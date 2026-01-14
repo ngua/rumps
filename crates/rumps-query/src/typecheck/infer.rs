@@ -34,6 +34,7 @@ use smallvec::SmallVec;
 
 use super::env::TypeEnv;
 use super::error::{TyPrinter, TypeError};
+use super::instance::InstanceRegistry;
 use super::ty::{Class, Scheme, Subst, Ty, TyVar};
 use crate::ast::{ExprId, TxnId};
 use crate::env::Environment;
@@ -126,6 +127,11 @@ pub(crate) struct InferCtx<'a> {
     pub(super) runtime_env: &'a Environment,
     /// Scoped type environment (variable -> scheme bindings).
     pub(super) env: TypeEnv,
+    /// Registry of user-defined class instances.
+    ///
+    /// Used during constraint solving to check if a user type satisfies
+    /// a class constraint via a user-provided implementation.
+    pub(super) instance_registry: InstanceRegistry,
     /// Collected constraints to be solved.
     constraints: Vec<Constraint>,
     /// Counter for generating fresh type variables.
@@ -211,6 +217,7 @@ impl<'a> InferCtx<'a> {
             type_exprs,
             runtime_env,
             env: TypeEnv::new(strings),
+            instance_registry: InstanceRegistry::new(),
             constraints: Vec::new(),
             next_var: 0,
             expr_types: HashMap::new(),

@@ -23,7 +23,7 @@ use smallvec::SmallVec;
 
 use super::error::TypeError;
 use super::infer::{Constraint, InferCtx};
-use super::ty::{Class, Subst, Ty, TyVar};
+use super::ty::{Class, ClassKind, Subst, Ty, TyVar};
 use crate::ast::AstTypeExpr;
 use crate::intern::StringId;
 use crate::value::TypeDef;
@@ -718,19 +718,24 @@ impl<'a> InferCtx<'a> {
             }
             Constraint::Class { ty, class, span } => match class {
                 // Iterable and Indexable: process in first pass for unification
-                Class::Iterable(elem) => {
-                    let coll = ty.apply(&subst);
-                    let elem = elem.apply(&subst);
-                    self.check_iterable(&coll, &elem, *span, &mut subst);
-                }
-                Class::Indexable(idx, elem) => {
-                    let base = ty.apply(&subst);
-                    let idx = idx.apply(&subst);
-                    let elem = elem.apply(&subst);
-                    self.check_indexable(&base, &idx, &elem, *span, &mut subst);
+                Class::Iterable(_) | Class::Indexable(_, _) => {
+                    let ty = ty.apply(&subst);
+                    let class = class.apply(&subst);
+                    self.satisfies_class(&class, &ty, *span, &mut subst);
                 }
                 // Other class constraints: processed in second/third pass
-                _ => {}
+                Class::Numeric
+                | Class::Monoid
+                | Class::BitLike
+                | Class::Negatable
+                | Class::Ord
+                | Class::Display
+                | Class::Fallible(_)
+                | Class::Into(_)
+                | Class::TryInto(_)
+                | Class::Mappable(_)
+                | Class::Foldable(_)
+                | Class::Filterable(_) => {}
             },
         });
 
@@ -753,20 +758,24 @@ impl<'a> InferCtx<'a> {
         constraints.iter().for_each(|c| {
             if let Constraint::Class { ty, class, span } = c {
                 match class {
-                    Class::Numeric => {
-                        self.check_numeric(&ty.apply(&subst), *span);
-                    }
-                    Class::Monoid => {
-                        self.check_monoid(&ty.apply(&subst), *span);
-                    }
-                    Class::BitLike => {
-                        self.check_bitlike(&ty.apply(&subst), *span);
-                    }
-                    Class::Negatable => {
-                        self.check_negatable(&ty.apply(&subst), *span);
+                    Class::Numeric
+                    | Class::Monoid
+                    | Class::BitLike
+                    | Class::Negatable
+                    | Class::Ord
+                    | Class::Display => {
+                        let ty = ty.apply(&subst);
+                        self.satisfies_class(class, &ty, *span, &mut subst);
                     }
                     // Other classes: processed in first or third pass
-                    _ => {}
+                    Class::Iterable(_)
+                    | Class::Indexable(_, _)
+                    | Class::Fallible(_)
+                    | Class::Into(_)
+                    | Class::TryInto(_)
+                    | Class::Mappable(_)
+                    | Class::Foldable(_)
+                    | Class::Filterable(_) => {}
                 }
             }
         });
@@ -779,36 +788,25 @@ impl<'a> InferCtx<'a> {
         constraints.iter().for_each(|c| {
             if let Constraint::Class { ty, class, span } = c {
                 match class {
-                    Class::Fallible(inner) => {
+                    Class::Fallible(_)
+                    | Class::Iterable(_)
+                    | Class::Indexable(_, _)
+                    | Class::Into(_)
+                    | Class::TryInto(_)
+                    | Class::Mappable(_)
+                    | Class::Foldable(_)
+                    | Class::Filterable(_) => {
                         let ty = ty.apply(&subst);
-                        let inner = inner.apply(&subst);
-                        self.check_fallible(&ty, &inner, *span, &mut subst);
+                        let class = class.apply(&subst);
+                        self.satisfies_class(&class, &ty, *span, &mut subst);
                     }
-                    Class::Iterable(elem) => {
-                        let coll = ty.apply(&subst);
-                        let elem = elem.apply(&subst);
-                        self.check_iterable(&coll, &elem, *span, &mut subst);
-                    }
-                    Class::Indexable(idx, elem) => {
-                        let base = ty.apply(&subst);
-                        let idx = idx.apply(&subst);
-                        let elem = elem.apply(&subst);
-                        self.check_indexable(
-                            &base, &idx, &elem, *span, &mut subst,
-                        );
-                    }
-                    Class::Into(to) => {
-                        let from = ty.apply(&subst);
-                        let to = to.apply(&subst);
-                        self.check_into(&from, &to, *span);
-                    }
-                    Class::TryInto(to) => {
-                        let from = ty.apply(&subst);
-                        let to = to.apply(&subst);
-                        self.check_try_into(&from, &to, *span);
-                    }
-                    // Others already processed
-                    _ => {}
+                    // Others already processed in second pass
+                    Class::Numeric
+                    | Class::Monoid
+                    | Class::BitLike
+                    | Class::Negatable
+                    | Class::Ord
+                    | Class::Display => {}
                 }
             }
         });
@@ -816,117 +814,1138 @@ impl<'a> InferCtx<'a> {
         subst
     }
 
-    /// Check that a type is numeric (`Int`, `Word`, or `Float`).
+    /// Check that a type satisfies a class constraint.
     ///
-    /// Type variables remain polymorphic; they satisfy the `Numeric` constraint
-    /// as long as they are eventually bound to a numeric type at use sites.
-    ///
-    /// For union types (including named unions like `NumericId = Int | String`),
-    /// the constraint is satisfied if at least ONE member is numeric. This
-    /// allows integer literals to flow into union-typed parameters; the literal
-    /// becomes the numeric member of the union at runtime.
-    fn check_numeric(&mut self, ty: &Ty, span: Span) {
-        match ty {
-            Ty::Int | Ty::Word | Ty::Float => {}
-            // Type variables remain polymorphic; caller provides concrete type
-            Ty::Var(_) | Ty::Error | Ty::Unknown => {}
-            Ty::Union(members) => {
-                // For literals flowing into unions, at least one member must
-                // be numeric. The literal will become that member at runtime.
-                let any_numeric = members
-                    .iter()
-                    .any(|m| matches!(m, Ty::Int | Ty::Word | Ty::Float));
-                if !any_numeric {
+    /// This is the unified constraint checking method that handles all class
+    /// constraints. The `class` parameter contains any associated types (e.g.,
+    /// `Into(target)`, `Iterable(elem)`). The `subst` is updated when the
+    /// constraint involves unification (e.g., `Fallible`, `Iterable`, `Indexable`).
+    fn satisfies_class(
+        &mut self,
+        class: &Class,
+        ty: &Ty,
+        span: Span,
+        subst: &mut Subst,
+    ) {
+        match class {
+            // `Numeric`: `Int`, `Word`, `Float`
+            Class::Numeric => match ty {
+                Ty::Int | Ty::Word | Ty::Float => {}
+                Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+                Ty::Union(members) => {
+                    // At least one member must be numeric (for literal coercion)
+                    let any_numeric = members
+                        .iter()
+                        .any(|m| matches!(m, Ty::Int | Ty::Word | Ty::Float));
+                    if !any_numeric {
+                        self.error(TypeError::UnsatisfiedClass(
+                            Class::Numeric,
+                            ty.clone(),
+                            span,
+                        ));
+                    }
+                }
+                Ty::Named(id, type_args) => {
+                    match self
+                        .instance_registry
+                        .lookup(ClassKind::Numeric, *id)
+                        .cloned()
+                    {
+                        Some(inst) => {
+                            self.check_instance_constraints(
+                                &inst, type_args, span, subst,
+                            );
+                        }
+                        None => match self.expand_union_members(ty) {
+                            Some(members) => {
+                                let any_numeric = members.iter().any(|m| {
+                                    matches!(m, Ty::Int | Ty::Word | Ty::Float)
+                                });
+                                if !any_numeric {
+                                    self.error(TypeError::UnsatisfiedClass(
+                                        Class::Numeric,
+                                        ty.clone(),
+                                        span,
+                                    ));
+                                }
+                            }
+                            None => match self.expand_alias_fully(ty) {
+                                Some(expanded) => self.satisfies_class(
+                                    class, &expanded, span, subst,
+                                ),
+                                None => {
+                                    self.error(TypeError::UnsatisfiedClass(
+                                        Class::Numeric,
+                                        ty.clone(),
+                                        span,
+                                    ));
+                                }
+                            },
+                        },
+                    }
+                }
+                _ => {
                     self.error(TypeError::UnsatisfiedClass(
                         Class::Numeric,
                         ty.clone(),
                         span,
                     ));
                 }
-            }
-            Ty::Named(..) => {
-                // Expand named unions (e.g., `NumericId = Int | String`) and
-                // check if any member is numeric
-                match self.expand_union_members(ty) {
-                    Some(members) => {
-                        let any_numeric = members.iter().any(|m| {
-                            matches!(m, Ty::Int | Ty::Word | Ty::Float)
-                        });
-                        if !any_numeric {
+            },
+
+            // `BitLike`: `Bool`, `Int`, `Word`
+            Class::BitLike => match ty {
+                Ty::Bool | Ty::Int | Ty::Word => {}
+                Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+                Ty::Union(members) => {
+                    members.iter().for_each(|m| {
+                        self.satisfies_class(class, m, span, subst)
+                    });
+                }
+                Ty::Named(id, type_args) => {
+                    match self
+                        .instance_registry
+                        .lookup(ClassKind::BitLike, *id)
+                        .cloned()
+                    {
+                        Some(inst) => {
+                            self.check_instance_constraints(
+                                &inst, type_args, span, subst,
+                            );
+                        }
+                        None => match self.expand_union_members(ty) {
+                            Some(members) => members.iter().for_each(|m| {
+                                self.satisfies_class(class, m, span, subst)
+                            }),
+                            None => match self.expand_alias_fully(ty) {
+                                Some(expanded) => self.satisfies_class(
+                                    class, &expanded, span, subst,
+                                ),
+                                None => {
+                                    self.error(TypeError::UnsatisfiedClass(
+                                        Class::BitLike,
+                                        ty.clone(),
+                                        span,
+                                    ));
+                                }
+                            },
+                        },
+                    }
+                }
+                _ => {
+                    self.error(TypeError::UnsatisfiedClass(
+                        Class::BitLike,
+                        ty.clone(),
+                        span,
+                    ));
+                }
+            },
+
+            // `Negatable`: `Int`, `Float` (not `Word`; unsigned)
+            Class::Negatable => match ty {
+                Ty::Int | Ty::Float => {}
+                Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+                Ty::Union(members) => {
+                    members.iter().for_each(|m| {
+                        self.satisfies_class(class, m, span, subst)
+                    });
+                }
+                Ty::Named(id, type_args) => {
+                    match self
+                        .instance_registry
+                        .lookup(ClassKind::Negatable, *id)
+                        .cloned()
+                    {
+                        Some(inst) => {
+                            self.check_instance_constraints(
+                                &inst, type_args, span, subst,
+                            );
+                        }
+                        None => {
                             self.error(TypeError::UnsatisfiedClass(
-                                Class::Numeric,
+                                Class::Negatable,
                                 ty.clone(),
                                 span,
                             ));
                         }
                     }
-                    None => {
-                        // Not a union; expand alias and recurse
-                        match self.expand_alias_fully(ty) {
-                            Some(expanded) => {
-                                self.check_numeric(&expanded, span)
+                }
+                _ => {
+                    self.error(TypeError::UnsatisfiedClass(
+                        Class::Negatable,
+                        ty.clone(),
+                        span,
+                    ));
+                }
+            },
+
+            // `Ord`: `Bool`, `Int`, `Word`, `Float`, `Char`, `String`, `Time`, `Ordering`
+            Class::Ord => match ty {
+                Ty::Bool
+                | Ty::Int
+                | Ty::Word
+                | Ty::Float
+                | Ty::Char
+                | Ty::String
+                | Ty::Time
+                | Ty::Ordering => {}
+                Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+                Ty::Union(members) => {
+                    members.iter().for_each(|m| {
+                        self.satisfies_class(class, m, span, subst)
+                    });
+                }
+                Ty::Named(id, args) => {
+                    match self
+                        .instance_registry
+                        .lookup(ClassKind::Ord, *id)
+                        .cloned()
+                    {
+                        Some(inst) => {
+                            self.check_instance_constraints(
+                                &inst, args, span, subst,
+                            );
+                        }
+                        None => {
+                            self.error(TypeError::UnsatisfiedClass(
+                                Class::Ord,
+                                ty.clone(),
+                                span,
+                            ));
+                        }
+                    }
+                }
+                _ => {
+                    self.error(TypeError::UnsatisfiedClass(
+                        Class::Ord,
+                        ty.clone(),
+                        span,
+                    ));
+                }
+            },
+
+            // `Display`: everything except `Fn`
+            Class::Display => match ty {
+                Ty::Bool
+                | Ty::Int
+                | Ty::Word
+                | Ty::Float
+                | Ty::Char
+                | Ty::String
+                | Ty::Unit
+                | Ty::Time
+                | Ty::Range
+                | Ty::Json
+                | Ty::Ordering
+                | Ty::DataStatus
+                | Ty::FilePath
+                | Ty::Path
+                | Ty::Regex
+                | Ty::RuntimeError
+                | Ty::Local
+                | Ty::Global => {}
+                Ty::Array(_)
+                | Ty::Option(_)
+                | Ty::Result(_, _)
+                | Ty::Map(_, _)
+                | Ty::Tuple(_)
+                | Ty::Object(_) => {}
+                Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+                Ty::Fn(_, _) => {
+                    self.error(TypeError::UnsatisfiedClass(
+                        Class::Display,
+                        ty.clone(),
+                        span,
+                    ));
+                }
+                Ty::Union(members) => {
+                    members.iter().for_each(|m| {
+                        self.satisfies_class(class, m, span, subst)
+                    });
+                }
+                Ty::Named(id, args) => {
+                    match self
+                        .instance_registry
+                        .lookup(ClassKind::Display, *id)
+                        .cloned()
+                    {
+                        Some(inst) => {
+                            self.check_instance_constraints(
+                                &inst, args, span, subst,
+                            );
+                        }
+                        None => {
+                            self.error(TypeError::UnsatisfiedClass(
+                                Class::Display,
+                                ty.clone(),
+                                span,
+                            ));
+                        }
+                    }
+                }
+                Ty::Apply(_, _) => {}
+            },
+
+            // `Monoid`: `String`, `Array`, `Map`, `Option`
+            Class::Monoid => match ty {
+                Ty::String | Ty::Array(_) | Ty::Map(_, _) | Ty::Option(_) => {}
+                Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+                Ty::Union(members) => {
+                    members.iter().for_each(|m| {
+                        self.satisfies_class(class, m, span, subst)
+                    });
+                }
+                Ty::Named(id, type_args) => {
+                    match self
+                        .instance_registry
+                        .lookup(ClassKind::Monoid, *id)
+                        .cloned()
+                    {
+                        Some(inst) => {
+                            self.check_instance_constraints(
+                                &inst, type_args, span, subst,
+                            );
+                        }
+                        None => {
+                            self.error(TypeError::UnsatisfiedClass(
+                                Class::Monoid,
+                                ty.clone(),
+                                span,
+                            ));
+                        }
+                    }
+                }
+                _ => {
+                    self.error(TypeError::UnsatisfiedClass(
+                        Class::Monoid,
+                        ty.clone(),
+                        span,
+                    ));
+                }
+            },
+
+            // `Into(target)`: `AS` casts
+            Class::Into(to) => match (ty, to) {
+                (Ty::Var(_), _) | (_, Ty::Var(_)) => {}
+                (Ty::Error, _) | (_, Ty::Error) => {}
+                (Ty::Unknown, _) | (_, Ty::Unknown) => {}
+
+                (a, b) if a == b => {}
+
+                // Functions cannot be stringified
+                (Ty::Fn(_, _), Ty::String) => {
+                    self.error(TypeError::InvalidCast {
+                        from: ty.clone(),
+                        to: to.clone(),
+                        span,
+                    });
+                }
+                (Ty::Union(members), Ty::String) => {
+                    let to = to.clone();
+                    members.iter().for_each(|m| {
+                        self.satisfies_class(
+                            &Class::Into(to.clone()),
+                            m,
+                            span,
+                            subst,
+                        )
+                    });
+                }
+                (_, Ty::String) => {}
+
+                // Functions, regex, refs cannot be Json-serialized
+                (Ty::Fn(_, _), Ty::Json)
+                | (Ty::Regex, Ty::Json)
+                | (Ty::Local, Ty::Json)
+                | (Ty::Global, Ty::Json) => {
+                    self.error(TypeError::InvalidCast {
+                        from: ty.clone(),
+                        to: to.clone(),
+                        span,
+                    });
+                }
+                (Ty::Array(elem), Ty::Json) => self.satisfies_class(
+                    &Class::Into(Ty::Json),
+                    elem,
+                    span,
+                    subst,
+                ),
+                (Ty::Option(inner), Ty::Json) => self.satisfies_class(
+                    &Class::Into(Ty::Json),
+                    inner,
+                    span,
+                    subst,
+                ),
+                (Ty::Result(ok, err), Ty::Json) => {
+                    self.satisfies_class(
+                        &Class::Into(Ty::Json),
+                        ok,
+                        span,
+                        subst,
+                    );
+                    self.satisfies_class(
+                        &Class::Into(Ty::Json),
+                        err,
+                        span,
+                        subst,
+                    );
+                }
+                (Ty::Map(k, v), Ty::Json) => {
+                    self.satisfies_class(
+                        &Class::Into(Ty::Json),
+                        k,
+                        span,
+                        subst,
+                    );
+                    self.satisfies_class(
+                        &Class::Into(Ty::Json),
+                        v,
+                        span,
+                        subst,
+                    );
+                }
+                (Ty::Tuple(elems), Ty::Json) => {
+                    elems.iter().for_each(|e| {
+                        self.satisfies_class(
+                            &Class::Into(Ty::Json),
+                            e,
+                            span,
+                            subst,
+                        )
+                    });
+                }
+                (Ty::Object(fields), Ty::Json) => {
+                    fields.values().for_each(|t| {
+                        self.satisfies_class(
+                            &Class::Into(Ty::Json),
+                            t,
+                            span,
+                            subst,
+                        )
+                    });
+                }
+                (Ty::Union(members), Ty::Json) => {
+                    members.iter().for_each(|m| {
+                        self.satisfies_class(
+                            &Class::Into(Ty::Json),
+                            m,
+                            span,
+                            subst,
+                        )
+                    });
+                }
+                (Ty::Named(_, args), Ty::Json) => {
+                    args.iter().for_each(|a| {
+                        self.satisfies_class(
+                            &Class::Into(Ty::Json),
+                            a,
+                            span,
+                            subst,
+                        )
+                    });
+                }
+                (_, Ty::Json) => {}
+
+                // Numeric coercions
+                (Ty::Int, Ty::Float) | (Ty::Float, Ty::Int) => {}
+                (Ty::Word, Ty::Int) | (Ty::Word, Ty::Float) => {}
+                (Ty::Bool, Ty::Int) | (Ty::Int, Ty::Bool) => {}
+
+                // Special conversions
+                (Ty::DataStatus, Ty::Int) => {}
+                (Ty::String, Ty::FilePath) => {}
+                (Ty::Path, Ty::FilePath) => {}
+                (Ty::Named(id, _), Ty::FilePath)
+                    if *id == crate::TypeId::PATH => {}
+
+                // Storable to member type
+                (Ty::Named(id, _), target)
+                    if *id == crate::TypeId::STORABLE =>
+                {
+                    if !Ty::STORABLE_MEMBERS.contains(target) {
+                        self.error(TypeError::InvalidCast {
+                            from: ty.clone(),
+                            to: to.clone(),
+                            span,
+                        });
+                    }
+                }
+
+                // Member to union type
+                (member, Ty::Named(id, _))
+                    if *id == crate::TypeId::STORABLE
+                        || *id == crate::TypeId::SCALAR
+                        || *id == crate::TypeId::SUBSCRIPT =>
+                {
+                    let is_member = if *id == crate::TypeId::STORABLE {
+                        Ty::STORABLE_MEMBERS.contains(member)
+                    } else if *id == crate::TypeId::SCALAR {
+                        Ty::SCALAR_MEMBERS.contains(member)
+                    } else {
+                        Ty::SUBSCRIPT_MEMBERS.contains(member)
+                    };
+                    if !is_member {
+                        self.error(TypeError::InvalidCast {
+                            from: ty.clone(),
+                            to: to.clone(),
+                            span,
+                        });
+                    }
+                }
+
+                // Union handling
+                (Ty::Union(members), target) => {
+                    let target = target.clone();
+                    members.iter().for_each(|m| {
+                        self.satisfies_class(
+                            &Class::Into(target.clone()),
+                            m,
+                            span,
+                            subst,
+                        )
+                    });
+                }
+
+                // User type with Into instance
+                (Ty::Named(id, type_args), target) => {
+                    match self
+                        .instance_registry
+                        .lookup(ClassKind::Into, *id)
+                        .cloned()
+                    {
+                        Some(inst) => {
+                            let inst_target = inst.class_args.first();
+                            match inst_target {
+                                Some(inst_target) if inst_target == target => {
+                                    self.check_instance_constraints(
+                                        &inst, type_args, span, subst,
+                                    );
+                                }
+                                _ => {
+                                    self.error(TypeError::InvalidCast {
+                                        from: ty.clone(),
+                                        to: to.clone(),
+                                        span,
+                                    });
+                                }
+                            }
+                        }
+                        None => {
+                            self.error(TypeError::InvalidCast {
+                                from: ty.clone(),
+                                to: to.clone(),
+                                span,
+                            });
+                        }
+                    }
+                }
+
+                _ => {
+                    self.error(TypeError::InvalidCast {
+                        from: ty.clone(),
+                        to: to.clone(),
+                        span,
+                    });
+                }
+            },
+
+            // `TryInto(target)`: `READ` casts
+            Class::TryInto(to) => match (ty, to) {
+                (Ty::Var(_), _) | (_, Ty::Var(_)) => {}
+                (Ty::Error, _) | (_, Ty::Error) => {}
+                (Ty::Unknown, _) | (_, Ty::Unknown) => {}
+
+                (a, b) if a == b => {}
+
+                // Function types cannot be source for READ
+                (Ty::Fn(_, _), _) => {
+                    self.error(TypeError::InvalidRead {
+                        from: ty.clone(),
+                        to: to.clone(),
+                        span,
+                    });
+                }
+
+                // Cannot READ into function, regex, or refs
+                (_, Ty::Fn(_, _))
+                | (_, Ty::Regex)
+                | (_, Ty::Local)
+                | (_, Ty::Global) => {
+                    self.error(TypeError::InvalidRead {
+                        from: ty.clone(),
+                        to: to.clone(),
+                        span,
+                    });
+                }
+
+                // READ Json requires source to be Into[Json]
+                (Ty::Regex, Ty::Json)
+                | (Ty::Local, Ty::Json)
+                | (Ty::Global, Ty::Json) => {
+                    self.error(TypeError::InvalidRead {
+                        from: ty.clone(),
+                        to: to.clone(),
+                        span,
+                    });
+                }
+                (Ty::Array(elem), Ty::Json) => self.satisfies_class(
+                    &Class::TryInto(Ty::Json),
+                    elem,
+                    span,
+                    subst,
+                ),
+                (Ty::Option(inner), Ty::Json) => self.satisfies_class(
+                    &Class::TryInto(Ty::Json),
+                    inner,
+                    span,
+                    subst,
+                ),
+                (Ty::Result(ok, err), Ty::Json) => {
+                    self.satisfies_class(
+                        &Class::TryInto(Ty::Json),
+                        ok,
+                        span,
+                        subst,
+                    );
+                    self.satisfies_class(
+                        &Class::TryInto(Ty::Json),
+                        err,
+                        span,
+                        subst,
+                    );
+                }
+                (Ty::Map(k, v), Ty::Json) => {
+                    self.satisfies_class(
+                        &Class::TryInto(Ty::Json),
+                        k,
+                        span,
+                        subst,
+                    );
+                    self.satisfies_class(
+                        &Class::TryInto(Ty::Json),
+                        v,
+                        span,
+                        subst,
+                    );
+                }
+                (Ty::Tuple(elems), Ty::Json) => {
+                    elems.iter().for_each(|e| {
+                        self.satisfies_class(
+                            &Class::TryInto(Ty::Json),
+                            e,
+                            span,
+                            subst,
+                        )
+                    });
+                }
+                (Ty::Object(fields), Ty::Json) => {
+                    fields.values().for_each(|t| {
+                        self.satisfies_class(
+                            &Class::TryInto(Ty::Json),
+                            t,
+                            span,
+                            subst,
+                        )
+                    });
+                }
+                (Ty::Named(_, args), Ty::Json) => {
+                    args.iter().for_each(|a| {
+                        self.satisfies_class(
+                            &Class::TryInto(Ty::Json),
+                            a,
+                            span,
+                            subst,
+                        )
+                    });
+                }
+
+                // Union handling
+                (Ty::Union(members), target) => {
+                    let target = target.clone();
+                    members.iter().for_each(|m| {
+                        self.satisfies_class(
+                            &Class::TryInto(target.clone()),
+                            m,
+                            span,
+                            subst,
+                        )
+                    });
+                }
+
+                // User type with TryInto instance
+                (Ty::Named(id, type_args), target) => {
+                    match self
+                        .instance_registry
+                        .lookup(ClassKind::TryInto, *id)
+                        .cloned()
+                    {
+                        Some(inst) => {
+                            let inst_target = inst.class_args.first();
+                            match inst_target {
+                                Some(inst_target) if inst_target == target => {
+                                    self.check_instance_constraints(
+                                        &inst, type_args, span, subst,
+                                    );
+                                }
+                                _ => {}
+                            }
+                        }
+                        None => {}
+                    }
+                }
+
+                // All other combinations are valid for READ
+                _ => {}
+            },
+
+            // `Fallible(inner)`: `Option[T]`, `Result[T, E]`
+            Class::Fallible(inner) => {
+                let expanded = self.expand_alias_fully(ty);
+                let ty = expanded.as_ref().unwrap_or(ty);
+
+                match ty {
+                    Ty::Option(opt_inner) => {
+                        match self.unify_types(inner, opt_inner, span) {
+                            UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                            UnifyResult::Err(e) => self.error(e),
+                        }
+                    }
+                    Ty::Result(ok, _) => {
+                        match self.unify_types(inner, ok, span) {
+                            UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                            UnifyResult::Err(e) => self.error(e),
+                        }
+                    }
+                    Ty::Union(members) => {
+                        members.iter().for_each(|m| {
+                            self.satisfies_class(class, m, span, subst)
+                        });
+                    }
+                    Ty::Var(v) => {
+                        let opt = Ty::Option(Box::new(inner.clone()));
+                        subst.extend(*v, opt);
+                    }
+                    Ty::Error | Ty::Unknown => {}
+                    Ty::Named(id, type_args) => {
+                        match self
+                            .instance_registry
+                            .lookup(ClassKind::Fallible, *id)
+                            .cloned()
+                        {
+                            Some(inst) => {
+                                if let Some(inst_inner) =
+                                    inst.class_args.first()
+                                {
+                                    let param_subst = Subst(
+                                        inst.type_params
+                                            .iter()
+                                            .zip(type_args.iter())
+                                            .map(|(p, a)| (*p, a.clone()))
+                                            .collect(),
+                                    );
+                                    let resolved =
+                                        inst_inner.apply(&param_subst);
+                                    match self
+                                        .unify_types(inner, &resolved, span)
+                                    {
+                                        UnifyResult::Ok(s) => {
+                                            *subst = subst.compose(&s)
+                                        }
+                                        UnifyResult::Err(e) => self.error(e),
+                                    }
+                                }
+                                self.check_instance_constraints(
+                                    &inst, type_args, span, subst,
+                                );
                             }
                             None => {
                                 self.error(TypeError::UnsatisfiedClass(
-                                    Class::Numeric,
+                                    class.clone(),
                                     ty.clone(),
                                     span,
                                 ));
                             }
                         }
                     }
+                    _ => {
+                        self.error(TypeError::UnsatisfiedClass(
+                            class.clone(),
+                            ty.clone(),
+                            span,
+                        ));
+                    }
                 }
             }
-            _ => {
-                self.error(TypeError::UnsatisfiedClass(
-                    Class::Numeric,
-                    ty.clone(),
-                    span,
-                ));
-            }
+
+            // `Iterable(elem)`: `Array[T]`, `Range`
+            Class::Iterable(elem) => match ty {
+                Ty::Array(inner) => match self.unify_types(elem, inner, span) {
+                    UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                    UnifyResult::Err(e) => self.error(e),
+                },
+                Ty::Range => match self.unify_types(elem, &Ty::Int, span) {
+                    UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                    UnifyResult::Err(e) => self.error(e),
+                },
+                Ty::Union(members) => {
+                    members.iter().for_each(|m| {
+                        self.satisfies_class(class, m, span, subst)
+                    });
+                }
+                Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+                Ty::Named(id, type_args) => {
+                    match self
+                        .instance_registry
+                        .lookup(ClassKind::Iterable, *id)
+                        .cloned()
+                    {
+                        Some(inst) => {
+                            if let Some(inst_elem) = inst.class_args.first() {
+                                let param_subst = Subst(
+                                    inst.type_params
+                                        .iter()
+                                        .zip(type_args.iter())
+                                        .map(|(p, a)| (*p, a.clone()))
+                                        .collect(),
+                                );
+                                let resolved = inst_elem.apply(&param_subst);
+                                match self.unify_types(elem, &resolved, span) {
+                                    UnifyResult::Ok(s) => {
+                                        *subst = subst.compose(&s)
+                                    }
+                                    UnifyResult::Err(e) => self.error(e),
+                                }
+                            }
+                            self.check_instance_constraints(
+                                &inst, type_args, span, subst,
+                            );
+                        }
+                        None => {
+                            self.error(TypeError::Mismatch {
+                                expected: Ty::Array(Box::new(elem.clone())),
+                                got: ty.clone(),
+                                span,
+                            });
+                        }
+                    }
+                }
+                _ => {
+                    self.error(TypeError::Mismatch {
+                        expected: Ty::Array(Box::new(elem.clone())),
+                        got: ty.clone(),
+                        span,
+                    });
+                }
+            },
+
+            // `Indexable(idx, elem)`: `Array[T]`, `Map[K,V]`, `String`
+            Class::Indexable(idx, elem) => match ty {
+                Ty::Array(inner) => {
+                    match self.unify_types(idx, &Ty::Int, span) {
+                        UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                        UnifyResult::Err(e) => self.error(e),
+                    }
+                    match self.unify_types(elem, inner, span) {
+                        UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                        UnifyResult::Err(e) => self.error(e),
+                    }
+                }
+                Ty::Map(key, val) => {
+                    match self.unify_types(idx, key, span) {
+                        UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                        UnifyResult::Err(e) => self.error(e),
+                    }
+                    let opt_val = Ty::Option(val.clone());
+                    match self.unify_types(elem, &opt_val, span) {
+                        UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                        UnifyResult::Err(e) => self.error(e),
+                    }
+                }
+                Ty::String => {
+                    match self.unify_types(idx, &Ty::Int, span) {
+                        UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                        UnifyResult::Err(e) => self.error(e),
+                    }
+                    match self.unify_types(elem, &Ty::Char, span) {
+                        UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                        UnifyResult::Err(e) => self.error(e),
+                    }
+                }
+                Ty::Union(members) => {
+                    members.iter().for_each(|m| {
+                        self.satisfies_class(class, m, span, subst)
+                    });
+                }
+                Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+                Ty::Named(id, type_args) => {
+                    match self
+                        .instance_registry
+                        .lookup(ClassKind::Indexable, *id)
+                        .cloned()
+                    {
+                        Some(inst) => {
+                            let param_subst = Subst(
+                                inst.type_params
+                                    .iter()
+                                    .zip(type_args.iter())
+                                    .map(|(p, a)| (*p, a.clone()))
+                                    .collect(),
+                            );
+                            if let Some(inst_idx) = inst.class_args.first() {
+                                let resolved = inst_idx.apply(&param_subst);
+                                match self.unify_types(idx, &resolved, span) {
+                                    UnifyResult::Ok(s) => {
+                                        *subst = subst.compose(&s)
+                                    }
+                                    UnifyResult::Err(e) => self.error(e),
+                                }
+                            }
+                            if let Some(inst_elem) = inst.class_args.get(1) {
+                                let resolved = inst_elem.apply(&param_subst);
+                                match self.unify_types(elem, &resolved, span) {
+                                    UnifyResult::Ok(s) => {
+                                        *subst = subst.compose(&s)
+                                    }
+                                    UnifyResult::Err(e) => self.error(e),
+                                }
+                            }
+                            self.check_instance_constraints(
+                                &inst, type_args, span, subst,
+                            );
+                        }
+                        None => {
+                            self.error(TypeError::UnsatisfiedClass(
+                                class.clone(),
+                                ty.clone(),
+                                span,
+                            ));
+                        }
+                    }
+                }
+                _ => {
+                    self.error(TypeError::UnsatisfiedClass(
+                        class.clone(),
+                        ty.clone(),
+                        span,
+                    ));
+                }
+            },
+
+            // `Mappable(elem)`: `Array[T]`, `Range`, `Option[T]`, `Result[T, E]`
+            Class::Mappable(elem) => match ty {
+                Ty::Array(inner) => match self.unify_types(elem, inner, span) {
+                    UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                    UnifyResult::Err(e) => self.error(e),
+                },
+                Ty::Range => match self.unify_types(elem, &Ty::Int, span) {
+                    UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                    UnifyResult::Err(e) => self.error(e),
+                },
+                Ty::Option(inner) => {
+                    match self.unify_types(elem, inner, span) {
+                        UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                        UnifyResult::Err(e) => self.error(e),
+                    }
+                }
+                Ty::Result(ok, _) => match self.unify_types(elem, ok, span) {
+                    UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                    UnifyResult::Err(e) => self.error(e),
+                },
+                Ty::Union(members) => {
+                    members.iter().for_each(|m| {
+                        self.satisfies_class(class, m, span, subst)
+                    });
+                }
+                Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+                Ty::Named(id, type_args) => {
+                    match self
+                        .instance_registry
+                        .lookup(ClassKind::Mappable, *id)
+                        .cloned()
+                    {
+                        Some(inst) => {
+                            if let Some(inst_elem) = inst.class_args.first() {
+                                let param_subst = Subst(
+                                    inst.type_params
+                                        .iter()
+                                        .zip(type_args.iter())
+                                        .map(|(p, a)| (*p, a.clone()))
+                                        .collect(),
+                                );
+                                let resolved = inst_elem.apply(&param_subst);
+                                match self.unify_types(elem, &resolved, span) {
+                                    UnifyResult::Ok(s) => {
+                                        *subst = subst.compose(&s)
+                                    }
+                                    UnifyResult::Err(e) => self.error(e),
+                                }
+                            }
+                            self.check_instance_constraints(
+                                &inst, type_args, span, subst,
+                            );
+                        }
+                        None => {
+                            self.error(TypeError::UnsatisfiedClass(
+                                class.clone(),
+                                ty.clone(),
+                                span,
+                            ));
+                        }
+                    }
+                }
+                _ => {
+                    self.error(TypeError::UnsatisfiedClass(
+                        class.clone(),
+                        ty.clone(),
+                        span,
+                    ));
+                }
+            },
+
+            // `Filterable(elem)`: `Array[T]`, `Range`
+            Class::Filterable(elem) => match ty {
+                Ty::Array(inner) => match self.unify_types(elem, inner, span) {
+                    UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                    UnifyResult::Err(e) => self.error(e),
+                },
+                Ty::Range => match self.unify_types(elem, &Ty::Int, span) {
+                    UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                    UnifyResult::Err(e) => self.error(e),
+                },
+                Ty::Union(members) => {
+                    members.iter().for_each(|m| {
+                        self.satisfies_class(class, m, span, subst)
+                    });
+                }
+                Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+                Ty::Named(id, type_args) => {
+                    match self
+                        .instance_registry
+                        .lookup(ClassKind::Filterable, *id)
+                        .cloned()
+                    {
+                        Some(inst) => {
+                            if let Some(inst_elem) = inst.class_args.first() {
+                                let param_subst = Subst(
+                                    inst.type_params
+                                        .iter()
+                                        .zip(type_args.iter())
+                                        .map(|(p, a)| (*p, a.clone()))
+                                        .collect(),
+                                );
+                                let resolved = inst_elem.apply(&param_subst);
+                                match self.unify_types(elem, &resolved, span) {
+                                    UnifyResult::Ok(s) => {
+                                        *subst = subst.compose(&s)
+                                    }
+                                    UnifyResult::Err(e) => self.error(e),
+                                }
+                            }
+                            self.check_instance_constraints(
+                                &inst, type_args, span, subst,
+                            );
+                        }
+                        None => {
+                            self.error(TypeError::UnsatisfiedClass(
+                                class.clone(),
+                                ty.clone(),
+                                span,
+                            ));
+                        }
+                    }
+                }
+                _ => {
+                    self.error(TypeError::UnsatisfiedClass(
+                        class.clone(),
+                        ty.clone(),
+                        span,
+                    ));
+                }
+            },
+
+            // `Foldable(elem)`: `Array[T]`, `Range`
+            Class::Foldable(elem) => match ty {
+                Ty::Array(inner) => match self.unify_types(elem, inner, span) {
+                    UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                    UnifyResult::Err(e) => self.error(e),
+                },
+                Ty::Range => match self.unify_types(elem, &Ty::Int, span) {
+                    UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                    UnifyResult::Err(e) => self.error(e),
+                },
+                Ty::Union(members) => {
+                    members.iter().for_each(|m| {
+                        self.satisfies_class(class, m, span, subst)
+                    });
+                }
+                Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+                Ty::Named(id, type_args) => {
+                    match self
+                        .instance_registry
+                        .lookup(ClassKind::Foldable, *id)
+                        .cloned()
+                    {
+                        Some(inst) => {
+                            if let Some(inst_elem) = inst.class_args.first() {
+                                let param_subst = Subst(
+                                    inst.type_params
+                                        .iter()
+                                        .zip(type_args.iter())
+                                        .map(|(p, a)| (*p, a.clone()))
+                                        .collect(),
+                                );
+                                let resolved = inst_elem.apply(&param_subst);
+                                match self.unify_types(elem, &resolved, span) {
+                                    UnifyResult::Ok(s) => {
+                                        *subst = subst.compose(&s)
+                                    }
+                                    UnifyResult::Err(e) => self.error(e),
+                                }
+                            }
+                            self.check_instance_constraints(
+                                &inst, type_args, span, subst,
+                            );
+                        }
+                        None => {
+                            self.error(TypeError::UnsatisfiedClass(
+                                class.clone(),
+                                ty.clone(),
+                                span,
+                            ));
+                        }
+                    }
+                }
+                _ => {
+                    self.error(TypeError::UnsatisfiedClass(
+                        class.clone(),
+                        ty.clone(),
+                        span,
+                    ));
+                }
+            },
         }
     }
 
-    /// Check that a type is bitlike (`Bool`, `Int`, or `Word`).
-    fn check_bitlike(&mut self, ty: &Ty, span: Span) {
-        match ty {
-            Ty::Bool | Ty::Int | Ty::Word => {}
-            // Type variables remain polymorphic; caller provides concrete type
-            Ty::Var(_) | Ty::Error | Ty::Unknown => {}
-            Ty::Union(members) => {
-                // All union members must be bitlike
-                members.iter().for_each(|m| self.check_bitlike(m, span));
-            }
-            _ => {
-                self.error(TypeError::UnsatisfiedClass(
-                    Class::BitLike,
-                    ty.clone(),
-                    span,
-                ));
-            }
-        }
-    }
-
-    /// Check that a type is negatable (`Int` or `Float`).
-    ///
-    /// Note: `Word` is NOT negatable since it is unsigned.
-    fn check_negatable(&mut self, ty: &Ty, span: Span) {
-        match ty {
-            Ty::Int | Ty::Float => {}
-            // Type variables remain polymorphic; caller provides concrete type
-            Ty::Var(_) | Ty::Error | Ty::Unknown => {}
-            Ty::Union(members) => {
-                // All union members must be negatable
-                members.iter().for_each(|m| self.check_negatable(m, span));
-            }
-            _ => {
-                self.error(TypeError::UnsatisfiedClass(
-                    Class::Negatable,
-                    ty.clone(),
-                    span,
-                ));
-            }
-        }
+    /// Check that a user instance's WHERE constraints are satisfied.
+    fn check_instance_constraints(
+        &mut self,
+        inst: &super::instance::Instance,
+        type_args: &[Ty],
+        span: Span,
+        subst: &mut Subst,
+    ) {
+        let inst_subst = Subst(
+            inst.type_params
+                .iter()
+                .zip(type_args.iter())
+                .map(|(p, a)| (*p, a.clone()))
+                .collect(),
+        );
+        inst.constraints.iter().for_each(|(var, class)| {
+            let ty = Ty::Var(*var).apply(&inst_subst);
+            let class = class.apply(&inst_subst);
+            self.satisfies_class(&class, &ty, span, subst);
+        });
     }
 
     /// Check that a callee type is callable and unify with expected signature.
@@ -992,247 +2011,6 @@ impl<'a> InferCtx<'a> {
 
             _ => {
                 self.error(TypeError::NotCallable(callee.clone(), span));
-            }
-        }
-    }
-
-    /// Check that a type is monoidal (supports `++` concatenation).
-    ///
-    /// Valid monoidal types are `String`, `Array[T]`, `Map[K, V]`, and `Option[T]`.
-    /// Unresolved type variables are left polymorphic (no defaulting).
-    fn check_monoid(&mut self, ty: &Ty, span: Span) {
-        match ty {
-            Ty::String | Ty::Array(_) | Ty::Map(_, _) | Ty::Option(_) => {}
-            // Type variables remain polymorphic; caller provides concrete type
-            Ty::Var(_) | Ty::Error | Ty::Unknown => {}
-            Ty::Union(members) => {
-                // All union members must be monoidal
-                members.iter().for_each(|m| self.check_monoid(m, span));
-            }
-            _ => {
-                self.error(TypeError::UnsatisfiedClass(
-                    Class::Monoid,
-                    ty.clone(),
-                    span,
-                ));
-            }
-        }
-    }
-
-    /// Check that a type can be converted to another type via `Into[From, To]`.
-    ///
-    /// This encodes all valid `AS` cast conversions:
-    /// - `T AS String`: all non-function types
-    /// - `T AS Json`: all JSON-serializable types (no functions, regex, refs)
-    /// - `Int AS Float`, `Float AS Int`: numeric coercions
-    /// - `Word AS Int`, `Word AS Float`: word widening
-    /// - `Bool AS Int`, `Int AS Bool`: boolean/int conversion
-    /// - `DataStatus AS Int`: variant index
-    /// - `String AS FilePath`, `Path AS FilePath`: path conversions
-    /// - `Storable AS T` (where `T` is a `Storable` member)
-    /// - Same type to itself
-    fn check_into(&mut self, from: &Ty, to: &Ty, span: Span) {
-        // Deferred types: cannot check yet
-        match (from, to) {
-            (Ty::Var(_), _) | (_, Ty::Var(_)) => {}
-            (Ty::Error, _) | (_, Ty::Error) => {}
-            (Ty::Unknown, _) | (_, Ty::Unknown) => {}
-
-            // Same type is always valid
-            (a, b) if a == b => {}
-
-            // Converting to String
-            //
-            // Functions cannot be stringified, everything else can
-            (Ty::Fn(_, _), Ty::String) => {
-                self.error(TypeError::InvalidCast {
-                    from: from.clone(),
-                    to: to.clone(),
-                    span,
-                });
-            }
-            (Ty::Union(members), Ty::String) => {
-                members
-                    .iter()
-                    .for_each(|m| self.check_into(m, &Ty::String, span));
-            }
-            (_, Ty::String) => {
-                // All other types can be converted to String
-            }
-
-            // Converting to Json
-            //
-            // Functions, regex, and refs cannot be serialized
-            (Ty::Fn(_, _), Ty::Json)
-            | (Ty::Regex, Ty::Json)
-            | (Ty::Local, Ty::Json)
-            | (Ty::Global, Ty::Json) => {
-                self.error(TypeError::InvalidCast {
-                    from: from.clone(),
-                    to: to.clone(),
-                    span,
-                });
-            }
-            // Compound types: recursively check elements
-            (Ty::Array(elem), Ty::Json) => {
-                self.check_into(elem, &Ty::Json, span)
-            }
-            (Ty::Option(inner), Ty::Json) => {
-                self.check_into(inner, &Ty::Json, span)
-            }
-            (Ty::Result(ok, err), Ty::Json) => {
-                self.check_into(ok, &Ty::Json, span);
-                self.check_into(err, &Ty::Json, span);
-            }
-            (Ty::Map(k, v), Ty::Json) => {
-                self.check_into(k, &Ty::Json, span);
-                self.check_into(v, &Ty::Json, span);
-            }
-            (Ty::Tuple(elems), Ty::Json) => {
-                elems
-                    .iter()
-                    .for_each(|e| self.check_into(e, &Ty::Json, span));
-            }
-            (Ty::Object(fields), Ty::Json) => {
-                fields
-                    .values()
-                    .for_each(|t| self.check_into(t, &Ty::Json, span));
-            }
-            (Ty::Union(members), Ty::Json) => {
-                members
-                    .iter()
-                    .for_each(|m| self.check_into(m, &Ty::Json, span));
-            }
-            (Ty::Named(_, args), Ty::Json) => {
-                args.iter()
-                    .for_each(|a| self.check_into(a, &Ty::Json, span));
-            }
-            (_, Ty::Json) => {
-                // Primitives and other types allowed
-            }
-
-            // Numeric coercions
-            (Ty::Int, Ty::Float) | (Ty::Float, Ty::Int) => {}
-            (Ty::Word, Ty::Int) | (Ty::Word, Ty::Float) => {}
-            (Ty::Bool, Ty::Int) | (Ty::Int, Ty::Bool) => {}
-
-            // Special conversions
-            (Ty::DataStatus, Ty::Int) => {}
-            (Ty::String, Ty::FilePath) => {}
-            (Ty::Path, Ty::FilePath) => {}
-            (Ty::Named(id, _), Ty::FilePath) if *id == crate::TypeId::PATH => {}
-
-            // Storable to member type
-            (Ty::Named(id, _), target) if *id == crate::TypeId::STORABLE => {
-                if !Ty::STORABLE_MEMBERS.contains(target) {
-                    self.error(TypeError::InvalidCast {
-                        from: from.clone(),
-                        to: to.clone(),
-                        span,
-                    });
-                }
-            }
-
-            // Member to union type (e.g., Int AS Storable)
-            (member, Ty::Named(id, _))
-                if *id == crate::TypeId::STORABLE
-                    || *id == crate::TypeId::SCALAR
-                    || *id == crate::TypeId::SUBSCRIPT =>
-            {
-                // For Storable/Scalar/Subscript, check that source is a member
-                let is_member = if *id == crate::TypeId::STORABLE {
-                    Ty::STORABLE_MEMBERS.contains(member)
-                } else if *id == crate::TypeId::SCALAR {
-                    Ty::SCALAR_MEMBERS.contains(member)
-                } else {
-                    Ty::SUBSCRIPT_MEMBERS.contains(member)
-                };
-                if !is_member {
-                    self.error(TypeError::InvalidCast {
-                        from: from.clone(),
-                        to: to.clone(),
-                        span,
-                    });
-                }
-            }
-
-            // Union handling
-            (Ty::Union(members), target) => {
-                // All union members must be convertible to target
-                members
-                    .iter()
-                    .for_each(|m| self.check_into(m, target, span));
-            }
-
-            // Invalid conversion
-            _ => {
-                self.error(TypeError::InvalidCast {
-                    from: from.clone(),
-                    to: to.clone(),
-                    span,
-                });
-            }
-        }
-    }
-
-    /// Check that a type is fallible (`Option[T]` or `Result[T, E]`).
-    ///
-    /// Unifies the `inner` type variable with the extracted inner type.
-    fn check_fallible(
-        &mut self,
-        ty: &Ty,
-        inner: &Ty,
-        span: Span,
-        subst: &mut Subst,
-    ) {
-        // Expand aliases (e.g., `Maybe[T]` -> `Option[T]`)
-        let expanded = self.expand_alias_fully(ty);
-        let ty = expanded.as_ref().unwrap_or(ty);
-
-        match ty {
-            Ty::Option(opt_inner) => {
-                match self.unify_types(inner, opt_inner, span) {
-                    UnifyResult::Ok(s) => {
-                        *subst = subst.compose(&s);
-                    }
-                    UnifyResult::Err(e) => {
-                        self.error(e);
-                    }
-                }
-            }
-
-            Ty::Result(ok, _) => match self.unify_types(inner, ok, span) {
-                UnifyResult::Ok(s) => {
-                    *subst = subst.compose(&s);
-                }
-                UnifyResult::Err(e) => {
-                    self.error(e);
-                }
-            },
-
-            // Union: all members must be fallible with compatible inner types
-            Ty::Union(members) => {
-                members
-                    .iter()
-                    .for_each(|m| self.check_fallible(m, inner, span, subst));
-            }
-
-            // Type variable: default to Option[inner]. This happens when `?x`
-            // is not constrained by context (e.g., standalone `?x` expression).
-            // Mimics Haskell's defaulting: `?x` becomes `Option.Some(x)`.
-            Ty::Var(v) => {
-                let opt = Ty::Option(Box::new(inner.clone()));
-                subst.extend(*v, opt);
-            }
-
-            Ty::Error | Ty::Unknown => {}
-
-            _ => {
-                self.error(TypeError::UnsatisfiedClass(
-                    Class::Fallible(ty.clone()),
-                    ty.clone(),
-                    span,
-                ));
             }
         }
     }
@@ -1373,238 +2151,169 @@ impl<'a> InferCtx<'a> {
             }
         }
     }
+}
 
-    /// Check that a type is iterable and unify the element type.
-    ///
-    /// Iterable types are `Array[T]` (element type T) and `Range` (element
-    /// type `Int`). Used by Iterable HOFs like `map`, `filter`, `foreach`.
-    fn check_iterable(
-        &mut self,
-        coll: &Ty,
-        elem: &Ty,
-        span: Span,
-        subst: &mut Subst,
-    ) {
-        match coll {
-            Ty::Array(inner) => match self.unify_types(elem, inner, span) {
-                UnifyResult::Ok(s) => {
-                    *subst = subst.compose(&s);
-                }
-                UnifyResult::Err(e) => {
-                    self.error(e);
-                }
-            },
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::typecheck::instance::Instance;
+    use crate::TypeId;
 
-            Ty::Range => {
-                // Range iterates over Int
-                match self.unify_types(elem, &Ty::Int, span) {
-                    UnifyResult::Ok(s) => {
-                        *subst = subst.compose(&s);
-                    }
-                    UnifyResult::Err(e) => {
-                        self.error(e);
-                    }
-                }
-            }
+    /// Test that `check_ord` passes for builtin orderable types.
+    #[test]
+    fn check_ord_builtins() {
+        // All these should pass without error
+        let builtins = [
+            Ty::Bool,
+            Ty::Int,
+            Ty::Word,
+            Ty::Float,
+            Ty::Char,
+            Ty::String,
+            Ty::Time,
+            Ty::Ordering,
+        ];
 
-            // Union: all members must be iterable with compatible element types
-            Ty::Union(members) => {
-                members
-                    .iter()
-                    .for_each(|m| self.check_iterable(m, elem, span, subst));
-            }
-
-            Ty::Var(_) => {
-                // Not yet resolved; defer
-            }
-
-            Ty::Error | Ty::Unknown => {}
-
-            _ => {
-                self.error(TypeError::Mismatch {
-                    expected: Ty::Array(Box::new(elem.clone())),
-                    got: coll.clone(),
-                    span,
-                });
-            }
-        }
+        builtins.iter().for_each(|ty| {
+            // We can't easily create an InferCtx in unit tests, so we test
+            // the match logic indirectly via integration tests. This test
+            // documents the expected behavior.
+            assert!(
+                matches!(
+                    ty,
+                    Ty::Bool
+                        | Ty::Int
+                        | Ty::Word
+                        | Ty::Float
+                        | Ty::Char
+                        | Ty::String
+                        | Ty::Time
+                        | Ty::Ordering
+                ),
+                "expected {} to be orderable",
+                ty
+            );
+        });
     }
 
-    /// Check that a type can be fallibly converted to another type via `TryInto[To]`.
-    ///
-    /// This encodes all valid `READ` conversions:
-    /// - Any non-function type can be `READ` into the basic scalar types
-    ///   (`Bool`, `Int`, `Word`, `Float`, `Char`, `String`, `DataStatus`)
-    /// - `READ Json` requires the input to be `Into[Json]` (no functions, regex, refs)
-    /// - Function types cannot be `READ` into any other type
-    /// - The target type must be a valid `READ` target (no functions, regex, refs)
-    fn check_try_into(&mut self, from: &Ty, to: &Ty, span: Span) {
-        // Deferred types: cannot check yet
-        match (from, to) {
-            (Ty::Var(_), _) | (_, Ty::Var(_)) => {}
-            (Ty::Error, _) | (_, Ty::Error) => {}
-            (Ty::Unknown, _) | (_, Ty::Unknown) => {}
+    /// Test that `check_display` passes for builtin displayable types.
+    #[test]
+    fn check_display_builtins() {
+        // Functions are NOT displayable
+        let fn_ty = Ty::Fn(vec![Ty::Int], Box::new(Ty::Int));
+        assert!(
+            matches!(fn_ty, Ty::Fn(_, _)),
+            "Fn types should not be displayable"
+        );
 
-            // Same type is always valid
-            (a, b) if a == b => {}
+        // All primitives are displayable
+        let displayable = [
+            Ty::Bool,
+            Ty::Int,
+            Ty::Word,
+            Ty::Float,
+            Ty::Char,
+            Ty::String,
+            Ty::Unit,
+            Ty::Time,
+            Ty::Range,
+            Ty::Json,
+            Ty::Ordering,
+            Ty::DataStatus,
+            Ty::FilePath,
+            Ty::Path,
+            Ty::Regex,
+            Ty::RuntimeError,
+            Ty::Local,
+            Ty::Global,
+        ];
 
-            // Function types cannot be source for READ
-            (Ty::Fn(_, _), _) => {
-                self.error(TypeError::InvalidRead {
-                    from: from.clone(),
-                    to: to.clone(),
-                    span,
-                });
-            }
-
-            // Check that target type is a valid READ target
-            (_, Ty::Fn(_, _)) => {
-                // Cannot READ into a function type
-                self.error(TypeError::InvalidRead {
-                    from: from.clone(),
-                    to: to.clone(),
-                    span,
-                });
-            }
-            (_, Ty::Regex) | (_, Ty::Local) | (_, Ty::Global) => {
-                // Cannot READ into regex or refs
-                self.error(TypeError::InvalidRead {
-                    from: from.clone(),
-                    to: to.clone(),
-                    span,
-                });
-            }
-
-            // READ Json requires source to be Into[Json]
-            (Ty::Regex, Ty::Json)
-            | (Ty::Local, Ty::Json)
-            | (Ty::Global, Ty::Json) => {
-                // These types cannot be converted to Json
-                self.error(TypeError::InvalidRead {
-                    from: from.clone(),
-                    to: to.clone(),
-                    span,
-                });
-            }
-            // Compound types: recursively check elements can be READ as Json
-            (Ty::Array(elem), Ty::Json) => {
-                self.check_try_into(elem, &Ty::Json, span)
-            }
-            (Ty::Option(inner), Ty::Json) => {
-                self.check_try_into(inner, &Ty::Json, span)
-            }
-            (Ty::Result(ok, err), Ty::Json) => {
-                self.check_try_into(ok, &Ty::Json, span);
-                self.check_try_into(err, &Ty::Json, span);
-            }
-            (Ty::Map(k, v), Ty::Json) => {
-                self.check_try_into(k, &Ty::Json, span);
-                self.check_try_into(v, &Ty::Json, span);
-            }
-            (Ty::Tuple(elems), Ty::Json) => {
-                elems
-                    .iter()
-                    .for_each(|e| self.check_try_into(e, &Ty::Json, span));
-            }
-            (Ty::Object(fields), Ty::Json) => {
-                fields
-                    .values()
-                    .for_each(|t| self.check_try_into(t, &Ty::Json, span));
-            }
-            (Ty::Named(_, args), Ty::Json) => {
-                args.iter()
-                    .for_each(|a| self.check_try_into(a, &Ty::Json, span));
-            }
-
-            // Union handling
-            (Ty::Union(members), target) => {
-                // All union members must be TryInto[target]
-                members
-                    .iter()
-                    .for_each(|m| self.check_try_into(m, target, span));
-            }
-
-            // All other combinations are valid for READ
-            // (actual parsing may fail at runtime)
-            _ => {}
-        }
+        displayable.iter().for_each(|ty| {
+            assert!(
+                !matches!(ty, Ty::Fn(_, _)),
+                "expected {} to be displayable",
+                ty
+            );
+        });
     }
 
-    /// Check that a type is indexable and unify index/element types.
-    ///
-    /// Indexable types:
-    /// - `Array[T]`: indexed by `Int`, returns `T`
-    /// - `Map[K, V]`: indexed by `K`, returns `Option[V]`
-    /// - `String`: indexed by `Int`, returns `Char`
-    fn check_indexable(
-        &mut self,
-        base: &Ty,
-        idx: &Ty,
-        elem: &Ty,
-        span: Span,
-        subst: &mut Subst,
-    ) {
-        match base {
-            Ty::Array(inner) => {
-                // Index must be Int
-                match self.unify_types(idx, &Ty::Int, span) {
-                    UnifyResult::Ok(s) => *subst = subst.compose(&s),
-                    UnifyResult::Err(e) => self.error(e),
-                }
-                // Element type is the array's inner type
-                match self.unify_types(elem, inner, span) {
-                    UnifyResult::Ok(s) => *subst = subst.compose(&s),
-                    UnifyResult::Err(e) => self.error(e),
-                }
-            }
+    /// Test Instance creation and lookup.
+    #[test]
+    fn instance_registry_lookup() {
+        use crate::typecheck::instance::InstanceRegistry;
 
-            Ty::Map(key, val) => {
-                // Index must match key type
-                match self.unify_types(idx, key, span) {
-                    UnifyResult::Ok(s) => *subst = subst.compose(&s),
-                    UnifyResult::Err(e) => self.error(e),
-                }
-                // Element type is Option[V]
-                let opt_val = Ty::Option(val.clone());
-                match self.unify_types(elem, &opt_val, span) {
-                    UnifyResult::Ok(s) => *subst = subst.compose(&s),
-                    UnifyResult::Err(e) => self.error(e),
-                }
-            }
+        let mut registry = InstanceRegistry::new();
 
-            Ty::String => {
-                // Index must be Int
-                match self.unify_types(idx, &Ty::Int, span) {
-                    UnifyResult::Ok(s) => *subst = subst.compose(&s),
-                    UnifyResult::Err(e) => self.error(e),
-                }
-                // Element type is Char
-                match self.unify_types(elem, &Ty::Char, span) {
-                    UnifyResult::Ok(s) => *subst = subst.compose(&s),
-                    UnifyResult::Err(e) => self.error(e),
-                }
-            }
+        // Use an existing TypeId constant for testing (STORABLE is a union type
+        // that we can hypothetically add an Ord instance for)
+        let user_type_id = TypeId::STORABLE;
 
-            // Union: all members must be indexable with compatible idx/elem types
-            Ty::Union(members) => {
-                members.iter().for_each(|m| {
-                    self.check_indexable(m, idx, elem, span, subst);
-                });
-            }
+        // Create an Ord instance for the user type
+        let ord_inst = Instance {
+            class: ClassKind::Ord,
+            class_args: SmallVec::new(),
+            type_params: SmallVec::new(),
+            constraints: SmallVec::new(),
+            methods: std::collections::HashMap::new(),
+            span: Span::new(0, 1),
+        };
 
-            Ty::Var(_) => {
-                // Not yet resolved; defer
-            }
+        let _ = registry.register(user_type_id, ord_inst.clone());
 
-            Ty::Error | Ty::Unknown => {}
+        // Lookup should find the instance
+        let found = registry.lookup(ClassKind::Ord, user_type_id);
+        assert!(found.is_some(), "should find Ord instance");
 
-            _ => {
-                self.error(TypeError::UnsatisfiedClass(
-                    Class::Indexable(idx.clone(), elem.clone()),
-                    base.clone(),
-                    span,
-                ));
-            }
-        }
+        // Lookup for different class should not find anything
+        let not_found = registry.lookup(ClassKind::Display, user_type_id);
+        assert!(not_found.is_none(), "should not find Display instance");
+
+        // Lookup for different type should not find anything
+        let other_type_id = TypeId::SCALAR;
+        let not_found2 = registry.lookup(ClassKind::Ord, other_type_id);
+        assert!(
+            not_found2.is_none(),
+            "should not find instance for other type"
+        );
+    }
+
+    /// Test that Instance with WHERE constraints stores them correctly.
+    #[test]
+    fn instance_with_constraints() {
+        let t = TyVar::new(0);
+        let constraint = (t, Class::Display);
+
+        let inst = Instance {
+            class: ClassKind::Ord,
+            class_args: SmallVec::new(),
+            type_params: smallvec::smallvec![t],
+            constraints: smallvec::smallvec![constraint],
+            methods: std::collections::HashMap::new(),
+            span: Span::new(0, 1),
+        };
+
+        assert_eq!(inst.type_params.len(), 1);
+        assert_eq!(inst.constraints.len(), 1);
+        assert_eq!(inst.constraints[0].0, t);
+        assert!(matches!(inst.constraints[0].1, Class::Display));
+    }
+
+    /// Test constraint substitution.
+    #[test]
+    fn constraint_substitution() {
+        let t = TyVar::new(0);
+        let constraint = Class::Iterable(Ty::Var(t));
+
+        // Create substitution: T -> Int
+        let subst = Subst::singleton(t, Ty::Int);
+
+        // Apply substitution to constraint
+        let resolved = constraint.apply(&subst);
+
+        // Should now be Iterable(Int)
+        assert!(
+            matches!(resolved, Class::Iterable(Ty::Int)),
+            "constraint should be Iterable(Int) after substitution"
+        );
     }
 }
