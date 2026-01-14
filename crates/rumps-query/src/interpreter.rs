@@ -100,7 +100,7 @@ mod convert;
 mod db;
 mod hof;
 mod hoist;
-mod instance;
+pub(crate) mod instance;
 mod modules;
 mod ops;
 mod pattern;
@@ -224,6 +224,13 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
     /// Populated during typechecking; used at runtime to look up the correct
     /// user instance for dispatch.
     instance_calls: HashMap<ExprId, crate::value::TypeId>,
+
+    /// Resolved class instance information from the resolution pass.
+    ///
+    /// Used during hoisting to register instance methods as functions and
+    /// populate `user_instances`. Keyed by `StmtId` so hoisting can look up
+    /// the resolved info when processing `Stmt::ClassInstance`.
+    resolved_instances: crate::resolve::InstanceMap,
 }
 
 // Public API
@@ -250,7 +257,8 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         // convert `Status.Pending` to `Expr::Variant` for user types
         registry.register_from_ast(ast, stmts, &mut arena, &mut type_exprs);
 
-        crate::resolve::resolve(ast, &mut arena, &registry);
+        let resolved_instances =
+            crate::resolve::resolve(ast, &mut arena, &registry);
 
         let env = Environment::new();
 
@@ -296,6 +304,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             module_hofs: hof::ModuleHofs::new(),
             user_instances: instance::RuntimeInstanceRegistry::new(),
             instance_calls: HashMap::new(),
+            resolved_instances,
         })
     }
 
@@ -352,6 +361,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             module_hofs: hof::ModuleHofs::new(),
             user_instances: instance::RuntimeInstanceRegistry::new(),
             instance_calls: HashMap::new(),
+            resolved_instances: HashMap::new(),
         }
     }
 

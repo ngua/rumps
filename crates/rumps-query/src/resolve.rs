@@ -27,12 +27,13 @@
 //!                         this pass
 //! ```
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use smallvec::{smallvec, SmallVec};
 
-use crate::ast::{Ast, Expr, ExprId, Stmt};
+use crate::ast::{Ast, AstTypeExpr, Expr, ExprId, Stmt, StmtId};
 use crate::env::BUILTIN_MODULE_NAMES;
+use crate::typecheck::ClassKind;
 #[cfg(test)]
 use crate::value::TypeExprArena;
 use crate::value::{TypeRegistry, ValueArena};
@@ -40,6 +41,38 @@ use crate::value::{TypeRegistry, ValueArena};
 /// Check if a name is a known module (builtin or user-defined).
 fn is_known_module(name: &str, user_modules: &HashSet<String>) -> bool {
     BUILTIN_MODULE_NAMES.contains(&name) || user_modules.contains(name)
+}
+
+/// Resolved class instance info.
+///
+/// Populated during resolution; used during hoisting to register functions
+/// and in typechecking to validate signatures.
+#[derive(Clone, Debug)]
+pub(crate) struct ResolvedInstance {
+    /// The class being implemented.
+    pub(crate) class: ClassKind,
+    /// The name of the implementing type (e.g., `"Point"`, `"MyModule.Point"`).
+    pub(crate) type_name: String,
+    /// Method mappings: (method_name, generated_fn_name).
+    pub(crate) methods: Vec<(String, String)>,
+}
+
+/// Map from `StmtId` to resolved instance info.
+pub(crate) type InstanceMap = HashMap<StmtId, ResolvedInstance>;
+
+/// Extract the type name from an `AstTypeExpr`.
+///
+/// Returns the simple name for `Named` types and the qualified name for
+/// parameterized types (e.g., `"Point"` or `"Either"`).
+fn extract_type_name(
+    ast: &Ast,
+    id: crate::ast::AstTypeExprId,
+) -> Option<String> {
+    ast.get_type_expr(id).and_then(|te| match te {
+        AstTypeExpr::Named(name) => Some(name.clone()),
+        AstTypeExpr::App(name, _) => Some(name.clone()),
+        _ => None,
+    })
 }
 
 /// Collect all user-defined module names from the AST.
@@ -89,11 +122,14 @@ fn collect_path_segments(
 /// - `Expr::Call(Field(Var(type), variant), args)` to `Expr::Variant` for
 ///   variant constructors with arguments
 /// - Module paths (builtin and user-defined) to `Expr::Path`
+///
+/// Also processes `Stmt::ClassInstance` to validate class names and generate
+/// internal function names. Returns a map of resolved instance info.
 pub(crate) fn resolve(
     ast: &mut Ast,
     arena: &mut ValueArena,
     registry: &TypeRegistry,
-) {
+) -> InstanceMap {
     // First, collect user-defined module names from MODULE statements
     let user_modules = collect_user_module_names(ast);
 
@@ -110,6 +146,55 @@ pub(crate) fn resolve(
     replacements
         .into_iter()
         .for_each(|(id, expr)| ast.set_expr(id, expr));
+
+    // Process class instances
+    resolve_class_instances(ast)
+}
+
+/// Process all `Stmt::ClassInstance` statements and return resolved info.
+fn resolve_class_instances(ast: &Ast) -> InstanceMap {
+    ast.stmt_ids()
+        .filter_map(|id| resolve_class_instance(ast, id).map(|inst| (id, inst)))
+        .collect()
+}
+
+/// Resolve a single `Stmt::ClassInstance`, generating function names.
+fn resolve_class_instance(ast: &Ast, id: StmtId) -> Option<ResolvedInstance> {
+    let stmt = ast.get_stmt(id)?;
+
+    match stmt {
+        Stmt::ClassInstance {
+            class_name,
+            for_type,
+            methods,
+            ..
+        } => {
+            // Validate class name
+            let class = ClassKind::from_str(class_name)?;
+
+            // Extract the implementing type name
+            let type_name = extract_type_name(ast, *for_type)?;
+
+            // Generate function names for each method
+            let mappings: Vec<(String, String)> = methods
+                .iter()
+                .map(|m| {
+                    let fn_name =
+                        crate::interpreter::instance::instance_fn_name(
+                            class, &type_name, &m.name,
+                        );
+                    (m.name.clone(), fn_name)
+                })
+                .collect();
+
+            Some(ResolvedInstance {
+                class,
+                type_name,
+                methods: mappings,
+            })
+        }
+        _ => None,
+    }
 }
 
 /// Resolve a single expression, returning `Some(replacement)` if it should
@@ -255,7 +340,7 @@ mod tests {
         let mut arena = ValueArena::new();
         let mut type_exprs = TypeExprArena::new();
         let registry = TypeRegistry::new(&mut arena, &mut type_exprs);
-        resolve(&mut result.ast, &mut arena, &registry);
+        let _ = resolve(&mut result.ast, &mut arena, &registry);
         result.ast
     }
 

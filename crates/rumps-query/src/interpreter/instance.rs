@@ -17,6 +17,21 @@ use crate::intern::StringId;
 use crate::typecheck::ClassKind;
 use crate::value::TypeId;
 
+/// Generate the internal function name for a class instance method.
+///
+/// Pattern: `__inst_{Class}_{Type}__{method}`
+///
+/// These names are internal and not user-callable directly. They follow a
+/// consistent format so both the typechecker and interpreter can independently
+/// generate the same names.
+pub(crate) fn instance_fn_name(
+    class: ClassKind,
+    type_name: &str,
+    method: &str,
+) -> String {
+    format!("__inst_{}_{}__{}", class.name(), type_name, method)
+}
+
 /// Runtime representation of a user-defined class instance.
 ///
 /// Contains the mapping from method names to generated function names.
