@@ -7,7 +7,7 @@ use std::fmt;
 
 use thiserror::Error;
 
-use super::ty::{Class, Ty, TyVar};
+use super::ty::{Class, ClassKind, Ty, TyVar};
 use crate::intern::{StringId, StringInterner};
 use crate::value::{TypeRegistry, ValueArena};
 use crate::{Span, TypeId};
@@ -379,6 +379,26 @@ pub(crate) enum TypeError {
         method: String,
         span: Span,
     },
+
+    /// Duplicate class instance declaration.
+    ///
+    /// A type can only have one instance of each class.
+    #[error("duplicate `{class:?}` instance for type `{type_id:?}`")]
+    DuplicateInstance {
+        class: ClassKind,
+        type_id: TypeId,
+        span: Span,
+    },
+
+    /// Attempt to implement a class for a builtin type.
+    ///
+    /// Users can only implement classes for their own types (TYPE, NEWTYPE, UNION).
+    #[error("cannot implement `{class:?}` for builtin type `{type_id:?}`")]
+    BuiltinInstanceForbidden {
+        class: ClassKind,
+        type_id: TypeId,
+        span: Span,
+    },
 }
 
 impl TypeError {
@@ -416,7 +436,9 @@ impl TypeError {
             | Self::PrivateAccess { span, .. }
             | Self::UnknownClass(_, span)
             | Self::UnknownMethod { span, .. }
-            | Self::ConvertMethodNeedsType { span, .. } => *span,
+            | Self::ConvertMethodNeedsType { span, .. }
+            | Self::DuplicateInstance { span, .. }
+            | Self::BuiltinInstanceForbidden { span, .. } => *span,
         }
     }
 
@@ -602,6 +624,22 @@ impl TypeError {
             Self::ConvertMethodNeedsType { class, method, .. } => (
                 format!("convert method `{class}:{method}` requires type parameter"),
                 Some(format!("use `{class}[TargetType]:{method}`")),
+            ),
+            Self::DuplicateInstance { class, type_id, .. } => (
+                format!(
+                    "duplicate `{}` instance for type `{}`",
+                    class.name(),
+                    p.type_name(*type_id)
+                ),
+                Some("a type can only have one instance of each class".to_owned()),
+            ),
+            Self::BuiltinInstanceForbidden { class, type_id, .. } => (
+                format!(
+                    "cannot implement `{}` for builtin type `{}`",
+                    class.name(),
+                    p.type_name(*type_id)
+                ),
+                Some("class instances can only be defined for user types (TYPE, NEWTYPE, UNION)".to_owned()),
             ),
         };
 
