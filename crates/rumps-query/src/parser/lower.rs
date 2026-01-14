@@ -64,6 +64,22 @@ fn lower_class(ast: &mut Ast, c: cst::Class) -> Result<ast::Class> {
         cst::Class::TryInto(target) => {
             ast::Class::TryInto(lower_type_expr(ast, target)?)
         }
+        cst::Class::Indexable(k, v) => {
+            let k_id = lower_type_expr(ast, k)?;
+            let v_id = lower_type_expr(ast, v)?;
+            ast::Class::Indexable(k_id, v_id)
+        }
+        cst::Class::Ord => ast::Class::Ord,
+        cst::Class::Mappable(elem) => {
+            ast::Class::Mappable(lower_type_expr(ast, elem)?)
+        }
+        cst::Class::Foldable(elem) => {
+            ast::Class::Foldable(lower_type_expr(ast, elem)?)
+        }
+        cst::Class::Filterable(elem) => {
+            ast::Class::Filterable(lower_type_expr(ast, elem)?)
+        }
+        cst::Class::Display => ast::Class::Display,
     })
 }
 
@@ -349,8 +365,70 @@ fn lower_stmt(ast: &mut Ast, ctx: &mut Ctx, stmt: cst::Stmt) -> Result<StmtId> {
                 items,
             })
         }
+        cst::StmtKind::ClassInstance {
+            class_name,
+            class_args,
+            type_params,
+            for_type,
+            constraints,
+            methods,
+        } => {
+            let class_args_ids = class_args
+                .into_iter()
+                .map(|t| lower_type_expr(ast, t))
+                .collect::<Result<SmallVec<_>>>()?;
+            let for_type_id = lower_type_expr(ast, for_type)?;
+            let constraints_lowered = constraints
+                .into_iter()
+                .map(|(name, classes)| {
+                    classes
+                        .into_iter()
+                        .map(|c| lower_class(ast, c))
+                        .collect::<Result<SmallVec<_>>>()
+                        .map(|cs| (name, cs))
+                })
+                .collect::<Result<SmallVec<_>>>()?;
+            let methods_lowered = methods
+                .into_iter()
+                .map(|m| lower_instance_method(ast, ctx, m))
+                .collect::<Result<SmallVec<_>>>()?;
+            Stmt::ClassInstance {
+                class_name,
+                class_args: class_args_ids,
+                type_params: lower_type_params(ast, type_params)?,
+                for_type: for_type_id,
+                constraints: constraints_lowered,
+                methods: methods_lowered,
+            }
+        }
     };
     ast.add_stmt(s, span)
+}
+
+/// Lower a CST instance method to AST.
+fn lower_instance_method(
+    ast: &mut Ast,
+    ctx: &mut Ctx,
+    m: cst::InstanceMethodDef,
+) -> Result<ast::InstanceMethodDef> {
+    let params = m
+        .params
+        .into_iter()
+        .map(|(n, t)| {
+            t.map(|te| lower_type_expr(ast, te))
+                .transpose()
+                .map(|ty_id| (n, ty_id))
+        })
+        .collect::<Result<SmallVec<_>>>()?;
+    let ret = m.ret.map(|t| lower_type_expr(ast, t)).transpose()?;
+    let body = lower_expr(ast, ctx, m.body)?;
+    Ok(ast::InstanceMethodDef {
+        name: m.name,
+        params,
+        ret,
+        body,
+        span: m.span,
+    })
 }
 
 /// Lower a CST expression to AST.
@@ -1362,6 +1440,61 @@ fn merge_stmt(
             }
         }
         Stmt::Import(import) => Stmt::Import(import),
+        Stmt::ClassInstance {
+            class_name,
+            class_args,
+            type_params,
+            for_type,
+            constraints,
+            methods,
+        } => {
+            let new_class_args: Result<SmallVec<_>> = class_args
+                .iter()
+                .map(|&t| merge_type_expr(target, source, t, span))
+                .collect();
+            let new_for_type = merge_type_expr(target, source, for_type, span)?;
+            let new_constraints: Result<SmallVec<_>> = constraints
+                .iter()
+                .map(|(name, cs)| Ok((name.clone(), cs.clone())))
+                .collect();
+            let new_methods: Result<SmallVec<_>> = methods
+                .iter()
+                .map(|m| {
+                    let new_params: Result<SmallVec<_>> = m
+                        .params
+                        .iter()
+                        .map(|(n, ty_opt)| {
+                            let new_ty = ty_opt
+                                .map(|t| {
+                                    merge_type_expr(target, source, t, span)
+                                })
+                                .transpose()?;
+                            Ok((n.clone(), new_ty))
+                        })
+                        .collect();
+                    let new_ret = m
+                        .ret
+                        .map(|t| merge_type_expr(target, source, t, span))
+                        .transpose()?;
+                    let new_body = merge_expr(target, source, m.body, span)?;
+                    Ok(ast::InstanceMethodDef {
+                        name: m.name.clone(),
+                        params: new_params?,
+                        ret: new_ret,
+                        body: new_body,
+                        span: m.span,
+                    })
+                })
+                .collect();
+            Stmt::ClassInstance {
+                class_name,
+                class_args: new_class_args?,
+                type_params,
+                for_type: new_for_type,
+                constraints: new_constraints?,
+                methods: new_methods?,
+            }
+        }
     };
     target.add_stmt(new_stmt, span)
 }

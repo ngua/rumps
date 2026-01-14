@@ -145,42 +145,38 @@ impl MatchPatternId {
 ///
 /// Note: Distinguished from `ty::Class` which carries resolved `Ty` types;
 /// this carries `AstTypeExprId` for parameterized variants.
+///
+/// Mirrors `ClassKind` in the typechecker; all classes should be representable.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Class {
     /// Type is `Int` or `Float`.
     Numeric,
     /// Type is iterable (`Array[T]` or `Range`).
-    ///
-    /// The inner type can be a type parameter name (`Iterable[T]`) or a
-    /// concrete type (`Iterable[Int]`).
     Iterable(AstTypeExprId),
     /// Type supports monoidal concatenation (`++`).
-    ///
-    /// Satisfied by `String`, `Array[T]`, and `Map[K, V]`.
     Monoid,
     /// Type supports bitwise operations (`&`, `|`, `<<`, `>>`).
-    ///
-    /// Satisfied by `Bool`, `Int`, and `Word`.
     BitLike,
     /// Type can be negated with unary `-`.
-    ///
-    /// Satisfied by `Int` and `Float` (NOT `Word`, which is unsigned).
     Negatable,
     /// Type is fallible (`Option[T]` or `Result[T, E]`).
-    ///
-    /// The inner type can be a type parameter name (`Fallible[T]`) or a
-    /// concrete type (`Fallible[Int]`).
     Fallible(AstTypeExprId),
     /// Type can be converted to another type: `Into[Target]`.
-    ///
-    /// The constrained type parameter is the source; the argument is the target.
-    /// For example, `T: Into[String]` means `T` can be converted to `String`.
     Into(AstTypeExprId),
     /// Type can be fallibly converted to another type: `TryInto[Target]`.
-    ///
-    /// The constrained type parameter is the source; the argument is the target.
-    /// For example, `T: TryInto[Int]` means `T` can be `READ` into `Int`.
     TryInto(AstTypeExprId),
+    /// Type supports indexing: `Indexable[Key, Value]`.
+    Indexable(AstTypeExprId, AstTypeExprId),
+    /// Type supports ordering comparisons.
+    Ord,
+    /// Type supports `map`: `Mappable[Element]`.
+    Mappable(AstTypeExprId),
+    /// Type supports `fold`: `Foldable[Element]`.
+    Foldable(AstTypeExprId),
+    /// Type supports `filter`: `Filterable[Element]`.
+    Filterable(AstTypeExprId),
+    /// Type can be converted to a display string.
+    Display,
 }
 
 /// A type parameter with optional class constraints.
@@ -1135,6 +1131,18 @@ pub(crate) struct Import {
     pub(crate) items: Vec<ImportItem>,
 }
 
+/// A method definition in a class instance.
+///
+/// Represents `FUN method(params) -> RetType { body }` inside a `CLASS ... FOR ...` block.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct InstanceMethodDef {
+    pub(crate) name: String,
+    pub(crate) params: SmallVec<[(String, Option<AstTypeExprId>); 4]>,
+    pub(crate) ret: Option<AstTypeExprId>,
+    pub(crate) body: ExprId,
+    pub(crate) span: Span,
+}
+
 /// A statement node.
 ///
 /// All recursive references use `ExprId`/`StmtId` indices into the `Ast` arena.
@@ -1250,4 +1258,30 @@ pub(crate) enum Stmt {
     /// - `IMPORT M.{ ... }` ; import all public members
     /// - `IMPORT M.{ ..., -excluded }` ; wildcard with exclusions
     Import(Import),
+
+    /// User-defined class instance: `CLASS ClassName FOR Type { methods }`.
+    ///
+    /// Implements a builtin class (`Display`, `Into`, `Ord`, etc.) for a user
+    /// type (`TYPE`, `NEWTYPE`, or `UNION`).
+    ///
+    /// Examples:
+    /// - `CLASS Display FOR Point { FUN display(p: Point) -> String { ... } }`
+    /// - `CLASS Into[String] FOR UserId { FUN into(id: UserId) -> String { ... } }`
+    /// - `CLASS Display FOR Pair[A, B] WHERE A: Display, B: Display { ... }`
+    ClassInstance {
+        /// Class name (e.g., `"Display"`, `"Into"`, `"Ord"`).
+        class_name: String,
+        /// Class type arguments (e.g., `[String]` for `Into[String]`).
+        class_args: SmallVec<[AstTypeExprId; 2]>,
+        /// Type parameters for polymorphic instances (e.g., `[A, B]` in `Pair[A, B]`).
+        type_params: SmallVec<[TypeParam; 2]>,
+        /// The user type implementing the class.
+        for_type: AstTypeExprId,
+        /// WHERE clause constraints (e.g., `A: Display, B: Display`).
+        ///
+        /// Each entry is `(type_param_name, constraints)`.
+        constraints: SmallVec<[(String, SmallVec<[Class; 2]>); 2]>,
+        /// Method implementations.
+        methods: SmallVec<[InstanceMethodDef; 4]>,
+    },
 }

@@ -489,6 +489,22 @@ impl InferCtx<'_> {
             ast::Class::TryInto(ty_id) => {
                 Class::TryInto(self.ast_type_to_ty(*ty_id, subst))
             }
+            ast::Class::Indexable(k_id, v_id) => {
+                let k = self.ast_type_to_ty(*k_id, subst);
+                let v = self.ast_type_to_ty(*v_id, subst);
+                Class::Indexable(k, v)
+            }
+            ast::Class::Ord => Class::Ord,
+            ast::Class::Mappable(ty_id) => {
+                Class::Mappable(self.ast_type_to_ty(*ty_id, subst))
+            }
+            ast::Class::Foldable(ty_id) => {
+                Class::Foldable(self.ast_type_to_ty(*ty_id, subst))
+            }
+            ast::Class::Filterable(ty_id) => {
+                Class::Filterable(self.ast_type_to_ty(*ty_id, subst))
+            }
+            ast::Class::Display => Class::Display,
         }
     }
 

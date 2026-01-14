@@ -226,6 +226,7 @@ impl Parser {
             let type_stmt = Self::type_stmt();
             let newtype_stmt = Self::newtype_stmt();
             let union_stmt = Self::union_stmt();
+            let class_stmt = Self::class_stmt(stmt.clone());
             let module_stmt = Self::module_stmt(stmt.clone());
             let expr_stmt = Self::expr_stmt(stmt);
 
@@ -239,6 +240,7 @@ impl Parser {
                 type_stmt,
                 newtype_stmt,
                 union_stmt,
+                class_stmt,
                 module_stmt,
                 expr_stmt,
             ))
@@ -1012,6 +1014,149 @@ impl Parser {
                     span,
                 )
             })
+    }
+
+    /// `CLASS ClassName[ClassArgs] FOR TypeExpr [WHERE constraints] { methods }`
+    ///
+    /// User-defined class instance declaration. Implements a builtin class
+    /// (e.g., `Display`, `Into`, `Ord`) for a user type.
+    ///
+    /// Examples:
+    /// - `CLASS Display FOR Point { FUN display(p) -> String { ... } }`
+    /// - `CLASS Into[String] FOR UserId { FUN into(id) -> String { ... } }`
+    /// - `CLASS Display FOR Pair[A, B] WHERE A: Display, B: Display { ... }`
+    fn class_stmt(
+        stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
+        // Optional class type arguments: `[String]` for `Into[String]`
+        let class_args = just(Token::LBracket)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(
+                Self::type_expr()
+                    .separated_by(
+                        just(Token::Comma).then_ignore(Self::opt_newlines()),
+                    )
+                    .at_least(1)
+                    .allow_trailing(),
+            )
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RBracket))
+            .or_not()
+            .map(|ps| ps.unwrap_or_default());
+
+        // WHERE clause constraint: `name: Class1 + Class2`
+        let where_constraint = Self::ident()
+            .then_ignore(just(Token::Colon))
+            .then_ignore(Self::opt_newlines())
+            .then(
+                Self::constraint()
+                    .separated_by(
+                        Self::opt_newlines()
+                            .ignore_then(just(Token::Plus))
+                            .then_ignore(Self::opt_newlines()),
+                    )
+                    .at_least(1),
+            );
+
+        // Optional WHERE clause: `WHERE A: Display, B: Display`
+        let where_clause = Self::ctx_ident("WHERE")
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(
+                where_constraint
+                    .separated_by(
+                        just(Token::Comma).then_ignore(Self::opt_newlines()),
+                    )
+                    .at_least(1)
+                    .allow_trailing(),
+            )
+            .or_not()
+            .map(|cs| cs.unwrap_or_default());
+
+        // Instance method: `FUN name(params) [-> Type] { body }`
+        let method_param = Self::ident().then(
+            just(Token::Colon)
+                .ignore_then(Self::opt_newlines())
+                .ignore_then(Self::type_expr())
+                .or_not(),
+        );
+        let method_param_sep =
+            just(Token::Comma).then_ignore(Self::opt_newlines());
+        let method_params = just(Token::LParen)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(
+                method_param.separated_by(method_param_sep).allow_trailing(),
+            )
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RParen));
+        let method_ret = Self::opt_newlines()
+            .ignore_then(just(Token::Arrow))
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(Self::type_expr())
+            .or_not();
+        let method_body = Self::block(stmt.clone());
+
+        let method = just(Token::Fun)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(Self::ident())
+            .then_ignore(Self::opt_newlines())
+            .then(method_params)
+            .then(method_ret)
+            .then(method_body)
+            .map_with_span(
+                |(((name, params_vec), ret), (stmts, blk_span)), span| {
+                    let params = SmallVec::from_vec(params_vec);
+                    let body = Self::stmts_to_block(stmts, blk_span);
+                    cst::InstanceMethodDef {
+                        name,
+                        params,
+                        ret,
+                        body,
+                        span,
+                    }
+                },
+            );
+
+        // Methods body: `{ FUN ... FUN ... }`
+        let methods_body = just(Token::LBrace)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(method.separated_by(Self::item_sep()).allow_trailing())
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RBrace));
+
+        // Full CLASS statement
+        just(Token::Class)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(Self::ident())
+            .then(class_args)
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(Self::ctx_ident("FOR"))
+            .then_ignore(Self::opt_newlines())
+            .then(Self::type_expr())
+            .then_ignore(Self::opt_newlines())
+            .then(where_clause)
+            .then_ignore(Self::opt_newlines())
+            .then(methods_body)
+            .map_with_span(
+                |(
+                    (((class_name, class_args), for_type), constraints),
+                    methods,
+                ),
+                 span| {
+                    cst::Stmt::new(
+                        cst::StmtKind::ClassInstance {
+                            class_name,
+                            class_args,
+                            type_params: vec![], // Derived during resolution
+                            for_type,
+                            constraints,
+                            methods,
+                        },
+                        span,
+                    )
+                },
+            )
     }
 
     /// User-defined module declaration.
@@ -2921,12 +3066,52 @@ impl Parser {
                         },
                         |ty| Ok(cst::Class::TryInto(ty)),
                     ),
+                    "Indexable" => {
+                        let mut it = args.into_iter();
+                        match (it.next(), it.next()) {
+                            (Some(k), Some(v)) => Ok(cst::Class::Indexable(k, v)),
+                            _ => Err(Simple::custom(
+                                span,
+                                "`Indexable` requires two type arguments; use `Indexable[K, V]`",
+                            )),
+                        }
+                    }
+                    "Ord" => Ok(cst::Class::Ord),
+                    "Mappable" => args.into_iter().next().map_or_else(
+                        || {
+                            Err(Simple::custom(
+                                span,
+                                "`Mappable` requires a type argument; use `Mappable[T]`",
+                            ))
+                        },
+                        |ty| Ok(cst::Class::Mappable(ty)),
+                    ),
+                    "Foldable" => args.into_iter().next().map_or_else(
+                        || {
+                            Err(Simple::custom(
+                                span,
+                                "`Foldable` requires a type argument; use `Foldable[T]`",
+                            ))
+                        },
+                        |ty| Ok(cst::Class::Foldable(ty)),
+                    ),
+                    "Filterable" => args.into_iter().next().map_or_else(
+                        || {
+                            Err(Simple::custom(
+                                span,
+                                "`Filterable` requires a type argument; use `Filterable[T]`",
+                            ))
+                        },
+                        |ty| Ok(cst::Class::Filterable(ty)),
+                    ),
+                    "Display" => Ok(cst::Class::Display),
                     _ => Err(Simple::custom(
                         span,
                         format!(
                             "unknown class `{name}`; valid classes are: \
-                             Numeric, Negatable, Subscriptable, Storable, Iterable[T], \
-                             Monoid, BitLike, Fallible[T], Into[T], TryInto[T]"
+                             Numeric, Negatable, Iterable[T], Monoid, BitLike, \
+                             Fallible[T], Into[T], TryInto[T], Indexable[K, V], \
+                             Ord, Mappable[T], Foldable[T], Filterable[T], Display"
                         ),
                     )),
                 }

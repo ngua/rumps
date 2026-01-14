@@ -50,45 +50,37 @@ use crate::Span;
 
 /// Type class constraint for type parameters (Haskell-style).
 ///
-/// This is a subset of the internal `Constraint` enum from the typechecker.
-/// Not all internal constraints are exposed to users; see the design doc
-/// at `TODOS/dsl/type-constraints.md` for rationale.
+/// Mirrors `ClassKind` in the typechecker; all classes should be representable.
 #[derive(Clone, Debug)]
 pub(crate) enum Class {
     /// Type is `Int` or `Float`.
     Numeric,
     /// Type is iterable (`Array[T]` or `Range`).
-    ///
-    /// The inner type expression can be a type parameter name (`Iterable[T]`)
-    /// or a concrete type (`Iterable[Int]`).
     Iterable(TypeExpr),
     /// Type supports monoidal concatenation (`++`).
-    ///
-    /// Satisfied by `String`, `Array[T]`, and `Map[K, V]`.
     Monoid,
     /// Type supports bitwise operations (`&`, `|`, `<<`, `>>`).
-    ///
-    /// Satisfied by `Bool`, `Int`, and `Word`.
     BitLike,
     /// Type can be negated with unary `-`.
-    ///
-    /// Satisfied by `Int` and `Float` (NOT `Word`, which is unsigned).
     Negatable,
     /// Type is fallible (`Option[T]` or `Result[T, E]`).
-    ///
-    /// The inner type expression can be a type parameter name (`Fallible[T]`)
-    /// or a concrete type (`Fallible[Int]`).
     Fallible(TypeExpr),
     /// Type can be converted to another type: `Into[Target]`.
-    ///
-    /// The constrained type parameter is the source; the argument is the target.
-    /// For example, `T: Into[String]` means `T` can be converted to `String`.
     Into(TypeExpr),
     /// Type can be fallibly converted to another type: `TryInto[Target]`.
-    ///
-    /// The constrained type parameter is the source; the argument is the target.
-    /// For example, `T: TryInto[Int]` means `T` can be `READ` into `Int`.
     TryInto(TypeExpr),
+    /// Type supports indexing: `Indexable[Key, Value]`.
+    Indexable(TypeExpr, TypeExpr),
+    /// Type supports ordering comparisons.
+    Ord,
+    /// Type supports `map`: `Mappable[Element]`.
+    Mappable(TypeExpr),
+    /// Type supports `fold`: `Foldable[Element]`.
+    Foldable(TypeExpr),
+    /// Type supports `filter`: `Filterable[Element]`.
+    Filterable(TypeExpr),
+    /// Type can be converted to a display string.
+    Display,
 }
 
 /// A type parameter with optional class constraints.
@@ -461,6 +453,16 @@ pub(crate) enum BindingPattern {
     Wildcard,
 }
 
+/// A method definition in a class instance (CST form).
+#[derive(Clone, Debug)]
+pub(crate) struct InstanceMethodDef {
+    pub(crate) name: String,
+    pub(crate) params: SmallVec<[(String, Option<TypeExpr>); 4]>,
+    pub(crate) ret: Option<TypeExpr>,
+    pub(crate) body: Expr,
+    pub(crate) span: Span,
+}
+
 /// The kind of a CST statement.
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
@@ -548,6 +550,32 @@ pub(crate) enum StmtKind {
     ///
     /// Syntax: `IMPORT Module.{ member, ... }` or `IMPORT Module.{ ... }`.
     Import(ImportStmt),
+
+    /// User-defined class instance: `CLASS ClassName FOR Type { methods }`.
+    ///
+    /// Implements a builtin class (`Display`, `Into`, `Ord`, etc.) for a user
+    /// type (`TYPE`, `NEWTYPE`, or `UNION`).
+    ///
+    /// Examples:
+    /// - `CLASS Display FOR Point { FUN display(p: Point) -> String { ... } }`
+    /// - `CLASS Into[String] FOR UserId { FUN into(id: UserId) -> String { ... } }`
+    /// - `CLASS Display FOR Pair[A, B] WHERE A: Display, B: Display { ... }`
+    ClassInstance {
+        /// Class name (e.g., `"Display"`, `"Into"`, `"Ord"`).
+        class_name: String,
+        /// Class type arguments (e.g., `[String]` for `Into[String]`).
+        class_args: Vec<TypeExpr>,
+        /// Type parameters for polymorphic instances (e.g., `[A, B]` in `Pair[A, B]`).
+        type_params: Vec<TypeParam>,
+        /// The user type implementing the class.
+        for_type: TypeExpr,
+        /// WHERE clause constraints (e.g., `A: Display, B: Display`).
+        ///
+        /// Each entry is `(type_param_name, constraints)`.
+        constraints: Vec<(String, Vec<Class>)>,
+        /// Method implementations.
+        methods: Vec<InstanceMethodDef>,
+    },
 }
 
 /// Source of a module's contents.

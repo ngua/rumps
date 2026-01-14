@@ -93,6 +93,12 @@ impl InferCtx<'_> {
                 self.user_module_with_path(&name, &body, span);
             }
 
+            Some(Stmt::ClassInstance { .. }) => {
+                self.env.mark_non_import();
+                // Class instances are validated and registered during Phase 6.
+                // TODO: Implement class instance type checking.
+            }
+
             None => {}
         }
     }
@@ -203,6 +209,10 @@ impl InferCtx<'_> {
                 Some(Stmt::Import(ref import)) => {
                     // Process import inside module
                     self.import_stmt(import, item_span);
+                }
+                Some(Stmt::ClassInstance { .. }) => {
+                    // Class instances are validated and registered during Phase 6.
+                    // TODO: Implement class instance type checking inside modules.
                 }
                 None => {}
             }

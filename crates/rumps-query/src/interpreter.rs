@@ -534,6 +534,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 self.user_module(&name, &body, span).await
             }
             Stmt::Import(ref import) => self.import(import, span),
+            Stmt::ClassInstance { .. } => {
+                // Class instances are processed during resolution, not execution.
+                // TODO: Phase 5 will add registration logic here.
+                Ok(())
+            }
         }
     }
 
