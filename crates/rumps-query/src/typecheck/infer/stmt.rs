@@ -10,11 +10,13 @@ use smallvec::SmallVec;
 use super::{Constraint, InferCtx};
 use crate::ast::{
     self, ArrayElem, AstTypeExpr, AstTypeExprId, BindingPattern, DbRef, Expr,
-    ExprId, Import, ImportItem, Literal, OutputFormat, OutputTarget, RefTarget,
-    Stmt, StmtId, SubscriptElem, TxnId, TypeParam, UnOp, Visibility, WriteExpr,
+    ExprId, Import, ImportItem, InstanceMethodDef, Literal, OutputFormat,
+    OutputTarget, RefTarget, Stmt, StmtId, SubscriptElem, TxnId, TypeParam,
+    UnOp, Visibility, WriteExpr,
 };
 use crate::typecheck::error::TypeError;
-use crate::typecheck::ty::{Class, Scheme, Ty, TyVar};
+use crate::typecheck::instance::Instance;
+use crate::typecheck::ty::{Class, ClassKind, Scheme, Ty, TyVar};
 use crate::value::{TypeDef, TypeId};
 use crate::Span;
 
@@ -93,10 +95,24 @@ impl InferCtx<'_> {
                 self.user_module_with_path(&name, &body, span);
             }
 
-            Some(Stmt::ClassInstance { .. }) => {
+            Some(Stmt::ClassInstance {
+                class_name,
+                class_args,
+                type_params,
+                for_type,
+                constraints,
+                methods,
+            }) => {
                 self.env.mark_non_import();
-                // Class instances are validated and registered during Phase 6.
-                // TODO: Implement class instance type checking.
+                self.class_instance(
+                    &class_name,
+                    &class_args,
+                    &type_params,
+                    for_type,
+                    &constraints,
+                    &methods,
+                    span,
+                );
             }
 
             None => {}
@@ -210,9 +226,24 @@ impl InferCtx<'_> {
                     // Process import inside module
                     self.import_stmt(import, item_span);
                 }
-                Some(Stmt::ClassInstance { .. }) => {
-                    // Class instances are validated and registered during Phase 6.
-                    // TODO: Implement class instance type checking inside modules.
+                Some(Stmt::ClassInstance {
+                    ref class_name,
+                    ref class_args,
+                    ref type_params,
+                    for_type,
+                    ref constraints,
+                    ref methods,
+                    ..
+                }) => {
+                    self.class_instance(
+                        class_name,
+                        class_args,
+                        type_params,
+                        for_type,
+                        constraints,
+                        methods,
+                        item_span,
+                    );
                 }
                 None => {}
             }
@@ -708,6 +739,349 @@ impl InferCtx<'_> {
                 let union_ty = Ty::Union(vec![Ty::FilePath, Ty::String]);
                 self.unify(path_ty, union_ty, span);
             }
+        }
+    }
+
+    /// Infer types for a `CLASS ... FOR ...` instance declaration.
+    ///
+    /// Validates:
+    /// 1. The class name is a valid `ClassKind`
+    /// 2. The `for_type` is NOT a builtin type
+    /// 3. All required methods are present
+    /// 4. Method signatures match the class definition (arity)
+    /// 5. Method bodies typecheck correctly
+    ///
+    /// Registers the instance in `InstanceRegistry` on success.
+    #[allow(clippy::too_many_arguments)]
+    fn class_instance(
+        &mut self,
+        class_name: &str,
+        class_args: &SmallVec<[AstTypeExprId; 2]>,
+        type_params: &SmallVec<[TypeParam; 2]>,
+        for_type: AstTypeExprId,
+        constraints: &SmallVec<[(String, SmallVec<[ast::Class; 2]>); 2]>,
+        methods: &SmallVec<[InstanceMethodDef; 4]>,
+        span: Span,
+    ) {
+        // 1. Resolve class name to ClassKind
+        let class = ClassKind::from_str(class_name).unwrap_or_else(|| {
+            self.error(TypeError::UnknownClass(class_name.to_string(), span));
+            ClassKind::Display // Default to `Display` to avoid cascading errors
+        });
+
+        // 2. Resolve for_type and get its TypeId
+        let for_ty = self.ast_type_to_ty(for_type, &HashMap::new());
+        let type_id = self.extract_type_id(&for_ty);
+
+        // Check that it's a user type (not builtin)
+        if let Some(tid) = type_id {
+            if self.is_builtin_type(tid) {
+                self.error(TypeError::BuiltinInstanceForbidden {
+                    class,
+                    type_id: tid,
+                    span,
+                });
+            }
+        }
+
+        // 3. Build type parameter substitution map
+        let type_param_subst: HashMap<_, _> = type_params
+            .iter()
+            .map(|tp| {
+                let id = self.env.intern(&tp.name);
+                let tv = self.fresh_var();
+                (id, Ty::Var(tv))
+            })
+            .collect();
+
+        // 4. Convert class args to Ty
+        let class_arg_tys: SmallVec<[Ty; 2]> = class_args
+            .iter()
+            .map(|id| self.ast_type_to_ty(*id, &type_param_subst))
+            .collect();
+
+        // 5. Process WHERE constraints
+        let mut scheme_constraints: SmallVec<[(TyVar, Class); 2]> =
+            SmallVec::new();
+        constraints
+            .iter()
+            .for_each(|(param_name, param_constraints)| {
+                let param_id = self.env.intern(param_name);
+                let ty = type_param_subst
+                    .get(&param_id)
+                    .cloned()
+                    .unwrap_or(Ty::Unknown);
+                let tv = match ty {
+                    Ty::Var(v) => v,
+                    _ => self.fresh_var(),
+                };
+                param_constraints.iter().for_each(|c| {
+                    scheme_constraints.push((
+                        tv,
+                        self.ast_class_to_ty_class(c, &type_param_subst),
+                    ));
+                });
+            });
+
+        // 6. Collect provided method names
+        let provided_methods: HashSet<&str> =
+            methods.iter().map(|m| m.name.as_str()).collect();
+
+        // 7. Check all required methods are present
+        class.required_methods().iter().for_each(|req| {
+            if !provided_methods.contains(req) {
+                self.error(TypeError::MissingInstanceMethod {
+                    class,
+                    method: req.to_string(),
+                    span,
+                });
+            }
+        });
+
+        // 8. Typecheck each method
+        methods.iter().for_each(|m| {
+            self.instance_method(class, &for_ty, &type_param_subst, m, span);
+        });
+
+        // 9. Register instance (if we have a valid type_id)
+        let type_name = self.extract_type_name_from_ast(for_type);
+        if let Some(tid) = type_id {
+            let method_map: HashMap<_, _> = methods
+                .iter()
+                .map(|m| {
+                    let method_id = self.env.intern(&m.name);
+                    let fn_name =
+                        crate::interpreter::instance::instance_fn_name(
+                            class, &type_name, &m.name,
+                        );
+                    let fn_name_id = self.env.intern(&fn_name);
+                    (method_id, fn_name_id)
+                })
+                .collect();
+
+            let type_var_params: SmallVec<[TyVar; 2]> = type_params
+                .iter()
+                .filter_map(|tp| {
+                    let id = self.env.intern(&tp.name);
+                    type_param_subst.get(&id).and_then(|ty| match ty {
+                        Ty::Var(v) => Some(*v),
+                        _ => None,
+                    })
+                })
+                .collect();
+
+            let inst = Instance {
+                class,
+                class_args: class_arg_tys,
+                type_params: type_var_params,
+                constraints: scheme_constraints,
+                methods: method_map,
+                span,
+            };
+
+            if let Err(e) = self.instance_registry.register(tid, inst) {
+                self.error(e);
+            }
+        }
+    }
+
+    /// Typecheck a single instance method definition.
+    ///
+    /// Validates that the method signature matches the class definition and
+    /// typechecks the method body.
+    fn instance_method(
+        &mut self,
+        class: ClassKind,
+        for_ty: &Ty,
+        type_param_subst: &HashMap<crate::intern::StringId, Ty>,
+        method: &InstanceMethodDef,
+        inst_span: Span,
+    ) {
+        let m_span = method.span;
+
+        // Get expected method signature from class
+        let expected = class.method(&method.name, m_span);
+
+        // Handle unknown method error
+        let (expected_param_tys, expected_ret_ty) = expected
+            .map(|spec| {
+                let scheme = spec.scheme();
+                // The first quantified var represents `Self` in class methods
+                let self_var = scheme.vars.first().copied();
+                // Extract param and return types, substituting `Self` with `for_ty`
+                match &scheme.ty {
+                    Ty::Fn(params, ret) => {
+                        let subst = |ty: &Ty| {
+                            self.subst_self_type(ty, self_var, for_ty)
+                        };
+                        (
+                            params.iter().map(subst).collect::<Vec<_>>(),
+                            subst(ret),
+                        )
+                    }
+                    _ => (vec![], Ty::Unknown),
+                }
+            })
+            .unwrap_or_else(|e| {
+                self.error(e);
+                (vec![], Ty::Unknown)
+            });
+
+        // Check arity
+        if method.params.len() != expected_param_tys.len() {
+            self.error(TypeError::MethodSignatureMismatch {
+                class,
+                method: method.name.clone(),
+                expected: expected_param_tys.len(),
+                got: method.params.len(),
+                span: m_span,
+            });
+        }
+
+        // Typecheck method body
+        self.env.push_scope();
+
+        // Bind parameters with user-provided types (or inferred)
+        let param_tys =
+            self.param_tys_with_subst(&method.params, type_param_subst);
+
+        // Unify user param types with expected param types
+        param_tys.iter().zip(expected_param_tys.iter()).for_each(
+            |(user_ty, exp_ty)| {
+                self.unify(user_ty.clone(), exp_ty.clone(), m_span);
+            },
+        );
+
+        self.bind_params(&method.params, &param_tys);
+
+        // Infer body type
+        let body_ty = self.expr(method.body);
+
+        // Determine expected return type (user annotation or class signature)
+        let ret_ty = method
+            .ret
+            .map(|ret_id| self.ast_type_to_ty(ret_id, type_param_subst))
+            .unwrap_or_else(|| expected_ret_ty.clone());
+
+        // Unify body with return type
+        self.unify(body_ty.clone(), ret_ty.clone(), m_span);
+
+        // Also unify with class's expected return type (catches wrong annotation)
+        if !matches!(expected_ret_ty, Ty::Unknown) {
+            self.unify(ret_ty, expected_ret_ty, inst_span);
+        }
+
+        self.env.pop_scope();
+    }
+
+    /// Extract a `TypeId` from a `Ty`, if it represents a named/aliased type.
+    fn extract_type_id(&self, ty: &Ty) -> Option<TypeId> {
+        match ty {
+            Ty::Named(id, _) => Some(*id),
+            Ty::Unknown | Ty::Error => None,
+            // For primitive types, look up by name
+            _ => self.primitive_type_id(ty),
+        }
+    }
+
+    /// Get the type name from an `AstTypeExprId` for function name generation.
+    fn extract_type_name_from_ast(&self, id: AstTypeExprId) -> String {
+        self.ast
+            .get_type_expr(id)
+            .and_then(|te| match te {
+                AstTypeExpr::Named(name) => Some(name.clone()),
+                AstTypeExpr::App(name, _) => Some(name.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| "Unknown".to_string())
+    }
+
+    /// Check if a `TypeId` represents a builtin type.
+    fn is_builtin_type(&self, id: TypeId) -> bool {
+        self.registry
+            .get_def(id)
+            .is_some_and(|def| matches!(def, TypeDef::Builtin(_)))
+    }
+
+    /// Get the `TypeId` for a primitive `Ty`.
+    fn primitive_type_id(&self, ty: &Ty) -> Option<TypeId> {
+        match ty {
+            Ty::Bool => Some(TypeId::BOOL),
+            Ty::Int => Some(TypeId::INT),
+            Ty::Word => Some(TypeId::WORD),
+            Ty::Float => Some(TypeId::FLOAT),
+            Ty::Char => Some(TypeId::CHAR),
+            Ty::String => Some(TypeId::STRING),
+            Ty::Unit => Some(TypeId::UNIT),
+            Ty::Time => Some(TypeId::TIME),
+            Ty::Range => Some(TypeId::RANGE),
+            Ty::Json => Some(TypeId::JSON),
+            Ty::Ordering => Some(TypeId::ORDERING),
+            Ty::DataStatus => Some(TypeId::DATA_STATUS),
+            Ty::FilePath => Some(TypeId::FILEPATH),
+            Ty::Path => Some(TypeId::PATH),
+            Ty::Regex => Some(TypeId::REGEX),
+            Ty::Local => Some(TypeId::LOCAL),
+            Ty::Global => Some(TypeId::GLOBAL),
+            _ => None,
+        }
+    }
+
+    /// Substitute the `Self` type variable in a class method signature.
+    ///
+    /// Class methods like `Display:display` have signature `forall T: Display. (T) -> String`
+    /// where `T` represents the implementing type. When checking an instance, we substitute
+    /// this type var with the actual `for_ty`.
+    fn subst_self_type(
+        &self,
+        ty: &Ty,
+        self_var: Option<TyVar>,
+        for_ty: &Ty,
+    ) -> Ty {
+        self_var
+            .map_or_else(|| ty.clone(), |sv| self.subst_tyvar(ty, sv, for_ty))
+    }
+
+    /// Recursively substitute a type variable with a concrete type.
+    fn subst_tyvar(&self, ty: &Ty, var: TyVar, replacement: &Ty) -> Ty {
+        match ty {
+            Ty::Var(v) if *v == var => replacement.clone(),
+            Ty::Var(_) => ty.clone(),
+            Ty::Fn(params, ret) => Ty::Fn(
+                params
+                    .iter()
+                    .map(|p| self.subst_tyvar(p, var, replacement))
+                    .collect(),
+                Box::new(self.subst_tyvar(ret, var, replacement)),
+            ),
+            Ty::Array(elem) => {
+                Ty::Array(Box::new(self.subst_tyvar(elem, var, replacement)))
+            }
+            Ty::Map(k, v) => Ty::Map(
+                Box::new(self.subst_tyvar(k, var, replacement)),
+                Box::new(self.subst_tyvar(v, var, replacement)),
+            ),
+            Ty::Tuple(elems) => Ty::Tuple(
+                elems
+                    .iter()
+                    .map(|e| self.subst_tyvar(e, var, replacement))
+                    .collect(),
+            ),
+            Ty::Option(inner) => {
+                Ty::Option(Box::new(self.subst_tyvar(inner, var, replacement)))
+            }
+            Ty::Result(ok, err) => Ty::Result(
+                Box::new(self.subst_tyvar(ok, var, replacement)),
+                Box::new(self.subst_tyvar(err, var, replacement)),
+            ),
+            Ty::Named(id, args) => Ty::Named(
+                *id,
+                args.iter()
+                    .map(|a| self.subst_tyvar(a, var, replacement))
+                    .collect(),
+            ),
+            // Primitives and other non-parametric types pass through
+            _ => ty.clone(),
         }
     }
 }

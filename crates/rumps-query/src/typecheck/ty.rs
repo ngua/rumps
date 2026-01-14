@@ -234,6 +234,29 @@ impl ClassKind {
             Self::Display => "Display",
         }
     }
+
+    /// Returns the list of methods that must be implemented for this class.
+    ///
+    /// Used during `CLASS ... FOR ...` validation to ensure all required
+    /// methods are provided by the user.
+    pub(crate) const fn required_methods(self) -> &'static [&'static str] {
+        match self {
+            Self::Numeric => &["add", "sub", "mul", "floor-div", "mod", "pow"],
+            Self::Negatable => &["neg"],
+            Self::BitLike => &["bit-and", "bit-or", "shl", "shr"],
+            Self::Ord => &["compare"],
+            Self::Monoid => &["identity", "concat"],
+            Self::Fallible => &["unwrap", "wrap", "flat-map"],
+            Self::Iterable => &["length", "contains", "reverse", "foreach"],
+            Self::Mappable => &["map"],
+            Self::Filterable => &["filter"],
+            Self::Foldable => &["reduce"],
+            Self::Into => &["into"],
+            Self::TryInto => &["try-into"],
+            Self::Indexable => &["index", "get"],
+            Self::Display => &["display"],
+        }
+    }
 }
 
 /// User-facing type class constraint (Haskell-style).

@@ -399,6 +399,28 @@ pub(crate) enum TypeError {
         type_id: TypeId,
         span: Span,
     },
+
+    /// Missing required method in class instance declaration.
+    ///
+    /// All methods defined by a class must be implemented.
+    #[error("missing required method `{method}` for class `{class:?}`")]
+    MissingInstanceMethod {
+        class: ClassKind,
+        method: String,
+        span: Span,
+    },
+
+    /// Method signature mismatch in class instance declaration.
+    ///
+    /// The user-provided method signature does not match the class definition.
+    #[error("method `{method}` has wrong signature: expected {expected} parameter(s), got {got}")]
+    MethodSignatureMismatch {
+        class: ClassKind,
+        method: String,
+        expected: usize,
+        got: usize,
+        span: Span,
+    },
 }
 
 impl TypeError {
@@ -438,7 +460,9 @@ impl TypeError {
             | Self::UnknownMethod { span, .. }
             | Self::ConvertMethodNeedsType { span, .. }
             | Self::DuplicateInstance { span, .. }
-            | Self::BuiltinInstanceForbidden { span, .. } => *span,
+            | Self::BuiltinInstanceForbidden { span, .. }
+            | Self::MissingInstanceMethod { span, .. }
+            | Self::MethodSignatureMismatch { span, .. } => *span,
         }
     }
 
@@ -640,6 +664,33 @@ impl TypeError {
                     p.type_name(*type_id)
                 ),
                 Some("class instances can only be defined for user types (TYPE, NEWTYPE, UNION)".to_owned()),
+            ),
+            Self::MissingInstanceMethod { class, method, .. } => (
+                format!(
+                    "missing required method `{}` for class `{}`",
+                    method,
+                    class.name()
+                ),
+                Some(format!(
+                    "required methods: {}",
+                    class.required_methods().join(", ")
+                )),
+            ),
+            Self::MethodSignatureMismatch {
+                class,
+                method,
+                expected,
+                got,
+                ..
+            } => (
+                format!(
+                    "method `{}` of class `{}` has wrong arity: expected {} parameter(s), got {}",
+                    method,
+                    class.name(),
+                    expected,
+                    got
+                ),
+                None,
             ),
         };
 
