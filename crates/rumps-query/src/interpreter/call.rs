@@ -433,13 +433,105 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Dispatch a class method call.
     ///
-    /// Unified entry point for all class methods. Sync methods (like `Numeric:add`)
-    /// don't await internally; async HOFs (like `Mappable:map`) do.
+    /// Unified entry point for all class methods. Checks for user-defined instances
+    /// first; falls back to builtin dispatch if none found.
+    ///
+    /// User instance lookup:
+    /// 1. Check `instance_calls` map (for NEWTYPE/UNION where type isn't in value)
+    /// 2. Check first arg if `Value::Tagged` (for TYPE/sum types)
+    /// 3. Look up user instance by (class, type_id)
+    /// 4. If found, dispatch to generated function; else use builtin
     ///
     /// The `expr_id` parameter is used by nullary methods (like `Monoid:identity`)
-    /// to look up the inferred type from `mempty_types`.
+    /// to look up the inferred type from `mempty_types`, and for user instance
+    /// dispatch with NEWTYPE/UNION types.
     #[async_recursion]
     pub(super) async fn dispatch_class_method(
+        &mut self,
+        expr_id: Option<ExprId>,
+        class: crate::typecheck::ClassKind,
+        method: &str,
+        args: &[ValueId],
+        span: Span,
+    ) -> Result<Value> {
+        // Check for user-defined instance dispatch.
+        // Priority: instance_calls map (for NEWTYPE/UNION) > Value::Tagged (for TYPE)
+        let user_type_id = expr_id
+            .and_then(|id| self.instance_calls.get(&id).copied())
+            .or_else(|| {
+                args.first()
+                    .and_then(|id| self.arena.get(*id))
+                    .and_then(|v| match v {
+                        Value::Tagged(ty_expr, _, _) => {
+                            self.type_exprs.base_type(*ty_expr)
+                        }
+                        _ => None,
+                    })
+            });
+
+        // If we have a user type, check for user instance
+        if let Some(type_id) = user_type_id {
+            let method_id = self.arena.intern(method);
+            if let Some(fn_name) =
+                self.user_instances.lookup_method(class, type_id, method_id)
+            {
+                // Dispatch to user-defined instance method
+                let func_def = self.functions.get(&fn_name).cloned();
+                if let Some(def) = func_def {
+                    self.invoke_function(
+                        &def.params,
+                        def.ret,
+                        def.body,
+                        args,
+                        span,
+                    )
+                    .await
+                } else {
+                    // User instance registered but function not found; should be
+                    // unreachable if Phase 5 is implemented correctly
+                    typechecked!("user instance method", "registered function")
+                }
+            } else {
+                // No user instance for this type; use builtin
+                self.dispatch_builtin_or_hof(expr_id, class, method, args, span)
+                    .await
+            }
+        } else {
+            // No user type; use builtin
+            self.dispatch_builtin_or_hof(expr_id, class, method, args, span)
+                .await
+        }
+    }
+
+    /// Dispatch to builtin class method or async HOF.
+    ///
+    /// Async wrapper that handles both sync builtin methods and async HOFs.
+    #[async_recursion]
+    async fn dispatch_builtin_or_hof(
+        &mut self,
+        expr_id: Option<ExprId>,
+        class: crate::typecheck::ClassKind,
+        method: &str,
+        args: &[ValueId],
+        span: Span,
+    ) -> Result<Value> {
+        // Check for HOF first (requires async)
+        if let Some(super::class::MethodFn::Hof(f)) =
+            self.class_methods.lookup(class, method)
+        {
+            self.run_hof_trampoline(f, args, span).await
+        } else {
+            self.dispatch_builtin_class_method(
+                expr_id, class, method, args, span,
+            )
+        }
+    }
+
+    /// Dispatch to builtin class method implementations.
+    ///
+    /// Handles all class methods defined in `class.rs`. Sync methods execute
+    /// directly; async HOFs use the trampoline pattern.
+    fn dispatch_builtin_class_method(
         &mut self,
         expr_id: Option<ExprId>,
         class: crate::typecheck::ClassKind,
@@ -523,8 +615,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                 self.class_methods
                     .dispatch_convert(class, method, &mut ctx, &v, &ty)
             }
-            Some(super::class::MethodFn::Hof(f)) => {
-                self.run_hof_trampoline(f, args, span).await
+            Some(super::class::MethodFn::Hof(_)) => {
+                // HOFs need async; caller should use dispatch_class_method
+                typechecked!("builtin Hof", "async context")
             }
             None => typechecked!("class method", "registered"),
         }

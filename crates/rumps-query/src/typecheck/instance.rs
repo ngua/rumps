@@ -14,13 +14,6 @@ use super::TypeError;
 use crate::intern::StringId;
 use crate::{Span, TypeId};
 
-/// Identifier for a generated instance method function.
-///
-/// TODO: Wire this up in Phase 5 (Resolution) when instance methods are
-/// lowered to named functions. For now this is a placeholder.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct FnId(pub(crate) u32);
-
 /// A user-defined instance of a builtin class for a user type.
 ///
 /// Example: `CLASS Display FOR Point { ... }` creates an instance with
@@ -38,10 +31,11 @@ pub(crate) struct Instance {
     pub(crate) type_params: SmallVec<[TyVar; 2]>,
     /// WHERE clause constraints (e.g., `[(L, Display), (R, Display)]`).
     pub(crate) constraints: SmallVec<[(TyVar, Class); 2]>,
-    /// Method implementations: method name -> generated function ID.
+    /// Method implementations: method name -> generated function name.
     ///
     /// Populated in Phase 5 (Resolution) when `CLASS` statements are lowered.
-    pub(crate) methods: HashMap<StringId, FnId>,
+    /// The generated function name follows the pattern `__inst_{Class}_{Type}_{method}`.
+    pub(crate) methods: HashMap<StringId, StringId>,
     /// Source span for error messages.
     pub(crate) span: Span,
 }

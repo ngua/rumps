@@ -100,6 +100,7 @@ mod convert;
 mod db;
 mod hof;
 mod hoist;
+mod instance;
 mod modules;
 mod ops;
 mod pattern;
@@ -206,6 +207,23 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
 
     /// Registry of module-level HoFs for dispatch.
     module_hofs: hof::ModuleHofs,
+
+    /// Registry of user-defined class instances for runtime dispatch.
+    ///
+    /// Populated from the typechecker's instance registry when `CLASS`
+    /// statements are processed.
+    user_instances: instance::RuntimeInstanceRegistry,
+
+    /// Mapping from class method call expression IDs to user type IDs.
+    ///
+    /// Used to dispatch class methods to user instances when the receiver
+    /// type is not directly encoded in the runtime value (e.g., `NEWTYPE`
+    /// aliases or `UNION` types). For `TYPE` (sum types), the type is
+    /// available from `Value::Tagged`; this map handles the other cases.
+    ///
+    /// Populated during typechecking; used at runtime to look up the correct
+    /// user instance for dispatch.
+    instance_calls: HashMap<ExprId, crate::value::TypeId>,
 }
 
 // Public API
@@ -276,6 +294,8 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 cm
             },
             module_hofs: hof::ModuleHofs::new(),
+            user_instances: instance::RuntimeInstanceRegistry::new(),
+            instance_calls: HashMap::new(),
         })
     }
 
@@ -330,6 +350,8 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 cm
             },
             module_hofs: hof::ModuleHofs::new(),
+            user_instances: instance::RuntimeInstanceRegistry::new(),
+            instance_calls: HashMap::new(),
         }
     }
 

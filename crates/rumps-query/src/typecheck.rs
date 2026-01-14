@@ -25,7 +25,7 @@ use std::collections::HashMap;
 pub(crate) use env::TypeEnv;
 pub(crate) use error::{FormattedTypeError, TyPrinter, TypeError};
 pub(crate) use infer::{Constraint, InferCtx};
-pub(crate) use instance::{FnId, Instance, InstanceRegistry};
+pub(crate) use instance::{Instance, InstanceRegistry};
 pub(crate) use ty::{Class, ClassKind, Scheme, Subst, Ty, TyVar};
 
 use crate::ast::{Ast, ExprId, StmtId};
