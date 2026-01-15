@@ -1,0 +1,99 @@
+; Test WRITE RAW modifier
+; RAW preserves escape sequences instead of rendering them
+
+; =============================================================================
+; Newline escaping
+; =============================================================================
+
+; Default: renders actual newline
+WRITE "line1\nline2"
+
+; RAW: shows escape sequence
+WRITE "line1\nline2" RAW
+
+; =============================================================================
+; Tab escaping
+; =============================================================================
+
+; Default: renders actual tab
+WRITE "col1\tcol2"
+
+; RAW: shows escape sequence
+WRITE "col1\tcol2" RAW
+
+; =============================================================================
+; Quote escaping
+; =============================================================================
+
+; Default: renders literal quotes (invalid RUMPS syntax)
+WRITE "He said \"Hello\""
+
+; RAW: shows escape sequence (valid RUMPS syntax)
+WRITE "He said \"Hello\"" RAW
+
+; =============================================================================
+; Backslash escaping
+; =============================================================================
+
+; Default: renders single backslash
+WRITE "path\\to\\file"
+
+; RAW: shows escaped backslash
+WRITE "path\\to\\file" RAW
+
+; =============================================================================
+; Multiple escapes
+; =============================================================================
+
+WRITE "line1\nline2\nline3" RAW
+WRITE "a\tb\tc" RAW
+
+; =============================================================================
+; Case-insensitive
+; =============================================================================
+
+WRITE "test\n" raw
+WRITE "test\n" Raw
+WRITE "test\n" RAW
+
+; =============================================================================
+; Char escaping in RAW mode
+; =============================================================================
+
+WRITE '\n' RAW
+WRITE '\t' RAW
+WRITE '\\' RAW
+
+; =============================================================================
+; Arrays with strings
+; =============================================================================
+
+WRITE ["a\nb", "c\td"] RAW
+
+; =============================================================================
+; Objects with strings
+; =============================================================================
+
+WRITE {name: "foo\nbar", value: "x\ty"} RAW
+
+; =============================================================================
+; Tuples with strings
+; =============================================================================
+
+WRITE ("a\nb", "c\td") RAW
+
+; =============================================================================
+; Options with strings
+; =============================================================================
+
+WRITE Option.Some("foo\nbar") RAW
+
+; =============================================================================
+; String.escape function
+; =============================================================================
+
+; Direct use of String.escape
+WRITE String.escape("foo\tbar")
+
+; Mixed: escaped via function + non-escaped in same interpolation
+WRITE "{String.escape("foo\tbar")} {"foo\tbar"}"

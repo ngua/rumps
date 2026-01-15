@@ -719,6 +719,8 @@ pub(crate) enum OutputFormat {
     Default,
     /// Convert to JSON before output.
     Json,
+    /// Raw: preserve escape sequences (e.g. `\n` displays as `\n`).
+    Raw,
 }
 
 /// Output target.

@@ -240,6 +240,7 @@ fn lower_stmt(ast: &mut Ast, ctx: &mut Ctx, stmt: cst::Stmt) -> Result<StmtId> {
             let format = match output.format {
                 cst::OutputFormat::Default => OutputFormat::Default,
                 cst::OutputFormat::Json => OutputFormat::Json,
+                cst::OutputFormat::Raw => OutputFormat::Raw,
             };
             let target = match output.target {
                 cst::OutputTarget::Stdout => OutputTarget::Stdout,
@@ -627,6 +628,7 @@ fn lower_expr(ast: &mut Ast, ctx: &mut Ctx, expr: cst::Expr) -> Result<ExprId> {
             let format = match output.format {
                 cst::OutputFormat::Default => OutputFormat::Default,
                 cst::OutputFormat::Json => OutputFormat::Json,
+                cst::OutputFormat::Raw => OutputFormat::Raw,
             };
             let target = match output.target {
                 cst::OutputTarget::Stdout => OutputTarget::Stdout,

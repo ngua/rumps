@@ -712,7 +712,7 @@ impl InferCtx<'_> {
 
         // Format constraint: must be convertible to target format
         match output.format {
-            OutputFormat::Default => {
+            OutputFormat::Default | OutputFormat::Raw => {
                 // Must be convertible to String
                 self.constrain(Constraint::Class {
                     ty: expr_ty,

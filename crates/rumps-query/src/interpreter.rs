@@ -96,7 +96,7 @@ mod call;
 mod class;
 mod collections;
 mod control;
-mod convert;
+pub(crate) mod convert;
 mod db;
 mod hof;
 mod hoist;
@@ -1671,7 +1671,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Execute a `WRITE` statement.
     ///
     /// Writes to stdout, stderr, or a file via the I/O context, with optional
-    /// JSON formatting.
+    /// JSON or RAW formatting.
     #[async_recursion]
     async fn write(&mut self, output: &WriteExpr) -> Result<()> {
         let span = self.ast.expr_span(output.expr).unwrap_or_default();
@@ -1685,6 +1685,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 serde_json::to_string_pretty(&json)
                     .unwrap_or_else(|_| invariant!("JSON serializable"))
             }
+            OutputFormat::Raw => self.display_raw(&val),
         };
 
         // Write to target

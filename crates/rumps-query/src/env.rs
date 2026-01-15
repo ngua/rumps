@@ -955,6 +955,11 @@ impl Environment {
                     f: Str::replace,
                     ty: scheme!((String, String, String) -> String),
                 },
+                PrimDef {
+                    name: "escape",
+                    f: Str::escape,
+                    ty: scheme!((String) -> String),
+                },
             ]),
         );
 

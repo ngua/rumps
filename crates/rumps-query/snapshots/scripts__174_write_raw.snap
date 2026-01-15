@@ -1,0 +1,27 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test WRITE RAW modifier\n; RAW preserves escape sequences instead of rendering them\n\n; =============================================================================\n; Newline escaping\n; =============================================================================\n\n; Default: renders actual newline\nWRITE \"line1\\nline2\"\n\n; RAW: shows escape sequence\nWRITE \"line1\\nline2\" RAW\n\n; =============================================================================\n; Tab escaping\n; =============================================================================\n\n; Default: renders actual tab\nWRITE \"col1\\tcol2\"\n\n; RAW: shows escape sequence\nWRITE \"col1\\tcol2\" RAW\n\n; =============================================================================\n; Quote escaping\n; =============================================================================\n\n; Default: renders literal quotes (invalid RUMPS syntax)\nWRITE \"He said \\\"Hello\\\"\"\n\n; RAW: shows escape sequence (valid RUMPS syntax)\nWRITE \"He said \\\"Hello\\\"\" RAW\n\n; =============================================================================\n; Backslash escaping\n; =============================================================================\n\n; Default: renders single backslash\nWRITE \"path\\\\to\\\\file\"\n\n; RAW: shows escaped backslash\nWRITE \"path\\\\to\\\\file\" RAW\n\n; =============================================================================\n; Multiple escapes\n; =============================================================================\n\nWRITE \"line1\\nline2\\nline3\" RAW\nWRITE \"a\\tb\\tc\" RAW\n\n; =============================================================================\n; Case-insensitive\n; =============================================================================\n\nWRITE \"test\\n\" raw\nWRITE \"test\\n\" Raw\nWRITE \"test\\n\" RAW\n\n; =============================================================================\n; Char escaping in RAW mode\n; =============================================================================\n\nWRITE '\\n' RAW\nWRITE '\\t' RAW\nWRITE '\\\\' RAW\n\n; =============================================================================\n; Arrays with strings\n; =============================================================================\n\nWRITE [\"a\\nb\", \"c\\td\"] RAW\n\n; =============================================================================\n; Objects with strings\n; =============================================================================\n\nWRITE {name: \"foo\\nbar\", value: \"x\\ty\"} RAW\n\n; =============================================================================\n; Tuples with strings\n; =============================================================================\n\nWRITE (\"a\\nb\", \"c\\td\") RAW\n\n; =============================================================================\n; Options with strings\n; =============================================================================\n\nWRITE Option.Some(\"foo\\nbar\") RAW\n\n; =============================================================================\n; String.escape function\n; =============================================================================\n\n; Direct use of String.escape\nWRITE String.escape(\"foo\\tbar\")\n\n; Mixed: escaped via function + non-escaped in same interpolation\nWRITE \"{String.escape(\"foo\\tbar\")} {\"foo\\tbar\"}\"\n"
+---
+"line1
+line2"
+"line1\nline2"
+"col1	col2"
+"col1\tcol2"
+"He said "Hello""
+"He said \"Hello\""
+"path\to\file"
+"path\\to\\file"
+"line1\nline2\nline3"
+"a\tb\tc"
+"test\n"
+"test\n"
+"test\n"
+'\n'
+'\t'
+'\\'
+[ "a\nb", "c\td" ]
+{ name: "foo\nbar", value: "x\ty" }
+("a\nb", "c\td")
+Option.Some("foo\nbar")
+"foo\tbar"
+"foo\tbar foo	bar"

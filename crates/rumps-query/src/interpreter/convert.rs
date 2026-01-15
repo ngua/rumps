@@ -90,6 +90,139 @@ impl<I: IoContext> Interpreter<'_, I> {
         self.stringify(v)
     }
 
+    /// Convert a value to display string with escape sequences preserved.
+    ///
+    /// Used for `WRITE expr RAW`. Strings are quoted and special characters
+    /// (`\n`, `\t`, etc.) are shown as escape sequences rather than rendered.
+    pub(crate) fn display_raw(&mut self, v: &Value) -> String {
+        match v {
+            Value::Char(c) => escape_char(*c),
+            Value::String(id) | Value::FilePath(id) => {
+                let s = self.arena.get_str(*id).unwrap_or("");
+                format!("\"{}\"", escape_str(s))
+            }
+            Value::Array(_, elems) => {
+                let vals: Vec<_> = elems
+                    .iter()
+                    .filter_map(|id| self.arena.get(*id).cloned())
+                    .collect();
+                let items = vals
+                    .iter()
+                    .map(|v| self.display_raw(v))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("[ {items} ]")
+            }
+            Value::Tuple(_, elems) => {
+                let len = elems.len();
+                let vals: Vec<_> = elems
+                    .iter()
+                    .filter_map(|id| self.arena.get(*id).cloned())
+                    .collect();
+                let items = vals
+                    .iter()
+                    .map(|v| self.display_raw(v))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let trail = if len == 1 { "," } else { "" };
+                format!("({items}{trail})")
+            }
+            Value::Object(obj) => {
+                // Collect keys and values first to avoid borrow conflicts
+                let data: Vec<_> = obj
+                    .iter()
+                    .map(|(k, vid)| {
+                        let key =
+                            self.arena.get_str(*k).unwrap_or("?").to_owned();
+                        let val = self.arena.get(*vid).cloned();
+                        (key, val)
+                    })
+                    .collect();
+                let fields = data
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let vs = v
+                            .map(|v| self.display_raw(&v))
+                            .unwrap_or_else(|| "?".to_owned());
+                        format!("{k}: {vs}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{{ {fields} }}")
+            }
+            Value::Map(_, _, entries) => {
+                // Collect keys and values first to avoid borrow conflicts
+                let data: Vec<_> = entries
+                    .iter()
+                    .map(|(k, vid)| {
+                        let key = self.stringify_map_key(k);
+                        let val = self.arena.get(*vid).cloned();
+                        (key, val)
+                    })
+                    .collect();
+                let items = data
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let vs = v
+                            .map(|v| self.display_raw(&v))
+                            .unwrap_or_else(|| "?".to_owned());
+                        format!("{k} => {vs}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{{ {items} }}")
+            }
+            Value::Tagged(ty_expr, idx, payloads) => {
+                let base_ty = self.type_exprs.base_type(*ty_expr);
+                let ty_name = base_ty
+                    .and_then(|ty| self.registry.type_name(ty, &self.arena))
+                    .unwrap_or("?")
+                    .to_owned();
+                let var_name = base_ty
+                    .and_then(|ty| {
+                        self.registry.variant_name(ty, *idx, &self.arena)
+                    })
+                    .unwrap_or("?")
+                    .to_owned();
+                if payloads.is_empty() {
+                    format!("{ty_name}.{var_name}")
+                } else {
+                    let args: Vec<_> = payloads
+                        .iter()
+                        .filter_map(|id| self.arena.get(*id).cloned())
+                        .collect();
+                    let args_str = args
+                        .iter()
+                        .map(|v| self.display_raw(v))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{ty_name}.{var_name}({args_str})")
+                }
+            }
+            Value::Ref(is_global, name_id, sub_ids) => {
+                let prefix = if *is_global { "^" } else { "" };
+                let name =
+                    self.arena.get_str(*name_id).unwrap_or("?").to_owned();
+                let subs: Vec<_> = sub_ids
+                    .iter()
+                    .filter_map(|id| self.arena.get(*id).cloned())
+                    .collect();
+                if subs.is_empty() {
+                    format!("{prefix}{name}")
+                } else {
+                    let subs_str = subs
+                        .iter()
+                        .map(|v| self.display_raw(v))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{prefix}{name}{{ {subs_str} }}")
+                }
+            }
+            // Non-string types delegate to normal stringify
+            _ => self.stringify(v),
+        }
+    }
+
     /// Coerce a value to a raw string for concatenation.
     ///
     /// Unlike `stringify`, this does not quote strings.
@@ -319,5 +452,33 @@ fn json_type_expr(
             arena.app(TypeId::ARRAY, smallvec::smallvec![elem_ty])
         }
         serde_json::Value::Object(_) => arena.named(TypeId::OBJECT),
+    }
+}
+
+/// Escape special characters in a string for raw display.
+pub(crate) fn escape_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    s.chars().for_each(|c| match c {
+        '"' => out.push_str("\\\""),
+        '\\' => out.push_str("\\\\"),
+        '\n' => out.push_str("\\n"),
+        '\t' => out.push_str("\\t"),
+        '\r' => out.push_str("\\r"),
+        '\0' => out.push_str("\\0"),
+        c => out.push(c),
+    });
+    out
+}
+
+/// Escape a char for raw display.
+fn escape_char(c: char) -> String {
+    match c {
+        '\'' => "'\\''".to_owned(),
+        '\\' => "'\\\\'".to_owned(),
+        '\n' => "'\\n'".to_owned(),
+        '\t' => "'\\t'".to_owned(),
+        '\r' => "'\\r'".to_owned(),
+        '\0' => "'\\0'".to_owned(),
+        c => format!("'{c}'"),
     }
 }

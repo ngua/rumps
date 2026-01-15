@@ -511,7 +511,7 @@ impl Parser {
         select! { Token::Ident(s) if s.eq_ignore_ascii_case(expected) => () }
     }
 
-    /// `OUTPUT expr [JSON] [TO ERROR | TO FILE expr]`
+    /// `WRITE expr [JSON | RAW] [TO ERROR | TO FILE expr]`
     fn output_stmt(
         stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
             + Clone
@@ -519,6 +519,7 @@ impl Parser {
     ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
         let format = Self::ctx_ident("JSON")
             .to(cst::OutputFormat::Json)
+            .or(Self::ctx_ident("RAW").to(cst::OutputFormat::Raw))
             .or_not()
             .map(|f| f.unwrap_or_default());
 
@@ -548,17 +549,18 @@ impl Parser {
             })
     }
 
-    /// `WRITE expr [JSON] [TO ERROR | TO FILE expr]` as expression.
+    /// `WRITE expr [JSON | RAW] [TO ERROR | TO FILE expr]` as expression.
     ///
     /// Same syntax as `output_stmt`, but returns `cst::Expr` instead of
     /// `cst::Stmt`. Evaluates to `Unit` after performing the output.
-    fn output_expr(
+    fn write_expr(
         expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
         let format = Self::ctx_ident("JSON")
             .to(cst::OutputFormat::Json)
+            .or(Self::ctx_ident("RAW").to(cst::OutputFormat::Raw))
             .or_not()
             .map(|f| f.unwrap_or_default());
 
@@ -2015,7 +2017,7 @@ impl Parser {
             });
 
             // OUTPUT expr [JSON] [TO target]
-            let output = Self::output_expr(intrinsic_op.clone());
+            let output = Self::write_expr(intrinsic_op.clone());
 
             // SET target = value
             let set = Self::set_expr(intrinsic_op.clone());

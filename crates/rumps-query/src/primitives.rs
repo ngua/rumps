@@ -877,6 +877,32 @@ impl Str {
             Ok(ctx.arena.add(Value::String(result_sid), ctx.span))
         })
     }
+
+    /// `(String) -> String`
+    ///
+    /// Escapes special characters for display. Converts:
+    /// - `"` → `\"`
+    /// - `\` → `\\`
+    /// - newline → `\n`
+    /// - tab → `\t`
+    /// - carriage return → `\r`
+    /// - null → `\0`
+    pub(crate) fn escape<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            let sid = ctx
+                .arena
+                .get_string_id(args[0])
+                .unwrap_or_else(|| typechecked!("String.escape", "String"));
+
+            let s = Self::valid_str(ctx.arena, sid);
+            let escaped = crate::interpreter::convert::escape_str(s);
+            let new_sid = ctx.arena.intern(&escaped);
+            Ok(ctx.arena.add(Value::String(new_sid), ctx.span))
+        })
+    }
 }
 
 /// Primitives for the `Math` module.
