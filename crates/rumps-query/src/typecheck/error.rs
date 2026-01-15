@@ -475,7 +475,7 @@ impl TypeError {
                     p.format(expected),
                     p.format(got)
                 ),
-                Self::mismatch_help(expected, got),
+                None,
             ),
             Self::UndefinedVar(name, _) => {
                 (format!("undefined variable `{name}`"), None)
@@ -698,31 +698,6 @@ impl TypeError {
             message: msg,
             help,
             span: self.span(),
-        }
-    }
-
-    /// Generate help text for type mismatch errors.
-    fn mismatch_help(expected: &Ty, got: &Ty) -> Option<String> {
-        match (expected, got) {
-            // String concatenation hint
-            (Ty::Int | Ty::Float, Ty::String)
-            | (Ty::String, Ty::Int | Ty::Float) => {
-                Some("use `++` for string concatenation, not `+`".to_owned())
-            }
-            // Unwrap hint
-            (inner, Ty::Option(opt_inner)) if inner == opt_inner.as_ref() => {
-                Some(
-                    "use `!` to unwrap the `Option`, or handle with `MATCH`"
-                        .to_owned(),
-                )
-            }
-            (inner, Ty::Result(ok_inner, _)) if inner == ok_inner.as_ref() => {
-                Some(
-                    "use `!` to unwrap the `Result`, or handle with `MATCH`"
-                        .to_owned(),
-                )
-            }
-            _ => None,
         }
     }
 }

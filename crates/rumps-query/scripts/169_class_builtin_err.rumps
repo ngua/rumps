@@ -1,0 +1,10 @@
+; Error: implementing class for builtin type
+;
+; Builtin types already have class implementations, so user cannot
+; override them.
+
+CLASS Display FOR Int {
+  FUN display(n: Int) -> String {
+    "custom: {n}"
+  }
+}

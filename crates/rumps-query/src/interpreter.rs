@@ -270,6 +270,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             numeric_types,
             convert_targets,
             wrap_types,
+            instance_calls,
         ) = crate::typecheck::check(
             ast,
             stmts,
@@ -303,7 +304,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             },
             module_hofs: hof::ModuleHofs::new(),
             user_instances: instance::RuntimeInstanceRegistry::new(),
-            instance_calls: HashMap::new(),
+            instance_calls,
             resolved_instances,
         })
     }

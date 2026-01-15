@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Error: missing required method\n;\n; The Display class requires a `display` method but none is provided.\n\nTYPE Point = Point(Int, Int)\n\nCLASS Display FOR Point {\n  ; Missing the display method\n}\n"
+---
+ERROR: missing required method `display` for class `Display`

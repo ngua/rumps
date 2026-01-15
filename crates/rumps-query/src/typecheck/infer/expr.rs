@@ -622,15 +622,58 @@ impl InferCtx<'_> {
                     };
 
                     // Infer argument types and unify with params
-                    args.iter().zip(params.iter()).for_each(|(arg, param)| {
-                        let arg_ty = self.expr(*arg);
-                        self.unify(arg_ty, param.clone(), span);
-                    });
+                    let arg_tys: Vec<_> = args
+                        .iter()
+                        .zip(params.iter())
+                        .map(|(arg, param)| {
+                            let arg_ty = self.expr(*arg);
+                            self.unify(arg_ty.clone(), param.clone(), span);
+                            arg_ty
+                        })
+                        .collect();
 
                     // Emit class constraints from scheme
                     constraints.into_iter().for_each(|(ty, class)| {
                         self.emit_class_constraint(ty, class, span);
                     });
+
+                    // Track user instance calls for NEWTYPE/UNION dispatch.
+                    // For these types, the runtime value doesn't carry TypeId,
+                    // so we record the mapping here for the interpreter.
+                    // (TYPE/sum types use Value::Tagged which carries the TypeId.)
+                    //
+                    // Also track for builtin types with user instances (e.g.,
+                    // `CLASS Into[UserId] FOR Int`).
+                    //
+                    // If the type is immediately resolvable (Named or primitive),
+                    // check and insert now. Otherwise, defer to be resolved after
+                    // constraint solving when type variables are resolved.
+                    if let Some(ty) = arg_tys.first() {
+                        let type_id = match ty {
+                            Ty::Named(tid, _) => Some(*tid),
+                            _ => self.primitive_type_id(ty),
+                        };
+                        match type_id {
+                            Some(tid)
+                                if self
+                                    .instance_registry
+                                    .lookup(kind, tid)
+                                    .is_some() =>
+                            {
+                                self.instance_calls.insert(id, tid);
+                            }
+                            _ => {
+                                // Defer resolution until after constraint solving.
+                                // At that point, type variables will be resolved
+                                // and we can check for user instances.
+                                self.deferred_instance_calls.push((
+                                    id,
+                                    ty.clone(),
+                                    kind,
+                                ));
+                            }
+                        }
+                    }
 
                     // Handle tracking for runtime dispatch
                     match spec {

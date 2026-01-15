@@ -769,38 +769,64 @@ impl InferCtx<'_> {
             ClassKind::Display // Default to `Display` to avoid cascading errors
         });
 
-        // 2. Resolve for_type and get its TypeId
-        let for_ty = self.ast_type_to_ty(for_type, &HashMap::new());
+        // 2. Build type parameter substitution map (BEFORE resolving for_type)
+        //    If `type_params` is empty, extract type param names from the
+        //    WHERE constraints (e.g., `L: Display, R: Display` gives `[L, R]`)
+        let type_param_subst: HashMap<_, _> = if type_params.is_empty() {
+            constraints
+                .iter()
+                .map(|(name, _)| {
+                    let id = self.env.intern(name);
+                    let tv = self.fresh_var();
+                    (id, Ty::Var(tv))
+                })
+                .collect()
+        } else {
+            type_params
+                .iter()
+                .map(|tp| {
+                    let id = self.env.intern(&tp.name);
+                    let tv = self.fresh_var();
+                    (id, Ty::Var(tv))
+                })
+                .collect()
+        };
+
+        // 3. Resolve for_type and get its TypeId
+        let for_ty = self.ast_type_to_ty(for_type, &type_param_subst);
         let type_id = self.extract_type_id(&for_ty);
 
-        // Check that it's a user type (not builtin)
-        if let Some(tid) = type_id {
-            if self.is_builtin_type(tid) {
-                self.error(TypeError::BuiltinInstanceForbidden {
-                    class,
-                    type_id: tid,
-                    span,
-                });
-            }
-        }
-
-        // 3. Build type parameter substitution map
-        let type_param_subst: HashMap<_, _> = type_params
-            .iter()
-            .map(|tp| {
-                let id = self.env.intern(&tp.name);
-                let tv = self.fresh_var();
-                (id, Ty::Var(tv))
-            })
-            .collect();
-
-        // 4. Convert class args to Ty
+        // 4. Convert class args to Ty (needed for builtin check)
         let class_arg_tys: SmallVec<[Ty; 2]> = class_args
             .iter()
             .map(|id| self.ast_type_to_ty(*id, &type_param_subst))
             .collect();
 
-        // 5. Process WHERE constraints
+        // 5. Check for forbidden builtin instance
+        //
+        // We allow implementing classes for builtin types IF the class has
+        // type args that include user-defined types. For example:
+        //   - `CLASS Display FOR Int` is forbidden (builtin has Display)
+        //   - `CLASS Into[String] FOR Int` is forbidden (builtin has Into[String])
+        //   - `CLASS Into[UserId] FOR Int` is ALLOWED (no builtin Into[UserId])
+        //
+        // The heuristic: if for_type is builtin AND all class args are builtin,
+        // reject. If any class arg is a user type, we allow it.
+        if let Some(tid) = type_id {
+            if self.is_builtin_type(tid) {
+                let all_args_builtin = class_arg_tys.is_empty()
+                    || class_arg_tys.iter().all(|ty| self.is_builtin_ty(ty));
+                if all_args_builtin {
+                    self.error(TypeError::BuiltinInstanceForbidden {
+                        class,
+                        type_id: tid,
+                        span,
+                    });
+                }
+            }
+        }
+
+        // 6. Process WHERE constraints
         let mut scheme_constraints: SmallVec<[(TyVar, Class); 2]> =
             SmallVec::new();
         constraints
@@ -823,11 +849,11 @@ impl InferCtx<'_> {
                 });
             });
 
-        // 6. Collect provided method names
+        // 7. Collect provided method names
         let provided_methods: HashSet<&str> =
             methods.iter().map(|m| m.name.as_str()).collect();
 
-        // 7. Check all required methods are present
+        // 8. Check all required methods are present
         class.required_methods().iter().for_each(|req| {
             if !provided_methods.contains(req) {
                 self.error(TypeError::MissingInstanceMethod {
@@ -838,12 +864,19 @@ impl InferCtx<'_> {
             }
         });
 
-        // 8. Typecheck each method
+        // 9. Typecheck each method
         methods.iter().for_each(|m| {
-            self.instance_method(class, &for_ty, &type_param_subst, m, span);
+            self.instance_method(
+                class,
+                &for_ty,
+                &class_arg_tys,
+                &type_param_subst,
+                m,
+                span,
+            );
         });
 
-        // 9. Register instance (if we have a valid type_id)
+        // 10. Register instance (if we have a valid type_id)
         let type_name = self.extract_type_name_from_ast(for_type);
         if let Some(tid) = type_id {
             let method_map: HashMap<_, _> = methods
@@ -870,17 +903,20 @@ impl InferCtx<'_> {
                 })
                 .collect();
 
-            let inst = Instance {
-                class,
-                class_args: class_arg_tys,
-                type_params: type_var_params,
-                constraints: scheme_constraints,
-                methods: method_map,
-                span,
-            };
+            // Skip registration if already hoisted (avoid duplicate error)
+            if self.instance_registry.lookup(class, tid).is_none() {
+                let inst = Instance {
+                    class,
+                    class_args: class_arg_tys,
+                    type_params: type_var_params,
+                    constraints: scheme_constraints,
+                    methods: method_map,
+                    span,
+                };
 
-            if let Err(e) = self.instance_registry.register(tid, inst) {
-                self.error(e);
+                if let Err(e) = self.instance_registry.register(tid, inst) {
+                    self.error(e);
+                }
             }
         }
     }
@@ -889,10 +925,12 @@ impl InferCtx<'_> {
     ///
     /// Validates that the method signature matches the class definition and
     /// typechecks the method body.
+    #[allow(clippy::too_many_arguments)]
     fn instance_method(
         &mut self,
         class: ClassKind,
         for_ty: &Ty,
+        class_arg_tys: &SmallVec<[Ty; 2]>,
         type_param_subst: &HashMap<crate::intern::StringId, Ty>,
         method: &InstanceMethodDef,
         inst_span: Span,
@@ -906,13 +944,27 @@ impl InferCtx<'_> {
         let (expected_param_tys, expected_ret_ty) = expected
             .map(|spec| {
                 let scheme = spec.scheme();
-                // The first quantified var represents `Self` in class methods
+                // The first quantified var represents `Self` in class methods.
+                // Subsequent vars represent class type parameters (e.g., `U` in
+                // `Into[U]`). We substitute both `Self` and class arg types.
                 let self_var = scheme.vars.first().copied();
-                // Extract param and return types, substituting `Self` with `for_ty`
+                let class_arg_vars: Vec<_> =
+                    scheme.vars.iter().skip(1).copied().collect();
+                // Extract param and return types, substituting vars
                 match &scheme.ty {
                     Ty::Fn(params, ret) => {
                         let subst = |ty: &Ty| {
-                            self.subst_self_type(ty, self_var, for_ty)
+                            let mut result =
+                                self.subst_self_type(ty, self_var, for_ty);
+                            // Substitute class arg type vars
+                            class_arg_vars
+                                .iter()
+                                .zip(class_arg_tys.iter())
+                                .for_each(|(var, arg_ty)| {
+                                    result =
+                                        self.subst_tyvar(&result, *var, arg_ty);
+                                });
+                            result
                         };
                         (
                             params.iter().map(subst).collect::<Vec<_>>(),
@@ -985,7 +1037,10 @@ impl InferCtx<'_> {
     }
 
     /// Get the type name from an `AstTypeExprId` for function name generation.
-    fn extract_type_name_from_ast(&self, id: AstTypeExprId) -> String {
+    pub(super) fn extract_type_name_from_ast(
+        &self,
+        id: AstTypeExprId,
+    ) -> String {
         self.ast
             .get_type_expr(id)
             .and_then(|te| match te {
@@ -997,14 +1052,52 @@ impl InferCtx<'_> {
     }
 
     /// Check if a `TypeId` represents a builtin type.
-    fn is_builtin_type(&self, id: TypeId) -> bool {
+    pub(super) fn is_builtin_type(&self, id: TypeId) -> bool {
         self.registry
             .get_def(id)
             .is_some_and(|def| matches!(def, TypeDef::Builtin(_)))
     }
 
+    /// Check if a `Ty` represents a builtin type.
+    ///
+    /// Returns `true` for primitive types (`Int`, `String`, etc.) and for
+    /// `Ty::Named` referencing a builtin. Returns `false` for user-defined
+    /// types and type variables.
+    pub(super) fn is_builtin_ty(&self, ty: &Ty) -> bool {
+        match ty {
+            // Primitives are builtin
+            Ty::Bool
+            | Ty::Int
+            | Ty::Word
+            | Ty::Float
+            | Ty::Char
+            | Ty::String
+            | Ty::Unit
+            | Ty::Time
+            | Ty::Range
+            | Ty::Json
+            | Ty::Ordering
+            | Ty::DataStatus
+            | Ty::FilePath
+            | Ty::Path
+            | Ty::Regex
+            | Ty::Local
+            | Ty::Global => true,
+            // Parameterized builtins
+            Ty::Array(_)
+            | Ty::Map(_, _)
+            | Ty::Tuple(_)
+            | Ty::Option(_)
+            | Ty::Result(_, _) => true,
+            // Named: check registry
+            Ty::Named(id, _) => self.is_builtin_type(*id),
+            // Everything else (Var, Fn, Object, Union, Unknown, Error)
+            _ => false,
+        }
+    }
+
     /// Get the `TypeId` for a primitive `Ty`.
-    fn primitive_type_id(&self, ty: &Ty) -> Option<TypeId> {
+    pub(crate) fn primitive_type_id(&self, ty: &Ty) -> Option<TypeId> {
         match ty {
             Ty::Bool => Some(TypeId::BOOL),
             Ty::Int => Some(TypeId::INT),

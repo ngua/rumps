@@ -1,0 +1,23 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; User-defined class instance tests\n;\n; Tests CLASS ... FOR ... syntax for implementing builtin classes\n; on user-defined types (TYPE, NEWTYPE, UNION).\n;\n; All types and class instances are defined at the BOTTOM to test hoisting.\n\n; === Usage (hoisted) ===\n\n; TYPE with Display\nLET p1 = Point.Point(10, 20)\nLET p2 = Point.Origin\nWRITE Display:display(p1)\nWRITE Display:display(p2)\n\n; TYPE with Into[String]\nLET uid = UserId.UserId(42)\nWRITE Into:into(uid)\n\n; Builtin Int with Into[UserId] (convert builtin to user type)\nLET id-from-int = Into:into(99)\nWRITE id-from-int\n\n; NEWTYPE with Display\nLET my-age: Age = 30\nWRITE Display:display(my-age)\n\n; NEWTYPE with Numeric (delegates to underlying Int)\nLET a: MyInt = 10\nLET b: MyInt = 3\nWRITE \"add: {Numeric:add(a, b)}\"\nWRITE \"sub: {Numeric:sub(a, b)}\"\nWRITE \"mul: {Numeric:mul(a, b)}\"\nWRITE \"floor-div: {Numeric:floor-div(a, b)}\"\nWRITE \"mod: {Numeric:mod(a, b)}\"\nWRITE \"pow: {Numeric:pow(a, b)}\"\n\n; NEWTYPE with Ord (reversed comparison)\nLET low: Priority = 10\nLET high: Priority = 1\nWRITE \"compare(10, 1) = {Ord:compare(low, high)}\"\nWRITE \"compare(1, 10) = {Ord:compare(high, low)}\"\nLET same1: Priority = 5\nLET same2: Priority = 5\nWRITE \"compare(5, 5) = {Ord:compare(same1, same2)}\"\n\n; UNION with Display\nLET soi1: StrOrInt = \"hello\"\nLET soi2: StrOrInt = 42\nWRITE Display:display(soi1)\nWRITE Display:display(soi2)\n\n; TYPE with constrained Display\nLET pair1 = Pair.Pair(1, 2)\nLET pair2 = Pair.Pair(\"hello\", \"world\")\nLET pair3 = Pair.Pair(true, false)\nWRITE Display:display(pair1)\nWRITE Display:display(pair2)\nWRITE Display:display(pair3)\n\n; === Type and Class Definitions ===\n\nTYPE Point = Point(Int, Int) | Origin\n\nCLASS Display FOR Point {\n  FUN display(p: Point) -> String {\n    MATCH p {\n      Point.Point(x, y) => { \"Point({x}, {y})\" }\n      Point.Origin => { \"Origin\" }\n    }\n  }\n}\n\nTYPE UserId = UserId(Int)\n\nCLASS Into[String] FOR UserId {\n  FUN into(u: UserId) -> String {\n    MATCH u {\n      UserId.UserId(id) => { \"user:{id}\" }\n    }\n  }\n}\n\n; Into[UserId] for builtin Int: convert Int to UserId\nCLASS Into[UserId] FOR Int {\n  FUN into(n: Int) -> UserId {\n    UserId.UserId(n)\n  }\n}\n\nNEWTYPE Age = Int\n\nCLASS Display FOR Age {\n  FUN display(a: Age) -> String {\n    \"{a} years old\"\n  }\n}\n\nNEWTYPE MyInt = Int\n\nCLASS Numeric FOR MyInt {\n  FUN add(a: MyInt, b: MyInt) -> MyInt { a + b }\n  FUN sub(a: MyInt, b: MyInt) -> MyInt { a - b }\n  FUN mul(a: MyInt, b: MyInt) -> MyInt { a * b }\n  FUN floor-div(a: MyInt, b: MyInt) -> MyInt { a // b }\n  FUN mod(a: MyInt, b: MyInt) -> MyInt { a % b }\n  FUN pow(a: MyInt, b: MyInt) -> MyInt { a ** b }\n}\n\nNEWTYPE Priority = Int\n\nCLASS Ord FOR Priority {\n  FUN compare(a: Priority, b: Priority) -> Ordering {\n    ; Reversed: higher number = lower priority\n    IF a > b { Ordering.Lt } ELSE {\n      IF a == b { Ordering.Eq } ELSE { Ordering.Gt }\n    }\n  }\n}\n\nUNION StrOrInt = String | Int\n\nCLASS Display FOR StrOrInt {\n  FUN display(v: StrOrInt) -> String {\n    MATCH v {\n      s IS String => { \"str({s})\" }\n      n IS Int => { \"int({n})\" }\n      _ => { \"unknown\" }\n    }\n  }\n}\n\nTYPE Pair[L, R] = Pair(L, R)\n\nCLASS Display FOR Pair[L, R] WHERE L: Display, R: Display {\n  FUN display(p: Pair[L, R]) -> String {\n    MATCH p {\n      Pair.Pair(l, r) => {\n        LET ls = Display:display(l)\n        LET rs = Display:display(r)\n        \"Pair({ls}, {rs})\"\n      }\n    }\n  }\n}\n"
+---
+"Point(10, 20)"
+"Origin"
+"user:42"
+UserId.UserId(99)
+"30 years old"
+"add: 13"
+"sub: 7"
+"mul: 30"
+"floor-div: 3"
+"mod: 1"
+"pow: 1000"
+"compare(10, 1) = Ordering.Lt"
+"compare(1, 10) = Ordering.Gt"
+"compare(5, 5) = Ordering.Eq"
+"str(hello)"
+"int(42)"
+"Pair(1, 2)"
+"Pair("hello", "world")"
+"Pair(TRUE, FALSE)"

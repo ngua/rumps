@@ -1,0 +1,9 @@
+; Error: missing required method
+;
+; The Display class requires a `display` method but none is provided.
+
+TYPE Point = Point(Int, Int)
+
+CLASS Display FOR Point {
+  ; Missing the display method
+}

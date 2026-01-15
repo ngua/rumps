@@ -1,0 +1,145 @@
+; User-defined class instance tests
+;
+; Tests CLASS ... FOR ... syntax for implementing builtin classes
+; on user-defined types (TYPE, NEWTYPE, UNION).
+;
+; All types and class instances are defined at the BOTTOM to test hoisting.
+
+; === Usage (hoisted) ===
+
+; TYPE with Display
+LET p1 = Point.Point(10, 20)
+LET p2 = Point.Origin
+WRITE Display:display(p1)
+WRITE Display:display(p2)
+
+; TYPE with Into[String]
+LET uid = UserId.UserId(42)
+WRITE Into:into(uid)
+
+; Builtin Int with Into[UserId] (convert builtin to user type)
+LET id-from-int = Into:into(99)
+WRITE id-from-int
+
+; NEWTYPE with Display
+LET my-age: Age = 30
+WRITE Display:display(my-age)
+
+; NEWTYPE with Numeric (delegates to underlying Int)
+LET a: MyInt = 10
+LET b: MyInt = 3
+WRITE "add: {Numeric:add(a, b)}"
+WRITE "sub: {Numeric:sub(a, b)}"
+WRITE "mul: {Numeric:mul(a, b)}"
+WRITE "floor-div: {Numeric:floor-div(a, b)}"
+WRITE "mod: {Numeric:mod(a, b)}"
+WRITE "pow: {Numeric:pow(a, b)}"
+
+; NEWTYPE with Ord (reversed comparison)
+LET low: Priority = 10
+LET high: Priority = 1
+WRITE "compare(10, 1) = {Ord:compare(low, high)}"
+WRITE "compare(1, 10) = {Ord:compare(high, low)}"
+LET same1: Priority = 5
+LET same2: Priority = 5
+WRITE "compare(5, 5) = {Ord:compare(same1, same2)}"
+
+; UNION with Display
+LET soi1: StrOrInt = "hello"
+LET soi2: StrOrInt = 42
+WRITE Display:display(soi1)
+WRITE Display:display(soi2)
+
+; TYPE with constrained Display
+LET pair1 = Pair.Pair(1, 2)
+LET pair2 = Pair.Pair("hello", "world")
+LET pair3 = Pair.Pair(true, false)
+WRITE Display:display(pair1)
+WRITE Display:display(pair2)
+WRITE Display:display(pair3)
+
+; === Type and Class Definitions ===
+
+TYPE Point = Point(Int, Int) | Origin
+
+CLASS Display FOR Point {
+  FUN display(p: Point) -> String {
+    MATCH p {
+      Point.Point(x, y) => { "Point({x}, {y})" }
+      Point.Origin => { "Origin" }
+    }
+  }
+}
+
+TYPE UserId = UserId(Int)
+
+CLASS Into[String] FOR UserId {
+  FUN into(u: UserId) -> String {
+    MATCH u {
+      UserId.UserId(id) => { "user:{id}" }
+    }
+  }
+}
+
+; Into[UserId] for builtin Int: convert Int to UserId
+CLASS Into[UserId] FOR Int {
+  FUN into(n: Int) -> UserId {
+    UserId.UserId(n)
+  }
+}
+
+NEWTYPE Age = Int
+
+CLASS Display FOR Age {
+  FUN display(a: Age) -> String {
+    "{a} years old"
+  }
+}
+
+NEWTYPE MyInt = Int
+
+CLASS Numeric FOR MyInt {
+  FUN add(a: MyInt, b: MyInt) -> MyInt { a + b }
+  FUN sub(a: MyInt, b: MyInt) -> MyInt { a - b }
+  FUN mul(a: MyInt, b: MyInt) -> MyInt { a * b }
+  FUN floor-div(a: MyInt, b: MyInt) -> MyInt { a // b }
+  FUN mod(a: MyInt, b: MyInt) -> MyInt { a % b }
+  FUN pow(a: MyInt, b: MyInt) -> MyInt { a ** b }
+}
+
+NEWTYPE Priority = Int
+
+CLASS Ord FOR Priority {
+  FUN compare(a: Priority, b: Priority) -> Ordering {
+    ; Reversed: higher number = lower priority
+    IF a > b { Ordering.Lt } ELSE {
+      IF a == b { Ordering.Eq } ELSE { Ordering.Gt }
+    }
+  }
+}
+
+UNION StrOrInt = String | Int
+
+CLASS Display FOR StrOrInt {
+  FUN display(v: StrOrInt) -> String {
+    MATCH v {
+      s IS String => { "str({s})" }
+      n IS Int => { "int({n})" }
+      _ => { "unknown" }
+    }
+  }
+}
+
+TYPE Pair[L, R] = Pair(L, R)
+
+CLASS Display FOR Pair[L, R] WHERE L: Display, R: Display {
+  FUN display(p: Pair[L, R]) -> String {
+    MATCH p {
+      Pair.Pair(l, r) => {
+        LET ls = Display:display(l)
+        LET rs = Display:display(r)
+        "Pair({ls}, {rs})"
+      }
+    }
+  }
+}

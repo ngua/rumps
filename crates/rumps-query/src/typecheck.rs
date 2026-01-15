@@ -63,6 +63,7 @@ pub(crate) fn check(
     HashMap<ExprId, Ty>,
     HashMap<ExprId, Ty>,
     HashMap<ExprId, Ty>,
+    HashMap<ExprId, crate::TypeId>,
 )> {
     let mut ctx =
         InferCtx::new(ast, registry, type_exprs, runtime_env, strings);
@@ -78,6 +79,9 @@ pub(crate) fn check(
 
     // Apply substitution to all inferred types
     ctx.apply_subst(&subst);
+
+    // Resolve deferred instance calls (now that types are resolved)
+    ctx.resolve_deferred_instance_calls(&subst);
 
     // Check for remaining unresolved type variables
     ctx.check_remaining_unknowns();

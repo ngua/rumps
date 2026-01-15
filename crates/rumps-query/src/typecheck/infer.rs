@@ -35,11 +35,11 @@ use smallvec::SmallVec;
 use super::env::TypeEnv;
 use super::error::{TyPrinter, TypeError};
 use super::instance::InstanceRegistry;
-use super::ty::{Class, Scheme, Subst, Ty, TyVar};
+use super::ty::{Class, ClassKind, Scheme, Subst, Ty, TyVar};
 use crate::ast::{ExprId, TxnId};
 use crate::env::Environment;
 use crate::intern::StringInterner;
-use crate::value::{TypeExprArena, TypeRegistry};
+use crate::value::{TypeExprArena, TypeId, TypeRegistry};
 use crate::Span;
 
 /// A type constraint generated during inference.
@@ -173,6 +173,19 @@ pub(crate) struct InferCtx<'a> {
     /// substitution to concrete `Option[T]` or `Result[T, E]` types.
     /// The interpreter uses this to produce the correct wrapper type.
     wrap_types: HashMap<ExprId, Ty>,
+    /// Mapping from class method call expression IDs to their receiver's TypeId.
+    ///
+    /// Populated when a class method is called on a NEWTYPE or UNION type.
+    /// The interpreter uses this to dispatch to user-defined class instances,
+    /// since these types don't carry their TypeId in the runtime value
+    /// (unlike TYPE/sum types which use `Value::Tagged`).
+    pub(super) instance_calls: HashMap<ExprId, crate::TypeId>,
+    /// Deferred instance call candidates to resolve after constraint solving.
+    ///
+    /// During inference, class method calls on types that are still type
+    /// variables are recorded here. After `apply_subst`, we resolve the types
+    /// and populate `instance_calls` for any user instances found.
+    deferred_instance_calls: Vec<(ExprId, Ty, ClassKind)>,
     /// Type variables created for integer literals, for defaulting to `Int`.
     ///
     /// Integer literals are polymorphic (no constraint) so they can unify with
@@ -228,6 +241,8 @@ impl<'a> InferCtx<'a> {
             numeric_types: HashMap::new(),
             convert_targets: HashMap::new(),
             wrap_types: HashMap::new(),
+            instance_calls: HashMap::new(),
+            deferred_instance_calls: Vec::new(),
             numeric_vars: Vec::new(),
             closure_schemes: HashMap::new(),
             in_transaction: None,
@@ -410,6 +425,48 @@ impl<'a> InferCtx<'a> {
             .for_each(|ty| *ty = ty.apply(subst));
     }
 
+    /// Resolve deferred instance calls after substitution.
+    ///
+    /// After constraint solving and substitution, type variables are resolved
+    /// to concrete types. This method iterates through deferred instance call
+    /// candidates, resolves their types, and populates `instance_calls` for
+    /// any that have user-defined instances.
+    pub(crate) fn resolve_deferred_instance_calls(&mut self, subst: &Subst) {
+        // Take ownership to avoid borrow issues
+        let deferred = std::mem::take(&mut self.deferred_instance_calls);
+
+        deferred.into_iter().for_each(|(expr_id, ty, kind)| {
+            let resolved = ty.apply(subst);
+            let type_id = match resolved {
+                Ty::Named(id, _) => Some(id),
+                Ty::Bool => Some(TypeId::BOOL),
+                Ty::Int => Some(TypeId::INT),
+                Ty::Word => Some(TypeId::WORD),
+                Ty::Float => Some(TypeId::FLOAT),
+                Ty::Char => Some(TypeId::CHAR),
+                Ty::String => Some(TypeId::STRING),
+                Ty::Unit => Some(TypeId::UNIT),
+                Ty::Time => Some(TypeId::TIME),
+                Ty::Range => Some(TypeId::RANGE),
+                Ty::Json => Some(TypeId::JSON),
+                Ty::Ordering => Some(TypeId::ORDERING),
+                Ty::DataStatus => Some(TypeId::DATA_STATUS),
+                Ty::FilePath => Some(TypeId::FILEPATH),
+                Ty::Path => Some(TypeId::PATH),
+                Ty::Regex => Some(TypeId::REGEX),
+                Ty::Local => Some(TypeId::LOCAL),
+                Ty::Global => Some(TypeId::GLOBAL),
+                _ => None,
+            };
+
+            if let Some(tid) = type_id {
+                if self.instance_registry.lookup(kind, tid).is_some() {
+                    self.instance_calls.insert(expr_id, tid);
+                }
+            }
+        });
+    }
+
     /// Check for remaining unresolved type variables and emit errors.
     ///
     /// After constraint solving and substitution application, any remaining
@@ -444,8 +501,8 @@ impl<'a> InferCtx<'a> {
     }
 
     /// Consume the context, returning the regex cache, index map, mempty
-    /// types, numeric types, and convert targets on success, or formatted type
-    /// errors on failure.
+    /// types, numeric types, convert targets, wrap types, and instance calls
+    /// on success, or formatted type errors on failure.
     pub(crate) fn into_result_formatted(
         self,
         registry: &TypeRegistry,
@@ -457,6 +514,7 @@ impl<'a> InferCtx<'a> {
         HashMap<ExprId, Ty>,
         HashMap<ExprId, Ty>,
         HashMap<ExprId, Ty>,
+        HashMap<ExprId, crate::TypeId>,
     )> {
         NonEmpty::from_vec(self.errors).map_or(
             Ok((
@@ -466,6 +524,7 @@ impl<'a> InferCtx<'a> {
                 self.numeric_types,
                 self.convert_targets,
                 self.wrap_types,
+                self.instance_calls,
             )),
             |errs| {
                 let printer = TyPrinter::new(

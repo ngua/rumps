@@ -1,0 +1,23 @@
+; Error: WHERE constraint not satisfied at use site
+;
+; Pair requires both L and R to implement Display, but we try to use
+; it with a function type (which cannot implement Display).
+
+TYPE Pair[L, R] = Pair(L, R)
+
+CLASS Display FOR Pair[L, R] WHERE L: Display, R: Display {
+  FUN display(p: Pair[L, R]) -> String {
+    MATCH p {
+      Pair.Pair(l, r) => {
+        LET ls = Display:display(l)
+        LET rs = Display:display(r)
+        "({ls}, {rs})"
+      }
+    }
+  }
+}
+
+; Int -> Int is a function type; functions don't implement Display
+LET f: Int -> Int = x => { x + 1 }
+LET bad = Pair.Pair(f, 42)
+WRITE Display:display(bad)

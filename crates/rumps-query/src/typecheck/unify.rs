@@ -1340,12 +1340,36 @@ impl<'a> InferCtx<'a> {
                     }
                 }
 
-                _ => {
-                    self.error(TypeError::InvalidCast {
-                        from: ty.clone(),
-                        to: to.clone(),
-                        span,
-                    });
+                // Builtin type with user-defined Into[UserType] instance
+                // E.g., `CLASS Into[UserId] FOR Int { ... }`
+                (from, target) => {
+                    let type_id = self.primitive_type_id(from);
+                    match type_id.and_then(|id| {
+                        self.instance_registry
+                            .lookup(ClassKind::Into, id)
+                            .cloned()
+                    }) {
+                        Some(inst) => {
+                            let inst_target = inst.class_args.first();
+                            match inst_target {
+                                Some(inst_target) if inst_target == target => {}
+                                _ => {
+                                    self.error(TypeError::InvalidCast {
+                                        from: ty.clone(),
+                                        to: to.clone(),
+                                        span,
+                                    });
+                                }
+                            }
+                        }
+                        None => {
+                            self.error(TypeError::InvalidCast {
+                                from: ty.clone(),
+                                to: to.clone(),
+                                span,
+                            });
+                        }
+                    }
                 }
             },
 

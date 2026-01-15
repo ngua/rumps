@@ -1,0 +1,11 @@
+; Error: wrong method signature
+;
+; The Display class requires `display(self) -> String` but we return Int.
+
+TYPE Point = Point(Int, Int)
+
+CLASS Display FOR Point {
+  FUN display(p: Point) -> Int {
+    42
+  }
+}

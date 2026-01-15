@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Error: WHERE constraint not satisfied at use site\n;\n; Pair requires both L and R to implement Display, but we try to use\n; it with a function type (which cannot implement Display).\n\nTYPE Pair[L, R] = Pair(L, R)\n\nCLASS Display FOR Pair[L, R] WHERE L: Display, R: Display {\n  FUN display(p: Pair[L, R]) -> String {\n    MATCH p {\n      Pair.Pair(l, r) => {\n        LET ls = Display:display(l)\n        LET rs = Display:display(r)\n        \"({ls}, {rs})\"\n      }\n    }\n  }\n}\n\n; Int -> Int is a function type; functions don't implement Display\nLET f: Int -> Int = x => { x + 1 }\nLET bad = Pair.Pair(f, 42)\nWRITE Display:display(bad)\n"
+---
+ERROR: type `(Int) -> Int` does not satisfy `Display` class
