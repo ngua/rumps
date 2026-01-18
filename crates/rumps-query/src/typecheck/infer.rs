@@ -38,7 +38,7 @@ use super::instance::InstanceRegistry;
 use super::ty::{Class, ClassKind, Scheme, Subst, Ty, TyVar};
 use crate::ast::{ExprId, TxnId};
 use crate::env::Environment;
-use crate::intern::StringInterner;
+use crate::intern::{StringId, StringInterner};
 use crate::value::{TypeExprArena, TypeId, TypeRegistry};
 use crate::Span;
 
@@ -109,6 +109,22 @@ impl Constraint {
             | Self::Class { span, .. } => *span,
         }
     }
+}
+
+/// Context for class instance type checking.
+///
+/// Tracks the current class being implemented and its associated type
+/// definitions, enabling resolution of bare associated type references like
+/// `:Index` within instance methods and associated type definitions.
+#[derive(Clone, Debug)]
+pub(crate) struct ClassContext {
+    /// The class being implemented (e.g., `Indexable`).
+    pub(crate) class: ClassKind,
+    /// Associated type definitions for this instance.
+    ///
+    /// Maps associated type names to their concrete types. For example,
+    /// `NEWTYPE Index = Int` maps `"Index"` -> `Ty::Int`.
+    pub(crate) assoc_types: HashMap<StringId, Ty>,
 }
 
 /// Type inference context.
@@ -208,6 +224,12 @@ pub(crate) struct InferCtx<'a> {
     pub(super) in_transaction: Option<TxnId>,
     /// Counter for generating unique `TxnId` values.
     next_txn_id: u32,
+    /// Current class context, if inside a `CLASS ... FOR ...` instance.
+    ///
+    /// Set when processing class instance methods and associated type
+    /// definitions. Enables resolution of bare associated type references
+    /// like `:Index` to the concrete types defined in the current instance.
+    pub(super) class_context: Option<ClassContext>,
 }
 
 impl<'a> InferCtx<'a> {
@@ -247,6 +269,7 @@ impl<'a> InferCtx<'a> {
             closure_schemes: HashMap::new(),
             in_transaction: None,
             next_txn_id: 0,
+            class_context: None,
         }
     }
 

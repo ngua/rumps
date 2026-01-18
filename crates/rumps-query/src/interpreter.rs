@@ -1159,6 +1159,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                     self.validate_type_params(*ty, declared, span)
                 })
             }
+            // Associated types: class name is just a string, nothing to validate
+            AstTypeExpr::AssocType { .. } => Ok(()),
         })
     }
 

@@ -37,6 +37,20 @@ pub(crate) enum ClassKind {
     Display = 13,
 }
 
+/// Definition of a class, including metadata about its associated types.
+///
+/// Used to determine what associated types a class declares and how many
+/// type parameters it takes.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ClassDef {
+    /// Which class this definition is for.
+    pub(crate) kind: ClassKind,
+    /// Associated type names declared by this class (e.g., `["Index"]` for `Indexable`).
+    pub(crate) assoc_types: &'static [&'static str],
+    /// Number of type parameters the class takes (e.g., `2` for `Indexable[I, E]`).
+    pub(crate) params: u8,
+}
+
 /// What kind of type tracking a method requires for runtime dispatch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TrackKind {
@@ -91,6 +105,45 @@ impl ClassKind {
             "Filterable" => Some(Self::Filterable),
             "Display" => Some(Self::Display),
             _ => None,
+        }
+    }
+
+    /// Get the definition metadata for this class.
+    ///
+    /// Returns information about associated types and parameter count.
+    /// NOTE: `Indexable` currently has `params: 2` and no associated types.
+    /// This will change in Phase 4 when we switch to associated types.
+    pub(crate) fn def(self) -> ClassDef {
+        match self {
+            // Parameterized classes with 1 type arg
+            Self::Iterable
+            | Self::Fallible
+            | Self::Into
+            | Self::TryInto
+            | Self::Mappable
+            | Self::Foldable
+            | Self::Filterable => ClassDef {
+                kind: self,
+                assoc_types: &[],
+                params: 1,
+            },
+            // Indexable: currently 2 params (idx, elem); will become 1 + assoc type in Phase 4
+            Self::Indexable => ClassDef {
+                kind: self,
+                assoc_types: &[], // Will become &["Index"] in Phase 4
+                params: 2,
+            },
+            // Simple classes with no type args
+            Self::Numeric
+            | Self::Monoid
+            | Self::BitLike
+            | Self::Negatable
+            | Self::Ord
+            | Self::Display => ClassDef {
+                kind: self,
+                assoc_types: &[],
+                params: 0,
+            },
         }
     }
 
@@ -256,6 +309,19 @@ impl ClassKind {
             Self::Indexable => &["index", "get"],
             Self::Display => &["display"],
         }
+    }
+
+    /// Check if this class defines the given associated type.
+    ///
+    /// Used during type conversion to validate `Class:AssocName` references.
+    pub(crate) fn has_assoc_type(self, name: &str) -> bool {
+        self.def().assoc_types.contains(&name)
+    }
+}
+
+impl fmt::Display for ClassKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
     }
 }
 
@@ -502,6 +568,18 @@ pub(crate) enum Ty {
     /// concrete type constructor, the application is evaluated.
     Apply(TyVar, Vec<Self>),
 
+    /// Associated type projection: `T.Index` where `T: Indexable[E]`.
+    ///
+    /// Represents a type that is determined by a class instance. For example,
+    /// `Array[Int].Index` resolves to `Int`, `Map[String, Int].Index` resolves
+    /// to `String`.
+    ///
+    /// Fields:
+    /// - `TyVar`: the type variable with the class constraint
+    /// - `ClassKind`: which class defines the associated type
+    /// - `StringId`: the associated type name (e.g., `"Index"`)
+    AssocType(TyVar, ClassKind, StringId),
+
     /// Unresolved; database reads before inference narrows.
     Unknown,
 
@@ -635,6 +713,9 @@ impl Ty {
                 acc.insert(*v);
                 args.iter().for_each(|t| t.collect_free_vars(acc));
             }
+            Self::AssocType(v, _, _) => {
+                acc.insert(*v);
+            }
         }
     }
 
@@ -673,6 +754,7 @@ impl Ty {
             Self::Union(members) => members.iter().any(|t| t.occurs(v)),
             Self::Named(_, args) => args.iter().any(|t| t.occurs(v)),
             Self::Apply(w, args) => *w == v || args.iter().any(|t| t.occurs(v)),
+            Self::AssocType(w, _, _) => *w == v,
         }
     }
 
@@ -764,6 +846,14 @@ impl Ty {
                             _ => Self::Error,
                         }
                     }
+                }
+            }
+            Self::AssocType(v, class, name) => {
+                // If the base type var is bound to another var, update the projection.
+                // If bound to a concrete type, keep as-is; resolution happens in unification.
+                match subst.0.get(v) {
+                    Some(Self::Var(w)) => Self::AssocType(*w, *class, *name),
+                    _ => Self::AssocType(*v, *class, *name),
                 }
             }
         }

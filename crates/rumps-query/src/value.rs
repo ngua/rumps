@@ -1271,7 +1271,11 @@ impl TypeExprArena {
                     members.iter().map(|m| self.intern_ty(m)).collect();
                 self.union(member_ids)
             }
-            Ty::Var(_) | Ty::Apply(_, _) | Ty::Unknown | Ty::Error => {
+            Ty::Var(_)
+            | Ty::Apply(_, _)
+            | Ty::AssocType(_, _, _)
+            | Ty::Unknown
+            | Ty::Error => {
                 unreachable!("intern_ty called on unresolved type: {ty:?}")
             }
         }
@@ -1356,9 +1360,11 @@ impl TypeExprArena {
                 self.union(member_ids)
             }
             // Unresolved types become UNKNOWN
-            Ty::Var(_) | Ty::Apply(_, _) | Ty::Unknown | Ty::Error => {
-                self.named(TypeId::UNKNOWN)
-            }
+            Ty::Var(_)
+            | Ty::Apply(_, _)
+            | Ty::AssocType(_, _, _)
+            | Ty::Unknown
+            | Ty::Error => self.named(TypeId::UNKNOWN),
         }
     }
 }
@@ -2193,6 +2199,10 @@ fn resolve_type_expr(
                 })
                 .collect();
             type_exprs.object(field_ids)
+        }
+        // Associated types should be resolved by typechecker before runtime
+        AstTypeExpr::AssocType { .. } => {
+            typechecked!("type resolution", "associated types resolved")
         }
     }
 }

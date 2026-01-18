@@ -9,7 +9,7 @@ use super::{Constraint, InferCtx};
 use crate::ast::{self, AstTypeExpr, AstTypeExprId, Visibility};
 use crate::intern::StringId;
 use crate::typecheck::error::TypeError;
-use crate::typecheck::ty::{Class, Scheme, Ty};
+use crate::typecheck::ty::{Class, ClassKind, Scheme, Ty};
 use crate::value::{TypeDef, TypeId};
 use crate::Span;
 
@@ -65,6 +65,8 @@ impl InferCtx<'_> {
             Ty::Named(_, args) => args.iter().any(Self::has_unresolved_vars),
             // Apply is polymorphic; check the arguments
             Ty::Apply(_, args) => args.iter().any(Self::has_unresolved_vars),
+            // AssocType is polymorphic; resolved when base type is known
+            Ty::AssocType(_, _, _) => false,
         }
     }
 
@@ -417,6 +419,42 @@ impl InferCtx<'_> {
                         })
                         .collect();
                     Ty::Object(field_tys)
+                }
+                AstTypeExpr::AssocType { class, name } => {
+                    let span = self.ast.type_expr_span(id).unwrap_or_default();
+                    let name_id = self.env.intern(name);
+
+                    match class {
+                        // Unqualified `:Index`: resolve from class context
+                        None => self
+                            .class_context
+                            .as_ref()
+                            .and_then(|ctx| {
+                                ctx.assoc_types.get(&name_id).cloned()
+                            })
+                            .unwrap_or_else(|| {
+                                self.error(TypeError::AssocTypeOutsideClass {
+                                    name: name.clone(),
+                                    span,
+                                });
+                                Ty::Error
+                            }),
+
+                        // Qualified `Indexable:Index`: create AssocType
+                        // Validation happens during resolution in unify.rs
+                        Some(class_name) => ClassKind::from_str(class_name)
+                            .map(|kind| {
+                                let tv = self.fresh_var();
+                                Ty::AssocType(tv, kind, name_id)
+                            })
+                            .unwrap_or_else(|| {
+                                self.error(TypeError::UnknownClass(
+                                    class_name.clone(),
+                                    span,
+                                ));
+                                Ty::Error
+                            }),
+                    }
                 }
             },
         }

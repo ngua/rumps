@@ -8,9 +8,9 @@ use std::fmt;
 use thiserror::Error;
 
 use super::ty::{Class, ClassKind, Ty, TyVar};
-use crate::intern::{StringId, StringInterner};
+use crate::intern::StringInterner;
 use crate::value::{TypeRegistry, ValueArena};
-use crate::{Span, TypeId};
+use crate::{Span, StringId, TypeId};
 
 /// Context for pretty-printing types in error messages.
 ///
@@ -145,6 +145,11 @@ impl<'a> TyPrinter<'a> {
                 let ps: Vec<_> =
                     args.iter().map(|t| self.format_inner(t, namer)).collect();
                 format!("{}[{}]", vname, ps.join(", "))
+            }
+            Ty::AssocType(v, _class, name) => {
+                let vname = namer.name(*v);
+                let assoc_name = self.strings.get(*name).unwrap_or("<unknown>");
+                format!("{}.{}", vname, assoc_name)
             }
         }
     }
@@ -383,7 +388,7 @@ pub(crate) enum TypeError {
     /// Duplicate class instance declaration.
     ///
     /// A type can only have one instance of each class.
-    #[error("duplicate `{class:?}` instance for type `{type_id:?}`")]
+    #[error("duplicate `{class}` instance for type `{type_id:?}`")]
     DuplicateInstance {
         class: ClassKind,
         type_id: TypeId,
@@ -393,7 +398,7 @@ pub(crate) enum TypeError {
     /// Attempt to implement a class for a builtin type.
     ///
     /// Users can only implement classes for their own types (TYPE, NEWTYPE, UNION).
-    #[error("cannot implement `{class:?}` for builtin type `{type_id:?}`")]
+    #[error("cannot implement `{class}` for builtin type `{type_id:?}`")]
     BuiltinInstanceForbidden {
         class: ClassKind,
         type_id: TypeId,
@@ -403,7 +408,7 @@ pub(crate) enum TypeError {
     /// Missing required method in class instance declaration.
     ///
     /// All methods defined by a class must be implemented.
-    #[error("missing required method `{method}` for class `{class:?}`")]
+    #[error("missing required method `{method}` for class `{class}`")]
     MissingInstanceMethod {
         class: ClassKind,
         method: String,
@@ -413,12 +418,70 @@ pub(crate) enum TypeError {
     /// Method signature mismatch in class instance declaration.
     ///
     /// The user-provided method signature does not match the class definition.
-    #[error("method `{method}` has wrong signature: expected {expected} parameter(s), got {got}")]
+    #[error("method `{method}` of class `{class}` has wrong arity: expected {expected} parameter(s), got {got}")]
     MethodSignatureMismatch {
         class: ClassKind,
         method: String,
         expected: usize,
         got: usize,
+        span: Span,
+    },
+
+    /// Missing required associated type in instance definition.
+    ///
+    /// Classes like `Indexable` require associated type definitions (e.g., `NEWTYPE Index = Int`).
+    #[error("missing required associated type `{assoc}` for class `{class}`")]
+    MissingAssocType {
+        class: ClassKind,
+        assoc: String,
+        span: Span,
+    },
+
+    /// Unknown associated type for a class.
+    ///
+    /// The instance defines an associated type that doesn't exist in the class.
+    #[error("class `{class}` has no associated type `{assoc}`")]
+    UnknownAssocTypeForClass {
+        class: ClassKind,
+        assoc: String,
+        span: Span,
+    },
+
+    /// Type does not have the specified associated type.
+    ///
+    /// Attempting to project an associated type from a type that doesn't support it.
+    #[error("type `{ty}` has no associated type `#{}`", assoc.idx())]
+    UnknownAssocType { ty: Ty, assoc: StringId, span: Span },
+
+    /// Associated type constraint not satisfied.
+    ///
+    /// The concrete type for an associated type doesn't satisfy the required constraint.
+    #[error(
+        "associated type `{assoc}` must satisfy `{constraint}`, got `{actual}`"
+    )]
+    AssocTypeConstraint {
+        assoc: String,
+        constraint: Class,
+        actual: Ty,
+        span: Span,
+    },
+
+    /// Bare associated type reference outside class context.
+    ///
+    /// Unqualified associated types like `:Index` can only be used inside
+    /// `CLASS ... FOR ...` instance definitions where the class context is known.
+    #[error(
+        "associated type `:{name}` can only be used inside a class instance"
+    )]
+    AssocTypeOutsideClass { name: String, span: Span },
+
+    /// Class does not define the specified associated type.
+    ///
+    /// The referenced associated type doesn't exist in the class.
+    #[error("class `{class}` has no associated type `#{}`", name.idx())]
+    NoSuchAssocType {
+        class: ClassKind,
+        name: StringId,
         span: Span,
     },
 }
@@ -462,7 +525,13 @@ impl TypeError {
             | Self::DuplicateInstance { span, .. }
             | Self::BuiltinInstanceForbidden { span, .. }
             | Self::MissingInstanceMethod { span, .. }
-            | Self::MethodSignatureMismatch { span, .. } => *span,
+            | Self::MethodSignatureMismatch { span, .. }
+            | Self::MissingAssocType { span, .. }
+            | Self::UnknownAssocTypeForClass { span, .. }
+            | Self::UnknownAssocType { span, .. }
+            | Self::AssocTypeConstraint { span, .. }
+            | Self::AssocTypeOutsideClass { span, .. }
+            | Self::NoSuchAssocType { span, .. } => *span,
         }
     }
 
@@ -692,6 +761,58 @@ impl TypeError {
                 ),
                 None,
             ),
+            Self::MissingAssocType { class, assoc, .. } => (
+                format!(
+                    "missing required associated type `{assoc}` for class `{}`",
+                    class.name()
+                ),
+                Some(format!("add `NEWTYPE {assoc} = <type>` to the instance")),
+            ),
+            Self::UnknownAssocTypeForClass { class, assoc, .. } => (
+                format!(
+                    "class `{}` has no associated type `{assoc}`",
+                    class.name()
+                ),
+                None,
+            ),
+            Self::UnknownAssocType { ty, assoc, .. } => {
+                let name = p.strings.get(*assoc).unwrap_or("<unknown>");
+                (
+                    format!(
+                        "type `{}` has no associated type `{name}`",
+                        p.format(ty)
+                    ),
+                    None,
+                )
+            }
+            Self::AssocTypeConstraint {
+                assoc,
+                constraint,
+                actual,
+                ..
+            } => (
+                format!(
+                    "associated type `{assoc}` must satisfy `{constraint}`, got `{}`",
+                    p.format(actual)
+                ),
+                None,
+            ),
+            Self::AssocTypeOutsideClass { name, .. } => (
+                format!(
+                    "associated type `:{name}` can only be used inside a class instance"
+                ),
+                Some("use qualified form `ClassName:AssocType` outside class instances".to_owned()),
+            ),
+            Self::NoSuchAssocType { class, name, .. } => {
+                let assoc = p.strings.get(*name).unwrap_or("<unknown>");
+                (
+                    format!(
+                        "class `{}` has no associated type `{assoc}`",
+                        class.name()
+                    ),
+                    None,
+                )
+            }
         };
 
         FormattedTypeError {
@@ -820,6 +941,10 @@ impl fmt::Display for Ty {
                     write!(f, "{t}")
                 })?;
                 write!(f, "]")
+            }
+            Self::AssocType(v, _class, name) => {
+                // Display without interner context; name shown as StringId index
+                write!(f, "?{}.#{}", v.idx(), name.idx())
             }
         }
     }

@@ -201,6 +201,21 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .collect::<Result<Option<IndexMap<_, _>>>>()?;
                 Ok(resolved.map(|r| self.type_exprs.object(r)))
             }
+            // Associated types should be resolved during type checking.
+            //
+            // - Unqualified `:Index` in class instances are resolved to concrete
+            //   types by the typechecker's class context
+            // - Qualified `Indexable:Index` are resolved during unification when
+            //   the base type is known
+            //
+            // If we reach this point, the typechecker failed to resolve the
+            // associated type, which is a bug.
+            AstTypeExpr::AssocType { .. } => {
+                typechecked!(
+                    "try_resolve_type_expr",
+                    "resolved associated type"
+                )
+            }
         }
     }
 
@@ -337,6 +352,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let fields = fields.clone();
 
                 // Use a local enum to distinguish soft errors (Result.Err) from hard errors
+                #[allow(clippy::large_enum_variant)]
                 enum FieldErr {
                     Soft(String),
                     Hard(Error),
@@ -797,6 +813,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                     })
                     .collect();
                 Ok(self.type_exprs.object(resolved?))
+            }
+            // Associated types should be resolved by typechecker before runtime
+            AstTypeExpr::AssocType { .. } => {
+                typechecked!("type resolution", "associated types resolved")
             }
         }
     }

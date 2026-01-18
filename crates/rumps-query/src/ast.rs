@@ -355,6 +355,12 @@ pub(crate) enum AstTypeExpr {
     /// Anonymous structural object type in type position. Uses extensible
     /// record semantics: a value matches if it has at least the specified fields.
     Object(SmallVec<[(String, AstTypeExprId); 4]>),
+
+    /// Associated type reference: `:Index` (unqualified) or `Indexable:Index` (qualified).
+    ///
+    /// - `class: None`: unqualified `:Index`, resolved from class context
+    /// - `class: Some("Indexable")`: qualified, names the class explicitly
+    AssocType { class: Option<String>, name: String },
 }
 
 /// Binary operators.
@@ -1145,9 +1151,27 @@ pub(crate) struct InstanceMethodDef {
     pub(crate) span: Span,
 }
 
+/// An associated type definition in a class instance.
+///
+/// Represents `NEWTYPE Index = Int` or `NEWTYPE Index: Ord = Int` inside a
+/// `CLASS ... FOR ...` block.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct AssocTypeDef {
+    /// Associated type name (e.g., `"Index"`).
+    pub(crate) name: String,
+    /// Optional constraint on the associated type.
+    pub(crate) constraint: Option<Class>,
+    /// The concrete type this associated type maps to.
+    pub(crate) target: AstTypeExprId,
+    pub(crate) span: Span,
+}
+
 /// A statement node.
 ///
 /// All recursive references use `ExprId`/`StmtId` indices into the `Ast` arena.
+// TODO: `ClassInstance` variant is ~1236 bytes due to nested SmallVecs; consider
+// using `Vec` for `methods` or reducing inline capacity to shrink enum size.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Stmt {
     /// Lexical binding with destructuring: `LET pattern = expr`.
@@ -1283,6 +1307,8 @@ pub(crate) enum Stmt {
         ///
         /// Each entry is `(type_param_name, constraints)`.
         constraints: SmallVec<[(String, SmallVec<[Class; 2]>); 2]>,
+        /// Associated type definitions (e.g., `NEWTYPE Index = Int`).
+        assoc_types: SmallVec<[AssocTypeDef; 2]>,
         /// Method implementations.
         methods: SmallVec<[InstanceMethodDef; 4]>,
     },

@@ -372,6 +372,7 @@ fn lower_stmt(ast: &mut Ast, ctx: &mut Ctx, stmt: cst::Stmt) -> Result<StmtId> {
             type_params,
             for_type,
             constraints,
+            assoc_types,
             methods,
         } => {
             let class_args_ids = class_args
@@ -389,6 +390,10 @@ fn lower_stmt(ast: &mut Ast, ctx: &mut Ctx, stmt: cst::Stmt) -> Result<StmtId> {
                         .map(|cs| (name, cs))
                 })
                 .collect::<Result<SmallVec<_>>>()?;
+            let assoc_types_lowered = assoc_types
+                .into_iter()
+                .map(|a| lower_assoc_type_def(ast, a))
+                .collect::<Result<SmallVec<_>>>()?;
             let methods_lowered = methods
                 .into_iter()
                 .map(|m| lower_instance_method(ast, ctx, m))
@@ -399,6 +404,7 @@ fn lower_stmt(ast: &mut Ast, ctx: &mut Ctx, stmt: cst::Stmt) -> Result<StmtId> {
                 type_params: lower_type_params(ast, type_params)?,
                 for_type: for_type_id,
                 constraints: constraints_lowered,
+                assoc_types: assoc_types_lowered,
                 methods: methods_lowered,
             }
         }
@@ -429,6 +435,21 @@ fn lower_instance_method(
         ret,
         body,
         span: m.span,
+    })
+}
+
+/// Lower a CST associated type definition to AST.
+fn lower_assoc_type_def(
+    ast: &mut Ast,
+    a: cst::AssocTypeCst,
+) -> Result<ast::AssocTypeDef> {
+    let constraint = a.constraint.map(|c| lower_class(ast, c)).transpose()?;
+    let target = lower_type_expr(ast, a.target)?;
+    Ok(ast::AssocTypeDef {
+        name: a.name,
+        constraint,
+        target,
+        span: a.span,
     })
 }
 
@@ -766,6 +787,9 @@ fn lower_type_expr(ast: &mut Ast, ty: cst::TypeExpr) -> Result<AstTypeExprId> {
                 .map(|(name, ty)| lower_type_expr(ast, ty).map(|id| (name, id)))
                 .collect::<Result<SmallVec<_>>>()?;
             AstTypeExpr::Object(lowered)
+        }
+        cst::TypeExprKind::AssocType { class, name } => {
+            AstTypeExpr::AssocType { class, name }
         }
     };
     ast.add_type_expr(te, span)
@@ -1198,6 +1222,9 @@ fn merge_type_expr(
                 .collect();
             AstTypeExpr::Object(new_fields?)
         }
+        AstTypeExpr::AssocType { class, name } => {
+            AstTypeExpr::AssocType { class, name }
+        }
     };
     target.add_type_expr(new_te, span)
 }
@@ -1448,6 +1475,7 @@ fn merge_stmt(
             type_params,
             for_type,
             constraints,
+            assoc_types,
             methods,
         } => {
             let new_class_args: Result<SmallVec<_>> = class_args
@@ -1458,6 +1486,19 @@ fn merge_stmt(
             let new_constraints: Result<SmallVec<_>> = constraints
                 .iter()
                 .map(|(name, cs)| Ok((name.clone(), cs.clone())))
+                .collect();
+            let new_assoc_types: Result<SmallVec<_>> = assoc_types
+                .iter()
+                .map(|a| {
+                    let new_target =
+                        merge_type_expr(target, source, a.target, span)?;
+                    Ok(ast::AssocTypeDef {
+                        name: a.name.clone(),
+                        constraint: a.constraint.clone(),
+                        target: new_target,
+                        span: a.span,
+                    })
+                })
                 .collect();
             let new_methods: Result<SmallVec<_>> = methods
                 .iter()
@@ -1494,6 +1535,7 @@ fn merge_stmt(
                 type_params,
                 for_type: new_for_type,
                 constraints: new_constraints?,
+                assoc_types: new_assoc_types?,
                 methods: new_methods?,
             }
         }

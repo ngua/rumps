@@ -7,15 +7,15 @@ use std::collections::{HashMap, HashSet};
 
 use smallvec::SmallVec;
 
-use super::{Constraint, InferCtx};
+use super::{ClassContext, Constraint, InferCtx};
 use crate::ast::{
-    self, ArrayElem, AstTypeExpr, AstTypeExprId, BindingPattern, DbRef, Expr,
-    ExprId, Import, ImportItem, InstanceMethodDef, Literal, OutputFormat,
-    OutputTarget, RefTarget, Stmt, StmtId, SubscriptElem, TxnId, TypeParam,
-    UnOp, Visibility, WriteExpr,
+    self, ArrayElem, AssocTypeDef, AstTypeExpr, AstTypeExprId, BindingPattern,
+    DbRef, Expr, ExprId, Import, ImportItem, InstanceMethodDef, Literal,
+    OutputFormat, OutputTarget, RefTarget, Stmt, StmtId, SubscriptElem, TxnId,
+    TypeParam, UnOp, Visibility, WriteExpr,
 };
 use crate::typecheck::error::TypeError;
-use crate::typecheck::instance::Instance;
+use crate::typecheck::instance::{self, Instance};
 use crate::typecheck::ty::{Class, ClassKind, Scheme, Ty, TyVar};
 use crate::value::{TypeDef, TypeId};
 use crate::Span;
@@ -101,6 +101,7 @@ impl InferCtx<'_> {
                 type_params,
                 for_type,
                 constraints,
+                assoc_types,
                 methods,
             }) => {
                 self.env.mark_non_import();
@@ -110,6 +111,7 @@ impl InferCtx<'_> {
                     &type_params,
                     for_type,
                     &constraints,
+                    &assoc_types,
                     &methods,
                     span,
                 );
@@ -232,8 +234,8 @@ impl InferCtx<'_> {
                     ref type_params,
                     for_type,
                     ref constraints,
+                    ref assoc_types,
                     ref methods,
-                    ..
                 }) => {
                     self.class_instance(
                         class_name,
@@ -241,6 +243,7 @@ impl InferCtx<'_> {
                         type_params,
                         for_type,
                         constraints,
+                        assoc_types,
                         methods,
                         item_span,
                     );
@@ -760,6 +763,7 @@ impl InferCtx<'_> {
         type_params: &SmallVec<[TypeParam; 2]>,
         for_type: AstTypeExprId,
         constraints: &SmallVec<[(String, SmallVec<[ast::Class; 2]>); 2]>,
+        assoc_types: &SmallVec<[AssocTypeDef; 2]>,
         methods: &SmallVec<[InstanceMethodDef; 4]>,
         span: Span,
     ) {
@@ -849,6 +853,25 @@ impl InferCtx<'_> {
                 });
             });
 
+        // 6.5. Process associated type definitions and set class context
+        //
+        // This enables bare `:Index` references inside method bodies to resolve
+        // to the concrete type defined in this instance.
+        let assoc_type_map: HashMap<_, _> = assoc_types
+            .iter()
+            .map(|def| {
+                let name_id = self.env.intern(&def.name);
+                let ty = self.ast_type_to_ty(def.target, &type_param_subst);
+                (name_id, ty)
+            })
+            .collect();
+
+        // Set class context for method body type checking
+        self.class_context = Some(ClassContext {
+            class,
+            assoc_types: assoc_type_map.clone(),
+        });
+
         // 7. Collect provided method names
         let provided_methods: HashSet<&str> =
             methods.iter().map(|m| m.name.as_str()).collect();
@@ -875,6 +898,9 @@ impl InferCtx<'_> {
                 span,
             );
         });
+
+        // 9.5. Clear class context after method processing
+        self.class_context = None;
 
         // 10. Register instance (if we have a valid type_id)
         let type_name = self.extract_type_name_from_ast(for_type);
@@ -905,12 +931,43 @@ impl InferCtx<'_> {
 
             // Skip registration if already hoisted (avoid duplicate error)
             if self.instance_registry.lookup(class, tid).is_none() {
+                // Convert AST associated types to instance associated types
+                let inst_assoc_types: SmallVec<[instance::AssocTypeDef; 1]> =
+                    assoc_types
+                        .iter()
+                        .map(|def| {
+                            let name_id = self.env.intern(&def.name);
+                            let ty = assoc_type_map
+                                .get(&name_id)
+                                .cloned()
+                                .unwrap_or(Ty::Unknown);
+                            let constraints = def
+                                .constraint
+                                .as_ref()
+                                .map(|c| {
+                                    self.ast_class_to_ty_class(
+                                        c,
+                                        &type_param_subst,
+                                    )
+                                })
+                                .into_iter()
+                                .collect();
+                            instance::AssocTypeDef {
+                                name: name_id,
+                                ty,
+                                constraints,
+                                span: def.span,
+                            }
+                        })
+                        .collect();
+
                 let inst = Instance {
                     class,
                     class_args: class_arg_tys,
                     type_params: type_var_params,
                     constraints: scheme_constraints,
                     methods: method_map,
+                    assoc_types: inst_assoc_types,
                     span,
                 };
 

@@ -1120,12 +1120,58 @@ impl Parser {
                 },
             );
 
-        // Methods body: `{ FUN ... FUN ... }`
-        let methods_body = just(Token::LBrace)
+        // Associated type: `NEWTYPE Index = Int` or `NEWTYPE Index: Ord = Int`
+        let assoc_type_constraint = just(Token::Colon)
             .ignore_then(Self::opt_newlines())
-            .ignore_then(method.separated_by(Self::item_sep()).allow_trailing())
+            .ignore_then(Self::constraint())
+            .or_not();
+        let assoc_type = just(Token::NewType)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(Self::ident())
+            .then(assoc_type_constraint)
             .then_ignore(Self::opt_newlines())
-            .then_ignore(just(Token::RBrace));
+            .then_ignore(just(Token::Assign))
+            .then_ignore(Self::opt_newlines())
+            .then(Self::type_expr())
+            .map_with_span(|((name, constraint), target), span| {
+                cst::AssocTypeCst {
+                    name,
+                    constraint,
+                    target,
+                    span,
+                }
+            });
+
+        // Instance body item: either NEWTYPE or FUN
+        #[derive(Clone)]
+        #[allow(clippy::large_enum_variant)]
+        enum InstanceItem {
+            AssocType(cst::AssocTypeCst),
+            Method(cst::InstanceMethodDef),
+        }
+        let instance_item = assoc_type
+            .map(InstanceItem::AssocType)
+            .or(method.map(InstanceItem::Method));
+
+        // Instance body: `{ NEWTYPE ... FUN ... }`
+        let instance_body = just(Token::LBrace)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(
+                instance_item
+                    .separated_by(Self::item_sep())
+                    .allow_trailing(),
+            )
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RBrace))
+            .map(|items| {
+                let mut assoc_types = Vec::new();
+                let mut methods = Vec::new();
+                items.into_iter().for_each(|item| match item {
+                    InstanceItem::AssocType(a) => assoc_types.push(a),
+                    InstanceItem::Method(m) => methods.push(m),
+                });
+                (assoc_types, methods)
+            });
 
         // Full CLASS statement
         just(Token::Class)
@@ -1139,11 +1185,11 @@ impl Parser {
             .then_ignore(Self::opt_newlines())
             .then(where_clause)
             .then_ignore(Self::opt_newlines())
-            .then(methods_body)
+            .then(instance_body)
             .map_with_span(
                 |(
                     (((class_name, class_args), for_type), constraints),
-                    methods,
+                    (assoc_types, methods),
                 ),
                  span| {
                     cst::Stmt::new(
@@ -1153,6 +1199,7 @@ impl Parser {
                             type_params: vec![], // Derived during resolution
                             for_type,
                             constraints,
+                            assoc_types,
                             methods,
                         },
                         span,
@@ -3229,6 +3276,30 @@ impl Parser {
                     ))
                 });
 
+            // Unqualified associated type: `:Index` (resolved from class context)
+            let unqualified_assoc = just(Token::Colon)
+                .ignore_then(Self::ident())
+                .map_with_span(|name, span| {
+                    TypeAtomOrParams::Single(cst::TypeExpr::new(
+                        cst::TypeExprKind::AssocType { class: None, name },
+                        span,
+                    ))
+                });
+
+            // Qualified associated type: `Indexable:Index` (names the class)
+            let qualified_assoc = Self::ident()
+                .then_ignore(just(Token::Colon))
+                .then(Self::ident())
+                .map_with_span(|(class, name), span| {
+                    TypeAtomOrParams::Single(cst::TypeExpr::new(
+                        cst::TypeExprKind::AssocType {
+                            class: Some(class),
+                            name,
+                        },
+                        span,
+                    ))
+                });
+
             // Named type (possibly qualified: `Module.Type`) with optional type params
             let named = Self::ident()
                 .separated_by(just(Token::Dot))
@@ -3243,8 +3314,10 @@ impl Parser {
                     TypeAtomOrParams::Single(cst::TypeExpr::new(kind, span))
                 });
 
-            // Atom: wildcard or named type
-            let atom = wildcard.or(named);
+            // Atom: wildcard, associated types, or named type
+            // Order: try qualified_assoc before named to match `Class:Assoc`
+            let atom =
+                wildcard.or(unqualified_assoc).or(qualified_assoc).or(named);
 
             // Parenthesized: `()`, `(T)`, `(T,)`, or `(T, U, ...)`
             // Parse as (elem ,)* [elem] to track trailing commas

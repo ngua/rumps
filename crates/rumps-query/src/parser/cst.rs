@@ -463,6 +463,21 @@ pub(crate) struct InstanceMethodDef {
     pub(crate) span: Span,
 }
 
+/// An associated type definition in a class instance (CST form).
+///
+/// Represents `NEWTYPE Index = Int` or `NEWTYPE Index: Ord = Int` inside a
+/// `CLASS ... FOR ...` block.
+#[derive(Clone, Debug)]
+pub(crate) struct AssocTypeCst {
+    /// Associated type name (e.g., `"Index"`).
+    pub(crate) name: String,
+    /// Optional constraint on the associated type.
+    pub(crate) constraint: Option<Class>,
+    /// The concrete type this associated type maps to.
+    pub(crate) target: TypeExpr,
+    pub(crate) span: Span,
+}
+
 /// The kind of a CST statement.
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
@@ -573,6 +588,8 @@ pub(crate) enum StmtKind {
         ///
         /// Each entry is `(type_param_name, constraints)`.
         constraints: Vec<(String, Vec<Class>)>,
+        /// Associated type definitions (e.g., `NEWTYPE Index = Int`).
+        assoc_types: Vec<AssocTypeCst>,
         /// Method implementations.
         methods: Vec<InstanceMethodDef>,
     },
@@ -652,6 +669,12 @@ pub(crate) enum TypeExprKind {
     /// Anonymous structural object types in type position. Uses extensible
     /// record semantics: an object matches if it has at least these fields.
     Object(Vec<(String, TypeExpr)>),
+
+    /// Associated type reference: `:Index` (unqualified) or `Indexable:Index` (qualified).
+    ///
+    /// - `class: None`: unqualified `:Index`, resolved from class context
+    /// - `class: Some("Indexable")`: qualified, names the class explicitly
+    AssocType { class: Option<String>, name: String },
 }
 
 /// A variant definition in a user-defined sum type (CST form).

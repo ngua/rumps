@@ -56,6 +56,7 @@ impl InferCtx<'_> {
                 type_params,
                 for_type,
                 constraints,
+                assoc_types: _,
                 methods,
             }) => self.hoist_class_instance(
                 &class_name,
@@ -340,6 +341,7 @@ impl InferCtx<'_> {
             type_params: type_var_params,
             constraints: scheme_constraints,
             methods: method_map,
+            assoc_types: SmallVec::new(),
             span,
         };
         if let Err(e) = self.instance_registry.register(type_id, inst) {

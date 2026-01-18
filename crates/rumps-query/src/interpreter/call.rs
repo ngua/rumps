@@ -423,7 +423,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             .map(str::to_owned)
             .unwrap_or_else(|| invariant!("method StringId in arena"));
 
-        let kind = ClassKind::from_str(&class_str).unwrap_or_else(|| {
+        let kind = ClassKind::from_str(class_str).unwrap_or_else(|| {
             typechecked!("invoke_class_method_fn", "known class")
         });
 

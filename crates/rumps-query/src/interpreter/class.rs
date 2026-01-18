@@ -1126,6 +1126,7 @@ impl Into {
             Ty::Union(_) => "Union",
             Ty::Var(_) => "Var",
             Ty::Apply(_, _) => "Apply",
+            Ty::AssocType(_, _, _) => "AssocType",
             Ty::Unknown => "Unknown",
             Ty::Error => "Error",
         }
