@@ -47,7 +47,7 @@ pub(crate) struct ClassDef {
     pub(crate) kind: ClassKind,
     /// Associated type names declared by this class (e.g., `["Index"]` for `Indexable`).
     pub(crate) assoc_types: &'static [&'static str],
-    /// Number of type parameters the class takes (e.g., `2` for `Indexable[I, E]`).
+    /// Number of type parameters the class takes (e.g., `1` for `Indexable[E]`).
     pub(crate) params: u8,
 }
 
@@ -111,8 +111,6 @@ impl ClassKind {
     /// Get the definition metadata for this class.
     ///
     /// Returns information about associated types and parameter count.
-    /// NOTE: `Indexable` currently has `params: 2` and no associated types.
-    /// This will change in Phase 4 when we switch to associated types.
     pub(crate) fn def(self) -> ClassDef {
         match self {
             // Parameterized classes with 1 type arg
@@ -127,11 +125,11 @@ impl ClassKind {
                 assoc_types: &[],
                 params: 1,
             },
-            // Indexable: currently 2 params (idx, elem); will become 1 + assoc type in Phase 4
+            // Indexable: 1 param (elem type) + associated type `Index` (index type)
             Self::Indexable => ClassDef {
                 kind: self,
-                assoc_types: &[], // Will become &["Index"] in Phase 4
-                params: 2,
+                assoc_types: &["Index"],
+                params: 1,
             },
             // Simple classes with no type args
             Self::Numeric
@@ -152,11 +150,15 @@ impl ClassKind {
     /// This is the **single source of truth** for all type class method schemes.
     /// Every class method must have its type scheme defined here.
     ///
+    /// The `intern` function is used to intern associated type names (e.g., `"Index"`
+    /// for `Indexable`). This is needed because `Ty::AssocType` stores a `StringId`.
+    ///
     /// Returns `Err(TypeError::UnknownMethod)` if the method doesn't exist.
     pub(crate) fn method(
         self,
         name: &str,
         span: Span,
+        intern: impl FnOnce(&str) -> StringId,
     ) -> Result<MethodSpec, TypeError> {
         use MethodSpec::{Standard, Tracked};
         use TrackKind::{Convert, ConvertResultInner, Mempty};
@@ -247,13 +249,39 @@ impl ClassKind {
                 track: ConvertResultInner,
             }),
 
-            // Indexable: (B, I) -> E where B: Indexable[I, E]
-            (Self::Indexable, "index") => Ok(Standard(
-                scheme!(forall B: Indexable[I, E], I, E. (B, I) -> E),
-            )),
-            (Self::Indexable, "get") => Ok(Standard(
-                scheme!(forall B: Indexable[I, E], I, E. (B, I) -> Option[E]),
-            )),
+            // Indexable: (B, B.Index) -> E where B: Indexable[E]
+            // The index type is the associated type `B.Index`, not a separate type parameter.
+            (Self::Indexable, "index") => {
+                let b = TyVar::new(0);
+                let e = TyVar::new(1);
+                let idx_name = intern("Index");
+                let idx_ty = Ty::AssocType(b, Self::Indexable, idx_name);
+                Ok(Standard(Scheme {
+                    vars: vec![b, e],
+                    ty: Ty::Fn(vec![Ty::Var(b), idx_ty], Box::new(Ty::Var(e))),
+                    constraints: smallvec::smallvec![(
+                        b,
+                        Class::Indexable(Ty::Var(e))
+                    )],
+                }))
+            }
+            (Self::Indexable, "get") => {
+                let b = TyVar::new(0);
+                let e = TyVar::new(1);
+                let idx_name = intern("Index");
+                let idx_ty = Ty::AssocType(b, Self::Indexable, idx_name);
+                Ok(Standard(Scheme {
+                    vars: vec![b, e],
+                    ty: Ty::Fn(
+                        vec![Ty::Var(b), idx_ty],
+                        Box::new(Ty::Option(Box::new(Ty::Var(e)))),
+                    ),
+                    constraints: smallvec::smallvec![(
+                        b,
+                        Class::Indexable(Ty::Var(e))
+                    )],
+                }))
+            }
 
             // Display: (T) -> String where T: Display
             (Self::Display, "display") => {
@@ -350,9 +378,9 @@ pub(crate) enum Class {
     TryInto(Ty),
     /// Type supports indexing (`[]` access).
     ///
-    /// First `Ty` is the index type, second is the element type.
-    /// The functional dependency is: `base idx -> elem`.
-    Indexable(Ty, Ty),
+    /// The `Ty` is the element type. The index type is accessed via the
+    /// associated type `Index` (e.g., `Array.Index = Int`, `Map[K,V].Index = K`).
+    Indexable(Ty),
     /// Type supports ordering comparisons (`<`, `>`, `<=`, `>=`).
     Ord,
     /// Type is a functor; supports structure-preserving `map`.
@@ -377,9 +405,7 @@ impl Class {
             Self::Fallible(t) => Self::Fallible(t.apply(subst)),
             Self::Into(t) => Self::Into(t.apply(subst)),
             Self::TryInto(t) => Self::TryInto(t.apply(subst)),
-            Self::Indexable(k, v) => {
-                Self::Indexable(k.apply(subst), v.apply(subst))
-            }
+            Self::Indexable(e) => Self::Indexable(e.apply(subst)),
             Self::Ord => Self::Ord,
             Self::Mappable(t) => Self::Mappable(t.apply(subst)),
             Self::Foldable(t) => Self::Foldable(t.apply(subst)),
@@ -399,7 +425,7 @@ impl Class {
             Self::Fallible(_) => "Fallible",
             Self::Into(_) => "Into",
             Self::TryInto(_) => "TryInto",
-            Self::Indexable(_, _) => "Indexable",
+            Self::Indexable(_) => "Indexable",
             Self::Ord => "Ord",
             Self::Mappable(_) => "Mappable",
             Self::Foldable(_) => "Foldable",
@@ -425,7 +451,7 @@ impl Class {
             Self::Fallible(_) => {
                 Some("fallible types are `Option` and `Result`")
             }
-            Self::Indexable(_, _) => {
+            Self::Indexable(_) => {
                 Some("indexable types are `Array`, `Map`, and `String`")
             }
             Self::Ord => {
@@ -455,7 +481,7 @@ impl Class {
             Self::Fallible(_) => ClassKind::Fallible,
             Self::Into(_) => ClassKind::Into,
             Self::TryInto(_) => ClassKind::TryInto,
-            Self::Indexable(_, _) => ClassKind::Indexable,
+            Self::Indexable(_) => ClassKind::Indexable,
             Self::Ord => ClassKind::Ord,
             Self::Mappable(_) => ClassKind::Mappable,
             Self::Foldable(_) => ClassKind::Foldable,

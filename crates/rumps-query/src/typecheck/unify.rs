@@ -734,7 +734,7 @@ impl<'a> InferCtx<'a> {
             }
             Constraint::Class { ty, class, span } => match class {
                 // Iterable and Indexable: process in first pass for unification
-                Class::Iterable(_) | Class::Indexable(_, _) => {
+                Class::Iterable(_) | Class::Indexable(_) => {
                     let ty = ty.apply(&subst);
                     let class = class.apply(&subst);
                     self.satisfies_class(&class, &ty, *span, &mut subst);
@@ -785,7 +785,7 @@ impl<'a> InferCtx<'a> {
                     }
                     // Other classes: processed in first or third pass
                     Class::Iterable(_)
-                    | Class::Indexable(_, _)
+                    | Class::Indexable(_)
                     | Class::Fallible(_)
                     | Class::Into(_)
                     | Class::TryInto(_)
@@ -806,7 +806,7 @@ impl<'a> InferCtx<'a> {
                 match class {
                     Class::Fallible(_)
                     | Class::Iterable(_)
-                    | Class::Indexable(_, _)
+                    | Class::Indexable(_)
                     | Class::Into(_)
                     | Class::TryInto(_)
                     | Class::Mappable(_)
@@ -837,6 +837,32 @@ impl<'a> InferCtx<'a> {
     /// `Into(target)`, `Iterable(elem)`). The `subst` is updated when the
     /// constraint involves unification (e.g., `Fallible`, `Iterable`, `Indexable`).
     fn satisfies_class(
+        &mut self,
+        class: &Class,
+        ty: &Ty,
+        span: Span,
+        subst: &mut Subst,
+    ) {
+        // Handle associated types: resolve to concrete type before checking
+        if let Ty::AssocType(tv, assoc_class, name) = ty {
+            // Apply current substitution to resolve the base type variable
+            let base = subst.apply(&Ty::Var(*tv));
+            match self.resolve_assoc_type(&base, *assoc_class, *name, span) {
+                Ok(resolved) => {
+                    // Resolved; check the concrete type against the class
+                    self.satisfies_class(class, &resolved, span, subst);
+                }
+                Err(_) => {
+                    // Base type still unresolved; defer constraint
+                }
+            }
+        } else {
+            self.satisfies_class_inner(class, ty, span, subst);
+        }
+    }
+
+    /// Inner implementation of class constraint checking.
+    fn satisfies_class_inner(
         &mut self,
         class: &Class,
         ty: &Ty,
@@ -1672,23 +1698,20 @@ impl<'a> InferCtx<'a> {
                 }
             },
 
-            // `Indexable(idx, elem)`: `Array[T]`, `Map[K,V]`, `String`
-            Class::Indexable(idx, elem) => match ty {
+            // `Indexable(elem)`: `Array[T]`, `Map[K,V]`, `String`
+            //
+            // The index type is now accessed via the associated type `.Index`,
+            // not as a class parameter. Only the element type is unified here.
+            Class::Indexable(elem) => match ty {
                 Ty::Array(inner) => {
-                    match self.unify_types(idx, &Ty::Int, span) {
-                        UnifyResult::Ok(s) => *subst = subst.compose(&s),
-                        UnifyResult::Err(e) => self.error(e),
-                    }
+                    // Array[T]: elem = T (index type is Int, via .Index)
                     match self.unify_types(elem, inner, span) {
                         UnifyResult::Ok(s) => *subst = subst.compose(&s),
                         UnifyResult::Err(e) => self.error(e),
                     }
                 }
-                Ty::Map(key, val) => {
-                    match self.unify_types(idx, key, span) {
-                        UnifyResult::Ok(s) => *subst = subst.compose(&s),
-                        UnifyResult::Err(e) => self.error(e),
-                    }
+                Ty::Map(_key, val) => {
+                    // Map[K, V]: elem = Option[V] (index type is K, via .Index)
                     let opt_val = Ty::Option(val.clone());
                     match self.unify_types(elem, &opt_val, span) {
                         UnifyResult::Ok(s) => *subst = subst.compose(&s),
@@ -1696,10 +1719,7 @@ impl<'a> InferCtx<'a> {
                     }
                 }
                 Ty::String => {
-                    match self.unify_types(idx, &Ty::Int, span) {
-                        UnifyResult::Ok(s) => *subst = subst.compose(&s),
-                        UnifyResult::Err(e) => self.error(e),
-                    }
+                    // String: elem = Char (index type is Int, via .Index)
                     match self.unify_types(elem, &Ty::Char, span) {
                         UnifyResult::Ok(s) => *subst = subst.compose(&s),
                         UnifyResult::Err(e) => self.error(e),
@@ -1725,16 +1745,8 @@ impl<'a> InferCtx<'a> {
                                     .map(|(p, a)| (*p, a.clone()))
                                     .collect(),
                             );
-                            if let Some(inst_idx) = inst.class_args.first() {
-                                let resolved = inst_idx.apply(&param_subst);
-                                match self.unify_types(idx, &resolved, span) {
-                                    UnifyResult::Ok(s) => {
-                                        *subst = subst.compose(&s)
-                                    }
-                                    UnifyResult::Err(e) => self.error(e),
-                                }
-                            }
-                            if let Some(inst_elem) = inst.class_args.get(1) {
+                            // class_args[0] is the element type
+                            if let Some(inst_elem) = inst.class_args.first() {
                                 let resolved = inst_elem.apply(&param_subst);
                                 match self.unify_types(elem, &resolved, span) {
                                     UnifyResult::Ok(s) => {
@@ -2203,11 +2215,6 @@ impl<'a> InferCtx<'a> {
     /// For user-defined types, looks up the instance in the registry and
     /// retrieves the associated type definition.
     ///
-    /// # TODO (Phase 4)
-    ///
-    /// The builtin rules below hardcode `"Index"` for `Indexable`. Once Phase 4
-    /// registers associated type constraints in class definitions, these should
-    /// be replaced with metadata-driven lookups from `ClassDef.assoc_types`.
     pub(crate) fn resolve_assoc_type(
         &self,
         base: &Ty,
@@ -2215,97 +2222,77 @@ impl<'a> InferCtx<'a> {
         assoc_name: StringId,
         span: Span,
     ) -> Result<Ty, TypeError> {
-        // Check if assoc_name is "Index" (the only associated type for now)
-        let is_index = self.env().get_str(assoc_name) == Some("Index");
+        // Validate that assoc_name is a valid associated type for this class
+        let assoc_str = self.env().get_str(assoc_name);
+        let def = class.def();
+        if !assoc_str.is_some_and(|s| def.assoc_types.contains(&s)) {
+            Err(TypeError::NoSuchAssocType {
+                class,
+                name: assoc_name,
+                span,
+            })
+        } else {
+            match base {
+                // Builtin: Array[T] with Indexable:Index = Int
+                Ty::Array(_) if class == ClassKind::Indexable => Ok(Ty::Int),
 
-        match base {
-            // Builtin: Array[T] with Indexable:Index = Int
-            Ty::Array(_) if class == ClassKind::Indexable => {
-                if is_index {
-                    Ok(Ty::Int)
-                } else {
-                    Err(TypeError::NoSuchAssocType {
-                        class,
-                        name: assoc_name,
-                        span,
-                    })
-                }
-            }
-
-            // Builtin: Map[K, V] with Indexable:Index = K
-            Ty::Map(k, _) if class == ClassKind::Indexable => {
-                if is_index {
+                // Builtin: Map[K, V] with Indexable:Index = K
+                Ty::Map(k, _) if class == ClassKind::Indexable => {
                     Ok(k.as_ref().clone())
-                } else {
-                    Err(TypeError::NoSuchAssocType {
-                        class,
-                        name: assoc_name,
-                        span,
-                    })
                 }
-            }
 
-            // Builtin: String with Indexable:Index = Int
-            Ty::String if class == ClassKind::Indexable => {
-                if is_index {
-                    Ok(Ty::Int)
-                } else {
-                    Err(TypeError::NoSuchAssocType {
-                        class,
-                        name: assoc_name,
-                        span,
-                    })
-                }
-            }
+                // Builtin: String with Indexable:Index = Int
+                Ty::String if class == ClassKind::Indexable => Ok(Ty::Int),
 
-            // User type: look up instance in registry
-            Ty::Named(type_id, type_args) => {
-                match self.instance_registry.lookup(class, *type_id) {
-                    Some(inst) => {
-                        // Find the associated type definition
-                        match inst.get_assoc_type(assoc_name) {
-                            Some(assoc_def) => {
-                                // Substitute type parameters
-                                let param_subst = Subst(
-                                    inst.type_params
-                                        .iter()
-                                        .zip(type_args.iter())
-                                        .map(|(p, a)| (*p, a.clone()))
-                                        .collect(),
-                                );
-                                Ok(assoc_def.ty.apply(&param_subst))
+                // User type: look up instance in registry
+                Ty::Named(type_id, type_args) => {
+                    match self.instance_registry.lookup(class, *type_id) {
+                        Some(inst) => {
+                            // Find the associated type definition
+                            match inst.get_assoc_type(assoc_name) {
+                                Some(assoc_def) => {
+                                    // Substitute type parameters
+                                    let param_subst = Subst(
+                                        inst.type_params
+                                            .iter()
+                                            .zip(type_args.iter())
+                                            .map(|(p, a)| (*p, a.clone()))
+                                            .collect(),
+                                    );
+                                    Ok(assoc_def.ty.apply(&param_subst))
+                                }
+                                None => Err(TypeError::MissingAssocType {
+                                    class,
+                                    assoc: assoc_name,
+                                    span,
+                                }),
                             }
-                            None => Err(TypeError::NoSuchAssocType {
-                                class,
-                                name: assoc_name,
-                                span,
-                            }),
                         }
+                        None => Err(TypeError::UnsatisfiedClass(
+                            self.class_kind_to_class(class),
+                            base.clone(),
+                            span,
+                        )),
                     }
-                    None => Err(TypeError::UnsatisfiedClass(
-                        self.class_kind_to_class(class),
-                        base.clone(),
-                        span,
-                    )),
                 }
+
+                // Type variable: cannot resolve yet (defer resolution)
+                Ty::Var(_) => Err(TypeError::UnknownAssocType {
+                    ty: base.clone(),
+                    assoc: assoc_name,
+                    span,
+                }),
+
+                // Error/Unknown: propagate
+                Ty::Error | Ty::Unknown => Ok(Ty::Error),
+
+                // Other types: no instance for this class
+                _ => Err(TypeError::UnsatisfiedClass(
+                    self.class_kind_to_class(class),
+                    base.clone(),
+                    span,
+                )),
             }
-
-            // Type variable: cannot resolve yet (defer resolution)
-            Ty::Var(_) => Err(TypeError::UnknownAssocType {
-                ty: base.clone(),
-                assoc: assoc_name,
-                span,
-            }),
-
-            // Error/Unknown: propagate
-            Ty::Error | Ty::Unknown => Ok(Ty::Error),
-
-            // Other types: no instance for this class
-            _ => Err(TypeError::UnsatisfiedClass(
-                self.class_kind_to_class(class),
-                base.clone(),
-                span,
-            )),
         }
     }
 
@@ -2322,7 +2309,7 @@ impl<'a> InferCtx<'a> {
             ClassKind::Fallible => Class::Fallible(Ty::Unknown),
             ClassKind::Into => Class::Into(Ty::Unknown),
             ClassKind::TryInto => Class::TryInto(Ty::Unknown),
-            ClassKind::Indexable => Class::Indexable(Ty::Unknown, Ty::Unknown),
+            ClassKind::Indexable => Class::Indexable(Ty::Unknown),
             ClassKind::Ord => Class::Ord,
             ClassKind::Mappable => Class::Mappable(Ty::Unknown),
             ClassKind::Foldable => Class::Foldable(Ty::Unknown),

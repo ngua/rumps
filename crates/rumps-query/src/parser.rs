@@ -3115,16 +3115,15 @@ impl Parser {
                         },
                         |ty| Ok(cst::Class::TryInto(ty)),
                     ),
-                    "Indexable" => {
-                        let mut it = args.into_iter();
-                        match (it.next(), it.next()) {
-                            (Some(k), Some(v)) => Ok(cst::Class::Indexable(k, v)),
-                            _ => Err(Simple::custom(
+                    "Indexable" => args.into_iter().next().map_or_else(
+                        || {
+                            Err(Simple::custom(
                                 span,
-                                "`Indexable` requires two type arguments; use `Indexable[K, V]`",
-                            )),
-                        }
-                    }
+                                "`Indexable` requires a type argument; use `Indexable[E]`",
+                            ))
+                        },
+                        |ty| Ok(cst::Class::Indexable(ty)),
+                    ),
                     "Ord" => Ok(cst::Class::Ord),
                     "Mappable" => args.into_iter().next().map_or_else(
                         || {
@@ -3159,7 +3158,7 @@ impl Parser {
                         format!(
                             "unknown class `{name}`; valid classes are: \
                              Numeric, Negatable, Iterable[T], Monoid, BitLike, \
-                             Fallible[T], Into[T], TryInto[T], Indexable[K, V], \
+                             Fallible[T], Into[T], TryInto[T], Indexable[E], \
                              Ord, Mappable[T], Foldable[T], Filterable[T], Display"
                         ),
                     )),

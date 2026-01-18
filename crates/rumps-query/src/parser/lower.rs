@@ -64,10 +64,8 @@ fn lower_class(ast: &mut Ast, c: cst::Class) -> Result<ast::Class> {
         cst::Class::TryInto(target) => {
             ast::Class::TryInto(lower_type_expr(ast, target)?)
         }
-        cst::Class::Indexable(k, v) => {
-            let k_id = lower_type_expr(ast, k)?;
-            let v_id = lower_type_expr(ast, v)?;
-            ast::Class::Indexable(k_id, v_id)
+        cst::Class::Indexable(elem) => {
+            ast::Class::Indexable(lower_type_expr(ast, elem)?)
         }
         cst::Class::Ord => ast::Class::Ord,
         cst::Class::Mappable(elem) => {

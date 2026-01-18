@@ -165,8 +165,11 @@ pub(crate) enum Class {
     Into(AstTypeExprId),
     /// Type can be fallibly converted to another type: `TryInto[Target]`.
     TryInto(AstTypeExprId),
-    /// Type supports indexing: `Indexable[Key, Value]`.
-    Indexable(AstTypeExprId, AstTypeExprId),
+    /// Type supports indexing: `Indexable[Elem]`.
+    ///
+    /// The element type is the return type of indexing. The index type is
+    /// determined by the associated type `Index` (e.g., `Int` for `Array`).
+    Indexable(AstTypeExprId),
     /// Type supports ordering comparisons.
     Ord,
     /// Type supports `map`: `Mappable[Element]`.

@@ -430,10 +430,10 @@ pub(crate) enum TypeError {
     /// Missing required associated type in instance definition.
     ///
     /// Classes like `Indexable` require associated type definitions (e.g., `NEWTYPE Index = Int`).
-    #[error("missing required associated type `{assoc}` for class `{class}`")]
+    #[error("missing required associated type for class `{class}`")]
     MissingAssocType {
         class: ClassKind,
-        assoc: String,
+        assoc: StringId,
         span: Span,
     },
 
@@ -761,13 +761,16 @@ impl TypeError {
                 ),
                 None,
             ),
-            Self::MissingAssocType { class, assoc, .. } => (
-                format!(
-                    "missing required associated type `{assoc}` for class `{}`",
-                    class.name()
-                ),
-                Some(format!("add `NEWTYPE {assoc} = <type>` to the instance")),
-            ),
+            Self::MissingAssocType { class, assoc, .. } => {
+                let name = p.strings.get(*assoc).unwrap_or("<unknown>");
+                (
+                    format!(
+                        "missing required associated type `{name}` for class `{}`",
+                        class.name()
+                    ),
+                    Some(format!("add `NEWTYPE {name} = <type>` to the instance")),
+                )
+            }
             Self::UnknownAssocTypeForClass { class, assoc, .. } => (
                 format!(
                     "class `{}` has no associated type `{assoc}`",

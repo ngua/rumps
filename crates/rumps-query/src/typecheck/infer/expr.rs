@@ -382,7 +382,7 @@ impl InferCtx<'_> {
         let empty_subst = HashMap::new();
 
         match ClassKind::from_str(class) {
-            Some(k) => match k.method(method, span) {
+            Some(k) => match k.method(method, span, |s| self.env.intern(s)) {
                 Err(e) => {
                     self.error(e);
                     Ty::Error
@@ -586,7 +586,7 @@ impl InferCtx<'_> {
         args: &SmallVec<[ExprId; 4]>,
         span: Span,
     ) -> Ty {
-        match kind.method(method, span) {
+        match kind.method(method, span, |s| self.env.intern(s)) {
             Err(e) => {
                 self.error(e);
                 Ty::Error
@@ -1269,11 +1269,20 @@ impl InferCtx<'_> {
             }
 
             Ty::Var(_) => {
-                // Base is type variable; generate Indexable constraint
+                // Base is type variable; generate Indexable constraint.
+                // The index type is resolved via the associated type `Base.Index`.
                 let elem = self.fresh();
+                let idx_name = self.env.intern("Index");
+                let base_var = match &base_ty {
+                    Ty::Var(v) => *v,
+                    _ => self.fresh_var(),
+                };
+                let expected_idx =
+                    Ty::AssocType(base_var, ClassKind::Indexable, idx_name);
+                self.unify(idx_ty, expected_idx, span);
                 self.constrain(Constraint::Class {
                     ty: base_ty,
-                    class: Class::Indexable(idx_ty, elem.clone()),
+                    class: Class::Indexable(elem.clone()),
                     span,
                 });
                 elem
@@ -1289,7 +1298,7 @@ impl InferCtx<'_> {
 
             _ => {
                 self.error(TypeError::UnsatisfiedClass(
-                    Class::Indexable(idx_ty, Ty::Error),
+                    Class::Indexable(Ty::Error),
                     base_ty,
                     span,
                 ));
@@ -1326,11 +1335,20 @@ impl InferCtx<'_> {
             }
 
             Ty::Var(_) => {
-                // Generate Indexable constraint with elem wrapped in Option
+                // Generate Indexable constraint with elem wrapped in Option.
+                // The index type is resolved via the associated type `Base.Index`.
                 let inner = self.fresh();
+                let idx_name = self.env.intern("Index");
+                let base_var = match &base_ty {
+                    Ty::Var(v) => *v,
+                    _ => self.fresh_var(),
+                };
+                let expected_idx =
+                    Ty::AssocType(base_var, ClassKind::Indexable, idx_name);
+                self.unify(idx_ty, expected_idx, span);
                 self.constrain(Constraint::Class {
                     ty: base_ty,
-                    class: Class::Indexable(idx_ty, inner.clone()),
+                    class: Class::Indexable(inner.clone()),
                     span,
                 });
                 Ty::Option(Box::new(inner))
@@ -1345,7 +1363,7 @@ impl InferCtx<'_> {
 
             _ => {
                 self.error(TypeError::UnsatisfiedClass(
-                    Class::Indexable(idx_ty, Ty::Error),
+                    Class::Indexable(Ty::Error),
                     base_ty,
                     span,
                 ));

@@ -995,7 +995,8 @@ impl InferCtx<'_> {
         let m_span = method.span;
 
         // Get expected method signature from class
-        let expected = class.method(&method.name, m_span);
+        let expected =
+            class.method(&method.name, m_span, |s| self.env.intern(s));
 
         // Handle unknown method error
         let (expected_param_tys, expected_ret_ty) = expected

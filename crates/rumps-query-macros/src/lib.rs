@@ -221,9 +221,8 @@ fn parameterized_class_tokens(
             quote! { crate::typecheck::Class::TryInto(#inner) }
         }
         "Indexable" => {
-            let idx = &args[0];
-            let elem = &args[1];
-            quote! { crate::typecheck::Class::Indexable(#idx, #elem) }
+            let elem = &args[0];
+            quote! { crate::typecheck::Class::Indexable(#elem) }
         }
         "Mappable" => {
             let inner = &args[0];

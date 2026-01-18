@@ -527,10 +527,8 @@ impl InferCtx<'_> {
             ast::Class::TryInto(ty_id) => {
                 Class::TryInto(self.ast_type_to_ty(*ty_id, subst))
             }
-            ast::Class::Indexable(k_id, v_id) => {
-                let k = self.ast_type_to_ty(*k_id, subst);
-                let v = self.ast_type_to_ty(*v_id, subst);
-                Class::Indexable(k, v)
+            ast::Class::Indexable(elem_id) => {
+                Class::Indexable(self.ast_type_to_ty(*elem_id, subst))
             }
             ast::Class::Ord => Class::Ord,
             ast::Class::Mappable(ty_id) => {
