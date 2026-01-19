@@ -34,7 +34,6 @@ use syn::{Ident, Result, Token};
 /// - `T: Monoid` ; `T` must be `String`, `Array[_]`, `Map[_, _]`, or `Option[_]`
 /// - `T: Storable` ; `T` must be storable in the database
 /// - `T: Subscriptable` ; `T` must be usable as a subscript key
-/// - `T: Indexable` ; `T` must support indexing (`Array`, `Map`, `String`)
 /// - `T: Ord` ; `T` must support ordering (`Bool`, `Int`, `Word`, `Float`, `Char`, `String`)
 /// - `T: Display` ; `T` can be displayed as RUMPS syntax
 ///
@@ -43,6 +42,7 @@ use syn::{Ident, Result, Token};
 /// - `F: Fallible[T]` ; `F` must be a fallible type (`Option[T]` or `Result[T, _]`)
 /// - `T: Into[U]` ; type `T` is convertible to type `U`
 /// - `T: TryInto[U]` ; type `T` is fallibly convertible to type `U`
+/// - `B: Indexable[E]` ; `B` supports indexing with element type `E`
 /// - `F: Mappable[T]` ; `F` is a functor with element type `T`
 /// - `F: Foldable[T]` ; `F` supports fold/reduce with element type `T`
 /// - `F: Filterable[T]` ; `F` supports filter with element type `T`
@@ -59,6 +59,7 @@ use syn::{Ident, Result, Token};
 /// - Tuples: `(A, B)` (without `->` following), `(A,)` for 1-tuple
 /// - Grouping: `(A)` is just `A`
 /// - Objects: `{ field1: Type1, field2: Type2 }` (requires context; use `ctx; ...`)
+/// - Associated types: `T:Class:Assoc` (e.g., `B:Indexable:Index` for the index type of `B`)
 #[proc_macro]
 pub fn scheme(input: TokenStream) -> TokenStream {
     syn::parse_macro_input!(input as SchemeInput)
@@ -347,6 +348,11 @@ enum TyExpr {
     Object(Vec<(String, Box<Self>)>),
     /// Named builtin type: `Storable`, `Subscript`, etc.
     Named(String),
+    /// Associated type projection: `T:Class:Assoc` (e.g., `B:Indexable:Index`).
+    ///
+    /// The type variable `T` must have a `Class` constraint, and `Assoc` is the
+    /// name of the associated type defined by that class.
+    AssocType(String, String, String),
 }
 
 impl TyExpr {
@@ -449,6 +455,23 @@ impl TyExpr {
                     crate::typecheck::Ty::Apply(
                         crate::typecheck::TyVar::new(#idx),
                         vec![#(#arg_tokens),*]
+                    )
+                }
+            }
+            Self::AssocType(var_name, class_name, assoc_name) => {
+                // NOTE: This generates code that calls `intern(...)` directly,
+                // so it only works when `intern: impl Fn(&str) -> StringId` is in scope.
+                // Currently this is only used in `ClassKind::method()`.
+                let idx = vars.get(var_name).copied().unwrap_or_else(|| {
+                    panic!("unbound type variable in associated type: `{var_name}`")
+                });
+                let class_ident =
+                    Ident::new(class_name, proc_macro2::Span::call_site());
+                quote! {
+                    crate::typecheck::Ty::AssocType(
+                        crate::typecheck::TyVar::new(#idx),
+                        crate::typecheck::ClassKind::#class_ident,
+                        intern(#assoc_name)
                     )
                 }
             }
@@ -626,7 +649,12 @@ fn parse_bracketed_args(input: ParseStream) -> Result<Vec<TyExpr>> {
     .map(|p| p.into_iter().collect())
 }
 
-/// Parse an identifier-based type: primitive, named, type var, or parameterized.
+/// Check if an identifier is a known class name (for associated type parsing).
+fn is_class_name(s: &str) -> bool {
+    SIMPLE_CLASSES.contains(&s) || PARAMETERIZED_CLASSES.contains(&s)
+}
+
+/// Parse an identifier-based type: primitive, named, type var, parameterized, or assoc type.
 fn parse_ty_ident(input: ParseStream) -> Result<TyExpr> {
     let name = input.parse::<Ident>()?.to_string();
 
@@ -639,6 +667,27 @@ fn parse_ty_ident(input: ParseStream) -> Result<TyExpr> {
     } else if input.peek(syn::token::Bracket) {
         // Type variable with args: `F[U]` (higher-kinded application)
         parse_bracketed_args(input).map(|args| TyExpr::Apply(name, args))
+    } else if input.peek(Token![:]) && input.peek2(Ident) {
+        // Potential associated type: `T:Class:Assoc`
+        let fork = input.fork();
+        fork.parse::<Token![:]>()?;
+        let maybe_class: Ident = fork.parse()?;
+        let class_name = maybe_class.to_string();
+        if is_class_name(&class_name)
+            && fork.peek(Token![:])
+            && fork.peek2(Ident)
+        {
+            fork.parse::<Token![:]>()?;
+            let assoc: Ident = fork.parse()?;
+            // Commit to forked state
+            input.parse::<Token![:]>()?;
+            input.parse::<Ident>()?;
+            input.parse::<Token![:]>()?;
+            input.parse::<Ident>()?;
+            Ok(TyExpr::AssocType(name, class_name, assoc.to_string()))
+        } else {
+            Ok(TyExpr::Var(name))
+        }
     } else {
         Ok(TyExpr::Var(name))
     }
@@ -657,6 +706,27 @@ fn parse_ty_starting_with(input: ParseStream, ident: Ident) -> Result<TyExpr> {
     } else if input.peek(syn::token::Bracket) {
         // Type variable with args: `F[U]` (higher-kinded application)
         TyExpr::Apply(name, parse_bracketed_args(input)?)
+    } else if input.peek(Token![:]) && input.peek2(Ident) {
+        // Potential associated type: `T:Class:Assoc`
+        let fork = input.fork();
+        fork.parse::<Token![:]>()?;
+        let maybe_class: Ident = fork.parse()?;
+        let class_name = maybe_class.to_string();
+        if is_class_name(&class_name)
+            && fork.peek(Token![:])
+            && fork.peek2(Ident)
+        {
+            fork.parse::<Token![:]>()?;
+            let assoc: Ident = fork.parse()?;
+            // Commit to forked state
+            input.parse::<Token![:]>()?;
+            input.parse::<Ident>()?;
+            input.parse::<Token![:]>()?;
+            input.parse::<Ident>()?;
+            TyExpr::AssocType(name, class_name, assoc.to_string())
+        } else {
+            TyExpr::Var(name)
+        }
     } else {
         TyExpr::Var(name)
     };

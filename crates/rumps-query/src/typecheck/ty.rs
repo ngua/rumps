@@ -160,133 +160,94 @@ impl ClassKind {
         span: Span,
         intern: impl FnOnce(&str) -> StringId,
     ) -> Result<MethodSpec, TypeError> {
-        use MethodSpec::{Standard, Tracked};
-        use TrackKind::{Convert, ConvertResultInner, Mempty};
-
         match (self, name) {
-            // Numeric: (T, T) -> T where T: Numeric
             (
                 Self::Numeric,
                 "add" | "sub" | "mul" | "floor-div" | "mod" | "pow",
-            ) => Ok(Standard(scheme!(forall T: Numeric. (T, T) -> T))),
+            ) => Ok(MethodSpec::Standard(
+                scheme!(forall T: Numeric. (T, T) -> T),
+            )),
 
-            // Negatable: (T) -> T where T: Negatable
             (Self::Negatable, "neg") => {
-                Ok(Standard(scheme!(forall T: Negatable. (T) -> T)))
+                Ok(MethodSpec::Standard(scheme!(forall T: Negatable. (T) -> T)))
             }
 
-            // BitLike: (T, T) -> T where T: BitLike
-            (Self::BitLike, "bit-and" | "bit-or" | "shl" | "shr") => {
-                Ok(Standard(scheme!(forall T: BitLike. (T, T) -> T)))
-            }
+            (Self::BitLike, "bit-and" | "bit-or" | "shl" | "shr") => Ok(
+                MethodSpec::Standard(scheme!(forall T: BitLike. (T, T) -> T)),
+            ),
 
-            // Ord: (T, T) -> Ordering where T: Ord
-            (Self::Ord, "compare") => {
-                Ok(Standard(scheme!(forall T: Ord. (T, T) -> Ordering)))
-            }
+            (Self::Ord, "compare") => Ok(MethodSpec::Standard(
+                scheme!(forall T: Ord. (T, T) -> Ordering),
+            )),
 
-            // Monoid:identity needs mempty_types tracking
-            (Self::Monoid, "identity") => Ok(Tracked {
+            // `Monoid:identity` needs `mempty_types` tracking
+            (Self::Monoid, "identity") => Ok(MethodSpec::Tracked {
                 scheme: scheme!(forall T: Monoid. () -> T),
-                track: Mempty,
+                track: TrackKind::Mempty,
             }),
             (Self::Monoid, "concat") => {
-                Ok(Standard(scheme!(forall T: Monoid. (T, T) -> T)))
+                Ok(MethodSpec::Standard(scheme!(forall T: Monoid. (T, T) -> T)))
             }
 
-            // Fallible
-            (Self::Fallible, "unwrap") => {
-                Ok(Standard(scheme!(forall T, F: Fallible[T]. (F) -> T)))
-            }
-            // Fallible:wrap needs convert_targets tracking
-            (Self::Fallible, "wrap") => Ok(Tracked {
+            (Self::Fallible, "unwrap") => Ok(MethodSpec::Standard(
+                scheme!(forall T, F: Fallible[T]. (F) -> T),
+            )),
+            // `Fallible:wrap` needs `convert_targets` tracking
+            (Self::Fallible, "wrap") => Ok(MethodSpec::Tracked {
                 scheme: scheme!(forall T, F: Fallible[T]. (T) -> F),
-                track: Convert,
+                track: TrackKind::Convert,
             }),
-            // Fallible:flat-map is standard
-            (Self::Fallible, "flat-map") => Ok(Standard(
+            (Self::Fallible, "flat-map") => Ok(MethodSpec::Standard(
                 scheme!(forall T U, F: Fallible[T]. (F, (T) -> F[U]) -> F[U]),
             )),
 
-            // Iterable methods
-            (Self::Iterable, "length") => {
-                Ok(Standard(scheme!(forall T, I: Iterable[T]. (I) -> Int)))
-            }
-            (Self::Iterable, "contains") => {
-                Ok(Standard(scheme!(forall T, I: Iterable[T]. (I, T) -> Bool)))
-            }
-            (Self::Iterable, "reverse") => {
-                Ok(Standard(scheme!(forall T, I: Iterable[T]. (I) -> Array[T])))
-            }
-            (Self::Iterable, "foreach") => Ok(Standard(
+            (Self::Iterable, "length") => Ok(MethodSpec::Standard(
+                scheme!(forall T, I: Iterable[T]. (I) -> Int),
+            )),
+            (Self::Iterable, "contains") => Ok(MethodSpec::Standard(
+                scheme!(forall T, I: Iterable[T]. (I, T) -> Bool),
+            )),
+            (Self::Iterable, "reverse") => Ok(MethodSpec::Standard(
+                scheme!(forall T, I: Iterable[T]. (I) -> Array[T]),
+            )),
+            (Self::Iterable, "foreach") => Ok(MethodSpec::Standard(
                 scheme!(forall T, I: Iterable[T]. ((T) -> Unit, I) -> Unit),
             )),
 
-            // `Mappable`: `(f, M) -> Array[U]` where `M: Mappable[T]`
-            (Self::Mappable, "map") => Ok(Standard(
+            (Self::Mappable, "map") => Ok(MethodSpec::Standard(
                 scheme!(forall T, U, M: Mappable[T]. ((T) -> U, M) -> Array[U]),
             )),
 
-            // `Filterable`: `(f, F) -> Array[T]` where `F: Filterable[T]`
-            (Self::Filterable, "filter") => Ok(Standard(
+            (Self::Filterable, "filter") => Ok(MethodSpec::Standard(
                 scheme!(forall T, F: Filterable[T]. ((T) -> Bool, F) -> Array[T]),
             )),
 
-            // `Foldable`: `(f, init, F) -> U` where `F: Foldable[T]`
-            (Self::Foldable, "reduce") => Ok(Standard(
+            (Self::Foldable, "reduce") => Ok(MethodSpec::Standard(
                 scheme!(forall T, U, F: Foldable[T]. ((U, T) -> U, U, F) -> U),
             )),
 
-            // Into:into needs convert_targets tracking
-            (Self::Into, "into") => Ok(Tracked {
+            // `Into:into` needs convert_targets tracking
+            (Self::Into, "into") => Ok(MethodSpec::Tracked {
                 scheme: scheme!(forall T: Into[U], U. (T) -> U),
-                track: Convert,
+                track: TrackKind::Convert,
             }),
 
-            // TryInto:try-into needs convert_targets tracking (inner type)
-            (Self::TryInto, "try-into") => Ok(Tracked {
+            // `TryInto:try-into` needs convert_targets tracking (inner type)
+            (Self::TryInto, "try-into") => Ok(MethodSpec::Tracked {
                 scheme: scheme!(forall T: TryInto[U], U. (T) -> Result[U, String]),
-                track: ConvertResultInner,
+                track: TrackKind::ConvertResultInner,
             }),
 
-            // Indexable: (B, B.Index) -> E where B: Indexable[E]
-            // The index type is the associated type `B.Index`, not a separate type parameter.
-            (Self::Indexable, "index") => {
-                let b = TyVar::new(0);
-                let e = TyVar::new(1);
-                let idx_name = intern("Index");
-                let idx_ty = Ty::AssocType(b, Self::Indexable, idx_name);
-                Ok(Standard(Scheme {
-                    vars: vec![b, e],
-                    ty: Ty::Fn(vec![Ty::Var(b), idx_ty], Box::new(Ty::Var(e))),
-                    constraints: smallvec::smallvec![(
-                        b,
-                        Class::Indexable(Ty::Var(e))
-                    )],
-                }))
-            }
-            (Self::Indexable, "get") => {
-                let b = TyVar::new(0);
-                let e = TyVar::new(1);
-                let idx_name = intern("Index");
-                let idx_ty = Ty::AssocType(b, Self::Indexable, idx_name);
-                Ok(Standard(Scheme {
-                    vars: vec![b, e],
-                    ty: Ty::Fn(
-                        vec![Ty::Var(b), idx_ty],
-                        Box::new(Ty::Option(Box::new(Ty::Var(e)))),
-                    ),
-                    constraints: smallvec::smallvec![(
-                        b,
-                        Class::Indexable(Ty::Var(e))
-                    )],
-                }))
-            }
+            (Self::Indexable, "index") => Ok(MethodSpec::Standard(
+                scheme!(forall B: Indexable[E], E. (B, B:Indexable:Index) -> E),
+            )),
+            (Self::Indexable, "get") => Ok(MethodSpec::Standard(
+                scheme!(forall B: Indexable[E], E. (B, B:Indexable:Index) -> Option[E]),
+            )),
 
-            // Display: (T) -> String where T: Display
-            (Self::Display, "display") => {
-                Ok(Standard(scheme!(forall T: Display. (T) -> String)))
-            }
+            (Self::Display, "display") => Ok(MethodSpec::Standard(
+                scheme!(forall T: Display. (T) -> String),
+            )),
 
             _ => Err(TypeError::UnknownMethod {
                 class: self.name().to_string(),
