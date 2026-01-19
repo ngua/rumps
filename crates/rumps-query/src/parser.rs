@@ -3286,8 +3286,10 @@ impl Parser {
                 });
 
             // Qualified associated type: `Indexable:Index` (names the class)
+            // NOTE: Uses `ColonNoSpace` because the lexer converts `:` to that
+            // when adjacent to an uppercase ident (class name syntax).
             let qualified_assoc = Self::ident()
-                .then_ignore(just(Token::Colon))
+                .then_ignore(just(Token::ColonNoSpace))
                 .then(Self::ident())
                 .map_with_span(|(class, name), span| {
                     TypeAtomOrParams::Single(cst::TypeExpr::new(

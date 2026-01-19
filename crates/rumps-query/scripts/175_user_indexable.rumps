@@ -39,3 +39,28 @@ CLASS Indexable[Int] FOR StringMap {
     }
   }
 }
+
+; === Qualified Associated Type Syntax ===
+;
+; Associated types can also be referenced with the qualified form
+; `ClassName:AssocType` instead of the shorthand `:AssocType`.
+
+NEWTYPE IntMap = Map[Int, String]
+
+CLASS Indexable[String] FOR IntMap {
+  NEWTYPE Index = Int
+
+  ; Uses qualified `Indexable:Index` instead of shorthand `:Index`
+  FUN index(im: IntMap, i: Indexable:Index) -> String {
+    im[i]
+  }
+
+  FUN get(im: IntMap, i: Indexable:Index) -> Option[String] {
+    im?[i]
+  }
+}
+
+LET im = ({ 1 => "one", 2 => "two" } : IntMap)
+WRITE im[1]
+WRITE im[2]
+WRITE im?[3]
