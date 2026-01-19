@@ -137,15 +137,21 @@ LET bool-map = { true => "yes", false => "no" }
 WRITE Map.lookup(bool-map, true)  ; Some("yes")
 WRITE Map.lookup(bool-map, false)  ; Some("no")
 
-; ============ Index syntax (returns Option) ============
+; ============ Index syntax (direct access) ============
 
-WRITE m[1]  ; Some("one")
-WRITE m[2]  ; Some("two")
-WRITE m[99]  ; None (key not found)
+WRITE m[1]  ; "one"
+WRITE m[2]  ; "two"
 
-WRITE str-keys["a"]  ; Some(1)
-WRITE str-keys["missing"]  ; None
+WRITE str-keys["a"]  ; 1
+
+; ============ Optional index syntax (returns Option) ============
+
+WRITE m?[1]  ; Some("one")
+WRITE m?[99]  ; None (key not found)
+
+WRITE str-keys?["a"]  ; Some(1)
+WRITE str-keys?["missing"]  ; None
 
 ; Chaining with optional unwrap
-WRITE m[1] ?? "default"  ; "one"
-WRITE m[99] ?? "default"  ; "default"
+WRITE m?[1] ?? "default"  ; "one"
+WRITE m?[99] ?? "default"  ; "default"

@@ -1,0 +1,41 @@
+; User-defined Indexable class with associated type Index
+;
+; Tests implementing Indexable for user types with NEWTYPE Index = ...
+; to define the associated index type.
+
+; === Usage (hoisted) ===
+
+; StringMap uses String as index type (via NEWTYPE Index = String)
+LET sm = StringMap.StringMap({ "a" => 1, "b" => 2, "c" => 3 })
+
+; Direct class method calls
+WRITE Indexable:index(sm, "a")
+WRITE Indexable:get(sm, "b")
+
+; Subscript syntax dispatches to user Indexable instance
+WRITE sm["a"]
+WRITE sm["c"]
+
+; Safe subscript (uses `get` method)
+WRITE sm?["b"]
+WRITE sm?["missing"]
+
+; === Type and Class Definitions ===
+
+TYPE StringMap = StringMap(Map[String, Int])
+
+CLASS Indexable[Int] FOR StringMap {
+  NEWTYPE Index = String
+
+  FUN index(sm: StringMap, i: :Index) -> Int {
+    MATCH sm {
+      StringMap.StringMap(m) => m[i]
+    }
+  }
+
+  FUN get(sm: StringMap, i: :Index) -> Option[Int] {
+    MATCH sm {
+      StringMap.StringMap(m) => m?[i]
+    }
+  }
+}

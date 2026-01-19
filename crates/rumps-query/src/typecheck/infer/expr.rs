@@ -1265,7 +1265,7 @@ impl InferCtx<'_> {
 
             Ty::Map(key, val) => {
                 self.unify(idx_ty, key.as_ref().clone(), span);
-                Ty::Option(val.clone())
+                val.as_ref().clone()
             }
 
             Ty::Var(_) => {
@@ -1294,6 +1294,48 @@ impl InferCtx<'_> {
                 // String indexing returns Char
                 self.unify(idx_ty, Ty::Int, span);
                 Ty::Char
+            }
+
+            Ty::Named(id, type_args) => {
+                // Check for user-defined Indexable instance
+                match self
+                    .instance_registry
+                    .lookup(ClassKind::Indexable, *id)
+                    .cloned()
+                {
+                    Some(inst) => {
+                        // Build substitution from instance type params to actual type args
+                        let param_subst = Subst(
+                            inst.type_params
+                                .iter()
+                                .zip(type_args.iter())
+                                .map(|(p, a)| (*p, a.clone()))
+                                .collect(),
+                        );
+
+                        // Resolve index type from associated type
+                        let idx_name = self.env.intern("Index");
+                        let inst_idx_ty = inst
+                            .get_assoc_type(idx_name)
+                            .map(|a| a.ty.apply(&param_subst))
+                            .unwrap_or(Ty::Unknown);
+                        self.unify(idx_ty, inst_idx_ty, span);
+
+                        // Resolve element type from class args
+                        inst.class_args
+                            .first()
+                            .map(|t| t.apply(&param_subst))
+                            .unwrap_or(Ty::Unknown)
+                    }
+                    None => {
+                        self.error(TypeError::UnsatisfiedClass(
+                            Class::Indexable(Ty::Error),
+                            base_ty.clone(),
+                            span,
+                        ));
+                        Ty::Error
+                    }
+                }
             }
 
             _ => {
@@ -1359,6 +1401,50 @@ impl InferCtx<'_> {
             Ty::String => {
                 self.unify(idx_ty, Ty::Int, span);
                 Ty::Option(Box::new(Ty::Char))
+            }
+
+            Ty::Named(id, type_args) => {
+                // Check for user-defined Indexable instance
+                match self
+                    .instance_registry
+                    .lookup(ClassKind::Indexable, *id)
+                    .cloned()
+                {
+                    Some(inst) => {
+                        // Build substitution from instance type params to actual type args
+                        let param_subst = Subst(
+                            inst.type_params
+                                .iter()
+                                .zip(type_args.iter())
+                                .map(|(p, a)| (*p, a.clone()))
+                                .collect(),
+                        );
+
+                        // Resolve index type from associated type
+                        let idx_name = self.env.intern("Index");
+                        let inst_idx_ty = inst
+                            .get_assoc_type(idx_name)
+                            .map(|a| a.ty.apply(&param_subst))
+                            .unwrap_or(Ty::Unknown);
+                        self.unify(idx_ty, inst_idx_ty, span);
+
+                        // Resolve element type from class args, wrapped in Option
+                        let elem = inst
+                            .class_args
+                            .first()
+                            .map(|t| t.apply(&param_subst))
+                            .unwrap_or(Ty::Unknown);
+                        Ty::Option(Box::new(elem))
+                    }
+                    None => {
+                        self.error(TypeError::UnsatisfiedClass(
+                            Class::Indexable(Ty::Error),
+                            base_ty.clone(),
+                            span,
+                        ));
+                        Ty::Error
+                    }
+                }
             }
 
             _ => {

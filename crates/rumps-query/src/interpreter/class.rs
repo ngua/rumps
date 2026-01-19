@@ -822,7 +822,6 @@ impl Indexable {
         base: &Value,
         idx: &Value,
     ) -> Result<Value> {
-        use smallvec::smallvec;
         match (base, idx) {
             (Value::Array(_, elems), Value::Int(i)) => {
                 let index = if *i < 0 {
@@ -840,14 +839,15 @@ impl Indexable {
                         )
                     })
             }
-            (Value::Map(_, v_ty, entries), key) => {
-                let opt_ty =
-                    ctx.type_exprs.app(TypeId::OPTION, smallvec![*v_ty]);
-                Ok(entries
-                    .get(&Self::map_key(key))
-                    .map(|id| Value::some(opt_ty, *id))
-                    .unwrap_or_else(|| Value::none(opt_ty)))
-            }
+            (Value::Map(_, _, entries), key) => entries
+                .get(&Self::map_key(key))
+                .and_then(|id| ctx.arena.get(*id).cloned())
+                .ok_or_else(|| {
+                    Error::runtime(
+                        ctx.span,
+                        format!("map key not found: {key:?}"),
+                    )
+                }),
             (Value::String(sid), Value::Int(i)) => {
                 let s = ctx.arena.get_str(*sid).unwrap_or("");
                 let len = s.chars().count() as i64;

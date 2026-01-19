@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test that omitting required associated type produces a type error\n;\n; Indexable requires NEWTYPE Index = ... to be defined\n\nTYPE MyList = MyList(Array[Int])\n\n; Missing NEWTYPE Index = ... declaration; should error\nCLASS Indexable[Int] FOR MyList {\n  FUN index(xs: MyList, i: Int) -> Int { 0 }\n  FUN get(xs: MyList, i: Int) -> Option[Int] { Option.None }\n}\n"
+---
+ERROR: missing required associated type `Index` for class `Indexable`

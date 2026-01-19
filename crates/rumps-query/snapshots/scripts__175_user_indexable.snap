@@ -1,0 +1,10 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; User-defined Indexable class with associated type Index\n;\n; Tests implementing Indexable for user types with NEWTYPE Index = ...\n; to define the associated index type.\n\n; === Usage (hoisted) ===\n\n; StringMap uses String as index type (via NEWTYPE Index = String)\nLET sm = StringMap.StringMap({ \"a\" => 1, \"b\" => 2, \"c\" => 3 })\n\n; Direct class method calls\nWRITE Indexable:index(sm, \"a\")\nWRITE Indexable:get(sm, \"b\")\n\n; Subscript syntax dispatches to user Indexable instance\nWRITE sm[\"a\"]\nWRITE sm[\"c\"]\n\n; Safe subscript (uses `get` method)\nWRITE sm?[\"b\"]\nWRITE sm?[\"missing\"]\n\n; === Type and Class Definitions ===\n\nTYPE StringMap = StringMap(Map[String, Int])\n\nCLASS Indexable[Int] FOR StringMap {\n  NEWTYPE Index = String\n\n  FUN index(sm: StringMap, i: :Index) -> Int {\n    MATCH sm {\n      StringMap.StringMap(m) => m[i]\n    }\n  }\n\n  FUN get(sm: StringMap, i: :Index) -> Option[Int] {\n    MATCH sm {\n      StringMap.StringMap(m) => m?[i]\n    }\n  }\n}\n"
+---
+1
+Option.Some(2)
+1
+3
+Option.Some(2)
+Option.None

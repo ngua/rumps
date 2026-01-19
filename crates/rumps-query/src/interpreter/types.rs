@@ -201,21 +201,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .collect::<Result<Option<IndexMap<_, _>>>>()?;
                 Ok(resolved.map(|r| self.type_exprs.object(r)))
             }
-            // Associated types should be resolved during type checking.
-            //
-            // - Unqualified `:Index` in class instances are resolved to concrete
-            //   types by the typechecker's class context
-            // - Qualified `Indexable:Index` are resolved during unification when
-            //   the base type is known
-            //
-            // If we reach this point, the typechecker failed to resolve the
-            // associated type, which is a bug.
-            AstTypeExpr::AssocType { .. } => {
-                typechecked!(
-                    "try_resolve_type_expr",
-                    "resolved associated type"
-                )
-            }
+            // Associated types (`:Index`, `Indexable:Index`) cannot be resolved
+            // at runtime because the AST doesn't store their resolved types.
+            // The typechecker has already verified correctness; return `None`
+            // to indicate the type annotation should be skipped at runtime.
+            AstTypeExpr::AssocType { .. } => Ok(None),
         }
     }
 

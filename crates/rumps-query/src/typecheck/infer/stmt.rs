@@ -866,6 +866,18 @@ impl InferCtx<'_> {
             })
             .collect();
 
+        // 6.6. Validate all required associated types are provided
+        class.def().assoc_types.iter().for_each(|req| {
+            let req_id = self.env.intern(req);
+            if !assoc_type_map.contains_key(&req_id) {
+                self.error(TypeError::MissingAssocType {
+                    class,
+                    assoc: req_id,
+                    span,
+                });
+            }
+        });
+
         // Set class context for method body type checking
         self.class_context = Some(ClassContext {
             class,

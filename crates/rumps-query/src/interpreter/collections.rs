@@ -492,14 +492,17 @@ impl<I: IoContext> Interpreter<'_, I> {
                         )
                     })
             }
-            (Value::Map(_, v_ty, entries), key) => {
+            (Value::Map(_, _, entries), key) => {
                 let map_key = self.value_to_map_key(key);
-                let opt_ty =
-                    self.type_exprs.app(TypeId::OPTION, smallvec![*v_ty]);
-                Ok(entries
+                entries
                     .get(&map_key)
-                    .map(|id| Value::some(opt_ty, *id))
-                    .unwrap_or_else(|| Value::none(opt_ty)))
+                    .and_then(|id| self.arena.get(*id).cloned())
+                    .ok_or_else(|| {
+                        Error::runtime(
+                            span,
+                            format!("map key not found: {key:?}"),
+                        )
+                    })
             }
             (Value::String(sid), Value::Int(i)) => {
                 let s = self.arena.get_str(*sid).unwrap_or("");
@@ -513,6 +516,19 @@ impl<I: IoContext> Interpreter<'_, I> {
                         )
                     },
                 )
+            }
+            // User-defined Indexable instance
+            (Value::Tagged(_, _, _), _) => {
+                let base_id = self.arena.add(base_val, span);
+                let idx_id = self.arena.add(idx_val, span);
+                self.dispatch_class_method(
+                    Some(base),
+                    crate::typecheck::ClassKind::Indexable,
+                    "index",
+                    &[base_id, idx_id],
+                    span,
+                )
+                .await
             }
             _ => typechecked!("[]", "Indexable"),
         }
@@ -570,6 +586,19 @@ impl<I: IoContext> Interpreter<'_, I> {
                         Value::some(opt_ty, char_id)
                     })
                     .unwrap_or_else(|| Value::none(opt_ty)))
+            }
+            // User-defined Indexable instance (safe indexing via `get`)
+            (Value::Tagged(_, _, _), _) => {
+                let base_id = self.arena.add(base_val, span);
+                let idx_id = self.arena.add(idx_val, span);
+                self.dispatch_class_method(
+                    Some(base),
+                    crate::typecheck::ClassKind::Indexable,
+                    "get",
+                    &[base_id, idx_id],
+                    span,
+                )
+                .await
             }
             _ => typechecked!("?[]", "Indexable"),
         }
