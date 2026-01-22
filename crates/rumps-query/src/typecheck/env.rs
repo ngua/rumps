@@ -23,6 +23,10 @@ struct Scope {
     ///
     /// Used to enforce that imports appear at the top of each scope.
     seen_non_import: bool,
+    /// Modules imported in this scope.
+    ///
+    /// Used to track which module instances are available.
+    imported_modules: HashSet<String>,
 }
 
 /// Scoped type environment mapping names to type schemes.
@@ -179,6 +183,21 @@ impl TypeEnv {
             .last()
             .map(|s| !s.seen_non_import)
             .unwrap_or(false)
+    }
+
+    /// Mark a module as imported in the current scope.
+    pub(crate) fn mark_module_imported(&mut self, module: &str) {
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.imported_modules.insert(module.to_string());
+        }
+    }
+
+    /// Check if a module has been imported in any enclosing scope.
+    pub(crate) fn is_module_imported(&self, module: &str) -> bool {
+        self.scopes
+            .iter()
+            .rev()
+            .any(|s| s.imported_modules.contains(module))
     }
 
     /// Bind a name to a type scheme in the current scope.
