@@ -973,6 +973,8 @@ impl InferCtx<'_> {
                         })
                         .collect();
 
+                // TODO: Phase 4 will propagate `module` from hoisting; top-level
+                // instances will remain `None`, module-scoped instances will be `Some(path)`.
                 let inst = Instance {
                     class,
                     class_args: class_arg_tys,
@@ -980,6 +982,7 @@ impl InferCtx<'_> {
                     constraints: scheme_constraints,
                     methods: method_map,
                     assoc_types: inst_assoc_types,
+                    module: None,
                     span,
                 };
 

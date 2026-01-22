@@ -335,6 +335,8 @@ impl InferCtx<'_> {
         };
 
         // Register instance (ignore duplicate errors; caught in Pass 2)
+        // TODO: Phase 4 will pass `module` parameter to this function; top-level
+        // instances will remain `None`, module-scoped instances will be `Some(path)`.
         let inst = Instance {
             class,
             class_args: class_arg_tys,
@@ -342,6 +344,7 @@ impl InferCtx<'_> {
             constraints: scheme_constraints,
             methods: method_map,
             assoc_types: SmallVec::new(),
+            module: None,
             span,
         };
         if let Err(e) = self.instance_registry.register(type_id, inst) {

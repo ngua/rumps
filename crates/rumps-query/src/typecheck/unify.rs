@@ -2422,6 +2422,7 @@ mod tests {
             constraints: SmallVec::new(),
             methods: std::collections::HashMap::new(),
             assoc_types: SmallVec::new(),
+            module: None,
             span: Span::new(0, 1),
         };
 
@@ -2457,6 +2458,7 @@ mod tests {
             constraints: smallvec::smallvec![constraint],
             methods: std::collections::HashMap::new(),
             assoc_types: SmallVec::new(),
+            module: None,
             span: Span::new(0, 1),
         };
 
