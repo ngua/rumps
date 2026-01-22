@@ -55,6 +55,8 @@ pub(crate) struct ResolvedInstance {
     pub(crate) type_name: String,
     /// Method mappings: (method_name, generated_fn_name).
     pub(crate) methods: Vec<(String, String)>,
+    /// Owning module path, or `None` for top-level instances.
+    pub(crate) module: Option<String>,
 }
 
 /// Map from `StmtId` to resolved instance info.
@@ -152,14 +154,52 @@ pub(crate) fn resolve(
 }
 
 /// Process all `Stmt::ClassInstance` statements and return resolved info.
+///
+/// Recursively processes modules to find instances defined inside them.
 fn resolve_class_instances(ast: &Ast) -> InstanceMap {
-    ast.stmt_ids()
-        .filter_map(|id| resolve_class_instance(ast, id).map(|inst| (id, inst)))
-        .collect()
+    let mut map = InstanceMap::new();
+    let ids: Vec<_> = ast.stmt_ids().collect();
+    resolve_class_instances_rec(ast, &ids, None, &mut map);
+    map
+}
+
+/// Recursively collect class instances from statements.
+fn resolve_class_instances_rec(
+    ast: &Ast,
+    ids: &[StmtId],
+    module: Option<&str>,
+    map: &mut InstanceMap,
+) {
+    ids.iter().for_each(|&id| {
+        // Check for CLASS instance
+        resolve_class_instance(ast, id, module)
+            .into_iter()
+            .for_each(|inst| {
+                map.insert(id, inst);
+            });
+        // Recurse into modules
+        ast.get_stmt(id)
+            .into_iter()
+            .filter_map(|s| match s {
+                Stmt::Module { name, body } => Some((name, body)),
+                _ => None,
+            })
+            .for_each(|(name, body)| {
+                let mod_path = module.map_or_else(
+                    || name.clone(),
+                    |m| format!("{}.{}", m, name),
+                );
+                resolve_class_instances_rec(ast, body, Some(&mod_path), map);
+            });
+    });
 }
 
 /// Resolve a single `Stmt::ClassInstance`, generating function names.
-fn resolve_class_instance(ast: &Ast, id: StmtId) -> Option<ResolvedInstance> {
+fn resolve_class_instance(
+    ast: &Ast,
+    id: StmtId,
+    module: Option<&str>,
+) -> Option<ResolvedInstance> {
     let stmt = ast.get_stmt(id)?;
 
     match stmt {
@@ -172,8 +212,16 @@ fn resolve_class_instance(ast: &Ast, id: StmtId) -> Option<ResolvedInstance> {
             // Validate class name
             let class = ClassKind::from_str(class_name)?;
 
-            // Extract the implementing type name
-            let type_name = extract_type_name(ast, *for_type)?;
+            // Extract the raw type name from AST
+            let raw_name = extract_type_name(ast, *for_type)?;
+
+            // Qualify with module path if inside a module and name is unqualified
+            let type_name = match module {
+                Some(m) if !raw_name.contains('.') => {
+                    format!("{}.{}", m, raw_name)
+                }
+                _ => raw_name,
+            };
 
             // Generate function names for each method
             let mappings: Vec<(String, String)> = methods
@@ -191,6 +239,7 @@ fn resolve_class_instance(ast: &Ast, id: StmtId) -> Option<ResolvedInstance> {
                 class,
                 type_name,
                 methods: mappings,
+                module: module.map(String::from),
             })
         }
         _ => None,

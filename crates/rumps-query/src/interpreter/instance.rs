@@ -24,12 +24,17 @@ use crate::value::TypeId;
 /// These names are internal and not user-callable directly. They follow a
 /// consistent format so both the typechecker and interpreter can independently
 /// generate the same names.
+///
+/// The `type_name` may contain `.` for module-qualified types (e.g., `"Shapes.Circle"`),
+/// which is sanitized to `_` to avoid path-like function names.
 pub(crate) fn instance_fn_name(
     class: ClassKind,
     type_name: &str,
     method: &str,
 ) -> String {
-    format!("__inst_{}_{}__{}", class.name(), type_name, method)
+    // Sanitize `.` to `_` for module-qualified type names
+    let safe_name = type_name.replace('.', "_");
+    format!("__inst_{}_{}__{}", class.name(), safe_name, method)
 }
 
 /// Runtime representation of a user-defined class instance.
