@@ -14,6 +14,7 @@ use crate::ast::{
     OutputFormat, OutputTarget, RefTarget, Stmt, StmtId, SubscriptElem, TxnId,
     TypeParam, UnOp, Visibility, WriteExpr,
 };
+use crate::intern::StringId;
 use crate::typecheck::error::TypeError;
 use crate::typecheck::instance::{self, Instance};
 use crate::typecheck::ty::{Class, ClassKind, Scheme, Ty, TyVar};
@@ -113,6 +114,7 @@ impl InferCtx<'_> {
                     &constraints,
                     &assoc_types,
                     &methods,
+                    None, // Top-level instance
                     span,
                 );
             }
@@ -237,6 +239,7 @@ impl InferCtx<'_> {
                     ref assoc_types,
                     ref methods,
                 }) => {
+                    let mod_id = self.env.intern(mod_path);
                     self.class_instance(
                         class_name,
                         class_args,
@@ -245,6 +248,7 @@ impl InferCtx<'_> {
                         constraints,
                         assoc_types,
                         methods,
+                        Some(mod_id),
                         item_span,
                     );
                 }
@@ -765,6 +769,7 @@ impl InferCtx<'_> {
         constraints: &SmallVec<[(String, SmallVec<[ast::Class; 2]>); 2]>,
         assoc_types: &SmallVec<[AssocTypeDef; 2]>,
         methods: &SmallVec<[InstanceMethodDef; 4]>,
+        module: Option<StringId>,
         span: Span,
     ) {
         // 1. Resolve class name to ClassKind
@@ -973,8 +978,6 @@ impl InferCtx<'_> {
                         })
                         .collect();
 
-                // TODO: Phase 4 will propagate `module` from hoisting; top-level
-                // instances will remain `None`, module-scoped instances will be `Some(path)`.
                 let inst = Instance {
                     class,
                     class_args: class_arg_tys,
@@ -982,7 +985,7 @@ impl InferCtx<'_> {
                     constraints: scheme_constraints,
                     methods: method_map,
                     assoc_types: inst_assoc_types,
-                    module: None,
+                    module,
                     span,
                 };
 

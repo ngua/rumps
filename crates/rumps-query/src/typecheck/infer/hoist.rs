@@ -11,8 +11,9 @@ use smallvec::SmallVec;
 use super::InferCtx;
 use crate::ast::{
     self, AstTypeExprId, BindingPattern, InstanceMethodDef, Stmt, StmtId,
-    TypeParam, Visibility,
+    TypeParam,
 };
+use crate::intern::StringId;
 use crate::typecheck::instance::Instance;
 use crate::typecheck::ty::{Class, ClassKind, Scheme, Ty, TyVar};
 use crate::Span;
@@ -65,6 +66,7 @@ impl InferCtx<'_> {
                 for_type,
                 &constraints,
                 &methods,
+                None, // Top-level instance
                 span,
             ),
 
@@ -194,6 +196,28 @@ impl InferCtx<'_> {
                     self.hoist_module(&nested_path, body, item_span);
                 }
 
+                Some(Stmt::ClassInstance {
+                    ref class_name,
+                    ref class_args,
+                    ref type_params,
+                    for_type,
+                    ref constraints,
+                    ref methods,
+                    ..
+                }) => {
+                    let mod_id = self.env.intern(mod_path);
+                    self.hoist_class_instance(
+                        class_name,
+                        class_args,
+                        type_params,
+                        for_type,
+                        constraints,
+                        methods,
+                        Some(mod_id),
+                        item_span,
+                    );
+                }
+
                 // TYPE/UNION/NEWTYPE are processed by registry; skip
                 // Other statements are invalid in modules (caught in Pass 2)
                 _ => {}
@@ -206,6 +230,9 @@ impl InferCtx<'_> {
     /// Registers the instance in `instance_registry` so that class method
     /// calls can find user instances even when the CLASS statement appears
     /// after the call site (forward reference).
+    ///
+    /// The `module` parameter is `Some(path_id)` when the CLASS is inside a
+    /// module, `None` for top-level instances.
     #[allow(clippy::too_many_arguments)]
     fn hoist_class_instance(
         &mut self,
@@ -215,140 +242,190 @@ impl InferCtx<'_> {
         for_type: AstTypeExprId,
         constraints: &SmallVec<[(String, SmallVec<[ast::Class; 2]>); 2]>,
         methods: &SmallVec<[InstanceMethodDef; 4]>,
+        module: Option<StringId>,
         span: Span,
     ) {
         // Parse class name; silently skip if invalid (error in Pass 2)
-        let Some(class) = ClassKind::from_str(class_name) else {
-            return;
-        };
+        if let Some(class) = ClassKind::from_str(class_name) {
+            // Build type parameter substitution from WHERE constraints
+            let type_param_subst: HashMap<_, _> = if type_params.is_empty() {
+                constraints
+                    .iter()
+                    .map(|(name, _)| {
+                        let id = self.env.intern(name);
+                        let tv = self.fresh_var();
+                        (id, Ty::Var(tv))
+                    })
+                    .collect()
+            } else {
+                type_params
+                    .iter()
+                    .map(|tp| {
+                        let id = self.env.intern(&tp.name);
+                        let tv = self.fresh_var();
+                        (id, Ty::Var(tv))
+                    })
+                    .collect()
+            };
 
-        // Build type parameter substitution from WHERE constraints
-        let type_param_subst: HashMap<_, _> = if type_params.is_empty() {
-            constraints
+            // Resolve for_type
+            let for_ty = self.ast_type_to_ty(for_type, &type_param_subst);
+
+            // Fallback for module-scoped unqualified type names: if `for_ty` is
+            // `Unknown` and we're inside a module, try the qualified name.
+            let for_ty = match (&for_ty, module) {
+                (Ty::Unknown, Some(mod_id)) => {
+                    let raw_name = self.extract_type_name_from_ast(for_type);
+                    if raw_name.contains('.') {
+                        for_ty // Already qualified
+                    } else {
+                        let mod_path =
+                            self.env.get_str(mod_id).map(String::from);
+                        mod_path
+                            .map(|mp| {
+                                let qname = format!("{}.{}", mp, raw_name);
+                                let qname_id = self.env.intern(&qname);
+                                self.registry
+                                    .lookup(qname_id)
+                                    .map(|tid| Ty::Named(tid, Vec::new()))
+                                    .unwrap_or(for_ty.clone())
+                            })
+                            .unwrap_or(for_ty)
+                    }
+                }
+                _ => for_ty,
+            };
+
+            // Convert class args (needed for builtin check)
+            let class_arg_tys: SmallVec<[Ty; 2]> = class_args
                 .iter()
-                .map(|(name, _)| {
-                    let id = self.env.intern(name);
-                    let tv = self.fresh_var();
-                    (id, Ty::Var(tv))
-                })
-                .collect()
-        } else {
-            type_params
-                .iter()
-                .map(|tp| {
-                    let id = self.env.intern(&tp.name);
-                    let tv = self.fresh_var();
-                    (id, Ty::Var(tv))
-                })
-                .collect()
-        };
+                .map(|id| self.ast_type_to_ty(*id, &type_param_subst))
+                .collect();
 
-        // Resolve for_type
-        let for_ty = self.ast_type_to_ty(for_type, &type_param_subst);
+            // Extract TypeId; for primitives, use primitive_type_id
+            let type_id_opt = match &for_ty {
+                Ty::Named(id, _) => Some(*id),
+                _ => self.primitive_type_id(&for_ty),
+            };
 
-        // Convert class args (needed for builtin check)
-        let class_arg_tys: SmallVec<[Ty; 2]> = class_args
-            .iter()
-            .map(|id| self.ast_type_to_ty(*id, &type_param_subst))
-            .collect();
+            if let Some(type_id) = type_id_opt {
+                // Check if this is a forbidden builtin instance (same logic as stmt.rs)
+                // Allow if any class arg is a user-defined type
+                let is_forbidden_builtin = self.is_builtin_type(type_id)
+                    && (class_arg_tys.is_empty()
+                        || class_arg_tys
+                            .iter()
+                            .all(|ty| self.is_builtin_ty(ty)));
 
-        // Extract TypeId; for primitives, use primitive_type_id
-        let type_id = match &for_ty {
-            Ty::Named(id, _) => *id,
-            _ => match self.primitive_type_id(&for_ty) {
-                Some(id) => id,
-                None => return, // Skip if we can't get a TypeId
-            },
-        };
+                if !is_forbidden_builtin {
+                    // Process constraints
+                    let mut scheme_constraints: SmallVec<[(TyVar, Class); 2]> =
+                        SmallVec::new();
+                    constraints.iter().for_each(
+                        |(param_name, param_constraints)| {
+                            let param_id = self.env.intern(param_name);
+                            let ty = type_param_subst
+                                .get(&param_id)
+                                .cloned()
+                                .unwrap_or(Ty::Unknown);
+                            let tv = match ty {
+                                Ty::Var(v) => v,
+                                _ => self.fresh_var(),
+                            };
+                            param_constraints.iter().for_each(|c| {
+                                scheme_constraints.push((
+                                    tv,
+                                    self.ast_class_to_ty_class(
+                                        c,
+                                        &type_param_subst,
+                                    ),
+                                ));
+                            });
+                        },
+                    );
 
-        // Check if this is a forbidden builtin instance (same logic as stmt.rs)
-        // Allow if any class arg is a user-defined type
-        if self.is_builtin_type(type_id) {
-            let all_args_builtin = class_arg_tys.is_empty()
-                || class_arg_tys.iter().all(|ty| self.is_builtin_ty(ty));
-            if all_args_builtin {
-                return; // Skip; error will be emitted in Pass 2
+                    // Build method map (empty for hoisting; filled in Pass 2)
+                    // Use qualified type name for function name generation to avoid collisions.
+                    let type_name_for_fn = match (&for_ty, module) {
+                        (Ty::Named(_, _), Some(mod_id)) => {
+                            let raw_name =
+                                self.extract_type_name_from_ast(for_type);
+                            if raw_name.contains('.') {
+                                raw_name
+                            } else {
+                                self.env
+                                    .get_str(mod_id)
+                                    .map(|mod_path| {
+                                        format!("{}.{}", mod_path, raw_name)
+                                    })
+                                    .unwrap_or(raw_name)
+                            }
+                        }
+                        _ => self.extract_type_name_from_ast(for_type),
+                    };
+                    let method_map: HashMap<_, _> = methods
+                        .iter()
+                        .map(|m| {
+                            let method_id = self.env.intern(&m.name);
+                            let fn_name =
+                                crate::interpreter::instance::instance_fn_name(
+                                    class,
+                                    &type_name_for_fn,
+                                    &m.name,
+                                );
+                            let fn_name_id = self.env.intern(&fn_name);
+                            (method_id, fn_name_id)
+                        })
+                        .collect();
+
+                    // Extract type params as TyVars
+                    let type_var_params: SmallVec<[TyVar; 2]> =
+                        if type_params.is_empty() {
+                            constraints
+                                .iter()
+                                .filter_map(|(name, _)| {
+                                    let id = self.env.intern(name);
+                                    type_param_subst.get(&id).and_then(|ty| {
+                                        match ty {
+                                            Ty::Var(v) => Some(*v),
+                                            _ => None,
+                                        }
+                                    })
+                                })
+                                .collect()
+                        } else {
+                            type_params
+                                .iter()
+                                .filter_map(|tp| {
+                                    let id = self.env.intern(&tp.name);
+                                    type_param_subst.get(&id).and_then(|ty| {
+                                        match ty {
+                                            Ty::Var(v) => Some(*v),
+                                            _ => None,
+                                        }
+                                    })
+                                })
+                                .collect()
+                        };
+
+                    // Register instance (ignore duplicate errors; caught in Pass 2)
+                    let inst = Instance {
+                        class,
+                        class_args: class_arg_tys,
+                        type_params: type_var_params,
+                        constraints: scheme_constraints,
+                        methods: method_map,
+                        assoc_types: SmallVec::new(),
+                        module,
+                        span,
+                    };
+                    if let Err(e) =
+                        self.instance_registry.register(type_id, inst)
+                    {
+                        self.error(e);
+                    }
+                }
             }
-        }
-
-        // Process constraints
-        let mut scheme_constraints: SmallVec<[(TyVar, Class); 2]> =
-            SmallVec::new();
-        constraints
-            .iter()
-            .for_each(|(param_name, param_constraints)| {
-                let param_id = self.env.intern(param_name);
-                let ty = type_param_subst
-                    .get(&param_id)
-                    .cloned()
-                    .unwrap_or(Ty::Unknown);
-                let tv = match ty {
-                    Ty::Var(v) => v,
-                    _ => self.fresh_var(),
-                };
-                param_constraints.iter().for_each(|c| {
-                    scheme_constraints.push((
-                        tv,
-                        self.ast_class_to_ty_class(c, &type_param_subst),
-                    ));
-                });
-            });
-
-        // Build method map (empty for hoisting; filled in Pass 2)
-        let method_map: HashMap<_, _> = methods
-            .iter()
-            .map(|m| {
-                let method_id = self.env.intern(&m.name);
-                // Generate function name for consistency
-                let type_name = self.extract_type_name_from_ast(for_type);
-                let fn_name = crate::interpreter::instance::instance_fn_name(
-                    class, &type_name, &m.name,
-                );
-                let fn_name_id = self.env.intern(&fn_name);
-                (method_id, fn_name_id)
-            })
-            .collect();
-
-        // Extract type params as TyVars
-        let type_var_params: SmallVec<[TyVar; 2]> = if type_params.is_empty() {
-            constraints
-                .iter()
-                .filter_map(|(name, _)| {
-                    let id = self.env.intern(name);
-                    type_param_subst.get(&id).and_then(|ty| match ty {
-                        Ty::Var(v) => Some(*v),
-                        _ => None,
-                    })
-                })
-                .collect()
-        } else {
-            type_params
-                .iter()
-                .filter_map(|tp| {
-                    let id = self.env.intern(&tp.name);
-                    type_param_subst.get(&id).and_then(|ty| match ty {
-                        Ty::Var(v) => Some(*v),
-                        _ => None,
-                    })
-                })
-                .collect()
-        };
-
-        // Register instance (ignore duplicate errors; caught in Pass 2)
-        // TODO: Phase 4 will pass `module` parameter to this function; top-level
-        // instances will remain `None`, module-scoped instances will be `Some(path)`.
-        let inst = Instance {
-            class,
-            class_args: class_arg_tys,
-            type_params: type_var_params,
-            constraints: scheme_constraints,
-            methods: method_map,
-            assoc_types: SmallVec::new(),
-            module: None,
-            span,
-        };
-        if let Err(e) = self.instance_registry.register(type_id, inst) {
-            self.error(e);
         }
     }
 }

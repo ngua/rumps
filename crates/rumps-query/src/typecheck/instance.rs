@@ -57,7 +57,7 @@ pub(crate) struct Instance {
     /// Currently empty; will be populated when associated types are parsed (Phase 2).
     pub(crate) assoc_types: SmallVec<[AssocTypeDef; 1]>,
     /// Owning module path, or `None` for top-level instances.
-    pub(crate) module: Option<String>,
+    pub(crate) module: Option<StringId>,
     /// Source span for error messages.
     pub(crate) span: Span,
 }
