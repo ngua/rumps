@@ -1,0 +1,137 @@
+; CLASS implementations inside MODULE blocks
+;
+; Tests CLASS ... FOR ... syntax within user-defined modules.
+; Instances become available after importing the module.
+
+; All imports at top
+IMPORT Shapes.{ ... }
+IMPORT Prio.{ ... }
+IMPORT Nums.{ ... }
+IMPORT Container.{ ... }
+IMPORT Collections.{ ... }
+; Instances are also brought into scope by empty import
+IMPORT EmptyImport.{ }
+
+; ============ Display CLASS in MODULE ============
+
+MODULE Shapes {
+  +TYPE Circle = Circle(Float)
+
+  CLASS Display FOR Shapes.Circle {
+    FUN display(c: Shapes.Circle) -> String {
+      MATCH c {
+        Shapes.Circle.Circle(r) => { "Circle(r={r})" }
+      }
+    }
+  }
+}
+
+LET c = Shapes.Circle.Circle(3.14)
+WRITE Display:display(c)
+
+; ============ Ord CLASS in MODULE ============
+
+MODULE Prio {
+  +NEWTYPE Priority = Int
+
+  ; Reversed ordering: higher number = lower priority
+  CLASS Ord FOR Prio.Priority {
+    FUN compare(a: Prio.Priority, b: Prio.Priority) -> Ordering {
+      IF a > b { Ordering.Lt } ELSE {
+        IF a == b { Ordering.Eq } ELSE { Ordering.Gt }
+      }
+    }
+  }
+}
+
+LET low: Prio.Priority = 10
+LET high: Prio.Priority = 1
+WRITE Ord:compare(low, high)
+WRITE Ord:compare(high, low)
+WRITE Ord:compare(low, low)
+
+; ============ Numeric CLASS in MODULE ============
+
+MODULE Nums {
+  +NEWTYPE MyInt = Int
+
+  CLASS Numeric FOR Nums.MyInt {
+    FUN add(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a + b }
+    FUN sub(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a - b }
+    FUN mul(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a * b }
+    FUN floor-div(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a // b }
+    FUN mod(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a % b }
+    FUN pow(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a ** b }
+  }
+}
+
+LET a: Nums.MyInt = 10
+LET b: Nums.MyInt = 3
+WRITE Numeric:add(a, b)
+WRITE Numeric:mul(a, b)
+
+; ============ Constrained type params in MODULE ============
+
+MODULE Container {
+  +TYPE Pair[L, R] = Pair(L, R)
+
+  CLASS Display FOR Container.Pair[L, R] WHERE L: Display, R: Display {
+    FUN display(p: Container.Pair[L, R]) -> String {
+      MATCH p {
+        Container.Pair.Pair(l, r) => {
+          LET ls = Display:display(l)
+          LET rs = Display:display(r)
+          "Pair({ls}, {rs})"
+        }
+      }
+    }
+  }
+}
+
+LET p1 = Container.Pair.Pair(1, 2)
+LET p2 = Container.Pair.Pair("hello", "world")
+WRITE Display:display(p1)
+WRITE Display:display(p2)
+
+; ============ Indexable with associated type in MODULE ============
+
+MODULE Collections {
+  +TYPE IntArray = IntArray(Array[Int])
+
+  CLASS Indexable[Int] FOR Collections.IntArray {
+    NEWTYPE Index = Int
+
+    FUN index(arr: Collections.IntArray, i: Int) -> Int {
+      MATCH arr {
+        Collections.IntArray.IntArray(inner) => inner[i]
+      }
+    }
+
+    FUN get(arr: Collections.IntArray, i: Int) -> Option[Int] {
+      MATCH arr {
+        Collections.IntArray.IntArray(inner) => inner?[i]
+      }
+    }
+  }
+}
+
+LET arr = Collections.IntArray.IntArray([10, 20, 30])
+WRITE Indexable:get(arr, 1)
+WRITE Indexable:index(arr, 2)
+
+; ============ Empty import brings instance into scope ============
+
+MODULE EmptyImport {
+  +TYPE Thing = Thing(Int)
+
+  CLASS Display FOR EmptyImport.Thing {
+    FUN display(t: EmptyImport.Thing) -> String {
+      MATCH t {
+        EmptyImport.Thing.Thing(n) => { "Thing({n})" }
+      }
+    }
+  }
+}
+
+LET thing = EmptyImport.Thing.Thing(42)
+WRITE Display:display(thing)

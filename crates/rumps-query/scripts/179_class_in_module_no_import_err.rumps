@@ -1,0 +1,17 @@
+; CLASS instance without import; should error with helpful suggestion
+
+MODULE Shapes {
+  +TYPE Circle = Circle(Float)
+
+  CLASS Display FOR Shapes.Circle {
+    FUN display(c: Shapes.Circle) -> String {
+      MATCH c {
+        Shapes.Circle.Circle(r) => { "Circle(r={r})" }
+      }
+    }
+  }
+}
+
+; No import; should error
+LET c = Shapes.Circle.Circle(3.14)
+WRITE Display:display(c)

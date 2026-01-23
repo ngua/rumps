@@ -1,0 +1,18 @@
+; Duplicate CLASS instance across modules; should error
+
+MODULE A {
+  +TYPE MyInt = MyInt(Int)
+}
+
+MODULE B {
+  CLASS Display FOR A.MyInt {
+    FUN display(x: A.MyInt) -> String { "B" }
+  }
+}
+
+MODULE C {
+  ; Duplicate instance for same type
+  CLASS Display FOR A.MyInt {
+    FUN display(x: A.MyInt) -> String { "C" }
+  }
+}

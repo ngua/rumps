@@ -103,7 +103,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     ///
     /// Registers the instance methods as functions with generated internal names
     /// and populates `user_instances` for runtime dispatch.
-    fn hoist_class_instance(
+    pub(crate) fn hoist_class_instance(
         &mut self,
         id: StmtId,
         _for_type: crate::ast::AstTypeExprId,

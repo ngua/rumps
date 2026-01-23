@@ -55,8 +55,6 @@ pub(crate) struct ResolvedInstance {
     pub(crate) type_name: String,
     /// Method mappings: (method_name, generated_fn_name).
     pub(crate) methods: Vec<(String, String)>,
-    /// Owning module path, or `None` for top-level instances.
-    pub(crate) module: Option<String>,
 }
 
 /// Map from `StmtId` to resolved instance info.
@@ -239,7 +237,6 @@ fn resolve_class_instance(
                 class,
                 type_name,
                 methods: mappings,
-                module: module.map(String::from),
             })
         }
         _ => None,

@@ -546,8 +546,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             Stmt::Import(ref import) => self.import(import, span),
             Stmt::ClassInstance { .. } => {
-                // Class instances are processed during resolution, not execution.
-                // TODO: Phase 5 will add registration logic here.
+                // Class instances are hoisted during `hoist_declarations()`.
                 Ok(())
             }
         }
@@ -729,6 +728,14 @@ impl<I: IoContext> Interpreter<'_, I> {
                                 &type_params,
                                 &members,
                                 item_span,
+                            )?;
+                        }
+
+                        Stmt::ClassInstance {
+                            for_type, methods, ..
+                        } => {
+                            self.hoist_class_instance(
+                                id, for_type, &methods, item_span,
                             )?;
                         }
 
