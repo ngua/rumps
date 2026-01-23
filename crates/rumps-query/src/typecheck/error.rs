@@ -484,6 +484,18 @@ pub(crate) enum TypeError {
         name: StringId,
         span: Span,
     },
+
+    /// Class instance exists but is not in scope because its module is not imported.
+    ///
+    /// Emitted when a class method is called on a type that has an instance
+    /// defined in a module, but that module has not been imported.
+    #[error("no `{class}` instance for `{type_id:?}` in scope")]
+    InstanceNotImported {
+        class: ClassKind,
+        type_id: TypeId,
+        module: String,
+        span: Span,
+    },
 }
 
 impl TypeError {
@@ -531,7 +543,8 @@ impl TypeError {
             | Self::UnknownAssocType { span, .. }
             | Self::AssocTypeConstraint { span, .. }
             | Self::AssocTypeOutsideClass { span, .. }
-            | Self::NoSuchAssocType { span, .. } => *span,
+            | Self::NoSuchAssocType { span, .. }
+            | Self::InstanceNotImported { span, .. } => *span,
         }
     }
 
@@ -816,6 +829,21 @@ impl TypeError {
                     None,
                 )
             }
+            Self::InstanceNotImported {
+                class,
+                type_id,
+                module,
+                ..
+            } => (
+                format!(
+                    "no `{}` instance for `{}` in scope",
+                    class.name(),
+                    p.type_name(*type_id)
+                ),
+                Some(format!(
+                    "an instance is defined in module `{module}`; try adding `IMPORT {module}.{{ }}`"
+                )),
+            ),
         };
 
         FormattedTypeError {

@@ -280,6 +280,11 @@ impl InferCtx<'_> {
             // Continue to gather more errors
         }
 
+        // Mark valid modules as imported (enables class instance lookup)
+        if is_builtin || is_user {
+            self.env.mark_module_imported(&mod_path);
+        }
+
         // Collect exclusions and check for wildcard
         let mut has_wildcard = false;
         let mut exclusions = HashSet::new();

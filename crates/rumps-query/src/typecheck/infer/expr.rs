@@ -569,6 +569,40 @@ impl InferCtx<'_> {
         self.constrain(Constraint::Class { ty, class, span });
     }
 
+    /// Check if a class instance is available in the current scope.
+    ///
+    /// An instance is available if:
+    /// - It is top-level (no module), or
+    /// - Its owning module has been imported
+    ///
+    /// Returns the cloned instance if available, `None` otherwise. If the
+    /// instance exists but its module is not imported, emits an error.
+    fn check_instance_available(
+        &mut self,
+        class: ClassKind,
+        type_id: TypeId,
+        span: Span,
+    ) -> Option<super::super::instance::Instance> {
+        let inst = self.instance_registry.lookup(class, type_id)?.clone();
+        match inst.module {
+            None => Some(inst),
+            Some(mod_id) => {
+                let mod_path = self.env.get_str(mod_id).unwrap_or("<unknown>");
+                if self.env.is_module_imported(mod_path) {
+                    Some(inst)
+                } else {
+                    self.error(TypeError::InstanceNotImported {
+                        class,
+                        type_id,
+                        module: mod_path.to_string(),
+                        span,
+                    });
+                    None
+                }
+            }
+        }
+    }
+
     /// Generic class method call type checking.
     ///
     /// Uses the centralized spec from `ClassKind::method` to:
@@ -656,8 +690,7 @@ impl InferCtx<'_> {
                         match type_id {
                             Some(tid)
                                 if self
-                                    .instance_registry
-                                    .lookup(kind, tid)
+                                    .check_instance_available(kind, tid, span)
                                     .is_some() =>
                             {
                                 self.instance_calls.insert(id, tid);
@@ -1298,11 +1331,11 @@ impl InferCtx<'_> {
 
             Ty::Named(id, type_args) => {
                 // Check for user-defined Indexable instance
-                match self
-                    .instance_registry
-                    .lookup(ClassKind::Indexable, *id)
-                    .cloned()
-                {
+                match self.check_instance_available(
+                    ClassKind::Indexable,
+                    *id,
+                    span,
+                ) {
                     Some(inst) => {
                         // Build substitution from instance type params to actual type args
                         let param_subst = Subst(
@@ -1328,11 +1361,19 @@ impl InferCtx<'_> {
                             .unwrap_or(Ty::Unknown)
                     }
                     None => {
-                        self.error(TypeError::UnsatisfiedClass(
-                            Class::Indexable(Ty::Error),
-                            base_ty.clone(),
-                            span,
-                        ));
+                        // Only emit UnsatisfiedClass if instance truly doesn't exist
+                        // (if it exists but isn't imported, error was already emitted)
+                        if self
+                            .instance_registry
+                            .lookup(ClassKind::Indexable, *id)
+                            .is_none()
+                        {
+                            self.error(TypeError::UnsatisfiedClass(
+                                Class::Indexable(Ty::Error),
+                                base_ty.clone(),
+                                span,
+                            ));
+                        }
                         Ty::Error
                     }
                 }
@@ -1405,11 +1446,11 @@ impl InferCtx<'_> {
 
             Ty::Named(id, type_args) => {
                 // Check for user-defined Indexable instance
-                match self
-                    .instance_registry
-                    .lookup(ClassKind::Indexable, *id)
-                    .cloned()
-                {
+                match self.check_instance_available(
+                    ClassKind::Indexable,
+                    *id,
+                    span,
+                ) {
                     Some(inst) => {
                         // Build substitution from instance type params to actual type args
                         let param_subst = Subst(
@@ -1437,11 +1478,19 @@ impl InferCtx<'_> {
                         Ty::Option(Box::new(elem))
                     }
                     None => {
-                        self.error(TypeError::UnsatisfiedClass(
-                            Class::Indexable(Ty::Error),
-                            base_ty.clone(),
-                            span,
-                        ));
+                        // Only emit UnsatisfiedClass if instance truly doesn't exist
+                        // (if it exists but isn't imported, error was already emitted)
+                        if self
+                            .instance_registry
+                            .lookup(ClassKind::Indexable, *id)
+                            .is_none()
+                        {
+                            self.error(TypeError::UnsatisfiedClass(
+                                Class::Indexable(Ty::Error),
+                                base_ty.clone(),
+                                span,
+                            ));
+                        }
                         Ty::Error
                     }
                 }
