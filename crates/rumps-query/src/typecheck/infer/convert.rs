@@ -99,6 +99,12 @@ impl InferCtx<'_> {
             TypeId::TIME => Ty::Time,
             TypeId::RANGE => Ty::Range,
             TypeId::JSON => Ty::Json,
+            TypeId::ORDERING => Ty::Ordering,
+            TypeId::DATA_STATUS => Ty::DataStatus,
+            TypeId::FILEPATH => Ty::FilePath,
+            TypeId::PATH => Ty::Path,
+            TypeId::REGEX => Ty::Regex,
+            TypeId::ERROR => Ty::RuntimeError,
             TypeId::LOCAL => Ty::Local,
             TypeId::GLOBAL => Ty::Global,
             // Ref is a union type (Local | Global); return Named
@@ -282,36 +288,184 @@ impl InferCtx<'_> {
                     let name_id = self.env.intern(name);
                     // Check substitution first (for type params)
                     subst.get(&name_id).cloned().unwrap_or_else(|| {
-                        // Check visibility for module-qualified types
                         let span =
                             self.ast.type_expr_span(id).unwrap_or_default();
-                        if self.check_type_visibility(name, span) {
-                            // Check if type requires type arguments
-                            let expected = Self::expected_type_arity(name)
-                                .or_else(|| {
-                                    self.env
-                                        .lookup_str(name)
-                                        .and_then(|id| self.registry.lookup(id))
-                                        .and_then(|ty_id| {
-                                            self.registry
-                                                .type_param_count(ty_id)
+
+                        // Try module-aware resolution for user types
+                        // Extract resolution data; only allocate when rewrite needed
+                        let resolved =
+                            self.resolve_type_name(name).map(|(tid, cow)| {
+                                let rewrite = &*cow != name;
+                                // Only allocate on rewrite; otherwise use `None`
+                                // and reference `name` later
+                                let qname = if rewrite {
+                                    Some(cow.into_owned())
+                                } else {
+                                    None
+                                };
+                                (tid, qname)
+                            });
+                        match resolved {
+                            Some((type_id, qname)) => {
+                                // Effective name for checks (borrow or owned)
+                                let eff = qname.as_deref().unwrap_or(name);
+                                // Check visibility
+                                if !self.check_type_visibility(eff, span) {
+                                    Ty::Error
+                                } else {
+                                    // Rewrite AST if name was resolved differently
+                                    if let Some(ref q) = qname {
+                                        self.ast.set_type_expr(
+                                            id,
+                                            AstTypeExpr::Named(q.clone()),
+                                        );
+                                    }
+                                    // Check arity; builtins use expected_type_arity
+                                    let exp = self
+                                        .registry
+                                        .type_param_count(type_id)
+                                        .or_else(|| {
+                                            Self::expected_type_arity(eff)
                                         })
-                                });
-                            if let Some(exp) = expected {
-                                if exp > 0 {
+                                        .unwrap_or(0);
+                                    if exp > 0 {
+                                        self.error(
+                                            TypeError::TypeArityMismatch {
+                                                name: qname.unwrap_or_else(
+                                                    || name.to_string(),
+                                                ),
+                                                expected: exp,
+                                                got: 0,
+                                                span,
+                                            },
+                                        );
+                                        Ty::Error
+                                    } else {
+                                        self.type_id_to_ty(type_id)
+                                    }
+                                }
+                            }
+                            None => {
+                                // Try builtin types
+                                let expected = Self::expected_type_arity(name);
+                                if let Some(exp) = expected {
+                                    if exp > 0 {
+                                        self.error(
+                                            TypeError::TypeArityMismatch {
+                                                name: name.clone(),
+                                                expected: exp,
+                                                got: 0,
+                                                span,
+                                            },
+                                        );
+                                        Ty::Error
+                                    } else {
+                                        self.named_type_to_ty(name)
+                                    }
+                                } else {
+                                    let ty = self.named_type_to_ty(name);
+                                    if ty == Ty::Unknown {
+                                        self.error(TypeError::UnknownType(
+                                            name.clone(),
+                                            span,
+                                        ));
+                                        Ty::Error
+                                    } else {
+                                        ty
+                                    }
+                                }
+                            }
+                        }
+                    })
+                }
+                AstTypeExpr::App(name, args) => {
+                    let span = self.ast.type_expr_span(id).unwrap_or_default();
+
+                    // Try module-aware resolution for user types
+                    // Only allocate when rewrite needed
+                    let resolved =
+                        self.resolve_type_name(name).map(|(tid, cow)| {
+                            let rewrite = &*cow != name;
+                            let qname = if rewrite {
+                                Some(cow.into_owned())
+                            } else {
+                                None
+                            };
+                            (tid, qname)
+                        });
+                    // Check for user-defined type (not builtin)
+                    let user_def =
+                        resolved.as_ref().and_then(|(tid, qname)| {
+                            let eff = qname.as_deref().unwrap_or(name);
+                            self.registry
+                                .type_param_count(*tid)
+                                .map(|exp| (*tid, eff, qname.clone(), exp))
+                        });
+                    match user_def {
+                        Some((type_id, eff, qname, exp)) => {
+                            // User-defined parameterized type
+                            if !self.check_type_visibility(eff, span) {
+                                Ty::Error
+                            } else {
+                                // Rewrite AST if name was resolved differently
+                                if let Some(ref q) = qname {
+                                    self.ast.set_type_expr(
+                                        id,
+                                        AstTypeExpr::App(
+                                            q.clone(),
+                                            args.clone(),
+                                        ),
+                                    );
+                                }
+                                // Check arity
+                                if args.len() != exp {
                                     self.error(TypeError::TypeArityMismatch {
-                                        name: name.clone(),
+                                        name: qname.unwrap_or_else(|| {
+                                            name.to_string()
+                                        }),
                                         expected: exp,
-                                        got: 0,
+                                        got: args.len(),
                                         span,
                                     });
                                     Ty::Error
                                 } else {
-                                    self.named_type_to_ty(name)
+                                    let arg_tys: Vec<_> = args
+                                        .iter()
+                                        .map(|a| self.ast_type_to_ty(*a, subst))
+                                        .collect();
+                                    self.apply_type_args(
+                                        self.type_id_to_ty(type_id),
+                                        arg_tys,
+                                    )
+                                }
+                            }
+                        }
+                        None => {
+                            // Builtin or unknown parameterized type
+                            let expected = Self::expected_type_arity(name);
+                            if let Some(exp) = expected {
+                                if args.len() != exp {
+                                    self.error(TypeError::TypeArityMismatch {
+                                        name: name.clone(),
+                                        expected: exp,
+                                        got: args.len(),
+                                        span,
+                                    });
+                                    Ty::Error
+                                } else {
+                                    let arg_tys: Vec<_> = args
+                                        .iter()
+                                        .map(|a| self.ast_type_to_ty(*a, subst))
+                                        .collect();
+                                    self.parameterized_type_to_ty(name, arg_tys)
                                 }
                             } else {
-                                let ty = self.named_type_to_ty(name);
-                                // Emit error for unknown types
+                                let arg_tys: Vec<_> = args
+                                    .iter()
+                                    .map(|a| self.ast_type_to_ty(*a, subst))
+                                    .collect();
+                                let ty = self
+                                    .parameterized_type_to_ty(name, arg_tys);
                                 if ty == Ty::Unknown {
                                     self.error(TypeError::UnknownType(
                                         name.clone(),
@@ -322,61 +476,7 @@ impl InferCtx<'_> {
                                     ty
                                 }
                             }
-                        } else {
-                            Ty::Error
                         }
-                    })
-                }
-                AstTypeExpr::App(name, args) => {
-                    // Check visibility for module-qualified types
-                    let span = self.ast.type_expr_span(id).unwrap_or_default();
-                    if self.check_type_visibility(name, span) {
-                        // Check arity: builtin types first, then user-defined
-                        let expected =
-                            Self::expected_type_arity(name).or_else(|| {
-                                self.env
-                                    .lookup_str(name)
-                                    .and_then(|id| self.registry.lookup(id))
-                                    .and_then(|ty_id| {
-                                        self.registry.type_param_count(ty_id)
-                                    })
-                            });
-                        if let Some(exp) = expected {
-                            if args.len() != exp {
-                                self.error(TypeError::TypeArityMismatch {
-                                    name: name.clone(),
-                                    expected: exp,
-                                    got: args.len(),
-                                    span,
-                                });
-                                Ty::Error
-                            } else {
-                                let arg_tys: Vec<_> = args
-                                    .iter()
-                                    .map(|a| self.ast_type_to_ty(*a, subst))
-                                    .collect();
-                                self.parameterized_type_to_ty(name, arg_tys)
-                            }
-                        } else {
-                            let arg_tys: Vec<_> = args
-                                .iter()
-                                .map(|a| self.ast_type_to_ty(*a, subst))
-                                .collect();
-                            let ty =
-                                self.parameterized_type_to_ty(name, arg_tys);
-                            // Emit error for unknown parameterized types
-                            if ty == Ty::Unknown {
-                                self.error(TypeError::UnknownType(
-                                    name.clone(),
-                                    span,
-                                ));
-                                Ty::Error
-                            } else {
-                                ty
-                            }
-                        }
-                    } else {
-                        Ty::Error
                     }
                 }
                 AstTypeExpr::Fn(params, ret) => {

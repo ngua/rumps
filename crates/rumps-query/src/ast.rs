@@ -277,6 +277,13 @@ impl Ast {
         }
     }
 
+    /// Replace a type expression in place (for name resolution).
+    pub(crate) fn set_type_expr(&mut self, id: AstTypeExprId, te: AstTypeExpr) {
+        if let Some(slot) = self.type_exprs.get_mut(id.0) {
+            *slot = te
+        }
+    }
+
     /// Iterate over all expression IDs.
     pub(crate) fn expr_ids(&self) -> impl Iterator<Item = ExprId> {
         (0..self.exprs.len()).map(ExprId)
