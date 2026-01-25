@@ -221,7 +221,16 @@ impl InferCtx<'_> {
                     );
                 }
 
-                // TYPE/UNION/NEWTYPE are processed by registry; skip
+                // TYPE/UNION/NEWTYPE: register visibility for imports.
+                // Type definitions are processed by registry; we only need
+                // to record visibility so imports can check access.
+                Some(Stmt::Type { ref name, vis, .. })
+                | Some(Stmt::Union { ref name, vis, .. })
+                | Some(Stmt::NewType { ref name, vis, .. }) => {
+                    let qname = format!("{}.{}", mod_path, name);
+                    self.env.register_user_module_type_vis(&qname, vis);
+                }
+
                 // Other statements are invalid in modules (caught in Pass 2)
                 _ => {}
             }

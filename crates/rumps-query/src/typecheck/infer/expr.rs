@@ -124,7 +124,9 @@ impl InferCtx<'_> {
             }
 
             // Function calls: f(args...)
-            Expr::Call(callee, args) => self.call(*callee, args, span),
+            Expr::Call(callee, args) => {
+                self.call_or_variant(id, *callee, args, span)
+            }
 
             // Control flow: IF
             Expr::If(cond, then_br, else_br) => {
@@ -1194,6 +1196,24 @@ impl InferCtx<'_> {
     /// (`Ty::Named` with `TypeDef::Struct`). For type variables, we cannot
     /// yet infer the field type without row polymorphism, so we create a
     /// structural object constraint.
+    ///
+    /// # AST Rewrite for Variant Access
+    ///
+    /// The parser produces `Field(Var("Type"), "Variant")` for `Type.Variant`
+    /// since it cannot distinguish field access from variant access without
+    /// type information. This method detects when `Type` resolves to a sum
+    /// type with variant `Variant` and rewrites the AST accordingly:
+    ///
+    /// - **Zero-arity variants** (e.g., `Option.None`): Rewritten immediately
+    ///   to `Variant("Option", "None", [])` since no call is needed.
+    ///
+    /// - **Non-zero-arity variants** (e.g., `Option.Some`): Returns a function
+    ///   type `(T) -> Option[T]`. The actual rewrite to `Variant` happens in
+    ///   `call_or_variant` when the constructor is invoked.
+    ///
+    /// This split handling is necessary because `Type.Variant` can appear in
+    /// two contexts: as a value (`Option.None`) or as a function to be called
+    /// (`Option.Some(x)`).
     fn field(
         &mut self,
         expr_id: ExprId,
@@ -1201,7 +1221,7 @@ impl InferCtx<'_> {
         field: &str,
         span: Span,
     ) -> Ty {
-        // Check for zero-arity variant: `Type.Variant` where Type is in scope
+        // Check for variant access: `Type.Variant` where Type is in scope
         // via module-aware resolution.
         //
         // Extract type name first to avoid borrow issues.
@@ -1210,22 +1230,21 @@ impl InferCtx<'_> {
             _ => None,
         });
 
-        // Try to resolve as a type with a zero-arity variant
-        let zero_arity_variant = ty_name_opt.and_then(|ty_name| {
+        // Try to resolve as a type with a variant (any arity)
+        let variant_lookup = ty_name_opt.and_then(|ty_name| {
             let field_id = self.env.intern(field);
             self.resolve_type_name(&ty_name).and_then(
                 |(type_id, resolved_name)| {
                     self.registry
                         .lookup_variant(type_id, field_id)
-                        .filter(|v| v.arity == 0)
-                        .map(|_| (type_id, resolved_name.into_owned()))
+                        .map(|v| (type_id, resolved_name.into_owned(), v.arity))
                 },
             )
         });
 
-        match zero_arity_variant {
-            Some((type_id, resolved_name)) => {
-                // Rewrite AST to Variant expression
+        match variant_lookup {
+            Some((type_id, resolved_name, 0)) => {
+                // Zero-arity variant: rewrite AST to Variant expression
                 self.ast.set_expr(
                     expr_id,
                     Expr::Variant(
@@ -1236,6 +1255,12 @@ impl InferCtx<'_> {
                 );
                 // Return the variant type
                 self.variant_type_for_nullary(type_id)
+            }
+            Some((type_id, resolved_name, _arity)) => {
+                // Non-zero-arity variant: return a function type for the
+                // constructor. The AST will be rewritten to `Variant` by
+                // `call` when this is invoked.
+                self.variant_ctor_fn_type(type_id, &resolved_name, field, span)
             }
             None => {
                 // Regular field access
@@ -1740,6 +1765,79 @@ impl InferCtx<'_> {
         fn_ty
     }
 
+    /// Infer type of a function call, detecting variant constructor calls.
+    ///
+    /// # AST Rewrite for Variant Constructors
+    ///
+    /// The parser produces `Call(Field(Var("Type"), "Variant"), args)` for
+    /// `Type.Variant(args)` since it cannot distinguish a method/function
+    /// call from a variant constructor without type information.
+    ///
+    /// This method detects when the callee is `Field(Var(type_name), variant)`
+    /// and `type_name` resolves to a sum type with that variant. When found,
+    /// it rewrites the entire `Call` expression to `Variant(qualified_type,
+    /// variant, args)` and delegates to the `variant` method.
+    ///
+    /// For example, `Circle.Circle(3.14)` is parsed as:
+    /// ```text
+    /// Call(Field(Var("Circle"), "Circle"), [3.14])
+    /// ```
+    /// and rewritten to:
+    /// ```text
+    /// Variant("ModulePath.Circle", "Circle", [3.14])
+    /// ```
+    ///
+    /// Note: Zero-arity variants are handled by `field` directly since they
+    /// do not appear in call position.
+    fn call_or_variant(
+        &mut self,
+        expr_id: ExprId,
+        callee_id: ExprId,
+        args: &SmallVec<[ExprId; 4]>,
+        span: Span,
+    ) -> Ty {
+        // Check if callee is `Field(Var(ty_name), var_name)`
+        let callee_expr = self.ast.get_expr(callee_id).cloned();
+        let variant_info = callee_expr.and_then(|e| match e {
+            Expr::Field(base_id, field) => {
+                self.ast.get_expr(base_id).and_then(|base| match base {
+                    Expr::Var(ty_name) => Some((ty_name.clone(), field)),
+                    _ => None,
+                })
+            }
+            _ => None,
+        });
+
+        // Try to resolve as variant constructor
+        let resolved = variant_info.and_then(|(ty_name, var_name)| {
+            let var_id = self.env.intern(&var_name);
+            self.resolve_type_name(&ty_name)
+                .and_then(|(type_id, qname)| {
+                    self.registry
+                        .lookup_variant(type_id, var_id)
+                        .filter(|v| v.arity > 0)
+                        .map(|_| (qname.into_owned(), var_name))
+                })
+        });
+
+        match resolved {
+            Some((qname, var_name)) => {
+                // Rewrite AST to Variant expression
+                self.ast.set_expr(
+                    expr_id,
+                    Expr::Variant(
+                        qname.clone(),
+                        var_name.clone(),
+                        args.clone(),
+                    ),
+                );
+                // Delegate to variant method
+                self.variant(expr_id, &qname, &var_name, args, span)
+            }
+            None => self.call(callee_id, args, span),
+        }
+    }
+
     /// Infer type of a function call expression.
     ///
     /// Infers callee and argument types, then adds a `Callable` constraint.
@@ -2139,6 +2237,85 @@ impl InferCtx<'_> {
                     Ty::Named(type_id, type_args)
                 }
                 _ => Ty::Error,
+            }
+        }
+    }
+
+    /// Get a function type for a non-zero-arity variant constructor.
+    ///
+    /// Returns `(PayloadTypes) -> ResultType` where `ResultType` is the sum type.
+    /// Used when `Type.Variant` is accessed but not immediately called (e.g.,
+    /// passed as a function value or used in a call expression).
+    fn variant_ctor_fn_type(
+        &mut self,
+        type_id: TypeId,
+        ty_name: &str,
+        var_name: &str,
+        span: Span,
+    ) -> Ty {
+        let var_id = self.env.intern(var_name);
+        let var_def = self.registry.lookup_variant(type_id, var_id);
+
+        match var_def {
+            None => {
+                self.error(TypeError::UnknownType(
+                    format!("{ty_name}.{var_name}"),
+                    span,
+                ));
+                Ty::Error
+            }
+            Some(vd) => {
+                // Build result type with fresh type args
+                let (result_ty, type_arg_map) =
+                    self.sum_type_with_fresh_args(type_id);
+
+                // Build parameter types by substituting type params
+                let param_tys: Vec<Ty> = vd
+                    .payloads
+                    .iter()
+                    .map(|&te_id| self.ast_type_to_ty(te_id, &type_arg_map))
+                    .collect();
+
+                Ty::Fn(param_tys, Box::new(result_ty))
+            }
+        }
+    }
+
+    /// Create a sum type with fresh type arguments, returning the type and a
+    /// mapping from type param `StringId` to `Ty` for substitution.
+    fn sum_type_with_fresh_args(
+        &mut self,
+        type_id: TypeId,
+    ) -> (Ty, HashMap<StringId, Ty>) {
+        // Handle builtin types
+        if type_id == TypeId::OPTION {
+            let inner = self.fresh();
+            let t_id = self.env.intern("T");
+            let map = std::iter::once((t_id, inner.clone())).collect();
+            (Ty::Option(Box::new(inner)), map)
+        } else if type_id == TypeId::RESULT {
+            let ok = self.fresh();
+            let err = self.fresh();
+            let ok_id = self.env.intern("T");
+            let err_id = self.env.intern("E");
+            let map = [(ok_id, ok.clone()), (err_id, err.clone())]
+                .into_iter()
+                .collect();
+            (Ty::Result(Box::new(ok), Box::new(err)), map)
+        } else {
+            // User-defined sum type
+            match self.registry.get_def(type_id) {
+                Some(TypeDef::Sum { type_params, .. }) => {
+                    let type_args: Vec<Ty> =
+                        type_params.iter().map(|_| self.fresh()).collect();
+                    let map: HashMap<_, _> = type_params
+                        .iter()
+                        .zip(type_args.iter())
+                        .map(|(&param_id, ty)| (param_id, ty.clone()))
+                        .collect();
+                    (Ty::Named(type_id, type_args), map)
+                }
+                _ => (Ty::Error, HashMap::new()),
             }
         }
     }
