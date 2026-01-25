@@ -1,0 +1,109 @@
+; Import types tests
+;
+; Tests that IMPORT M.{ MyType } brings type names into scope for use
+; in type annotations (LET bindings).
+
+; All imports at top
+IMPORT Shapes.{ Circle }
+IMPORT Shapes.{ }  ; brings `Display` class instance into scope
+IMPORT Units.{ Meters, Feet }
+IMPORT Payload.{ Data }
+IMPORT Geometry.{ Shape AS S }
+IMPORT Colors.{ ... }
+IMPORT Multi.{ A, B, C }
+IMPORT Generic.{ Box }
+
+; ============ Named import of TYPE ============
+
+MODULE Shapes {
+  +TYPE Circle = Circle(Float)
+
+  CLASS Display FOR Circle {
+    FUN display(c: Circle) -> String {
+      MATCH c {
+        Circle.Circle(r) => { "Circle(r={r})" }
+      }
+    }
+  }
+}
+
+; Use imported type name in annotation
+LET c1: Circle = Shapes.Circle.Circle(1.5)
+WRITE Display:display(c1)
+
+; ============ Named import of NEWTYPE ============
+
+MODULE Units {
+  +NEWTYPE Meters = Float
+  +NEWTYPE Feet = Float
+
+  +FUN to-feet(m: Meters) -> Feet {
+    m * 3.28084
+  }
+}
+
+; Use imported newtype in annotations
+LET dist: Meters = 5.0
+LET converted: Feet = Units.to-feet(dist)
+WRITE converted
+
+; ============ Named import of UNION ============
+
+MODULE Payload {
+  +UNION Data = Int | String
+}
+
+; Use imported union in annotation
+LET d1: Data = 42
+LET d2: Data = "hello"
+WRITE d1
+WRITE d2
+
+; ============ Aliased import ============
+
+MODULE Geometry {
+  +TYPE Shape = Rect(Float, Float) | Circle(Float)
+}
+
+; Use alias in annotation
+LET shape: S = Geometry.Shape.Rect(10.0, 20.0)
+WRITE shape
+
+; ============ Wildcard import brings types ============
+
+MODULE Colors {
+  +NEWTYPE RGB = (Int, Int, Int)
+  +TYPE Color = Red | Green | Blue | Custom(RGB)
+}
+
+; Types from wildcard import
+LET rgb: RGB = (255, 128, 0)
+LET color: Color = Colors.Color.Custom(rgb)
+WRITE color
+
+; ============ Multiple types from same module ============
+
+MODULE Multi {
+  +NEWTYPE A = Int
+  +NEWTYPE B = String
+  +NEWTYPE C = Bool
+}
+
+LET a: A = 1
+LET b: B = "two"
+LET c: C = TRUE
+WRITE a
+WRITE b
+WRITE c
+
+; ============ Import parameterized type ============
+
+MODULE Generic {
+  +TYPE Box[T] = Full(T) | Empty
+}
+
+; Use imported parameterized type
+LET box1: Box[Int] = Generic.Box.Full(42)
+LET box2: Box[String] = Generic.Box.Empty
+WRITE box1
+WRITE box2

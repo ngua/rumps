@@ -1,0 +1,15 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Import types tests\n;\n; Tests that IMPORT M.{ MyType } brings type names into scope for use\n; in type annotations (LET bindings).\n\n; All imports at top\nIMPORT Shapes.{ Circle }\nIMPORT Shapes.{ }\nIMPORT Units.{ Meters, Feet }\nIMPORT Payload.{ Data }\nIMPORT Geometry.{ Shape AS S }\nIMPORT Colors.{ ... }\nIMPORT Multi.{ A, B, C }\nIMPORT Generic.{ Box }\n\n; ============ Named import of TYPE ============\n\nMODULE Shapes {\n  +TYPE Circle = Circle(Float)\n\n  CLASS Display FOR Circle {\n    FUN display(c: Circle) -> String {\n      MATCH c {\n        Circle.Circle(r) => { \"Circle(r={r})\" }\n      }\n    }\n  }\n}\n\n; Use imported type name in annotation\nLET c1: Circle = Shapes.Circle.Circle(1.5)\nWRITE Display:display(c1)\n\n; ============ Named import of NEWTYPE ============\n\nMODULE Units {\n  +NEWTYPE Meters = Float\n  +NEWTYPE Feet = Float\n\n  +FUN to-feet(m: Meters) -> Feet {\n    m * 3.28084\n  }\n}\n\n; Use imported newtype in annotations\nLET dist: Meters = 5.0\nLET converted: Feet = Units.to-feet(dist)\nWRITE converted\n\n; ============ Named import of UNION ============\n\nMODULE Payload {\n  +UNION Data = Int | String\n}\n\n; Use imported union in annotation\nLET d1: Data = 42\nLET d2: Data = \"hello\"\nWRITE d1\nWRITE d2\n\n; ============ Aliased import ============\n\nMODULE Geometry {\n  +TYPE Shape = Rect(Float, Float) | Circle(Float)\n}\n\n; Use alias in annotation\nLET shape: S = Geometry.Shape.Rect(10.0, 20.0)\nWRITE shape\n\n; ============ Wildcard import brings types ============\n\nMODULE Colors {\n  +NEWTYPE RGB = (Int, Int, Int)\n  +TYPE Color = Red | Green | Blue | Custom(RGB)\n}\n\n; Types from wildcard import\nLET rgb: RGB = (255, 128, 0)\nLET color: Color = Colors.Color.Custom(rgb)\nWRITE color\n\n; ============ Multiple types from same module ============\n\nMODULE Multi {\n  +NEWTYPE A = Int\n  +NEWTYPE B = String\n  +NEWTYPE C = Bool\n}\n\nLET a: A = 1\nLET b: B = \"two\"\nLET c: C = TRUE\nWRITE a\nWRITE b\nWRITE c\n\n; ============ Import parameterized type ============\n\nMODULE Generic {\n  +TYPE Box[T] = Full(T) | Empty\n}\n\n; Use imported parameterized type\nLET box1: Box[Int] = Generic.Box.Full(42)\nLET box2: Box[String] = Generic.Box.Empty\nWRITE box1\nWRITE box2\n"
+---
+"Circle(r=1.5)"
+16.4042
+42
+"hello"
+Geometry.Shape.Rect(10.0, 20.0)
+Colors.Color.Custom((255, 128, 0))
+1
+"two"
+TRUE
+Generic.Box.Full(42)
+Generic.Box.Empty
