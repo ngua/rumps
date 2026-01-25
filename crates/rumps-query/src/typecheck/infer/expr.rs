@@ -7,7 +7,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 use indexmap::IndexMap;
-use smallvec::SmallVec;
+use smallvec::{smallvec, SmallVec};
 
 use super::{Constraint, InferCtx};
 use crate::ast::{
@@ -87,7 +87,7 @@ impl InferCtx<'_> {
             Expr::MapLit(entries) => self.map_lit(entries, span),
 
             // Field access: obj.field
-            Expr::Field(base, field) => self.field(*base, field, span),
+            Expr::Field(base, field) => self.field(id, *base, field, span),
 
             // Optional field access: obj?.field
             Expr::OptionalField(base, field) => {
@@ -143,7 +143,7 @@ impl InferCtx<'_> {
 
             // Variant constructors
             Expr::Variant(ty_name, var_name, args) => {
-                self.variant(ty_name, var_name, args, span)
+                self.variant(id, ty_name, var_name, args, span)
             }
 
             // Postfix operators: `!`
@@ -1194,9 +1194,55 @@ impl InferCtx<'_> {
     /// (`Ty::Named` with `TypeDef::Struct`). For type variables, we cannot
     /// yet infer the field type without row polymorphism, so we create a
     /// structural object constraint.
-    fn field(&mut self, base_id: ExprId, field: &str, span: Span) -> Ty {
-        let base_ty = self.expr(base_id);
-        self.field_type(&base_ty, field, span)
+    fn field(
+        &mut self,
+        expr_id: ExprId,
+        base_id: ExprId,
+        field: &str,
+        span: Span,
+    ) -> Ty {
+        // Check for zero-arity variant: `Type.Variant` where Type is in scope
+        // via module-aware resolution.
+        //
+        // Extract type name first to avoid borrow issues.
+        let ty_name_opt = self.ast.get_expr(base_id).and_then(|e| match e {
+            Expr::Var(name) => Some(name.clone()),
+            _ => None,
+        });
+
+        // Try to resolve as a type with a zero-arity variant
+        let zero_arity_variant = ty_name_opt.and_then(|ty_name| {
+            let field_id = self.env.intern(field);
+            self.resolve_type_name(&ty_name).and_then(
+                |(type_id, resolved_name)| {
+                    self.registry
+                        .lookup_variant(type_id, field_id)
+                        .filter(|v| v.arity == 0)
+                        .map(|_| (type_id, resolved_name.into_owned()))
+                },
+            )
+        });
+
+        match zero_arity_variant {
+            Some((type_id, resolved_name)) => {
+                // Rewrite AST to Variant expression
+                self.ast.set_expr(
+                    expr_id,
+                    Expr::Variant(
+                        resolved_name,
+                        field.to_string(),
+                        smallvec![],
+                    ),
+                );
+                // Return the variant type
+                self.variant_type_for_nullary(type_id)
+            }
+            None => {
+                // Regular field access
+                let base_ty = self.expr(base_id);
+                self.field_type(&base_ty, field, span)
+            }
+        }
     }
 
     /// Infer type of optional field access: `base?.field`.
@@ -1928,6 +1974,7 @@ impl InferCtx<'_> {
     /// Infer type of a variant constructor: `Type.Variant(args)`.
     fn variant(
         &mut self,
+        expr_id: ExprId,
         ty_name: &str,
         var_name: &str,
         args: &SmallVec<[ExprId; 4]>,
@@ -1935,19 +1982,11 @@ impl InferCtx<'_> {
     ) -> Ty {
         let arg_tys: Vec<Ty> = args.iter().map(|id| self.expr(*id)).collect();
 
-        // Look up type and variant
+        // Resolve type name using module-aware lookup
         let var_name_id = self.env.intern(var_name);
-        let lookup = self
-            .env
-            .lookup_str(ty_name)
-            .and_then(|id| self.registry.lookup(id))
-            .and_then(|type_id| {
-                self.registry
-                    .lookup_variant(type_id, var_name_id)
-                    .map(|var_def| (type_id, var_def))
-            });
+        let resolved = self.resolve_type_name(ty_name);
 
-        match lookup {
+        match resolved {
             None => {
                 self.error(TypeError::UnknownType(
                     format!("{ty_name}.{var_name}"),
@@ -1955,77 +1994,151 @@ impl InferCtx<'_> {
                 ));
                 Ty::Error
             }
-            Some((type_id, var_def)) => {
-                if var_def.arity as usize != arg_tys.len() {
-                    self.error(TypeError::ArityMismatch {
-                        expected: var_def.arity as usize,
-                        got: arg_tys.len(),
-                        span,
-                    });
+            Some((type_id, resolved_name)) => {
+                // Convert to owned for rewrite and error messages
+                let qname = resolved_name.into_owned();
+
+                // Rewrite AST if name was resolved differently
+                if qname != ty_name {
+                    self.ast.set_expr(
+                        expr_id,
+                        Expr::Variant(
+                            qname.clone(),
+                            var_name.to_string(),
+                            args.clone(),
+                        ),
+                    );
                 }
 
-                if type_id == TypeId::OPTION {
-                    let inner = arg_tys
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| self.fresh());
-                    Ty::Option(Box::new(inner))
-                } else if type_id == TypeId::RESULT {
-                    match var_def.idx {
-                        0 => {
-                            let ok = arg_tys
-                                .first()
-                                .cloned()
-                                .unwrap_or_else(|| self.fresh());
-                            Ty::Result(Box::new(ok), Box::new(self.fresh()))
-                        }
-                        1 => {
-                            let err = arg_tys
-                                .first()
-                                .cloned()
-                                .unwrap_or_else(|| self.fresh());
-                            Ty::Result(Box::new(self.fresh()), Box::new(err))
-                        }
-                        _ => Ty::Error,
+                // Look up variant in resolved type
+                let lookup = self
+                    .registry
+                    .lookup_variant(type_id, var_name_id)
+                    .map(|var_def| (type_id, var_def));
+
+                match lookup {
+                    None => {
+                        self.error(TypeError::UnknownType(
+                            format!("{qname}.{var_name}"),
+                            span,
+                        ));
+                        Ty::Error
                     }
-                } else if type_id == TypeId::ORDERING {
-                    // Ordering has no type parameters; all variants are nullary
-                    Ty::Ordering
-                } else {
-                    match self.registry.get_def(type_id) {
-                        Some(TypeDef::Sum { type_params, .. }) => {
-                            let type_args: Vec<Ty> = type_params
-                                .iter()
-                                .map(|_| self.fresh())
-                                .collect();
-                            let subst: HashMap<crate::intern::StringId, Ty> =
-                                type_params
-                                    .iter()
-                                    .zip(type_args.iter())
-                                    .map(|(p, a)| (*p, a.clone()))
-                                    .collect();
-
-                            var_def
-                                .payloads
-                                .iter()
-                                .zip(arg_tys.iter())
-                                .for_each(|(expected_id, got)| {
-                                    let expected = self
-                                        .ast_type_to_ty(*expected_id, &subst);
-                                    self.unify(expected, got.clone(), span);
-                                });
-
-                            Ty::Named(type_id, type_args)
-                        }
-                        _ => {
-                            self.error(TypeError::UnknownType(
-                                format!("{ty_name}.{var_name}"),
+                    Some((type_id, var_def)) => {
+                        if var_def.arity as usize != arg_tys.len() {
+                            self.error(TypeError::ArityMismatch {
+                                expected: var_def.arity as usize,
+                                got: arg_tys.len(),
                                 span,
-                            ));
-                            Ty::Error
+                            });
+                        }
+
+                        if type_id == TypeId::OPTION {
+                            let inner = arg_tys
+                                .first()
+                                .cloned()
+                                .unwrap_or_else(|| self.fresh());
+                            Ty::Option(Box::new(inner))
+                        } else if type_id == TypeId::RESULT {
+                            match var_def.idx {
+                                0 => {
+                                    let ok = arg_tys
+                                        .first()
+                                        .cloned()
+                                        .unwrap_or_else(|| self.fresh());
+                                    Ty::Result(
+                                        Box::new(ok),
+                                        Box::new(self.fresh()),
+                                    )
+                                }
+                                1 => {
+                                    let err = arg_tys
+                                        .first()
+                                        .cloned()
+                                        .unwrap_or_else(|| self.fresh());
+                                    Ty::Result(
+                                        Box::new(self.fresh()),
+                                        Box::new(err),
+                                    )
+                                }
+                                _ => Ty::Error,
+                            }
+                        } else if type_id == TypeId::ORDERING {
+                            // Ordering has no type parameters; all variants
+                            // are nullary
+                            Ty::Ordering
+                        } else {
+                            match self.registry.get_def(type_id) {
+                                Some(TypeDef::Sum { type_params, .. }) => {
+                                    let type_args: Vec<Ty> = type_params
+                                        .iter()
+                                        .map(|_| self.fresh())
+                                        .collect();
+                                    let subst: HashMap<
+                                        crate::intern::StringId,
+                                        Ty,
+                                    > = type_params
+                                        .iter()
+                                        .zip(type_args.iter())
+                                        .map(|(p, a)| (*p, a.clone()))
+                                        .collect();
+
+                                    var_def
+                                        .payloads
+                                        .iter()
+                                        .zip(arg_tys.iter())
+                                        .for_each(|(expected_id, got)| {
+                                            let expected = self.ast_type_to_ty(
+                                                *expected_id,
+                                                &subst,
+                                            );
+                                            self.unify(
+                                                expected,
+                                                got.clone(),
+                                                span,
+                                            );
+                                        });
+
+                                    Ty::Named(type_id, type_args)
+                                }
+                                _ => {
+                                    self.error(TypeError::UnknownType(
+                                        format!("{ty_name}.{var_name}"),
+                                        span,
+                                    ));
+                                    Ty::Error
+                                }
+                            }
                         }
                     }
                 }
+            }
+        }
+    }
+
+    /// Get the type for a nullary (zero-arity) variant constructor.
+    ///
+    /// Used when resolving `Type.Variant` access for variants with no payload.
+    /// Returns the appropriate type for builtin types (`Option`, `Result`,
+    /// `Ordering`) or a generic `Named` type with fresh type variables.
+    fn variant_type_for_nullary(&mut self, type_id: TypeId) -> Ty {
+        if type_id == TypeId::OPTION {
+            // Option.None has a fresh inner type
+            Ty::Option(Box::new(self.fresh()))
+        } else if type_id == TypeId::RESULT {
+            // Nullary Result variants are not common; use fresh vars
+            Ty::Result(Box::new(self.fresh()), Box::new(self.fresh()))
+        } else if type_id == TypeId::ORDERING {
+            Ty::Ordering
+        } else {
+            // User-defined sum type: create fresh type args
+            match self.registry.get_def(type_id) {
+                Some(TypeDef::Sum { type_params, .. }) => {
+                    let type_args: Vec<Ty> =
+                        type_params.iter().map(|_| self.fresh()).collect();
+                    Ty::Named(type_id, type_args)
+                }
+                _ => Ty::Error,
             }
         }
     }
