@@ -123,8 +123,27 @@ impl InferCtx<'_> {
                 }
 
                 MatchPattern::Variant(ty_name, var_name, sub_pats) => {
+                    // Resolve type name using module-aware lookup; extract owned
+                    // string only if it differs (avoids allocation in common case)
+                    let qname = self
+                        .resolve_type_name(ty_name)
+                        .map(|(_, cow)| cow.into_owned())
+                        .filter(|q| q != ty_name);
+
+                    // Rewrite AST if name was resolved differently
+                    if let Some(q) = &qname {
+                        self.ast.set_pattern(
+                            pat_id,
+                            MatchPattern::Variant(
+                                q.clone(),
+                                var_name.clone(),
+                                sub_pats.clone(),
+                            ),
+                        );
+                    }
+
                     let payload_tys = self.variant_payload_types(
-                        ty_name,
+                        qname.as_deref().unwrap_or(ty_name),
                         var_name,
                         scrutinee_ty,
                         span,

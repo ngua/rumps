@@ -322,6 +322,13 @@ impl Ast {
     ) -> Option<&MatchPattern> {
         self.patterns.get(id.idx())
     }
+
+    /// Replace a match pattern in place (for name resolution).
+    pub(crate) fn set_pattern(&mut self, id: MatchPatternId, p: MatchPattern) {
+        if let Some(slot) = self.patterns.get_mut(id.idx()) {
+            *slot = p
+        }
+    }
 }
 
 /// A type expression in the AST (for annotations).
