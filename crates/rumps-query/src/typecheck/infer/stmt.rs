@@ -335,6 +335,15 @@ impl InferCtx<'_> {
                     .for_each(|(name, scheme)| {
                         self.env.bind(&name, scheme);
                     });
+
+                // Import public types
+                self.env
+                    .get_public_user_module_types(&mod_path)
+                    .into_iter()
+                    .filter(|(name, _)| !exclusions.contains(name.as_str()))
+                    .for_each(|(local, qname)| {
+                        self.env.import_type(&local, &qname);
+                    });
             }
         }
 
@@ -375,13 +384,32 @@ impl InferCtx<'_> {
                         });
                     }
                     (None, None) => {
-                        self.error(TypeError::Custom {
-                            msg: format!(
-                                "member `{}` not found in module `{}`",
-                                name, mod_path
-                            ),
-                            span,
-                        });
+                        // Check if it's a type
+                        let qname = format!("{}.{}", mod_path, name);
+                        match self.env.lookup_user_module_type_vis(&qname) {
+                            Some(Visibility::Public) => {
+                                // Register as imported type
+                                self.env.import_type(bind_name, &qname);
+                            }
+                            Some(Visibility::Private) => {
+                                self.error(TypeError::Custom {
+                                    msg: format!(
+                                        "type `{}` is private in module `{}`",
+                                        name, mod_path
+                                    ),
+                                    span,
+                                });
+                            }
+                            None => {
+                                self.error(TypeError::Custom {
+                                    msg: format!(
+                                        "member `{}` not found in module `{}`",
+                                        name, mod_path
+                                    ),
+                                    span,
+                                });
+                            }
+                        }
                     }
                 }
             }

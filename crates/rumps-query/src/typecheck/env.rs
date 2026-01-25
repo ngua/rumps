@@ -157,6 +157,27 @@ impl TypeEnv {
             .unwrap_or_default()
     }
 
+    /// Get all public types in a user module.
+    ///
+    /// Returns `(local_name, qualified_name)` pairs for direct children only.
+    pub(crate) fn get_public_user_module_types(
+        &self,
+        mod_path: &str,
+    ) -> Vec<(String, String)> {
+        let prefix = format!("{}.", mod_path);
+        self.user_module_type_vis
+            .iter()
+            .filter_map(|(qname, vis)| {
+                qname
+                    .strip_prefix(&prefix)
+                    .filter(|local| {
+                        !local.contains('.') && *vis == Visibility::Public
+                    })
+                    .map(|local| (local.to_string(), qname.clone()))
+            })
+            .collect()
+    }
+
     /// Register an imported type alias.
     ///
     /// Maps a local (unqualified) name to its qualified name. Used when
