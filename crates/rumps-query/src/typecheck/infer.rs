@@ -230,6 +230,11 @@ pub(crate) struct InferCtx<'a> {
     /// definitions. Enables resolution of bare associated type references
     /// like `:Index` to the concrete types defined in the current instance.
     pub(super) class_context: Option<ClassContext>,
+    /// Current module path during typechecking (e.g., `"Outer.Inner"`).
+    ///
+    /// `None` when at top-level; `Some(path)` inside a module.
+    /// Used to resolve unqualified type names within modules.
+    pub(super) current_module: Option<String>,
 }
 
 impl<'a> InferCtx<'a> {
@@ -270,6 +275,7 @@ impl<'a> InferCtx<'a> {
             in_transaction: None,
             next_txn_id: 0,
             class_context: None,
+            current_module: None,
         }
     }
 

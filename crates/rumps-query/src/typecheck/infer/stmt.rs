@@ -148,6 +148,9 @@ impl InferCtx<'_> {
         // `Geometry.pi` from within `Geometry.area` resolve correctly.
         self.env.register_user_module(mod_path);
 
+        // Save and set current module for unqualified type resolution
+        let prev_module = self.current_module.replace(mod_path.to_string());
+
         // Typecheck each statement and validate it's an allowed item type.
         // We also collect type information for registration.
         body.iter().for_each(|&id| {
@@ -255,6 +258,9 @@ impl InferCtx<'_> {
                 None => {}
             }
         });
+
+        // Restore previous module
+        self.current_module = prev_module;
     }
 
     /// Process an import statement.

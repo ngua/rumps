@@ -3,6 +3,7 @@
 //! Contains methods for converting between AST type expressions, runtime type
 //! representations, and static `Ty` types.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use super::{Constraint, InferCtx};
@@ -773,5 +774,51 @@ impl InferCtx<'_> {
             }
             _ => self.field_type(base_ty, field, span),
         }
+    }
+
+    /// Resolve a type name, returning `(TypeId, qualified_name)` if found.
+    ///
+    /// Resolution order:
+    /// 1. Check imported types first
+    /// 2. Try exact name (already qualified or top-level)
+    /// 3. If inside a module, try prefixing with current module, then parent
+    pub(super) fn resolve_type_name<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> Option<(TypeId, Cow<'a, str>)> {
+        // 1. Check imported types
+        let effective: Cow<str> = self
+            .env
+            .lookup_imported_type(name)
+            .map(Cow::Borrowed)
+            .unwrap_or(Cow::Borrowed(name));
+
+        // 2. Try exact lookup
+        self.try_lookup_type(&effective)
+            .map(|id| (id, effective.clone()))
+            .or_else(|| {
+                // 3. Try module prefixes (only if not already qualified)
+                if effective.contains('.') {
+                    None
+                } else {
+                    self.current_module.as_ref().and_then(|mod_path| {
+                        std::iter::successors(Some(mod_path.as_str()), |p| {
+                            p.rsplit_once('.').map(|(parent, _)| parent)
+                        })
+                        .find_map(|prefix| {
+                            let qname = format!("{}.{}", prefix, effective);
+                            self.try_lookup_type(&qname)
+                                .map(|id| (id, Cow::Owned(qname)))
+                        })
+                    })
+                }
+            })
+    }
+
+    /// Try to look up a type by exact name.
+    fn try_lookup_type(&self, name: &str) -> Option<TypeId> {
+        self.env
+            .lookup_str(name)
+            .and_then(|id| self.registry.lookup(id))
     }
 }

@@ -139,6 +139,9 @@ impl InferCtx<'_> {
         // Register the module name first
         self.env.register_user_module(mod_path);
 
+        // Save and set current module for unqualified type resolution
+        let prev_module = self.current_module.replace(mod_path.to_string());
+
         // Hoist module members
         body.iter().for_each(|&id| {
             let item_span = self.ast.stmt_span(id).unwrap_or(span);
@@ -223,6 +226,9 @@ impl InferCtx<'_> {
                 _ => {}
             }
         });
+
+        // Restore previous module
+        self.current_module = prev_module;
     }
 
     /// Hoist a class instance declaration.

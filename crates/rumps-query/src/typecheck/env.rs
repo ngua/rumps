@@ -44,6 +44,11 @@ pub(crate) struct TypeEnv {
     ///
     /// Used to enforce visibility for `TYPE`, `NEWTYPE`, `UNION` inside modules.
     user_module_type_vis: HashMap<String, Visibility>,
+    /// Imported type aliases: unqualified name -> qualified name.
+    ///
+    /// When `IMPORT M.{ MyType }` is processed, maps `"MyType"` -> `"M.MyType"`.
+    /// Checked first during type name resolution.
+    imported_types: HashMap<String, String>,
 }
 
 impl TypeEnv {
@@ -58,6 +63,7 @@ impl TypeEnv {
             user_modules: HashSet::new(),
             user_module_members: HashMap::new(),
             user_module_type_vis: HashMap::new(),
+            imported_types: HashMap::new(),
         }
     }
 
@@ -149,6 +155,22 @@ impl TypeEnv {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// Register an imported type alias.
+    ///
+    /// Maps a local (unqualified) name to its qualified name. Used when
+    /// processing `IMPORT M.{ MyType }`.
+    pub(crate) fn import_type(&mut self, local: &str, qualified: &str) {
+        self.imported_types
+            .insert(local.to_string(), qualified.to_string());
+    }
+
+    /// Look up an imported type by its local name.
+    ///
+    /// Returns the qualified name if this type was imported.
+    pub(crate) fn lookup_imported_type(&self, local: &str) -> Option<&str> {
+        self.imported_types.get(local).map(String::as_str)
     }
 
     /// Push a new scope (e.g., entering a function body or block).

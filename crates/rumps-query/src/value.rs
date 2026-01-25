@@ -1481,6 +1481,24 @@ impl TypeRegistry {
         })
     }
 
+    /// Get the registered name for a type by reverse lookup in `by_name`.
+    ///
+    /// Returns the name used to register the type, which may differ from
+    /// the display name returned by `type_name()`.
+    ///
+    /// Note: This uses a linear scan over registered types. If this becomes
+    /// a hot path, consider adding a reverse lookup cache (`TypeId` -> `StringId`).
+    pub(crate) fn name<'a>(
+        &self,
+        id: TypeId,
+        arena: &'a ValueArena,
+    ) -> Option<&'a str> {
+        self.by_name
+            .iter()
+            .find(|(_, &tid)| tid == id)
+            .and_then(|(name_id, _)| arena.get_str(*name_id))
+    }
+
     /// Register all built-in types (called from `new`).
     ///
     /// Registers in order: Bool, Int, Float, String, Array, Object, Option, Result, Char,
