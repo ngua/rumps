@@ -56,10 +56,10 @@ LET evens = FOREVER { i: 0, acc: [] } (state, cont) => {
 WRITE evens
 
 ; Using @ORDER to iterate through subscripts
-@SET data{1} = "one"
-@SET data{2} = "two"
-@SET data{3} = "three"
-@SET data{4} = "four"
+@SET data{1} "one"
+@SET data{2} "two"
+@SET data{3} "three"
+@SET data{4} "four"
 
 ; Collect keys using @ORDER and FOREVER
 LET keys = FOREVER { key: @ORDER data{}, acc: [] } (state, cont) => {

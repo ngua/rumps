@@ -3,10 +3,10 @@
 ; Useful for @QUERY iteration where keys are returned as arrays
 
 ; Set up test data
-@SET data{1, "a"} = "first"
-@SET data{1, "b"} = "second"
-@SET data{2, "x"} = "third"
-@SET data{2, "y"} = "fourth"
+@SET data{1, "a"} "first"
+@SET data{1, "b"} "second"
+@SET data{2, "x"} "third"
+@SET data{2, "y"} "fourth"
 
 ; Regular subscripts (existing behavior)
 LET v1 = @GET data{1, "a"}
@@ -34,12 +34,12 @@ WRITE v3
 
 ; Spread with @SET
 LET set-key: Array[Subscript] = [3, "z"]
-@SET data{...set-key} = "spread-set"
+@SET data{...set-key} "spread-set"
 LET v4 = @GET data{3, "z"}
 WRITE v4
 
 ; Spread with @KILL
-@SET data{99, "del"} = "to-delete"
+@SET data{99, "del"} "to-delete"
 LET kill-key: Array[Subscript] = [99, "del"]
 @KILL data{...kill-key}
 LET deleted = @GET data{99, "del"}
@@ -51,9 +51,9 @@ LET status = @DATA data{...data-key}
 WRITE status
 
 ; Spread with @ORDER
-@SET items{1} = "one"
-@SET items{2} = "two"
-@SET items{10} = "ten"
+@SET items{1} "one"
+@SET items{2} "two"
+@SET items{10} "ten"
 LET prefix: Array[Subscript] = [1]
 LET next = @ORDER items{...prefix}
 WRITE next

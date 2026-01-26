@@ -4,4 +4,4 @@
 LET x: Ref = ^global{}
 
 ; This should fail: global writes require transaction
-@SET x = "should fail"
+@SET x "should fail"

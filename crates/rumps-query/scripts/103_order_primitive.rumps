@@ -3,15 +3,15 @@
 ; NOTE: Uses locals only; globals require TRANSACTION blocks
 
 ; Set up test data
-@SET items{1} = "one"
-@SET items{2} = "two"
-@SET items{10} = "ten"
-@SET items{"A"} = "alpha"
-@SET items{"B"} = "beta"
+@SET items{1} "one"
+@SET items{2} "two"
+@SET items{10} "ten"
+@SET items{"A"} "alpha"
+@SET items{"B"} "beta"
 
-@SET nested{1, "A"} = "nested 1A"
-@SET nested{1, "B"} = "nested 1B"
-@SET nested{2, "X"} = "nested 2X"
+@SET nested{1, "A"} "nested 1A"
+@SET nested{1, "B"} "nested 1B"
+@SET nested{2, "X"} "nested 2X"
 
 ; First subscript at root (no after value, use {} for root)
 LET first = @ORDER items{}
@@ -58,10 +58,10 @@ LET no-keys = @ORDER empty{}
 WRITE no-keys
 
 ; @ORDER with different subscript types
-@SET mixed{true} = "bool key"
-@SET mixed{42} = "int key"
-@SET mixed{3.14} = "float key"
-@SET mixed{"str"} = "string key"
+@SET mixed{true} "bool key"
+@SET mixed{42} "int key"
+@SET mixed{3.14} "float key"
+@SET mixed{"str"} "string key"
 
 ; Bool comes first, then numbers, then strings
 LET mixed-first = @ORDER mixed{}

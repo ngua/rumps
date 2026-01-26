@@ -8,8 +8,8 @@ LET sum = x + y
 WRITE sum
 
 ; @SET for B-tree locals (async, subscriptable)
-@SET z{} = 100
-@SET z{1, "ABC"} = 30
+@SET z{} 100
+@SET z{1, "ABC"} 30
 
 ; Comparison and branching
 IF sum > 25 {

@@ -4,4 +4,4 @@
 LET g = ^info{"test-key"}
 
 ; This should fail: global write requires transaction
-@SET g = "should fail"
+@SET g "should fail"

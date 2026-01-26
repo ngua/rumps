@@ -3,9 +3,9 @@
 ; NOTE: Uses locals only; globals require TRANSACTION blocks
 
 ; Set up single-level test data
-@SET items{1} = "one"
-@SET items{2} = "two"
-@SET items{10} = "ten"
+@SET items{1} "one"
+@SET items{2} "two"
+@SET items{10} "ten"
 
 ; First key path (no after position, use {} for root)
 LET first = @QUERY items{}
@@ -47,9 +47,9 @@ LET path2 = (@QUERY items{1})!
 WRITE path2
 
 ; Spread syntax to continue iteration
-@SET data{1} = "a"
-@SET data{2} = "b"
-@SET data{3} = "c"
+@SET data{1} "a"
+@SET data{2} "b"
+@SET data{3} "c"
 
 LET k1 = @QUERY data{} ?? []
 WRITE k1
@@ -63,9 +63,9 @@ WRITE k4
 ; === Nested data tests ===
 ; @QUERY should skip intermediate nodes (ancestors with no value)
 
-@SET patients{1, "age"} = 30
-@SET patients{1, "name"} = "Alice"
-@SET patients{2, "name"} = "Bob"
+@SET patients{1, "age"} 30
+@SET patients{1, "name"} "Alice"
+@SET patients{2, "name"} "Bob"
 
 ; First key should be [1, "age"], not [1]
 LET p1 = @QUERY patients{} ?? []
@@ -84,7 +84,7 @@ LET p4 = @QUERY patients{2, "name"}
 WRITE p4
 
 ; Deep nesting test
-@SET deep{1, 2, 3, "leaf"} = "value"
+@SET deep{1, 2, 3, "leaf"} "value"
 
 ; Should return [1, 2, 3, "leaf"], skipping [1], [1, 2], [1, 2, 3]
 LET d1 = @QUERY deep{} ?? []

@@ -1,9 +1,9 @@
 ; Test postfix operators on intrinsic expressions (@GET, @DATA, @ORDER, @QUERY)
 
 ; Setup test data
-@SET d{1} = "one"
-@SET d{2} = "two"
-@SET d{3} = "three"
+@SET d{1} "one"
+@SET d{2} "two"
+@SET d{3} "three"
 
 ; @GET with postfix ! (no parens needed)
 WRITE @GET d{1}! AS String
@@ -27,5 +27,5 @@ LET key = 2
 WRITE @GET d{key}! AS String
 
 ; Multiple postfix ops chained on @GET
-@SET arr{1} = 42
+@SET arr{1} 42
 WRITE (@GET arr{1}! AS Int) + 8

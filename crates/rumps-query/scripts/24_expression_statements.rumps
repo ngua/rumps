@@ -55,8 +55,8 @@ IF mode == "debug" {
 
 ; Block with @SET side effects
 {
-  @SET items{1} = "first"
-  @SET items{2} = "second"
+  @SET items{1} "first"
+  @SET items{2} "second"
 }
 
 WRITE @GET items{1}

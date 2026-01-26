@@ -573,7 +573,7 @@ pub(crate) enum Value {
     /// A database reference (local or global variable with subscripts).
     ///
     /// Created via `data{1, 2}` or `^global{key}` syntax.
-    /// Used with intrinsics: `@GET r`, `@SET r = value`, etc.
+    /// Used with intrinsics: `@GET r`, `@SET r value`, etc.
     ///
     /// - `bool`: `true` for global (`^var`), `false` for local
     /// - `StringId`: the variable name

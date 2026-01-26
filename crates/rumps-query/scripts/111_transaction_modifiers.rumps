@@ -22,63 +22,63 @@
 
 ; === ON CONFLICT ABORT (default) ===
 LET r1 = TRANSACTION {
-  @SET ^data{1} = "one"
+  @SET ^data{1} "one"
 } ON CONFLICT ABORT
 WRITE r1 IS Result.Ok(_)
 
 ; === ON CONFLICT OVERWRITE ===
 LET r2 = TRANSACTION {
-  @SET ^data{2} = "two"
+  @SET ^data{2} "two"
 } ON CONFLICT OVERWRITE
 WRITE r2 IS Result.Ok(_)
 
 ; === WITH TIMEOUT (milliseconds) ===
 LET r3 = TRANSACTION {
-  @SET ^data{3} = "three"
+  @SET ^data{3} "three"
 } WITH TIMEOUT 5000
 WRITE r3 IS Result.Ok(_)
 
 ; === WITH RETRIES n ===
 LET r4 = TRANSACTION {
-  @SET ^data{4} = "four"
+  @SET ^data{4} "four"
 } WITH RETRIES 3
 WRITE r4 IS Result.Ok(_)
 
 ; === WITH ISOLATION SNAPSHOT ===
 LET r5 = TRANSACTION {
-  @SET ^data{5} = "five"
+  @SET ^data{5} "five"
 } WITH ISOLATION SNAPSHOT
 WRITE r5 IS Result.Ok(_)
 
 ; === Combined modifiers ===
 LET r6 = TRANSACTION {
-  @SET ^data{6} = "six"
+  @SET ^data{6} "six"
 } ON CONFLICT OVERWRITE WITH TIMEOUT 5000 WITH RETRIES 3
 WRITE r6 IS Result.Ok(_)
 
 ; === All modifiers ===
 LET r7 = TRANSACTION {
-  @SET ^data{7} = "seven"
+  @SET ^data{7} "seven"
 } ON CONFLICT OVERWRITE WITH TIMEOUT 1000 WITH RETRIES 5 WITH ISOLATION SNAPSHOT
 WRITE r7 IS Result.Ok(_)
 
 ; === Timeout from expression ===
 LET timeout-ms = 2000
 LET r8 = TRANSACTION {
-  @SET ^data{8} = "eight"
+  @SET ^data{8} "eight"
 } WITH TIMEOUT timeout-ms
 WRITE r8 IS Result.Ok(_)
 
 ; === Case-insensitivity ===
 ; Contextual keywords are matched case-insensitively (like RUMPS keywords)
 LET r9 = TRANSACTION {
-  @SET ^data{9} = "nine"
+  @SET ^data{9} "nine"
 } on conflict abort with timeout 1000
 WRITE r9 IS Result.Ok(_)
 
 ; Mixed case also works
 LET r10 = TRANSACTION {
-  @SET ^data{10} = "ten"
+  @SET ^data{10} "ten"
 } On Conflict Overwrite With Retries 2
 WRITE r10 IS Result.Ok(_)
 
@@ -93,7 +93,7 @@ WRITE "{on} {conflict}"
 
 ; Can use these as variable names and still use modifiers
 LET r11 = TRANSACTION {
-  @SET ^data{11} = "{on}{conflict}"
+  @SET ^data{11} "{on}{conflict}"
 } WITH TIMEOUT timeout
 WRITE r11 IS Result.Ok(_)
 WRITE @GET ^data{11}
@@ -106,7 +106,7 @@ LET timed-out = TRANSACTION {
       next
     } ELSE {
       cont({
-        @SET ^d{next} = "a"
+        @SET ^d{next} "a"
         Time.sleep(10 * 10000)
         next + 1
       })

@@ -363,7 +363,7 @@ pub(crate) enum ExprKind {
     /// A database reference literal: `data{1, 2}` or `^global{key}`.
     ///
     /// Creates a first-class `Ref` value that can be stored or passed to
-    /// functions. Use with intrinsics: `@GET r`, `@SET r = value`.
+    /// functions. Use with intrinsics: `@GET r`, `@SET r value`.
     RefLit(DbRef),
 
     /// Placeholder for pipe operator: `.` in call arguments.

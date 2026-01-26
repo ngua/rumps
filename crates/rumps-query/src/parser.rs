@@ -461,8 +461,8 @@ impl Parser {
         Ok(cst::MatchPattern::Array(pats, rest))
     }
 
-    /// `SET name = expr` or `SET name(subs...) = expr`
-    /// `SET ^global = expr` or `SET ^global(subs...) = expr`
+    /// `SET name expr` or `SET name{subs...} expr`
+    /// `SET ^global expr` or `SET ^global{subs...} expr`
     fn set_stmt(
         stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
             + Clone
@@ -472,7 +472,6 @@ impl Parser {
 
         just(Token::Set)
             .ignore_then(Self::ref_expr(expr.clone()))
-            .then_ignore(just(Token::Assign))
             .then_ignore(Self::opt_newlines())
             .then(expr)
             .map_with_span(|(r, val), span| {
@@ -590,7 +589,7 @@ impl Parser {
             })
     }
 
-    /// `@SET target = value` as expression.
+    /// `@SET target value` as expression.
     ///
     /// B-tree assignment that evaluates to `Unit`.
     fn set_expr(
@@ -600,7 +599,6 @@ impl Parser {
     ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
         just(Token::Set)
             .ignore_then(Self::ref_expr(expr.clone()))
-            .then_ignore(just(Token::Assign))
             .then_ignore(Self::opt_newlines())
             .then(expr)
             .map_with_span(|(r, val), span| {

@@ -3,11 +3,11 @@
 ; enabling seamless piping of `@ORDER` results into `@GET` without coercions.
 
 ; Set up test data with mixed subscript types
-@SET data{1} = "one"
-@SET data{2} = "two"
-@SET data{3} = "three"
-@SET data{"a"} = "alpha"
-@SET data{"b"} = "beta"
+@SET data{1} "one"
+@SET data{2} "two"
+@SET data{3} "three"
+@SET data{"a"} "alpha"
+@SET data{"b"} "beta"
 
 ; Use @ORDER result directly as subscript (no READ coercion needed)
 LET first : Subscript = @ORDER data{}!
@@ -32,7 +32,7 @@ WRITE vals
 
 ; Explicit Subscript annotation works
 LET sub : Subscript = 42
-@SET x{sub} = "works"
+@SET x{sub} "works"
 WRITE @GET x{sub}!
 
 ; Function that takes Subscript parameter

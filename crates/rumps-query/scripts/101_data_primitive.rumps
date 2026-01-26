@@ -3,9 +3,9 @@
 
 ; === Setup: create test data ===
 
-@SET vars{1} = "value at 1"
-@SET vars{1, "A"} = "value at 1,A"
-@SET vars{2, "B", "C"} = "deep value"
+@SET vars{1} "value at 1"
+@SET vars{1, "A"} "value at 1,A"
+@SET vars{2, "B", "C"} "deep value"
 
 ; === @DATA on non-existent key ===
 

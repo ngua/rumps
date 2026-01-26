@@ -2,11 +2,11 @@
 ; Tests deletion of variables and subtrees
 
 ; Set up test data
-@SET items{1} = "one"
-@SET items{2} = "two"
-@SET items{3} = "three"
-@SET items{1, "a"} = "nested a"
-@SET items{1, "b"} = "nested b"
+@SET items{1} "one"
+@SET items{2} "two"
+@SET items{3} "three"
+@SET items{1, "a"} "nested a"
+@SET items{1, "b"} "nested b"
 
 ; Verify items exists
 LET v1 = @GET items{1}
@@ -39,7 +39,7 @@ WRITE v5
 ; Expected: three
 
 ; @KILL entire variable
-@SET temp{} = 999
+@SET temp{} 999
 LET before = @GET temp{}
 WRITE before
 ; Expected: 999

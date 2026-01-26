@@ -13,10 +13,10 @@ FUN get-or-default(r: Ref, default: Storable) -> Storable {
 }
 
 ; Set up some data
-@SET data{1, 2} = "nested"
-@SET data{42} = "found"
+@SET data{1, 2} "nested"
+@SET data{42} "found"
 TRANSACTION {
-  @SET ^info{"key"} = "global value"
+  @SET ^info{"key"} "global value"
 }
 
 ; Use refs with functions
@@ -37,7 +37,7 @@ WRITE refs
 LET keys = [1, 2]
 LET spread-ref = data{...keys}
 WRITE spread-ref
-@SET data{1, 2} = "via spread"
+@SET data{1, 2} "via spread"
 WRITE @GET spread-ref
 
 ; Function that returns a Ref
@@ -51,7 +51,7 @@ WRITE @GET returned
 
 ; @SET and @KILL with local Ref variable (no transaction needed)
 LET set-ref = data{100}
-@SET set-ref = "via ref"
+@SET set-ref "via ref"
 WRITE @GET set-ref
 
 ; KILL local ref via variable (no transaction needed)
@@ -62,7 +62,7 @@ WRITE @GET kill-ref ?? "killed"
 ; Global ref via variable (requires transaction)
 TRANSACTION {
   LET g-ref = ^info{"txn-key"}
-  @SET g-ref = "set via ref"
+  @SET g-ref "set via ref"
   WRITE @GET g-ref
   @KILL g-ref
   WRITE @GET g-ref ?? "global killed"

@@ -4,7 +4,7 @@
 ; Directly nested transaction
 LET r = TRANSACTION {
   TRANSACTION {
-    @SET ^data{1} = "inner"
+    @SET ^data{1} "inner"
   }
 }
 

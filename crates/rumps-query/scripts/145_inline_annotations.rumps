@@ -62,7 +62,7 @@ WRITE opt!: Int
 
 ; Setup a local db
 LET d = {}
-@SET d{"key"} = 123
+@SET d{"key"} 123
 
 ; @GET with annotation
 LET val = @GET d{"key"}: Option[Storable]

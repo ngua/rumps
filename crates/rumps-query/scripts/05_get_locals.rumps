@@ -2,11 +2,11 @@
 ; Tests retrieving values from local B-tree variables
 
 ; Set up test data
-@SET x{} = 42
-@SET items{1} = "first"
-@SET items{2} = "second"
-@SET patient{123, "name"} = "John"
-@SET patient{123, "age"} = 30
+@SET x{} 42
+@SET items{1} "first"
+@SET items{2} "second"
+@SET patient{123, "name"} "John"
+@SET patient{123, "age"} 30
 
 ; @GET simple local (use {} for root ref)
 LET val = @GET x{}
@@ -41,7 +41,7 @@ WRITE missing2
 ; Expected: Option.None
 
 ; @GET after overwrite
-@SET x{} = 100
+@SET x{} 100
 LET newval = @GET x{}
 WRITE newval
 ; Expected: 100
