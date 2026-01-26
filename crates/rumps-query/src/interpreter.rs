@@ -307,12 +307,94 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
     /// Run a program (a sequence of statements).
     ///
     /// Consumes and returns the interpreter, allowing continued use after execution.
-    pub(crate) async fn run(mut self, stmts: &[StmtId]) -> Result<Self> {
+    /// In interactive mode, executes all statements sequentially. In normal mode,
+    /// executes declarations then calls `main`.
+    pub(crate) async fn run(
+        mut self,
+        stmts: &[StmtId],
+        interactive: bool,
+    ) -> Result<Self> {
         // Pass 1: Hoist function and module declarations for forward references
         self.hoist_declarations(stmts).await?;
-        // Pass 2: Execute all statements
-        self.stmts(stmts).await?;
+        // Pass 2: Execute statements (mode-dependent)
+        if interactive {
+            self.stmts(stmts).await?
+        } else {
+            self.exec_declarations(stmts).await?;
+            self.call_main().await?
+        };
         Ok(self)
+    }
+
+    /// Execute declarations only (non-interactive mode).
+    ///
+    /// Executes `Let`, `Type`, `NewType`, `Union`, and `Import` statements.
+    /// Skips `Expr` (rejected by typechecker), `Fun`, `Module`, and `ClassInstance`
+    /// (already hoisted).
+    #[async_recursion]
+    async fn exec_declarations(&mut self, stmts: &[StmtId]) -> Result<()> {
+        match stmts.split_first() {
+            None => Ok(()),
+            Some((&head, tail)) => {
+                let span = self.ast.stmt_span(head).unwrap_or_default();
+                let stmt = self
+                    .ast
+                    .get_stmt(head)
+                    .unwrap_or_else(|| invariant!("valid statement id"))
+                    .clone();
+
+                match stmt {
+                    Stmt::Let(pat, ty_ann, expr_id, _) => {
+                        self.r#let(&pat, ty_ann, expr_id, span).await?
+                    }
+                    // Top-level Expr is rejected by typechecker in non-interactive mode
+                    Stmt::Expr(_) => {
+                        typechecked!("top-level Stmt::Expr", "inside main")
+                    }
+                    // Already hoisted
+                    Stmt::Fun { .. }
+                    | Stmt::Module { .. }
+                    | Stmt::ClassInstance { .. } => {}
+                    Stmt::Type {
+                        name,
+                        type_params,
+                        def,
+                        ..
+                    } => self.type_decl(&name, &type_params, &def, span)?,
+                    Stmt::NewType {
+                        name,
+                        type_params,
+                        target,
+                        ..
+                    } => {
+                        self.newtype_decl(&name, &type_params, target, span)?
+                    }
+                    Stmt::Union {
+                        name,
+                        type_params,
+                        members,
+                        ..
+                    } => {
+                        self.union_decl(&name, &type_params, &members, span)?
+                    }
+                    Stmt::Import(ref import) => self.import(import, span)?,
+                };
+                self.exec_declarations(tail).await
+            }
+        }
+    }
+
+    /// Call the `main` function (non-interactive mode entry point).
+    async fn call_main(&mut self) -> Result<()> {
+        let main_id = self.arena.intern("main");
+        let def = self
+            .functions
+            .get(&main_id)
+            .cloned()
+            .unwrap_or_else(|| typechecked!("main", "defined"));
+        self.call_function(&def.params, def.ret, def.body, &[], Span::default())
+            .await
+            .map(|_| ())
     }
 
     /// Consume the interpreter and return the I/O context.

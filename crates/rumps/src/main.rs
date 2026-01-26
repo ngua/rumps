@@ -18,6 +18,9 @@ use miette::{NamedSource, Report};
 use rumps_storage::Database;
 
 /// RUMPS query language interpreter.
+// TODO: Add `--interactive` / `-i` flag once we have REPL support.
+// Scripts will require `main` by default; interactive mode will allow
+// top-level expressions without `main`.
 #[derive(Parser)]
 #[command(name = "rumps")]
 #[command(about = "Run RUMPS scripts against a database")]
