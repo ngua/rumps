@@ -2,8 +2,10 @@
 ;
 ; Tests that types in nested modules can be accessed without full qualification
 ; from child modules (looking up the module chain).
+;
+; Also tests that imported types work in function signatures.
 
-IMPORT Outer.{ }
+IMPORT Outer.{ Id }
 IMPORT Outer.Inner.{ }
 
 ; ============ Child module accesses parent module types ============
@@ -20,6 +22,12 @@ MODULE Outer {
 
 LET id: Outer.Id = Outer.Inner.make-id(42)
 WRITE Outer.Inner.id-value(id)
+
+; ============ Imported type in function signature ============
+
+; Function using imported type `Id` (imported from Outer.{ Id })
+FUN double-id(i: Id) -> Id { i * 2 }
+WRITE double-id(21)
 
 ; ============ Deeply nested modules ============
 

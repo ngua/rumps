@@ -31,8 +31,9 @@ impl InferCtx<'_> {
         let stmt = self.ast.get_stmt(id).cloned();
 
         match stmt {
-            Some(Stmt::Import(ref import)) => {
-                // Check import ordering before processing
+            Some(Stmt::Import(_)) => {
+                // Imports are processed during hoisting; here we only check
+                // ordering (imports must appear at top of scope)
                 if !self.env.imports_allowed() {
                     self.error(TypeError::Custom {
                         msg: "imports must appear at the top of a scope"
@@ -40,7 +41,7 @@ impl InferCtx<'_> {
                         span,
                     });
                 }
-                self.import_stmt(import, span);
+                // Don't call import_stmt(); already processed during hoisting
             }
 
             Some(Stmt::Fun {
@@ -229,9 +230,9 @@ impl InferCtx<'_> {
                     let qname = format!("{}.{}", mod_path, name);
                     self.env.register_user_module_type_vis(&qname, vis);
                 }
-                Some(Stmt::Import(ref import)) => {
-                    // Process import inside module
-                    self.import_stmt(import, item_span);
+                Some(Stmt::Import(_)) => {
+                    // Imports inside modules are processed during hoisting;
+                    // nothing to do here in Pass 2
                 }
                 Some(Stmt::ClassInstance {
                     ref class_name,
@@ -267,7 +268,10 @@ impl InferCtx<'_> {
     ///
     /// Validates module and member existence, checks visibility, and binds
     /// imported names in the current scope with their types.
-    fn import_stmt(&mut self, import: &Import, span: Span) {
+    ///
+    /// Called during both hoisting (for type imports) and Pass 2 (for full
+    /// processing). Visibility is `pub(super)` so `hoist.rs` can call it.
+    pub(super) fn import_stmt(&mut self, import: &Import, span: Span) {
         let mod_path = import.path.join(".");
         let path_segs: Vec<&str> =
             import.path.iter().map(String::as_str).collect();

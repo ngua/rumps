@@ -10,10 +10,11 @@ use smallvec::SmallVec;
 
 use super::InferCtx;
 use crate::ast::{
-    self, AstTypeExprId, BindingPattern, InstanceMethodDef, Stmt, StmtId,
-    TypeParam,
+    self, AstTypeExprId, BindingPattern, Import, InstanceMethodDef, Stmt,
+    StmtId, TypeParam,
 };
 use crate::intern::StringId;
+use crate::typecheck::error::TypeError;
 use crate::typecheck::instance::Instance;
 use crate::typecheck::ty::{Class, ClassKind, Scheme, Ty, TyVar};
 use crate::Span;
@@ -24,15 +25,40 @@ impl InferCtx<'_> {
     /// This enables forward references: functions can call other functions
     /// defined later in the same scope, and modules can be referenced before
     /// their definition.
+    ///
+    /// Hoisting is done in three phases to ensure imported types are available
+    /// when function signatures are processed:
+    ///
+    /// 1. **Phase 1**: Hoist modules only (registers module types like `M.T`)
+    /// 2. **Phase 2**: Process imports (populates `imported_types` mapping)
+    /// 3. **Phase 3**: Hoist functions and class instances
     pub(crate) fn hoist_declarations(&mut self, stmts: &[StmtId]) {
-        stmts.iter().for_each(|&id| self.hoist_stmt(id));
+        // Phase 1: Hoist modules only (registers module types)
+        stmts.iter().for_each(|&id| {
+            let stmt = self.ast.get_stmt(id).cloned();
+            if let Some(Stmt::Module { ref name, ref body }) = stmt {
+                let span = self.ast.stmt_span(id).unwrap_or(Span::new(0, 0));
+                self.hoist_module(name, body, span);
+            }
+        });
+
+        // Phase 2: Process imports (populates imported_types)
+        stmts.iter().for_each(|&id| {
+            let stmt = self.ast.get_stmt(id).cloned();
+            if let Some(Stmt::Import(ref import)) = stmt {
+                let span = self.ast.stmt_span(id).unwrap_or(Span::new(0, 0));
+                self.import_stmt(import, span);
+            }
+        });
+
+        // Phase 3: Hoist functions and class instances
+        stmts.iter().for_each(|&id| self.hoist_non_module(id));
     }
 
-    /// Hoist a single statement's declarations.
+    /// Hoist non-module declarations (functions and class instances).
     ///
-    /// Only processes `FUN` and `MODULE` statements; other statements are
-    /// skipped (they don't introduce hoistable bindings).
-    fn hoist_stmt(&mut self, id: StmtId) {
+    /// Called in Phase 3 after modules have been hoisted and imports processed.
+    fn hoist_non_module(&mut self, id: StmtId) {
         let span = self.ast.stmt_span(id).unwrap_or(Span::new(0, 0));
         let stmt = self.ast.get_stmt(id).cloned();
 
@@ -45,10 +71,6 @@ impl InferCtx<'_> {
                 ..
             }) => {
                 self.hoist_fun(&name, &type_params, &params, ret.as_ref(), span)
-            }
-
-            Some(Stmt::Module { name, body }) => {
-                self.hoist_module(&name, &body, span)
             }
 
             Some(Stmt::ClassInstance {
@@ -70,7 +92,8 @@ impl InferCtx<'_> {
                 span,
             ),
 
-            // Other statements don't introduce hoistable bindings
+            // Modules already hoisted in Phase 1; imports processed in Phase 2;
+            // other statements don't need hoisting
             _ => {}
         }
     }
@@ -135,6 +158,11 @@ impl InferCtx<'_> {
     ///
     /// Registers the module name and hoists all function members with
     /// provisional types. Nested modules are processed recursively.
+    ///
+    /// Uses the same three-phase approach as top-level hoisting:
+    /// 1. Process nested modules and type declarations
+    /// 2. Process imports inside the module
+    /// 3. Process functions, LETs, and class instances
     fn hoist_module(&mut self, mod_path: &str, body: &[StmtId], span: Span) {
         // Register the module name first
         self.env.register_user_module(mod_path);
@@ -142,7 +170,69 @@ impl InferCtx<'_> {
         // Save and set current module for unqualified type resolution
         let prev_module = self.current_module.replace(mod_path.to_string());
 
-        // Hoist module members
+        // Phase 1: Process nested modules and type declarations
+        body.iter().for_each(|&id| {
+            let item_span = self.ast.stmt_span(id).unwrap_or(span);
+            let item = self.ast.get_stmt(id).cloned();
+
+            match item {
+                Some(Stmt::Module { ref name, ref body }) => {
+                    // Nested module; recurse with qualified path
+                    let nested_path = format!("{}.{}", mod_path, name);
+                    self.hoist_module(&nested_path, body, item_span);
+                }
+
+                // TYPE/UNION/NEWTYPE: register visibility for imports.
+                // Type definitions are processed by registry; we only need
+                // to record visibility so imports can check access.
+                Some(Stmt::Type { ref name, vis, .. })
+                | Some(Stmt::Union { ref name, vis, .. })
+                | Some(Stmt::NewType { ref name, vis, .. }) => {
+                    // Check for shadowing of builtin types
+                    if self.named_type_to_ty(name) != Ty::Unknown {
+                        self.error(TypeError::Custom {
+                            msg: format!(
+                                "type `{}` shadows a builtin type",
+                                name
+                            ),
+                            span: item_span,
+                        });
+                    // Check for shadowing from parent modules
+                    } else if let Some(parent) =
+                        mod_path.rsplit_once('.').map(|(p, _)| p)
+                    {
+                        // Temporarily set current_module to parent for lookup
+                        let saved = self.current_module.replace(parent.to_string());
+                        if self.resolve_type_name(name).is_some() {
+                            self.error(TypeError::Custom {
+                                msg: format!(
+                                    "type `{}` already in scope from outer module",
+                                    name
+                                ),
+                                span: item_span,
+                            });
+                        }
+                        self.current_module = saved;
+                    }
+                    let qname = format!("{}.{}", mod_path, name);
+                    self.env.register_user_module_type_vis(&qname, vis);
+                }
+
+                _ => {}
+            }
+        });
+
+        // Phase 2: Process imports inside the module
+        body.iter().for_each(|&id| {
+            let item_span = self.ast.stmt_span(id).unwrap_or(span);
+            let item = self.ast.get_stmt(id).cloned();
+
+            if let Some(Stmt::Import(ref import)) = item {
+                self.import_stmt(import, item_span);
+            }
+        });
+
+        // Phase 3: Process functions, LETs, and class instances
         body.iter().for_each(|&id| {
             let item_span = self.ast.stmt_span(id).unwrap_or(span);
             let item = self.ast.get_stmt(id).cloned();
@@ -193,12 +283,6 @@ impl InferCtx<'_> {
                     );
                 }
 
-                Some(Stmt::Module { ref name, ref body }) => {
-                    // Nested module; recurse with qualified path
-                    let nested_path = format!("{}.{}", mod_path, name);
-                    self.hoist_module(&nested_path, body, item_span);
-                }
-
                 Some(Stmt::ClassInstance {
                     ref class_name,
                     ref class_args,
@@ -221,17 +305,7 @@ impl InferCtx<'_> {
                     );
                 }
 
-                // TYPE/UNION/NEWTYPE: register visibility for imports.
-                // Type definitions are processed by registry; we only need
-                // to record visibility so imports can check access.
-                Some(Stmt::Type { ref name, vis, .. })
-                | Some(Stmt::Union { ref name, vis, .. })
-                | Some(Stmt::NewType { ref name, vis, .. }) => {
-                    let qname = format!("{}.{}", mod_path, name);
-                    self.env.register_user_module_type_vis(&qname, vis);
-                }
-
-                // Other statements are invalid in modules (caught in Pass 2)
+                // Modules, types, and imports already processed in earlier phases
                 _ => {}
             }
         });
