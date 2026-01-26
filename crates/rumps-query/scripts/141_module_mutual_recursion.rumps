@@ -1,5 +1,19 @@
 ; Module-level mutual recursion: functions within a module calling each other
 
+FUN main() {
+  ; Test mutual recursion via module path
+  WRITE Parity.is-even(0)
+  WRITE Parity.is-even(4)
+  WRITE Parity.is-even(7)
+  WRITE Parity.is-odd(0)
+  WRITE Parity.is-odd(3)
+  WRITE Parity.is-odd(6)
+
+  WRITE Math.Fibonacci.fib(0)
+  WRITE Math.Fibonacci.fib(1)
+  WRITE Math.Fibonacci.fib(10)
+}
+
 MODULE Parity {
     +FUN is-even(n: Int) -> Bool {
         IF n == 0 { true } ELSE { is-odd(n - 1) }
@@ -9,14 +23,6 @@ MODULE Parity {
         IF n == 0 { false } ELSE { is-even(n - 1) }
     }
 }
-
-; Test mutual recursion via module path
-WRITE Parity.is-even(0)
-WRITE Parity.is-even(4)
-WRITE Parity.is-even(7)
-WRITE Parity.is-odd(0)
-WRITE Parity.is-odd(3)
-WRITE Parity.is-odd(6)
 
 ; Nested module with mutual recursion
 MODULE Math {
@@ -31,7 +37,3 @@ MODULE Math {
         }
     }
 }
-
-WRITE Math.Fibonacci.fib(0)
-WRITE Math.Fibonacci.fib(1)
-WRITE Math.Fibonacci.fib(10)

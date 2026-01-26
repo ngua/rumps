@@ -1,101 +1,103 @@
 ; Test: equality for complex types
 ; Tests structural equality for arrays, objects, and tagged values
 
-; === Array Equality ===
+FUN main() {
+  ; === Array Equality ===
 
-LET a1 = [1, 2, 3]
-LET a2 = [1, 2, 3]
-LET a3 = [1, 2, 4]
-LET a4 = [1, 2]
+  LET a1 = [1, 2, 3]
+  LET a2 = [1, 2, 3]
+  LET a3 = [1, 2, 4]
+  LET a4 = [1, 2]
 
-WRITE a1 == a2
-; Expected: true (same elements)
+  WRITE a1 == a2
+  ; Expected: true (same elements)
 
-WRITE a1 == a3
-; Expected: false (different last element)
+  WRITE a1 == a3
+  ; Expected: false (different last element)
 
-WRITE a1 == a4
-; Expected: false (different length)
+  WRITE a1 == a4
+  ; Expected: false (different length)
 
-WRITE a1 != a3
-; Expected: true
+  WRITE a1 != a3
+  ; Expected: true
 
-; Empty arrays
-LET empty1 = []
-LET empty2 = []
-WRITE empty1 == empty2
-; Expected: true
+  ; Empty arrays
+  LET empty1 = []
+  LET empty2 = []
+  WRITE empty1 == empty2
+  ; Expected: true
 
-; Nested arrays
-LET nested1 = [[1, 2], [3, 4]]
-LET nested2 = [[1, 2], [3, 4]]
-LET nested3 = [[1, 2], [3, 5]]
+  ; Nested arrays
+  LET nested1 = [[1, 2], [3, 4]]
+  LET nested2 = [[1, 2], [3, 4]]
+  LET nested3 = [[1, 2], [3, 5]]
 
-WRITE nested1 == nested2
-; Expected: true
+  WRITE nested1 == nested2
+  ; Expected: true
 
-WRITE nested1 == nested3
-; Expected: false
+  WRITE nested1 == nested3
+  ; Expected: false
 
-; === Object Equality ===
+  ; === Object Equality ===
 
-LET o1 = { a: 1, b: 2 }
-LET o2 = { a: 1, b: 2 }
-LET o3 = { a: 1, b: 3 }
-LET o4 = { a: 1 }
+  LET o1 = { a: 1, b: 2 }
+  LET o2 = { a: 1, b: 2 }
+  LET o3 = { a: 1, b: 3 }
+  LET o4 = { a: 1 }
 
-WRITE o1 == o2
-; Expected: true (same keys and values)
+  WRITE o1 == o2
+  ; Expected: true (same keys and values)
 
-WRITE o1 == o3
-; Expected: false (different value)
+  WRITE o1 == o3
+  ; Expected: false (different value)
 
-WRITE o1 == o4
-; Expected: false (different keys)
+  WRITE o1 == o4
+  ; Expected: false (different keys)
 
-WRITE o1 != o3
-; Expected: true
+  WRITE o1 != o3
+  ; Expected: true
 
-; Empty objects
-LET empty-obj-a = {}
-LET empty-obj-b = {}
-WRITE empty-obj-a == empty-obj-b
-; Expected: true
+  ; Empty objects
+  LET empty-obj-a = {}
+  LET empty-obj-b = {}
+  WRITE empty-obj-a == empty-obj-b
+  ; Expected: true
 
-; Nested objects
-LET no1 = { outer: { inner: 42 } }
-LET no2 = { outer: { inner: 42 } }
-LET no3 = { outer: { inner: 99 } }
+  ; Nested objects
+  LET no1 = { outer: { inner: 42 } }
+  LET no2 = { outer: { inner: 42 } }
+  LET no3 = { outer: { inner: 99 } }
 
-WRITE no1 == no2
-; Expected: true
+  WRITE no1 == no2
+  ; Expected: true
 
-WRITE no1 == no3
-; Expected: false
+  WRITE no1 == no3
+  ; Expected: false
 
-; Objects with arrays
-LET oa1 = { items: [1, 2, 3] }
-LET oa2 = { items: [1, 2, 3] }
-LET oa3 = { items: [1, 2, 4] }
+  ; Objects with arrays
+  LET oa1 = { items: [1, 2, 3] }
+  LET oa2 = { items: [1, 2, 3] }
+  LET oa3 = { items: [1, 2, 4] }
 
-WRITE oa1 == oa2
-; Expected: true
+  WRITE oa1 == oa2
+  ; Expected: true
 
-WRITE oa1 == oa3
-; Expected: false
+  WRITE oa1 == oa3
+  ; Expected: false
 
-; === Same-type Equality ===
+  ; === Same-type Equality ===
 
-WRITE 5 == 5
-; Expected: true (same type comparison)
+  WRITE 5 == 5
+  ; Expected: true (same type comparison)
 
-WRITE 5.0 == 5.0
-; Expected: true (same type comparison)
+  WRITE 5.0 == 5.0
+  ; Expected: true (same type comparison)
 
-WRITE [1, 2, 3] == [1, 2, 3]
-; Expected: true
+  WRITE [1, 2, 3] == [1, 2, 3]
+  ; Expected: true
 
-WRITE { x: 5 } == { x: 5 }
-; Expected: true
+  WRITE { x: 5 } == { x: 5 }
+  ; Expected: true
 
-WRITE "Equality test complete"
+  WRITE "Equality test complete"
+}

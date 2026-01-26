@@ -1,53 +1,55 @@
 ; Coalesce operator (??) tests
 ; `??` unwraps Option.Some/Result.Ok or falls back to right operand
 
-; === Option.None coalesces to fallback ===
+FUN main() {
+  ; === Option.None coalesces to fallback ===
 
-; Option.None falls back to right operand
-WRITE Option.None ?? "fallback1"
-; Expected: fallback1
+  ; Option.None falls back to right operand
+  WRITE Option.None ?? "fallback1"
+  ; Expected: fallback1
 
-; Option.Some unwraps to its value
-WRITE Option.Some(42) ?? 0
-; Expected: 42
+  ; Option.Some unwraps to its value
+  WRITE Option.Some(42) ?? 0
+  ; Expected: 42
 
-; === Chained coalesce ===
+  ; === Chained coalesce ===
 
-; Chain of None values falls through to final fallback
-LET result = Option.None ?? Option.None ?? 3
-WRITE result
-; Expected: 3
+  ; Chain of None values falls through to final fallback
+  LET result = Option.None ?? Option.None ?? 3
+  WRITE result
+  ; Expected: 3
 
-; First non-None wins
-LET chain-2 = Option.None ?? Option.Some("found") ?? "default"
-WRITE chain-2
-; Expected: found
+  ; First non-None wins
+  LET chain-2 = Option.None ?? Option.Some("found") ?? "default"
+  WRITE chain-2
+  ; Expected: found
 
-; === Result coalesce ===
+  ; === Result coalesce ===
 
-; Result.Ok unwraps to its value
-WRITE Result.Ok(100) ?? 0
-; Expected: 100
+  ; Result.Ok unwraps to its value
+  WRITE Result.Ok(100) ?? 0
+  ; Expected: 100
 
-; Result.Err falls back to right operand
-WRITE Result.Err("oops") ?? 999
-; Expected: 999
+  ; Result.Err falls back to right operand
+  WRITE Result.Err("oops") ?? 999
+  ; Expected: 999
 
-; === Coalesce in expressions ===
+  ; === Coalesce in expressions ===
 
-; Coalesce result can be used in further expressions
-LET val = (Option.None ?? 5) + 1
-WRITE val
-; Expected: 6
+  ; Coalesce result can be used in further expressions
+  LET val = (Option.None ?? 5) + 1
+  WRITE val
+  ; Expected: 6
 
-; Coalesce with string concatenation
-LET greeting = Option.None ?? "Hello"
-WRITE "{greeting} World"
-; Expected: Hello World
+  ; Coalesce with string concatenation
+  LET greeting = Option.None ?? "Hello"
+  WRITE "{greeting} World"
+  ; Expected: Hello World
 
-; Coalesce with Option.Some in expression
-LET num = (Option.Some(10) ?? 0) * 2
-WRITE num
-; Expected: 20
+  ; Coalesce with Option.Some in expression
+  LET num = (Option.Some(10) ?? 0) * 2
+  WRITE num
+  ; Expected: 20
 
-WRITE "Coalesce tests complete"
+  WRITE "Coalesce tests complete"
+}

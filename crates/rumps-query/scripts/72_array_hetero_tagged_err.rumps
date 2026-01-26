@@ -1,8 +1,10 @@
 ; Test: Mappable:map with heterogeneous tagged results should error
 ; This should fail because mixing Option and Result types is heterogeneous
 
-LET result = Mappable:map(
-  x => IF x > 1 { Option.Some(x) } ELSE { Result.Ok(x) },
-  [1, 2]
-)
-WRITE result
+FUN main() {
+  LET result = Mappable:map(
+    x => IF x > 1 { Option.Some(x) } ELSE { Result.Ok(x) },
+    [1, 2]
+  )
+  WRITE result
+}

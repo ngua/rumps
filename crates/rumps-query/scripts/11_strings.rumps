@@ -1,61 +1,63 @@
 ; Test: string operations
 ; Tests string literals and concatenation
 
-; Simple string
-LET s = "Hello"
-WRITE s
-; Expected: Hello
+FUN main() {
+  ; Simple string
+  LET s = "Hello"
+  WRITE s
+  ; Expected: Hello
 
-; Empty string
-LET empty = ""
-WRITE empty
-; Expected: (empty line)
+  ; Empty string
+  LET empty = ""
+  WRITE empty
+  ; Expected: (empty line)
 
-; String with spaces
-LET spaced = "Hello World"
-WRITE spaced
-; Expected: Hello World
+  ; String with spaces
+  LET spaced = "Hello World"
+  WRITE spaced
+  ; Expected: Hello World
 
-; String concatenation (using interpolation)
-LET a = "Hello"
-LET b = "World"
-LET c = "{a} {b}"
-WRITE c
-; Expected: Hello World
+  ; String concatenation (using interpolation)
+  LET a = "Hello"
+  LET b = "World"
+  LET c = "{a} {b}"
+  WRITE c
+  ; Expected: Hello World
 
-; Concatenate literals
-WRITE "{"foo"}{"bar"}"
-; Expected: foobar
+  ; Concatenate literals
+  WRITE "{"foo"}{"bar"}"
+  ; Expected: foobar
 
-; Concatenate with numbers (interpolation auto-coerces)
-WRITE "Value: {42}"
-; Expected: Value: 42
+  ; Concatenate with numbers (interpolation auto-coerces)
+  WRITE "Value: {42}"
+  ; Expected: Value: 42
 
-WRITE "Pi is {3.14}"
-; Expected: Pi is 3.14
+  WRITE "Pi is {3.14}"
+  ; Expected: Pi is 3.14
 
-; Concatenate with booleans
-WRITE "Flag is {TRUE}"
-; Expected: Flag is true
+  ; Concatenate with booleans
+  WRITE "Flag is {TRUE}"
+  ; Expected: Flag is true
 
-; Multiple concatenations
-LET first = "one"
-LET second = "two"
-LET third = "three"
-WRITE "{first}, {second}, {third}"
-; Expected: one, two, three
+  ; Multiple concatenations
+  LET first = "one"
+  LET second = "two"
+  LET third = "three"
+  WRITE "{first}, {second}, {third}"
+  ; Expected: one, two, three
 
-; Escape sequences (if supported)
-LET escaped = "Line1\nLine2"
-WRITE escaped
-; Expected: Line1 (newline) Line2
+  ; Escape sequences (if supported)
+  LET escaped = "Line1\nLine2"
+  WRITE escaped
+  ; Expected: Line1 (newline) Line2
 
-LET tabbed = "Col1\tCol2"
-WRITE tabbed
-; Expected: Col1 (tab) Col2
+  LET tabbed = "Col1\tCol2"
+  WRITE tabbed
+  ; Expected: Col1 (tab) Col2
 
-LET quoted = "He said \"Hello\""
-WRITE quoted
-; Expected: He said "Hello"
+  LET quoted = "He said \"Hello\""
+  WRITE quoted
+  ; Expected: He said "Hello"
 
-WRITE "String test complete"
+  WRITE "String test complete"
+}

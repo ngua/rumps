@@ -1,137 +1,140 @@
 ; Test: Inline type annotations
 ; Tests `expr: Type` syntax for inline type annotations without requiring parens
 
-; === Basic scalar annotations (no parens required) ===
+FUN main() {
+  ; === Basic scalar annotations (no parens required) ===
 
-WRITE 42: Int
-WRITE "hello": String
-WRITE TRUE: Bool
-WRITE 3.14: Float
+  WRITE 42: Int
+  WRITE "hello": String
+  WRITE TRUE: Bool
+  WRITE 3.14: Float
 
-; With LET bindings
-LET x = 10: Int
-WRITE x
+  ; With LET bindings
+  LET x = 10: Int
+  WRITE x
 
-LET s = "world": String
-WRITE s
+  LET s = "world": String
+  WRITE s
 
-; === Annotation with various whitespace ===
+  ; === Annotation with various whitespace ===
 
-; No space
-LET a = 1:Int
-WRITE a
+  ; No space
+  LET a = 1:Int
+  WRITE a
 
-; Spaces around colon
-LET b = 2 : Int
-WRITE b
+  ; Spaces around colon
+  LET b = 2 : Int
+  WRITE b
 
-; Space only before
-LET c = 3 :Int
-WRITE c
+  ; Space only before
+  LET c = 3 :Int
+  WRITE c
 
-; === Annotation inside parentheses ===
+  ; === Annotation inside parentheses ===
 
-; Single expression with annotation inside parens
-LET y = (100: Int)
-WRITE y
+  ; Single expression with annotation inside parens
+  LET y = (100: Int)
+  WRITE y
 
-; Nested parens
-LET z = ((200: Int))
-WRITE z
+  ; Nested parens
+  LET z = ((200: Int))
+  WRITE z
 
-; === Old syntax still works: `(expr): Type` ===
+  ; === Old syntax still works: `(expr): Type` ===
 
-LET old = (300): Int
-WRITE old
+  LET old = (300): Int
+  WRITE old
 
-; === Postfix operators then annotation ===
+  ; === Postfix operators then annotation ===
 
-; Field access then annotation
-LET obj = { a: { b: 10 } }
-WRITE obj.a.b: Int
+  ; Field access then annotation
+  LET obj = { a: { b: 10 } }
+  WRITE obj.a.b: Int
 
-; Index then annotation
-LET arr = [1, 2, 3]
-WRITE arr[0]: Int
+  ; Index then annotation
+  LET arr = [1, 2, 3]
+  WRITE arr[0]: Int
 
-; Unwrap then annotation
-LET opt = Option.Some(42)
-WRITE opt!: Int
+  ; Unwrap then annotation
+  LET opt = Option.Some(42)
+  WRITE opt!: Int
 
-; === DB intrinsics with annotation ===
+  ; === DB intrinsics with annotation ===
 
-; Setup a local db
-LET d = {}
-@SET d{"key"} 123
+  ; Setup a local db
+  LET d = {}
+  @SET d{"key"} 123
 
-; @GET with annotation
-LET val = @GET d{"key"}: Option[Storable]
-WRITE val
+  ; @GET with annotation
+  LET val = @GET d{"key"}: Option[Storable]
+  WRITE val
 
-; @GET with unwrap then annotation
-LET unwrapped = @GET d{"key"}!: Storable
-WRITE unwrapped
+  ; @GET with unwrap then annotation
+  LET unwrapped = @GET d{"key"}!: Storable
+  WRITE unwrapped
 
-; @DATA with annotation
-LET status = @DATA d{"key"}: DataStatus
-WRITE status
+  ; @DATA with annotation
+  LET status = @DATA d{"key"}: DataStatus
+  WRITE status
 
-; @ORDER with annotation
-LET ord = @ORDER d{""}: Option[Subscript]
-WRITE ord
+  ; @ORDER with annotation
+  LET ord = @ORDER d{""}: Option[Subscript]
+  WRITE ord
 
-; === WRITE with annotated operand ===
+  ; === WRITE with annotated operand ===
 
-WRITE 999: Int
-WRITE "test": String
-WRITE obj.a.b: Int
+  WRITE 999: Int
+  WRITE "test": String
+  WRITE obj.a.b: Int
 
-; === Tuple annotation ===
+  ; === Tuple annotation ===
 
-; Tuple with annotation (parens around tuple + annotation)
-LET tup = (1, 2): (Int, Int)
-WRITE tup
+  ; Tuple with annotation (parens around tuple + annotation)
+  LET tup = (1, 2): (Int, Int)
+  WRITE tup
 
-; Tuple annotation inside parens
-LET tup2 = ((3, 4): (Int, Int))
-WRITE tup2
+  ; Tuple annotation inside parens
+  LET tup2 = ((3, 4): (Int, Int))
+  WRITE tup2
 
-; Access tuple element with annotation
-WRITE tup.0: Int
+  ; Access tuple element with annotation
+  WRITE tup.0: Int
 
-; === Parameterized type annotations ===
+  ; === Parameterized type annotations ===
 
-LET some = Option.Some(10): Option[Int]
-WRITE some
+  LET some = Option.Some(10): Option[Int]
+  WRITE some
 
-LET none = Option.None: Option[String]
-WRITE none
+  LET none = Option.None: Option[String]
+  WRITE none
 
-LET ok = Result.Ok(42): Result[Int, String]
-WRITE ok
+  LET ok = Result.Ok(42): Result[Int, String]
+  WRITE ok
 
-LET err = Result.Err("oops"): Result[Int, String]
-WRITE err
+  LET err = Result.Err("oops"): Result[Int, String]
+  WRITE err
 
-; === Array annotations ===
+  ; === Array annotations ===
 
-LET nums = [1, 2, 3]: Array[Int]
-WRITE nums
+  LET nums = [1, 2, 3]: Array[Int]
+  WRITE nums
 
-; === Complex expressions ===
+  ; === Complex expressions ===
 
-; Arithmetic then annotation (annotation binds to `2` not to `1 + 2`)
-; So we need parens for the whole thing
-LET sum = (1 + 2: Int)
-WRITE sum
+  ; Arithmetic then annotation (annotation binds to `2` not to `1 + 2`)
+  ; So we need parens for the whole thing
+  LET sum = (1 + 2: Int)
+  WRITE sum
 
-; Chained postfix then annotation
-LET nested = { x: Option.Some({ y: 5 }) }
-WRITE nested.x!.y: Int
+  ; Chained postfix then annotation
+  LET nested = { x: Option.Some({ y: 5 }) }
+  WRITE nested.x!.y: Int
 
-; === Function return type inference with annotation ===
+  ; === Function return type inference with annotation ===
+
+  WRITE double(5): Int
+
+  WRITE "Inline annotation test complete"
+}
 
 FUN double(n: Int) -> Int { n * 2 }
-WRITE double(5): Int
-
-WRITE "Inline annotation test complete"

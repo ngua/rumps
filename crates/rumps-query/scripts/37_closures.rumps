@@ -1,58 +1,60 @@
 ; Test: Closures
 ; Tests closure definition, binding, and calling
 
-; === Single parameter closure ===
+FUN main() {
+  ; === Single parameter closure ===
 
-LET double = x => x * 2
-WRITE double(21)
-; Expected: 42
+  LET double = x => x * 2
+  WRITE double(21)
+  ; Expected: 42
 
-LET identity = x => x
-WRITE identity(42)
-; Expected: 42
+  LET identity = x => x
+  WRITE identity(42)
+  ; Expected: 42
 
-; === Multi-parameter closure ===
+  ; === Multi-parameter closure ===
 
-LET add = (a, b) => a + b
-WRITE add(10, 32)
-; Expected: 42
+  LET add = (a, b) => a + b
+  WRITE add(10, 32)
+  ; Expected: 42
 
-LET triple = (a, b, c) => a + b + c
-WRITE triple(1, 2, 3)
-; Expected: 6
+  LET triple = (a, b, c) => a + b + c
+  WRITE triple(1, 2, 3)
+  ; Expected: 6
 
-; === Nullary closure ===
+  ; === Nullary closure ===
 
-LET const = () => 42
-WRITE const()
-; Expected: 42
+  LET const = () => 42
+  WRITE const()
+  ; Expected: 42
 
-; === Typed parameter closure ===
+  ; === Typed parameter closure ===
 
-LET typed = (x: Int) => x + 1
-WRITE typed(41)
-; Expected: 42
+  LET typed = (x: Int) => x + 1
+  WRITE typed(41)
+  ; Expected: 42
 
-LET multi-typed = (x: Int, y: String) => y
-WRITE multi-typed(1, "hello")
-; Expected: "hello"
+  LET multi-typed = (x: Int, y: String) => y
+  WRITE multi-typed(1, "hello")
+  ; Expected: "hello"
 
-; === Closure with return type ===
+  ; === Closure with return type ===
 
-LET with-ret = (x: Int) -> Int => x * x
-WRITE with-ret(6)
-; Expected: 36
+  LET with-ret = (x: Int) -> Int => x * x
+  WRITE with-ret(6)
+  ; Expected: 36
 
-; === Nested closure in expression ===
+  ; === Nested closure in expression ===
 
-LET nested = (x => x + 1)
-WRITE nested(41)
-; Expected: 42
+  LET nested = (x => x + 1)
+  WRITE nested(41)
+  ; Expected: 42
 
-; === Closure with complex body ===
+  ; === Closure with complex body ===
 
-LET complex = (a, b) => { a * b + 1 }
-WRITE complex(5, 8)
-; Expected: 41
+  LET complex = (a, b) => { a * b + 1 }
+  WRITE complex(5, 8)
+  ; Expected: 41
 
-WRITE "Closure test complete"
+  WRITE "Closure test complete"
+}

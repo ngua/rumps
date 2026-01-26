@@ -2,6 +2,105 @@
 ; Tests MODULE definition, functions, constants, and nested modules
 ; Uses `+` prefix for public members; members without `+` are private
 
+FUN main() {
+  LET c = Counter.new()
+  WRITE c  ; 0
+
+  LET c1 = Counter.inc(c)
+  WRITE c1  ; 1
+
+  LET c2 = Counter.add(c1, 10)
+  WRITE c2  ; 11
+
+  WRITE Config.max-size  ; 1000
+  WRITE Config.default-name  ; unnamed
+  WRITE Config.ratio > 3.0  ; true
+
+  ; Use constants in expressions
+  LET scaled = Config.max-size * 2
+  WRITE scaled  ; 2000
+
+  WRITE Geometry.pi > 3.0  ; true
+
+  LET a = Geometry.area(2.0)
+  WRITE a > 12.0  ; true
+
+  LET circ = Geometry.circumference(1.0)
+  WRITE circ > 6.0  ; true
+
+  WRITE Outer.val  ; 100
+  WRITE Outer.value()  ; 100
+  WRITE Outer.Inner.secret  ; 42
+  WRITE Outer.Inner.get-secret()  ; 42
+  WRITE Outer.Inner.combined()  ; 142
+
+  LET id-int = Utils.identity(42)
+  WRITE id-int  ; 42
+
+  LET id-str = Utils.identity("hello")
+  WRITE id-str  ; hello
+
+  LET p = Utils.pair(1, "one")
+  WRITE p  ; (1, one)
+
+  ; ============ Module function as value ============
+
+  LET inc-fn = Counter.inc
+  LET result = inc-fn(5)
+  WRITE result  ; 6
+
+  LET add5 = Adder.make(5)
+  WRITE add5(10)  ; 15
+
+  LET add10 = Adder.make(10)
+  WRITE add10(7)  ; 17
+
+  WRITE MonoHof.apply(n => n + 1, 5)  ; 6
+  WRITE MonoHof.map-twice(n => n * 2, 3)  ; 12
+
+  ; Int -> Int
+  WRITE PolyHof.apply(n => n + 1, 5)  ; 6
+
+  ; Int -> String
+  WRITE PolyHof.apply(n => "num: {n}", 42)  ; num: 42
+
+  ; String -> Int
+  WRITE PolyHof.apply(s => String.length(s), "hello")  ; 5
+
+  ; Compose: Int -> Int -> String
+  WRITE PolyHof.compose(n => "result: {n}", x => x * 2, 10)  ; result: 20
+
+  LET c = Shapes.Shape.Circle(2.0)
+  LET r = Shapes.Shape.Rectangle(3.0, 4.0)
+
+  WRITE Shapes.describe(c)  ; circle
+  WRITE Shapes.describe(r)  ; rectangle
+  WRITE Shapes.area(c) > 12.0  ; true (approx 12.56)
+  WRITE Shapes.area(r) > 11.0  ; true (12.0)
+
+  LET u: Users.User = { name: "Alice", age: 30 }
+  WRITE Users.greet(u)  ; Hello, Alice
+  WRITE Users.is-adult(u)  ; true
+
+  LET child: Users.User = { name: "Bob", age: 10 }
+  WRITE Users.is-adult(child)  ; false
+
+  LET i: Data.Primitive = 42
+  LET s: Data.Primitive = "hello"
+  WRITE Data.stringify(i)  ; 42
+  WRITE Data.stringify(s)  ; hello
+
+  LET active = Outer2.Inner2.Status.Active
+  LET inactive = Outer2.Inner2.Status.Inactive
+  WRITE Outer2.Inner2.is-active(active)  ; true
+  WRITE Outer2.Inner2.is-active(inactive)  ; false
+
+  LET box-int = Container.Box.Wrapped(42)
+  LET empty-box = Container.Box.Empty
+  WRITE Container.unwrap-or(box-int, 0)  ; 42
+  WRITE Container.unwrap-or(empty-box, 99)  ; 99
+}
+
 ; ============ Basic module with functions ============
 
 MODULE Counter {
@@ -10,15 +109,6 @@ MODULE Counter {
   +FUN add(x: Int, y: Int) -> Int { x + y }
 }
 
-LET c = Counter.new()
-WRITE c  ; 0
-
-LET c1 = Counter.inc(c)
-WRITE c1  ; 1
-
-LET c2 = Counter.add(c1, 10)
-WRITE c2  ; 11
-
 ; ============ Module with constants ============
 
 MODULE Config {
@@ -26,14 +116,6 @@ MODULE Config {
   +LET default-name = "unnamed"
   +LET ratio = 3.14
 }
-
-WRITE Config.max-size  ; 1000
-WRITE Config.default-name  ; unnamed
-WRITE Config.ratio > 3.0  ; true
-
-; Use constants in expressions
-LET scaled = Config.max-size * 2
-WRITE scaled  ; 2000
 
 ; ============ Module with both functions and constants ============
 
@@ -48,14 +130,6 @@ MODULE Geometry {
     2.0 * Geometry.pi * r
   }
 }
-
-WRITE Geometry.pi > 3.0  ; true
-
-LET a = Geometry.area(2.0)
-WRITE a > 12.0  ; true
-
-LET circ = Geometry.circumference(1.0)
-WRITE circ > 6.0  ; true
 
 ; ============ Nested modules ============
 
@@ -72,33 +146,12 @@ MODULE Outer {
   }
 }
 
-WRITE Outer.val  ; 100
-WRITE Outer.value()  ; 100
-WRITE Outer.Inner.secret  ; 42
-WRITE Outer.Inner.get-secret()  ; 42
-WRITE Outer.Inner.combined()  ; 142
-
 ; ============ Generic functions in modules ============
 
 MODULE Utils {
   +FUN identity[T](x: T) -> T { x }
   +FUN pair[A, B](a: A, b: B) -> (A, B) { (a, b) }
 }
-
-LET id-int = Utils.identity(42)
-WRITE id-int  ; 42
-
-LET id-str = Utils.identity("hello")
-WRITE id-str  ; hello
-
-LET p = Utils.pair(1, "one")
-WRITE p  ; (1, one)
-
-; ============ Module function as value ============
-
-LET inc-fn = Counter.inc
-LET result = inc-fn(5)
-WRITE result  ; 6
 
 ; ============ Module with closures ============
 
@@ -107,12 +160,6 @@ MODULE Adder {
     x => x + n
   }
 }
-
-LET add5 = Adder.make(5)
-WRITE add5(10)  ; 15
-
-LET add10 = Adder.make(10)
-WRITE add10(7)  ; 17
 
 ; ============ Monomorphic higher-order functions ============
 
@@ -126,9 +173,6 @@ MODULE MonoHof {
   }
 }
 
-WRITE MonoHof.apply(n => n + 1, 5)  ; 6
-WRITE MonoHof.map-twice(n => n * 2, 3)  ; 12
-
 ; ============ Polymorphic higher-order functions ============
 
 MODULE PolyHof {
@@ -140,18 +184,6 @@ MODULE PolyHof {
     f(g(x))
   }
 }
-
-; Int -> Int
-WRITE PolyHof.apply(n => n + 1, 5)  ; 6
-
-; Int -> String
-WRITE PolyHof.apply(n => "num: {n}", 42)  ; num: 42
-
-; String -> Int
-WRITE PolyHof.apply(s => String.length(s), "hello")  ; 5
-
-; Compose: Int -> Int -> String
-WRITE PolyHof.compose(n => "result: {n}", x => x * 2, 10)  ; result: 20
 
 ; ============ Module with TYPE definitions ============
 
@@ -173,14 +205,6 @@ MODULE Shapes {
   }
 }
 
-LET c = Shapes.Shape.Circle(2.0)
-LET r = Shapes.Shape.Rectangle(3.0, 4.0)
-
-WRITE Shapes.describe(c)  ; circle
-WRITE Shapes.describe(r)  ; rectangle
-WRITE Shapes.area(c) > 12.0  ; true (approx 12.56)
-WRITE Shapes.area(r) > 11.0  ; true (12.0)
-
 ; ============ Module with NEWTYPE ============
 
 MODULE Users {
@@ -195,13 +219,6 @@ MODULE Users {
   }
 }
 
-LET u: Users.User = { name: "Alice", age: 30 }
-WRITE Users.greet(u)  ; Hello, Alice
-WRITE Users.is-adult(u)  ; true
-
-LET child: Users.User = { name: "Bob", age: 10 }
-WRITE Users.is-adult(child)  ; false
-
 ; ============ Module with UNION definition ============
 
 MODULE Data {
@@ -211,11 +228,6 @@ MODULE Data {
     p as String
   }
 }
-
-LET i: Data.Primitive = 42
-LET s: Data.Primitive = "hello"
-WRITE Data.stringify(i)  ; 42
-WRITE Data.stringify(s)  ; hello
 
 ; ============ Nested module with types ============
 
@@ -232,11 +244,6 @@ MODULE Outer2 {
   }
 }
 
-LET active = Outer2.Inner2.Status.Active
-LET inactive = Outer2.Inner2.Status.Inactive
-WRITE Outer2.Inner2.is-active(active)  ; true
-WRITE Outer2.Inner2.is-active(inactive)  ; false
-
 ; ============ Generic type in module ============
 
 MODULE Container {
@@ -249,8 +256,3 @@ MODULE Container {
     }
   }
 }
-
-LET box-int = Container.Box.Wrapped(42)
-LET empty-box = Container.Box.Empty
-WRITE Container.unwrap-or(box-int, 0)  ; 42
-WRITE Container.unwrap-or(empty-box, 99)  ; 99

@@ -1,13 +1,39 @@
 ; Test: Generic user-defined functions with explicit type parameters
 ; Tests `FUN name[T](x: T) -> T` syntax
 
+FUN main() {
+  WRITE id(42)        ; 42
+  WRITE id("hello")   ; hello
+  WRITE id(TRUE)      ; true
+
+  WRITE pair(1, "hello")  ; (1, "hello")
+  WRITE pair(TRUE, 3.14)  ; (true, 3.14)
+
+  WRITE wrap(42)      ; Option.Some(42)
+  WRITE wrap("test")  ; Option.Some("test")
+
+  WRITE swap((1, "x"))    ; ("x", 1)
+  WRITE swap(("a", TRUE)) ; (true, "a")
+
+  LET p = (42, "answer")
+  WRITE fst(p)  ; 42
+  WRITE snd(p)  ; answer
+
+  WRITE apply(double, 21)        ; 42
+  WRITE apply(greet, "World")    ; Hello, World
+
+  ; Both should work the same way
+  WRITE implicit-id(100)   ; 100
+  WRITE explicit-id(100)   ; 100
+  WRITE implicit-id("hi")  ; hi
+  WRITE explicit-id("hi")  ; hi
+
+  WRITE "Generic functions test complete"
+}
+
 ; === Simple identity function with explicit type parameter ===
 
 FUN id[T](x: T) -> T { x }
-
-WRITE id(42)        ; 42
-WRITE id("hello")   ; hello
-WRITE id(TRUE)      ; true
 
 ; === Multiple type parameters ===
 
@@ -15,17 +41,11 @@ FUN pair[A, B](a: A, b: B) -> (A, B) {
   (a, b)
 }
 
-WRITE pair(1, "hello")  ; (1, "hello")
-WRITE pair(TRUE, 3.14)  ; (true, 3.14)
-
 ; === Generic function returning parameterized type ===
 
 FUN wrap[T](x: T) -> Option[T] {
   Option.Some(x)
 }
-
-WRITE wrap(42)      ; Option.Some(42)
-WRITE wrap("test")  ; Option.Some("test")
 
 ; === Generic swap function ===
 
@@ -33,17 +53,10 @@ FUN swap[A, B](p: (A, B)) -> (B, A) {
   (p.1, p.0)
 }
 
-WRITE swap((1, "x"))    ; ("x", 1)
-WRITE swap(("a", TRUE)) ; (true, "a")
-
 ; === Generic first/second accessors ===
 
 FUN fst[A, B](p: (A, B)) -> A { p.0 }
 FUN snd[A, B](p: (A, B)) -> B { p.1 }
-
-LET p = (42, "answer")
-WRITE fst(p)  ; 42
-WRITE snd(p)  ; answer
 
 ; === Generic higher-order function ===
 
@@ -54,9 +67,6 @@ FUN apply[A, B](f: (A) -> B, x: A) -> B {
 FUN double(n: Int) -> Int { n * 2 }
 FUN greet(s: String) -> String { "Hello, {s}" }
 
-WRITE apply(double, 21)        ; 42
-WRITE apply(greet, "World")    ; Hello, World
-
 ; === Mix of implicit and explicit generics ===
 
 ; This function is implicitly generic (inferred)
@@ -64,11 +74,3 @@ FUN implicit-id(x) { x }
 
 ; This function is explicitly generic
 FUN explicit-id[T](x: T) -> T { x }
-
-; Both should work the same way
-WRITE implicit-id(100)   ; 100
-WRITE explicit-id(100)   ; 100
-WRITE implicit-id("hi")  ; hi
-WRITE explicit-id("hi")  ; hi
-
-WRITE "Generic functions test complete"

@@ -10,4 +10,6 @@ FUN greet (name: String) -> String {
   "Hello, {name}"
 }
 
-WRITE apply(greet, 5)
+FUN main() {
+  WRITE apply(greet, 5)
+}

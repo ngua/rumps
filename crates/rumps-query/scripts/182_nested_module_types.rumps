@@ -8,7 +8,51 @@
 IMPORT Outer.{ Id }
 IMPORT Outer.Inner.{ }
 
-; ============ Child module accesses parent module types ============
+FUN main() {
+  ; ============ Child module accesses parent module types ============
+
+  LET id: Outer.Id = Outer.Inner.make-id(42)
+  WRITE Outer.Inner.id-value(id)
+
+  ; ============ Imported type in function signature ============
+
+  WRITE double-id(21)
+
+  ; ============ Deeply nested modules ============
+
+  LET s1 = A.Status.Active
+  WRITE A.B.is-active(s1)
+  LET s2 = A.B.C.toggle(s1)
+  WRITE A.B.is-active(s2)
+
+  ; ============ NEWTYPE lookup through module chain ============
+
+  LET score: Root.Score = 100
+  LET mult: Root.Level1.Multiplier = 1.5
+  WRITE Root.Level1.Level2.compute(score, mult)
+
+  ; ============ UNION lookup through module chain ============
+
+  LET v1: Config.Value = 42
+  LET v2: Config.Value = "hello"
+  WRITE Config.Parser.is-int(v1)
+  WRITE Config.Parser.is-int(v2)
+
+  ; ============ TYPE with variants in nested module ============
+
+  LET box1 = Container.Box.Full(10)
+  LET box2: Container.Box[Int] = Container.Box.Empty
+  WRITE Container.Ops.is-full(box1)
+  WRITE Container.Ops.is-full(box2)
+  LET mapped = Container.Ops.map(box1, (x: Int) => x * 2)
+  WRITE mapped
+
+  ; ============ Multiple types at different levels ============
+
+  LET a: Multi.A = 123
+  LET b: Multi.Sub1.B = "test"
+  WRITE Multi.Sub1.Sub2.combine(a, b)
+}
 
 MODULE Outer {
   +NEWTYPE Id = Int
@@ -20,16 +64,8 @@ MODULE Outer {
   }
 }
 
-LET id: Outer.Id = Outer.Inner.make-id(42)
-WRITE Outer.Inner.id-value(id)
-
-; ============ Imported type in function signature ============
-
 ; Function using imported type `Id` (imported from Outer.{ Id })
 FUN double-id(i: Id) -> Id { i * 2 }
-WRITE double-id(21)
-
-; ============ Deeply nested modules ============
 
 MODULE A {
   +TYPE Status = Active | Inactive
@@ -55,13 +91,6 @@ MODULE A {
   }
 }
 
-LET s1 = A.Status.Active
-WRITE A.B.is-active(s1)
-LET s2 = A.B.C.toggle(s1)
-WRITE A.B.is-active(s2)
-
-; ============ NEWTYPE lookup through module chain ============
-
 MODULE Root {
   +NEWTYPE Score = Int
 
@@ -78,12 +107,6 @@ MODULE Root {
   }
 }
 
-LET score: Root.Score = 100
-LET mult: Root.Level1.Multiplier = 1.5
-WRITE Root.Level1.Level2.compute(score, mult)
-
-; ============ UNION lookup through module chain ============
-
 MODULE Config {
   +UNION Value = Int | String | Bool
 
@@ -93,13 +116,6 @@ MODULE Config {
     }
   }
 }
-
-LET v1: Config.Value = 42
-LET v2: Config.Value = "hello"
-WRITE Config.Parser.is-int(v1)
-WRITE Config.Parser.is-int(v2)
-
-; ============ TYPE with variants in nested module ============
 
 MODULE Container {
   +TYPE Box[T] = Full(T) | Empty
@@ -122,15 +138,6 @@ MODULE Container {
   }
 }
 
-LET box1 = Container.Box.Full(10)
-LET box2: Container.Box[Int] = Container.Box.Empty
-WRITE Container.Ops.is-full(box1)
-WRITE Container.Ops.is-full(box2)
-LET mapped = Container.Ops.map(box1, (x: Int) => x * 2)
-WRITE mapped
-
-; ============ Multiple types at different levels ============
-
 MODULE Multi {
   +NEWTYPE A = Int
 
@@ -145,7 +152,3 @@ MODULE Multi {
     }
   }
 }
-
-LET a: Multi.A = 123
-LET b: Multi.Sub1.B = "test"
-WRITE Multi.Sub1.Sub2.combine(a, b)

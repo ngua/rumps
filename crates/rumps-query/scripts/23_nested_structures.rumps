@@ -1,132 +1,134 @@
 ; Test: deeply nested structures
 ; Tests complex nesting of arrays, objects, and blocks
 
-; === Deeply nested arrays ===
+FUN main() {
+  ; === Deeply nested arrays ===
 
-LET deep = [[[[1]]]]
-WRITE deep[0][0][0][0]
-; Expected: 1
+  LET deep = [[[[1]]]]
+  WRITE deep[0][0][0][0]
+  ; Expected: 1
 
-LET matrix3d = [
-  [[1, 2], [3, 4]],
-  [[5, 6], [7, 8]]
-]
-WRITE matrix3d[0][0][0]
-; Expected: 1
+  LET matrix3d = [
+    [[1, 2], [3, 4]],
+    [[5, 6], [7, 8]]
+  ]
+  WRITE matrix3d[0][0][0]
+  ; Expected: 1
 
-WRITE matrix3d[1][1][1]
-; Expected: 8
+  WRITE matrix3d[1][1][1]
+  ; Expected: 8
 
-WRITE matrix3d[-1][-1][-1]
-; Expected: 8
+  WRITE matrix3d[-1][-1][-1]
+  ; Expected: 8
 
-; === Deeply nested objects ===
+  ; === Deeply nested objects ===
 
-LET nested = {
-  level1: {
-    level2: {
-      level3: {
-        value: "deep"
+  LET nested = {
+    level1: {
+      level2: {
+        level3: {
+          value: "deep"
+        }
       }
     }
   }
-}
-WRITE nested.level1.level2.level3.value
-; Expected: deep
+  WRITE nested.level1.level2.level3.value
+  ; Expected: deep
 
-; === Mixed nesting ===
+  ; === Mixed nesting ===
 
-LET complex = {
-  users: [
-    { name: "Alice", scores: [100, 95, 88] },
-    { name: "Bob", scores: [90, 85, 92] }
-  ],
-  meta: {
-    count: 2,
-    tags: ["active", "verified"]
-  }
-}
-
-WRITE complex.users[0].name
-; Expected: Alice
-
-WRITE complex.users[0].scores[0]
-; Expected: 100
-
-WRITE complex.users[1].scores[-1]
-; Expected: 92
-
-WRITE complex.meta.tags[0]
-; Expected: active
-
-WRITE complex.users[1].name
-; Expected: Bob
-
-; === Nested blocks ===
-
-LET result = {
-  LET a = {
-    LET b = {
-      LET c = 10
-      c * 2
+  LET complex = {
+    users: [
+      { name: "Alice", scores: [100, 95, 88] },
+      { name: "Bob", scores: [90, 85, 92] }
+    ],
+    meta: {
+      count: 2,
+      tags: ["active", "verified"]
     }
-    b + 5
   }
-  a * 3
-}
-WRITE result
-; Expected: 75 ((10 * 2 + 5) * 3 = 25 * 3)
 
-; === Nested conditionals ===
+  WRITE complex.users[0].name
+  ; Expected: Alice
 
-LET score = 85
-LET grade = IF score >= 90 {
-  "A"
-} ELSE {
-  IF score >= 80 {
-    "B"
+  WRITE complex.users[0].scores[0]
+  ; Expected: 100
+
+  WRITE complex.users[1].scores[-1]
+  ; Expected: 92
+
+  WRITE complex.meta.tags[0]
+  ; Expected: active
+
+  WRITE complex.users[1].name
+  ; Expected: Bob
+
+  ; === Nested blocks ===
+
+  LET result = {
+    LET a = {
+      LET b = {
+        LET c = 10
+        c * 2
+      }
+      b + 5
+    }
+    a * 3
+  }
+  WRITE result
+  ; Expected: 75 ((10 * 2 + 5) * 3 = 25 * 3)
+
+  ; === Nested conditionals ===
+
+  LET score = 85
+  LET grade = IF score >= 90 {
+    "A"
   } ELSE {
-    IF score >= 70 {
-      "C"
+    IF score >= 80 {
+      "B"
     } ELSE {
-      "F"
+      IF score >= 70 {
+        "C"
+      } ELSE {
+        "F"
+      }
     }
   }
-}
-WRITE grade
-; Expected: B
+  WRITE grade
+  ; Expected: B
 
-; === Array of blocks ===
+  ; === Array of blocks ===
 
-LET computed = [
-  { LET x = 1
-    x + 1
-  },
-  { LET x = 2
-    x + 1
-  },
-  { LET x = 3
-    x + 1
+  LET computed = [
+    { LET x = 1
+      x + 1
+    },
+    { LET x = 2
+      x + 1
+    },
+    { LET x = 3
+      x + 1
+    }
+  ]
+  WRITE computed
+  ; Expected: [ 2, 3, 4 ]
+
+  ; === Object with computed values ===
+
+  LET base = 10
+  LET obj = {
+    double: base * 2,
+    triple: base * 3,
+    square: base * base
   }
-]
-WRITE computed
-; Expected: [ 2, 3, 4 ]
+  WRITE obj.double
+  ; Expected: 20
 
-; === Object with computed values ===
+  WRITE obj.triple
+  ; Expected: 30
 
-LET base = 10
-LET obj = {
-  double: base * 2,
-  triple: base * 3,
-  square: base * base
+  WRITE obj.square
+  ; Expected: 100
+
+  WRITE "Nested structures test complete"
 }
-WRITE obj.double
-; Expected: 20
-
-WRITE obj.triple
-; Expected: 30
-
-WRITE obj.square
-; Expected: 100
-
-WRITE "Nested structures test complete"

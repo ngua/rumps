@@ -1,3 +1,6 @@
 ; Unwrap Result.Err should error with message
-LET err-val = Result.Err("something went wrong")
-WRITE err-val!
+
+FUN main() {
+  LET err-val = Result.Err("something went wrong")
+  WRITE err-val!
+}

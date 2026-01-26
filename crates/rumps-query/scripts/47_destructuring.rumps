@@ -1,61 +1,63 @@
 ; Destructuring bindings
 
-; === Tuple destructuring ===
+FUN main() {
+  ; === Tuple destructuring ===
 
-LET pair = (1, 2)
-LET (a, b) = pair
-WRITE a
-WRITE b
+  LET pair = (1, 2)
+  LET (a, b) = pair
+  WRITE a
+  WRITE b
 
-; Nested tuple
-LET nested = ((1, 2), (3, 4))
-LET ((x1, y1), (x2, y2)) = nested
-WRITE x1
-WRITE y1
-WRITE x2
-WRITE y2
+  ; Nested tuple
+  LET nested = ((1, 2), (3, 4))
+  LET ((x1, y1), (x2, y2)) = nested
+  WRITE x1
+  WRITE y1
+  WRITE x2
+  WRITE y2
 
-; === Object destructuring ===
+  ; === Object destructuring ===
 
-LET person = { name: "Alice", age: 30 }
-LET { name, age } = person
-WRITE name
-WRITE age
+  LET person = { name: "Alice", age: 30 }
+  LET { name, age } = person
+  WRITE name
+  WRITE age
 
-; Object with rename
-LET point = { x: 10, y: 20 }
-LET { x: px, y: py } = point
-WRITE px
-WRITE py
+  ; Object with rename
+  LET point = { x: 10, y: 20 }
+  LET { x: px, y: py } = point
+  WRITE px
+  WRITE py
 
-; NOTE: Array destructuring is only supported in MATCH expressions, not in LET bindings.
-; See 62_match.rumps for array pattern matching examples.
+  ; NOTE: Array destructuring is only supported in MATCH expressions, not in LET bindings.
+  ; See 62_match.rumps for array pattern matching examples.
 
-; === Wildcard ===
+  ; === Wildcard ===
 
-LET triple = (100, 200, 300)
-LET (keep, _, last) = triple
-WRITE keep
-WRITE last
+  LET triple = (100, 200, 300)
+  LET (keep, _, last) = triple
+  WRITE keep
+  WRITE last
 
-; Wildcard discards entire value
-LET _ = "discarded"
-WRITE "wildcard works"
+  ; Wildcard discards entire value
+  LET _ = "discarded"
+  WRITE "wildcard works"
 
-; === Mixed nesting ===
+  ; === Mixed nesting ===
 
-LET data = { coords: (10, 20), name: "origin" }
-LET { coords: (cx, cy), name: label } = data
-WRITE cx
-WRITE cy
-WRITE label
+  LET data = { coords: (10, 20), name: "origin" }
+  LET { coords: (cx, cy), name: label } = data
+  WRITE cx
+  WRITE cy
+  WRITE label
 
-; === In expressions ===
+  ; === In expressions ===
 
-LET result = {
-  LET (x, y) = (5, 10)
-  x + y
+  LET result = {
+    LET (x, y) = (5, 10)
+    x + y
+  }
+  WRITE result
+
+  WRITE "Destructuring test complete"
 }
-WRITE result
-
-WRITE "Destructuring test complete"

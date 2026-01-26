@@ -1,8 +1,10 @@
 ; Test: Type mismatch error detection
 ; This script should produce a type error
 
-; Annotating Int but assigning String
-LET x: Int = "hello"
+FUN main() {
+  ; Annotating Int but assigning String
+  LET x: Int = "hello"
 
-; This line should not be reached
-WRITE "Should not reach here"
+  ; This line should not be reached
+  WRITE "Should not reach here"
+}

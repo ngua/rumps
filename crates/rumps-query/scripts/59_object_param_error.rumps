@@ -2,9 +2,11 @@
 
 NEWTYPE Person = { name: String, age: Int }
 
-FUN greet (p: Person) -> String {
+FUN greet(p: Person) -> String {
   "Hello, {p.name}!"
 }
 
-; Missing `age` field
-WRITE greet({ name: "Alice" })
+FUN main() {
+  ; Missing `age` field
+  WRITE greet({ name: "Alice" })
+}

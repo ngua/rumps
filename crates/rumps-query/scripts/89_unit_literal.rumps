@@ -1,22 +1,24 @@
 ; Test: Unit literal
 ; Tests the `Unit` value literal
 
-; Unit equals itself
-WRITE Unit IS Unit
-; Expected: true
+FUN main() {
+  ; Unit equals itself
+  WRITE Unit IS Unit
+  ; Expected: true
 
-; Unit in variable
-LET u = Unit
-WRITE u
-; Expected: Unit
+  ; Unit in variable
+  LET u = Unit
+  WRITE u
+  ; Expected: Unit
 
-; Unit equality via variable
-WRITE u IS Unit
-; Expected: true
+  ; Unit equality via variable
+  WRITE u IS Unit
+  ; Expected: true
 
-; Unit in tuple
-LET pair = (1, Unit)
-WRITE pair
-; Expected: (1, Unit)
+  ; Unit in tuple
+  LET pair = (1, Unit)
+  WRITE pair
+  ; Expected: (1, Unit)
 
-WRITE "Unit literal test complete"
+  WRITE "Unit literal test complete"
+}

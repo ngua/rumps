@@ -1,88 +1,90 @@
 ; Test: IF/ELSE branches
 ; Tests conditional expressions and statements
 
-; Simple IF with true condition
-IF TRUE {
-  WRITE "TRUE branch taken"
-}
+FUN main() {
+  ; Simple IF with true condition
+  IF TRUE {
+    WRITE "TRUE branch taken"
+  }
 
-; Simple IF with false condition (no output)
-IF FALSE {
-  WRITE "This should not print"
-}
+  ; Simple IF with false condition (no output)
+  IF FALSE {
+    WRITE "This should not print"
+  }
 
-; IF/ELSE with true condition
-IF TRUE {
-  WRITE "IF branch"
-} ELSE {
-  WRITE "ELSE branch"
-}
-; Expected: IF branch
-
-; IF/ELSE with false condition
-IF FALSE {
-  WRITE "IF branch"
-} ELSE {
-  WRITE "ELSE branch"
-}
-; Expected: ELSE branch
-
-; IF with comparison
-LET x = 10
-IF x > 5 {
-  WRITE "x is greater than 5"
-} ELSE {
-  WRITE "x is not greater than 5"
-}
-; Expected: x is greater than 5
-
-; IF with equality
-LET name = "Alice"
-IF name == "Alice" {
-  WRITE "Hello, Alice!"
-} ELSE {
-  WRITE "You are not Alice"
-}
-; Expected: Hello, Alice!
-
-; IF as expression
-LET result = IF 10 > 5 { "big" } ELSE { "small" }
-WRITE result
-; Expected: big
-
-; Nested IF
-LET score = 85
-IF score >= 90 {
-  WRITE "A"
-} ELSE {
-  IF score >= 80 {
-    WRITE "B"
+  ; IF/ELSE with true condition
+  IF TRUE {
+    WRITE "IF branch"
   } ELSE {
-    IF score >= 70 {
-      WRITE "C"
+    WRITE "ELSE branch"
+  }
+  ; Expected: IF branch
+
+  ; IF/ELSE with false condition
+  IF FALSE {
+    WRITE "IF branch"
+  } ELSE {
+    WRITE "ELSE branch"
+  }
+  ; Expected: ELSE branch
+
+  ; IF with comparison
+  LET x = 10
+  IF x > 5 {
+    WRITE "x is greater than 5"
+  } ELSE {
+    WRITE "x is not greater than 5"
+  }
+  ; Expected: x is greater than 5
+
+  ; IF with equality
+  LET name = "Alice"
+  IF name == "Alice" {
+    WRITE "Hello, Alice!"
+  } ELSE {
+    WRITE "You are not Alice"
+  }
+  ; Expected: Hello, Alice!
+
+  ; IF as expression
+  LET result = IF 10 > 5 { "big" } ELSE { "small" }
+  WRITE result
+  ; Expected: big
+
+  ; Nested IF
+  LET score = 85
+  IF score >= 90 {
+    WRITE "A"
+  } ELSE {
+    IF score >= 80 {
+      WRITE "B"
     } ELSE {
-      WRITE "F"
+      IF score >= 70 {
+        WRITE "C"
+      } ELSE {
+        WRITE "F"
+      }
     }
   }
-}
-; Expected: B
+  ; Expected: B
 
-; IF with logical operators
-LET a = TRUE
-LET b = FALSE
-IF a AND NOT b {
-  WRITE "a is true and b is false"
-}
-; Expected: a is true and b is false
+  ; IF with logical operators
+  LET a = TRUE
+  LET b = FALSE
+  IF a AND NOT b {
+    WRITE "a is true and b is false"
+  }
+  ; Expected: a is true and b is false
 
-; IF with complex condition
-LET age = 25
-LET has-license = TRUE
-IF age >= 18 AND has-license {
-  WRITE "Can drive"
-} ELSE {
-  WRITE "Cannot drive"
-}
-; Expected: Can drive
+  ; IF with complex condition
+  LET age = 25
+  LET has-license = TRUE
+  IF age >= 18 AND has-license {
+    WRITE "Can drive"
+  } ELSE {
+    WRITE "Cannot drive"
+  }
+  ; Expected: Can drive
 
-WRITE "IF/ELSE test complete"
+  WRITE "IF/ELSE test complete"
+}

@@ -1,78 +1,80 @@
 ; Test: Power operator (**)
 ; Tests exponentiation with right-associativity
 
-; === Int ** Int ===
+FUN main() {
+  ; === Int ** Int ===
 
-LET sq = 2 ** 10
-WRITE sq
-; Expected: 1024
+  LET sq = 2 ** 10
+  WRITE sq
+  ; Expected: 1024
 
-LET cube = 3 ** 3
-WRITE cube
-; Expected: 27
+  LET cube = 3 ** 3
+  WRITE cube
+  ; Expected: 27
 
-LET zero-pow = 5 ** 0
-WRITE zero-pow
-; Expected: 1
+  LET zero-pow = 5 ** 0
+  WRITE zero-pow
+  ; Expected: 1
 
-LET one-pow = 7 ** 1
-WRITE one-pow
-; Expected: 7
+  LET one-pow = 7 ** 1
+  WRITE one-pow
+  ; Expected: 7
 
-; === Float ** Float ===
+  ; === Float ** Float ===
 
-LET sqrt2 = 2.0 ** 0.5
-WRITE sqrt2
-; Expected: 1.4142135623730951 (approximately)
+  LET sqrt2 = 2.0 ** 0.5
+  WRITE sqrt2
+  ; Expected: 1.4142135623730951 (approximately)
 
-LET cubert = 8.0 ** (1.0 / 3.0)
-WRITE cubert
-; Expected: 2.0
+  LET cubert = 8.0 ** (1.0 / 3.0)
+  WRITE cubert
+  ; Expected: 2.0
 
-; === Negative exponent (Int -> Float) ===
+  ; === Negative exponent (Int -> Float) ===
 
-LET half = 2 ** -1
-WRITE half
-; Expected: 0.5
+  LET half = 2 ** -1
+  WRITE half
+  ; Expected: 0.5
 
-LET quarter = 2 ** -2
-WRITE quarter
-; Expected: 0.25
+  LET quarter = 2 ** -2
+  WRITE quarter
+  ; Expected: 0.25
 
-; === Mixed Int/Float ===
+  ; === Mixed Int/Float ===
 
-LET mixed1 = 4 ** 0.5
-WRITE mixed1
-; Expected: 2
+  LET mixed1 = 4 ** 0.5
+  WRITE mixed1
+  ; Expected: 2
 
-LET mixed2 = 2.0 ** 3
-WRITE mixed2
-; Expected: 8
+  LET mixed2 = 2.0 ** 3
+  WRITE mixed2
+  ; Expected: 8
 
-; === Right-associativity ===
-; 2 ** 3 ** 2 should be 2 ** (3 ** 2) = 2 ** 9 = 512
-; NOT (2 ** 3) ** 2 = 8 ** 2 = 64
+  ; === Right-associativity ===
+  ; 2 ** 3 ** 2 should be 2 ** (3 ** 2) = 2 ** 9 = 512
+  ; NOT (2 ** 3) ** 2 = 8 ** 2 = 64
 
-LET right-assoc = 2 ** 3 ** 2
-WRITE right-assoc
-; Expected: 512
+  LET right-assoc = 2 ** 3 ** 2
+  WRITE right-assoc
+  ; Expected: 512
 
-; === Precedence: higher than multiplication ===
-; 2 * 3 ** 2 should be 2 * (3 ** 2) = 2 * 9 = 18
-; NOT (2 * 3) ** 2 = 6 ** 2 = 36
+  ; === Precedence: higher than multiplication ===
+  ; 2 * 3 ** 2 should be 2 * (3 ** 2) = 2 * 9 = 18
+  ; NOT (2 * 3) ** 2 = 6 ** 2 = 36
 
-LET prec = 2 * 3 ** 2
-WRITE prec
-; Expected: 18
+  LET prec = 2 * 3 ** 2
+  WRITE prec
+  ; Expected: 18
 
-; === Combinations ===
+  ; === Combinations ===
 
-LET combo = 10 ** 2 + 5
-WRITE combo
-; Expected: 105
+  LET combo = 10 ** 2 + 5
+  WRITE combo
+  ; Expected: 105
 
-LET combo2 = (2 + 3) ** 2
-WRITE combo2
-; Expected: 25
+  LET combo2 = (2 + 3) ** 2
+  WRITE combo2
+  ; Expected: 25
 
-WRITE "Power test complete"
+  WRITE "Power test complete"
+}

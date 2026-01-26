@@ -1,39 +1,83 @@
 ; Test Fallible[T] constraint for Option/Result polymorphism
 
-; ============================================================================
-; Basic Fallible constraint with inner type
-; ============================================================================
+FUN main() {
+  ; ============================================================================
+  ; Basic Fallible constraint with inner type
+  ; ============================================================================
+
+  ; Works with Option
+  LET opt = Option.Some(42)
+  WRITE unwrap(opt)
+
+  ; Works with Result
+  LET res = Result.Ok("hello")
+  WRITE unwrap(res)
+
+  ; ============================================================================
+  ; Fallible with coalesce
+  ; ============================================================================
+
+  WRITE or-else(Option.Some(10), 0)
+  WRITE or-else(Option.None, 99)
+  WRITE or-else(Result.Ok(5), 0)
+  WRITE or-else(Result.Err("oops"), -1)
+
+  ; ============================================================================
+  ; Fallible with mapping
+  ; ============================================================================
+
+  WRITE map-fallible((n) => n * 2, Option.Some(21))
+  WRITE map-fallible((s) => s ++ "!", Result.Ok("hi"))
+  WRITE map-fallible((n) => n * 2, Option.None)
+
+  ; ============================================================================
+  ; Closure with Fallible constraint
+  ; ============================================================================
+
+  LET safe-get = [T, F: Fallible[T]](x: F, default: T) -> T => x ?? default
+
+  WRITE safe-get(Option.Some(100), 0)
+  WRITE safe-get(Option.None, 42)
+
+  ; ============================================================================
+  ; Combining Fallible with other constraints
+  ; ============================================================================
+
+  WRITE unwrap-numeric(Option.Some(123))
+  WRITE unwrap-numeric(Option.None: Option[Int])
+  WRITE unwrap-numeric(Result.Ok(4.5))
+
+  ; ============================================================================
+  ; Fallible with unconstrained inner type
+  ; ============================================================================
+
+  WRITE is-present(Option.Some(1))
+  WRITE is-present(Option.None)
+  WRITE is-present(Result.Ok("x"))
+  WRITE is-present(Result.Err("e"))
+
+  ; ============================================================================
+  ; Union types with Fallible constraint
+  ; ============================================================================
+
+  WRITE fallible-unwrap(Option.Some(42))
+  WRITE fallible-unwrap(Result.Ok(99))
+
+  WRITE fallible-or-default(Option.Some(10), 0)
+  WRITE fallible-or-default(Option.None, 77)
+  WRITE fallible-or-default(Result.Ok(5), 0)
+  WRITE fallible-or-default(Result.Err("oops"), -1)
+}
 
 ; Generic unwrap function that works on any Option[T] or Result[T, E]
 FUN unwrap[T, F: Fallible[T]](x: F) -> T {
   x!
 }
 
-; Works with Option
-LET opt = Option.Some(42)
-WRITE unwrap(opt)
-
-; Works with Result
-LET res = Result.Ok("hello")
-WRITE unwrap(res)
-
-; ============================================================================
-; Fallible with coalesce
-; ============================================================================
-
 ; Generic or-else function
 FUN or-else[T, F: Fallible[T]](x: F, default: T) -> T {
   x ?? default
 }
-
-WRITE or-else(Option.Some(10), 0)
-WRITE or-else(Option.None, 99)
-WRITE or-else(Result.Ok(5), 0)
-WRITE or-else(Result.Err("oops"), -1)
-
-; ============================================================================
-; Fallible with mapping
-; ============================================================================
 
 ; Map over fallible, returning Option
 FUN map-fallible[T, U, F: Fallible[T]](f: (T) -> U, x: F) -> Option[U] {
@@ -48,35 +92,10 @@ FUN map-fallible[T, U, F: Fallible[T]](f: (T) -> U, x: F) -> Option[U] {
   }
 }
 
-WRITE map-fallible((n) => n * 2, Option.Some(21))
-WRITE map-fallible((s) => s ++ "!", Result.Ok("hi"))
-WRITE map-fallible((n) => n * 2, Option.None)
-
-; ============================================================================
-; Closure with Fallible constraint
-; ============================================================================
-
-LET safe-get = [T, F: Fallible[T]](x: F, default: T) -> T => x ?? default
-
-WRITE safe-get(Option.Some(100), 0)
-WRITE safe-get(Option.None, 42)
-
-; ============================================================================
-; Combining Fallible with other constraints
-; ============================================================================
-
 ; Fallible + Numeric inner type
 FUN unwrap-numeric[T: Numeric, F: Fallible[T]](x: F) -> T {
   x ?? 0
 }
-
-WRITE unwrap-numeric(Option.Some(123))
-WRITE unwrap-numeric(Option.None: Option[Int])
-WRITE unwrap-numeric(Result.Ok(4.5))
-
-; ============================================================================
-; Fallible with unconstrained inner type
-; ============================================================================
 
 ; When inner type is unconstrained, it's inferred from usage
 FUN is-present[T, F: Fallible[T]](x: F) -> Bool {
@@ -91,29 +110,12 @@ FUN is-present[T, F: Fallible[T]](x: F) -> Bool {
   }
 }
 
-WRITE is-present(Option.Some(1))
-WRITE is-present(Option.None)
-WRITE is-present(Result.Ok("x"))
-WRITE is-present(Result.Err("e"))
-
-; ============================================================================
-; Union types with Fallible constraint
-; ============================================================================
-
 ; Union of fallible types should satisfy Fallible[T] constraint
 FUN fallible-unwrap(x: Option[Int] | Result[Int, String]) -> Int {
   x!
 }
 
-WRITE fallible-unwrap(Option.Some(42))
-WRITE fallible-unwrap(Result.Ok(99))
-
 ; Union with coalesce
 FUN fallible-or-default(x: Option[Int] | Result[Int, String], default: Int) -> Int {
   x ?? default
 }
-
-WRITE fallible-or-default(Option.Some(10), 0)
-WRITE fallible-or-default(Option.None, 77)
-WRITE fallible-or-default(Result.Ok(5), 0)
-WRITE fallible-or-default(Result.Err("oops"), -1)

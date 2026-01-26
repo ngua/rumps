@@ -1,17 +1,19 @@
 ; Test Ref-typed function parameters with explicitly typed Local/Global args
 
+FUN main() {
+  ; Explicit type annotations
+  LET loc: Local = data{}
+  LET glob: Global = ^info{}
+
+  ; Pass explicitly typed values to Ref parameter
+  WRITE takes-ref(loc)
+  WRITE takes-ref(glob)
+
+  ; Also test inline refs
+  WRITE takes-ref(data{1, 2})
+  WRITE takes-ref(^global{"key"})
+}
+
 FUN takes-ref(r: Ref) -> String {
   "got ref"
 }
-
-; Explicit type annotations
-LET loc: Local = data{}
-LET glob: Global = ^info{}
-
-; Pass explicitly typed values to Ref parameter
-WRITE takes-ref(loc)
-WRITE takes-ref(glob)
-
-; Also test inline refs
-WRITE takes-ref(data{1, 2})
-WRITE takes-ref(^global{"key"})

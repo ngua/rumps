@@ -1,6 +1,8 @@
 ; Test: duplicate/out-of-order transaction modifiers produce parse errors
 
-; Duplicate ON CONFLICT should fail
-LET r = TRANSACTION {
-  @SET ^data{1} "one"
-} ON CONFLICT ABORT ON CONFLICT SKIP
+FUN main() {
+  ; Duplicate ON CONFLICT should fail
+  LET r = TRANSACTION {
+    @SET ^data{1} "one"
+  } ON CONFLICT ABORT ON CONFLICT SKIP
+}

@@ -1,16 +1,49 @@
 ; Ordering type tests
 
-; === Ordering variant construction ===
+FUN main() {
+  ; === Ordering variant construction ===
 
-LET lt = Ordering.Lt
-LET eq = Ordering.Eq
-LET gt = Ordering.Gt
+  LET lt = Ordering.Lt
+  LET eq = Ordering.Eq
+  LET gt = Ordering.Gt
 
-WRITE lt
-WRITE eq
-WRITE gt
+  WRITE lt
+  WRITE eq
+  WRITE gt
 
-; === Pattern matching on Ordering ===
+  ; === Pattern matching on Ordering ===
+
+  WRITE describe(Ordering.Lt)
+  WRITE describe(Ordering.Eq)
+  WRITE describe(Ordering.Gt)
+
+  ; === Using Ordering as function result ===
+
+  WRITE describe(compare-int(1, 2))
+  WRITE describe(compare-int(2, 2))
+  WRITE describe(compare-int(3, 2))
+
+  ; === Ordering in data structures ===
+
+  LET orderings: Array[Ordering] = [Ordering.Lt, Ordering.Eq, Ordering.Gt]
+  WRITE Iterable:length(orderings)
+
+  LET mapped = Mappable:map(describe, orderings)
+  WRITE mapped
+
+  ; === Ordering in match with guards ===
+
+  WRITE classify(Ordering.Lt)
+  WRITE classify(Ordering.Eq)
+  WRITE classify(Ordering.Gt)
+
+  ; === Type annotation with Ordering ===
+
+  LET typed: Ordering = Ordering.Gt
+  WRITE describe(typed)
+
+  WRITE describe(identity(Ordering.Eq))
+}
 
 FUN describe(ord: Ordering) -> String {
   MATCH ord {
@@ -20,31 +53,11 @@ FUN describe(ord: Ordering) -> String {
   }
 }
 
-WRITE describe(Ordering.Lt)
-WRITE describe(Ordering.Eq)
-WRITE describe(Ordering.Gt)
-
-; === Using Ordering as function result ===
-
 FUN compare-int(a: Int, b: Int) -> Ordering {
   IF a < b { Ordering.Lt } ELSE {
     IF a == b { Ordering.Eq } ELSE { Ordering.Gt }
   }
 }
-
-WRITE describe(compare-int(1, 2))
-WRITE describe(compare-int(2, 2))
-WRITE describe(compare-int(3, 2))
-
-; === Ordering in data structures ===
-
-LET orderings: Array[Ordering] = [Ordering.Lt, Ordering.Eq, Ordering.Gt]
-WRITE Iterable:length(orderings)
-
-LET mapped = Mappable:map(describe, orderings)
-WRITE mapped
-
-; === Ordering in match with guards ===
 
 FUN classify(ord: Ordering) -> Int {
   MATCH ord {
@@ -54,17 +67,6 @@ FUN classify(ord: Ordering) -> Int {
   }
 }
 
-WRITE classify(Ordering.Lt)
-WRITE classify(Ordering.Eq)
-WRITE classify(Ordering.Gt)
-
-; === Type annotation with Ordering ===
-
-LET typed: Ordering = Ordering.Gt
-WRITE describe(typed)
-
 FUN identity(ord: Ordering) -> Ordering {
   ord
 }
-
-WRITE describe(identity(Ordering.Eq))

@@ -9,138 +9,140 @@
 ; NOTE: Mixed operations (`Word` + `Int`, `Word` - `Float`, etc.) are NOT allowed;
 ; explicit conversion is required (use `AS` or `READ`).
 
-; === Basic Word Literals ===
+FUN main() {
+  ; === Basic Word Literals ===
 
-; Word annotation with positive integer
-LET w1: Word = 42
-WRITE w1
-; Expected: 42
+  ; Word annotation with positive integer
+  LET w1: Word = 42
+  WRITE w1
+  ; Expected: 42
 
-; Word with zero
-LET w2: Word = 0
-WRITE w2
-; Expected: 0
+  ; Word with zero
+  LET w2: Word = 0
+  WRITE w2
+  ; Expected: 0
 
-; === Arithmetic Operations (same-type) ===
+  ; === Arithmetic Operations (same-type) ===
 
-; Word + Word -> Word (saturating)
-LET w10: Word = 10
-LET w5: Word = 5
-LET a: Word = w10 + w5
-WRITE a
-; Expected: 15
+  ; Word + Word -> Word (saturating)
+  LET w10: Word = 10
+  LET w5: Word = 5
+  LET a: Word = w10 + w5
+  WRITE a
+  ; Expected: 15
 
-; Word * Word -> Word (saturating)
-LET w3: Word = 3
-LET w4: Word = 4
-LET d: Word = w3 * w4
-WRITE d
-; Expected: 12
+  ; Word * Word -> Word (saturating)
+  LET w3: Word = 3
+  LET w4: Word = 4
+  LET d: Word = w3 * w4
+  WRITE d
+  ; Expected: 12
 
-; === Saturating Subtraction (Word - Word) ===
+  ; === Saturating Subtraction (Word - Word) ===
 
-; Word - Word with positive result
-LET e = w10 - w3
-WRITE e
-; Expected: 7 (Word, stays Word)
+  ; Word - Word with positive result
+  LET e = w10 - w3
+  WRITE e
+  ; Expected: 7 (Word, stays Word)
 
-; Word - Word at boundary (saturates to 0)
-LET f = w5 - w10
-WRITE f
-; Expected: 0 (saturating subtraction)
+  ; Word - Word at boundary (saturates to 0)
+  LET f = w5 - w10
+  WRITE f
+  ; Expected: 0 (saturating subtraction)
 
-LET wz: Word = 0
-LET w1a: Word = 1
-LET g = wz - w1a
-WRITE g
-; Expected: 0 (saturating subtraction)
+  LET wz: Word = 0
+  LET w1a: Word = 1
+  LET g = wz - w1a
+  WRITE g
+  ; Expected: 0 (saturating subtraction)
 
-; === Comparisons (same-type) ===
+  ; === Comparisons (same-type) ===
 
-LET w20: Word = 20
-WRITE w10 == w10
-; Expected: TRUE
+  LET w20: Word = 20
+  WRITE w10 == w10
+  ; Expected: TRUE
 
-LET w10i: Word = 10
-WRITE w10 == w10i
-; Expected: TRUE
+  LET w10i: Word = 10
+  WRITE w10 == w10i
+  ; Expected: TRUE
 
-WRITE w10 < w20
-; Expected: TRUE
+  WRITE w10 < w20
+  ; Expected: TRUE
 
-WRITE w10 > w5
-; Expected: TRUE
+  WRITE w10 > w5
+  ; Expected: TRUE
 
-; === Conversion: Word AS Int (infallible) ===
+  ; === Conversion: Word AS Int (infallible) ===
 
-LET w100: Word = 100
-LET as-int = w100 AS Int
-WRITE as-int
-; Expected: 100
+  LET w100: Word = 100
+  LET as-int = w100 AS Int
+  WRITE as-int
+  ; Expected: 100
 
-; === Conversion: Word AS Float (infallible) ===
+  ; === Conversion: Word AS Float (infallible) ===
 
-LET as-float = w100 AS Float
-WRITE as-float
-; Expected: 100.0
+  LET as-float = w100 AS Float
+  WRITE as-float
+  ; Expected: 100.0
 
-; === Conversion: Int READ Word (fallible) ===
+  ; === Conversion: Int READ Word (fallible) ===
 
-; Positive Int -> Word (success)
-LET res1 = 42 READ Word
-WRITE res1
-; Expected: Result.Ok(42)
+  ; Positive Int -> Word (success)
+  LET res1 = 42 READ Word
+  WRITE res1
+  ; Expected: Result.Ok(42)
 
-; Zero -> Word (success)
-LET res2 = 0 READ Word
-WRITE res2
-; Expected: Result.Ok(0)
+  ; Zero -> Word (success)
+  LET res2 = 0 READ Word
+  WRITE res2
+  ; Expected: Result.Ok(0)
 
-; Negative Int -> Word (failure)
-LET res3 = (-5) READ Word
-WRITE res3
-; Expected: Result.Err("expected non-negative Int for Word, got -5")
+  ; Negative Int -> Word (failure)
+  LET res3 = (-5) READ Word
+  WRITE res3
+  ; Expected: Result.Err("expected non-negative Int for Word, got -5")
 
-; === String READ Word ===
+  ; === String READ Word ===
 
-LET res4 = "123" READ Word
-WRITE res4
-; Expected: Result.Ok(123)
+  LET res4 = "123" READ Word
+  WRITE res4
+  ; Expected: Result.Ok(123)
 
-LET res5 = "abc" READ Word
-WRITE res5
-; Expected: Result.Err("invalid unsigned integer: abc")
+  LET res5 = "abc" READ Word
+  WRITE res5
+  ; Expected: Result.Err("invalid unsigned integer: abc")
 
-LET res6 = "-42" READ Word
-WRITE res6
-; Expected: Result.Err("invalid unsigned integer: -42")
+  LET res6 = "-42" READ Word
+  WRITE res6
+  ; Expected: Result.Err("invalid unsigned integer: -42")
 
-; === Division (Float operands required) ===
+  ; === Division (Float operands required) ===
 
-LET f10 = w10 AS Float
-LET f4 = w4 AS Float
-LET div = f10 / f4
-WRITE div
-; Expected: 2.5
+  LET f10 = w10 AS Float
+  LET f4 = w4 AS Float
+  LET div = f10 / f4
+  WRITE div
+  ; Expected: 2.5
 
-; === Floor division (Word // Word -> Word) ===
+  ; === Floor division (Word // Word -> Word) ===
 
-LET fdiv: Word = w10 // w3
-WRITE fdiv
-; Expected: 3
+  LET fdiv: Word = w10 // w3
+  WRITE fdiv
+  ; Expected: 3
 
-; === Modulo (Word % Word -> Word) ===
+  ; === Modulo (Word % Word -> Word) ===
 
-LET m: Word = w10 % w3
-WRITE m
-; Expected: 1
+  LET m: Word = w10 % w3
+  WRITE m
+  ; Expected: 1
 
-; === Power (Word ** Word -> Word, saturating) ===
+  ; === Power (Word ** Word -> Word, saturating) ===
 
-LET w2p: Word = 2
-LET w10p: Word = 10
-LET p: Word = w2p ** w10p
-WRITE p
-; Expected: 1024
+  LET w2p: Word = 2
+  LET w10p: Word = 10
+  LET p: Word = w2p ** w10p
+  WRITE p
+  ; Expected: 1024
 
-WRITE "Word type test complete"
+  WRITE "Word type test complete"
+}

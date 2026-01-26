@@ -1,98 +1,100 @@
 ; Test: indentation-based expression continuation
 ; Expressions continue across newlines when indented
 
-; === Basic continuation ===
+FUN main() {
+  ; === Basic continuation ===
 
-LET x = 1
-  + 2
-WRITE x
-; Expected: 3
+  LET x = 1
+    + 2
+  WRITE x
+  ; Expected: 3
 
-LET y = 10
-  - 3
-  - 2
-WRITE y
-; Expected: 5
+  LET y = 10
+    - 3
+    - 2
+  WRITE y
+  ; Expected: 5
 
-; === Multi-operator continuation ===
+  ; === Multi-operator continuation ===
 
-LET sum = 1
-  + 2
-  + 3
-  + 4
-WRITE sum
-; Expected: 10
+  LET sum = 1
+    + 2
+    + 3
+    + 4
+  WRITE sum
+  ; Expected: 10
 
-; === Mixed operators with precedence ===
+  ; === Mixed operators with precedence ===
 
-LET expr = 1
-  + 2
-  * 3
-WRITE expr
-; Expected: 7 (1 + (2 * 3))
+  LET expr = 1
+    + 2
+    * 3
+  WRITE expr
+  ; Expected: 7 (1 + (2 * 3))
 
-LET expr2 = 2
-  * 3
-  + 4
-WRITE expr2
-; Expected: 10 ((2 * 3) + 4)
+  LET expr2 = 2
+    * 3
+    + 4
+  WRITE expr2
+  ; Expected: 10 ((2 * 3) + 4)
 
-; === Comparison continuation ===
+  ; === Comparison continuation ===
 
-LET cmp = 10
-  > 5
-WRITE cmp
-; Expected: true
+  LET cmp = 10
+    > 5
+  WRITE cmp
+  ; Expected: true
 
-; === Logical continuation ===
+  ; === Logical continuation ===
 
-LET logic = TRUE
-  AND TRUE
-  AND FALSE
-WRITE logic
-; Expected: false
+  LET logic = TRUE
+    AND TRUE
+    AND FALSE
+  WRITE logic
+  ; Expected: false
 
-; === String interpolation (replaces concat) ===
+  ; === String interpolation (replaces concat) ===
 
-LET greet = "Hello"
-LET target = "World"
-LET msg = "{greet} {target}"
-WRITE msg
-; Expected: Hello World
+  LET greet = "Hello"
+  LET target = "World"
+  LET msg = "{greet} {target}"
+  WRITE msg
+  ; Expected: Hello World
 
-; === Continuation does NOT apply inside delimiters ===
+  ; === Continuation does NOT apply inside delimiters ===
 
-; Arrays can have newlines freely
-LET arr = [
-  1,
-  2,
-  3
-]
-WRITE arr[0]
-; Expected: 1
+  ; Arrays can have newlines freely
+  LET arr = [
+    1,
+    2,
+    3
+  ]
+  WRITE arr[0]
+  ; Expected: 1
 
-; Objects can have newlines freely
-LET obj = {
-  a: 1,
-  b: 2
+  ; Objects can have newlines freely
+  LET obj = {
+    a: 1,
+    b: 2
+  }
+  WRITE obj.a
+  ; Expected: 1
+
+  ; Blocks use braces, not indentation
+  LET blk = {
+    LET inner = 5
+    inner * 2
+  }
+  WRITE blk
+  ; Expected: 10
+
+  ; === Continuation ends at dedent ===
+
+  LET a = 1
+    + 2
+  LET b = 3
+  WRITE a + b
+  ; Expected: 6
+
+  WRITE "Indent continuation test complete"
 }
-WRITE obj.a
-; Expected: 1
-
-; Blocks use braces, not indentation
-LET blk = {
-  LET inner = 5
-  inner * 2
-}
-WRITE blk
-; Expected: 10
-
-; === Continuation ends at dedent ===
-
-LET a = 1
-  + 2
-LET b = 3
-WRITE a + b
-; Expected: 6
-
-WRITE "Indent continuation test complete"

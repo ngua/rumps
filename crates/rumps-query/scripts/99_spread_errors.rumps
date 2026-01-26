@@ -1,10 +1,12 @@
 ; Test spread operator type errors
 ; Section 8 of phase-4c.md
 
-; Spread non-array in array literal
-LET x = 42
-LET arr = [...x]
+FUN main() {
+  ; Spread non-array in array literal
+  LET x = 42
+  LET arr = [...x]
 
-; Spread non-object in object literal
-LET y = "hello"
-LET obj = { ...y }
+  ; Spread non-object in object literal
+  LET y = "hello"
+  LET obj = { ...y }
+}

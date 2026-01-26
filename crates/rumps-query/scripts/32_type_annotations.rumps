@@ -1,59 +1,61 @@
 ; Test: Type annotations on LET bindings
 ; Tests `LET x: Type = expr` syntax with type checking
 
-; === Basic type annotations ===
+FUN main() {
+  ; === Basic type annotations ===
 
-; Int annotation
-LET x: Int = 42
-WRITE x
-; Expected: 42
+  ; Int annotation
+  LET x: Int = 42
+  WRITE x
+  ; Expected: 42
 
-; String annotation
-LET s: String = "hello"
-WRITE s
-; Expected: hello
+  ; String annotation
+  LET s: String = "hello"
+  WRITE s
+  ; Expected: hello
 
-; Bool annotation
-LET b: Bool = TRUE
-WRITE b
-; Expected: true
+  ; Bool annotation
+  LET b: Bool = TRUE
+  WRITE b
+  ; Expected: true
 
-; Float annotation
-LET f: Float = 3.14
-WRITE f
-; Expected: 3.14
+  ; Float annotation
+  LET f: Float = 3.14
+  WRITE f
+  ; Expected: 3.14
 
-; === Parameterized type annotations ===
+  ; === Parameterized type annotations ===
 
-; Option[Int] with Some
-LET opt: Option[Int] = Option.Some(10)
-WRITE opt
-; Expected: Option.Some(10)
+  ; Option[Int] with Some
+  LET opt: Option[Int] = Option.Some(10)
+  WRITE opt
+  ; Expected: Option.Some(10)
 
-; Option[Int] with None (this tests type compatibility)
-; Note: None is Option[unknown] which should be compatible with Option[Int]
+  ; Option[Int] with None (this tests type compatibility)
+  ; Note: None is Option[unknown] which should be compatible with Option[Int]
 
-; === Nested type annotations ===
+  ; === Nested type annotations ===
 
-; Array[Int]
-LET arr: Array[Int] = [1, 2, 3]
-WRITE arr
-; Expected: [1, 2, 3]
+  ; Array[Int]
+  LET arr: Array[Int] = [1, 2, 3]
+  WRITE arr
+  ; Expected: [1, 2, 3]
 
-; Array[Option[Int]] - nested parameterized type
-LET arr-opt: Array[Option[Int]] = [Option.Some(1), Option.Some(2)]
-WRITE arr-opt
-; Expected: [Option.Some(1), Option.Some(2)]
+  ; Array[Option[Int]] - nested parameterized type
+  LET arr-opt: Array[Option[Int]] = [Option.Some(1), Option.Some(2)]
+  WRITE arr-opt
+  ; Expected: [Option.Some(1), Option.Some(2)]
 
-; Result[Int, String] - two type parameters
-LET res: Result[Int, String] = Result.Ok(42)
-WRITE res
-; Expected: Result.Ok(42)
+  ; Result[Int, String] - two type parameters
+  LET res: Result[Int, String] = Result.Ok(42)
+  WRITE res
+  ; Expected: Result.Ok(42)
 
-; === Without annotations (still works) ===
+  ; === Without annotations (still works) ===
 
-LET no-ann = 123
-WRITE no-ann
-; Expected: 123
+  LET no-ann = 123
+  WRITE no-ann
+  ; Expected: 123
 
-WRITE "Type annotation test complete"
+  WRITE "Type annotation test complete"
+}

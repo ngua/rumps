@@ -1,7 +1,9 @@
 ; Test: Closure Parameter Type Error
 ; Calling a typed closure with wrong argument type.
 
-LET double = (x: Int) -> Int => x * 2
+FUN main() {
+  LET double = (x: Int) -> Int => x * 2
 
-; Pass string to Int parameter
-WRITE double("hello")
+  ; Pass string to Int parameter
+  WRITE double("hello")
+}

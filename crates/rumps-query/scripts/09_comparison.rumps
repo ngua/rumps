@@ -1,107 +1,109 @@
 ; Test: comparison operators
 ; Tests all comparison operators
 
-; Equality
-WRITE 5 == 5
-; Expected: true
+FUN main() {
+  ; Equality
+  WRITE 5 == 5
+  ; Expected: true
 
-WRITE 5 == 6
-; Expected: false
+  WRITE 5 == 6
+  ; Expected: false
 
-WRITE "abc" == "abc"
-; Expected: true
+  WRITE "abc" == "abc"
+  ; Expected: true
 
-WRITE "abc" == "def"
-; Expected: false
+  WRITE "abc" == "def"
+  ; Expected: false
 
-WRITE TRUE == TRUE
-; Expected: true
+  WRITE TRUE == TRUE
+  ; Expected: true
 
-WRITE TRUE == FALSE
-; Expected: false
+  WRITE TRUE == FALSE
+  ; Expected: false
 
-; Inequality
-WRITE 5 != 6
-; Expected: true
+  ; Inequality
+  WRITE 5 != 6
+  ; Expected: true
 
-WRITE 5 != 5
-; Expected: false
+  WRITE 5 != 5
+  ; Expected: false
 
-; Less than
-WRITE 5 < 10
-; Expected: true
+  ; Less than
+  WRITE 5 < 10
+  ; Expected: true
 
-WRITE 10 < 5
-; Expected: false
+  WRITE 10 < 5
+  ; Expected: false
 
-WRITE 5 < 5
-; Expected: false
+  WRITE 5 < 5
+  ; Expected: false
 
-; Greater than
-WRITE 10 > 5
-; Expected: true
+  ; Greater than
+  WRITE 10 > 5
+  ; Expected: true
 
-WRITE 5 > 10
-; Expected: false
+  WRITE 5 > 10
+  ; Expected: false
 
-WRITE 5 > 5
-; Expected: false
+  WRITE 5 > 5
+  ; Expected: false
 
-; Less than or equal
-WRITE 5 <= 10
-; Expected: true
+  ; Less than or equal
+  WRITE 5 <= 10
+  ; Expected: true
 
-WRITE 5 <= 5
-; Expected: true
+  WRITE 5 <= 5
+  ; Expected: true
 
-WRITE 10 <= 5
-; Expected: false
+  WRITE 10 <= 5
+  ; Expected: false
 
-; Greater than or equal
-WRITE 10 >= 5
-; Expected: true
+  ; Greater than or equal
+  WRITE 10 >= 5
+  ; Expected: true
 
-WRITE 5 >= 5
-; Expected: true
+  WRITE 5 >= 5
+  ; Expected: true
 
-WRITE 5 >= 10
-; Expected: false
+  WRITE 5 >= 10
+  ; Expected: false
 
-; Float comparisons
-WRITE 3.14 < 3.15
-; Expected: true
+  ; Float comparisons
+  WRITE 3.14 < 3.15
+  ; Expected: true
 
-WRITE 2.5 >= 2.5
-; Expected: true
+  WRITE 2.5 >= 2.5
+  ; Expected: true
 
-; Same-type comparisons (no implicit coercion)
-WRITE 5 < 6
-; Expected: true
+  ; Same-type comparisons (no implicit coercion)
+  WRITE 5 < 6
+  ; Expected: true
 
-WRITE 5.0 == 5.0
-; Expected: true
+  WRITE 5.0 == 5.0
+  ; Expected: true
 
-; String comparisons (lexicographic)
-WRITE "abc" < "abd"
-; Expected: true
+  ; String comparisons (lexicographic)
+  WRITE "abc" < "abd"
+  ; Expected: true
 
-WRITE "abc" < "ab"
-; Expected: false
+  WRITE "abc" < "ab"
+  ; Expected: false
 
-WRITE "apple" < "banana"
-; Expected: true
+  WRITE "apple" < "banana"
+  ; Expected: true
 
-; Chained comparisons via variables
-LET a = 5
-LET b = 10
-LET c = 15
-WRITE a < b
-; Expected: true
+  ; Chained comparisons via variables
+  LET a = 5
+  LET b = 10
+  LET c = 15
+  WRITE a < b
+  ; Expected: true
 
-WRITE b < c
-; Expected: true
+  WRITE b < c
+  ; Expected: true
 
-WRITE a < c
-; Expected: true
+  WRITE a < c
+  ; Expected: true
 
-WRITE "Comparison test complete"
+  WRITE "Comparison test complete"
+}

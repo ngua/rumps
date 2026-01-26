@@ -1,119 +1,121 @@
 ; IS operator with parameterized types (Array[T], Map[K, V])
 ; Tests that element/key/value types are checked, not just the container type
 
-; === Array element type checks ===
+FUN main() {
+  ; === Array element type checks ===
 
-LET floats = [1.0, 2.0, 3.0]
-WRITE floats IS Array[Float]
-; TRUE
+  LET floats = [1.0, 2.0, 3.0]
+  WRITE floats IS Array[Float]
+  ; TRUE
 
-WRITE floats IS Array[Int]
-; FALSE - floats are not ints
+  WRITE floats IS Array[Int]
+  ; FALSE - floats are not ints
 
-WRITE floats IS Array[Char]
-; FALSE
+  WRITE floats IS Array[Char]
+  ; FALSE
 
-LET ints = [1, 2, 3]
-WRITE ints IS Array[Int]
-; TRUE
+  LET ints = [1, 2, 3]
+  WRITE ints IS Array[Int]
+  ; TRUE
 
-WRITE ints IS Array[Float]
-; FALSE
+  WRITE ints IS Array[Float]
+  ; FALSE
 
-WRITE ints IS Array[String]
-; FALSE
+  WRITE ints IS Array[String]
+  ; FALSE
 
-; === Empty array with annotation ===
+  ; === Empty array with annotation ===
 
-; Empty array without annotation is polymorphic (UNKNOWN element type)
-LET empty = []
-WRITE empty IS Array[Int]
-; TRUE - UNKNOWN matches anything
+  ; Empty array without annotation is polymorphic (UNKNOWN element type)
+  LET empty = []
+  WRITE empty IS Array[Int]
+  ; TRUE - UNKNOWN matches anything
 
-WRITE empty IS Array[String]
-; TRUE - UNKNOWN matches anything
+  WRITE empty IS Array[String]
+  ; TRUE - UNKNOWN matches anything
 
-; Empty array WITH annotation has concrete element type
-LET empty-bool: Array[Bool] = []
-WRITE empty-bool IS Array[Bool]
-; TRUE
+  ; Empty array WITH annotation has concrete element type
+  LET empty-bool: Array[Bool] = []
+  WRITE empty-bool IS Array[Bool]
+  ; TRUE
 
-WRITE empty-bool IS Array[Int]
-; FALSE - annotated as Bool, not Int
+  WRITE empty-bool IS Array[Int]
+  ; FALSE - annotated as Bool, not Int
 
-WRITE empty-bool IS Array[String]
-; FALSE
+  WRITE empty-bool IS Array[String]
+  ; FALSE
 
-; === Map key/value type checks ===
+  ; === Map key/value type checks ===
 
-LET str-to-int = { "a" => 1, "b" => 2 }
-WRITE str-to-int IS Map[String, Int]
-; TRUE
+  LET str-to-int = { "a" => 1, "b" => 2 }
+  WRITE str-to-int IS Map[String, Int]
+  ; TRUE
 
-WRITE str-to-int IS Map[String, String]
-; FALSE - values are Int, not String
+  WRITE str-to-int IS Map[String, String]
+  ; FALSE - values are Int, not String
 
-WRITE str-to-int IS Map[Int, Int]
-; FALSE - keys are String, not Int
+  WRITE str-to-int IS Map[Int, Int]
+  ; FALSE - keys are String, not Int
 
-; Empty map with annotation
-LET empty-map: Map[Int, Bool] = Map.empty()
-WRITE empty-map IS Map[Int, Bool]
-; TRUE
+  ; Empty map with annotation
+  LET empty-map: Map[Int, Bool] = Map.empty()
+  WRITE empty-map IS Map[Int, Bool]
+  ; TRUE
 
-WRITE empty-map IS Map[String, Int]
-; FALSE - annotated as Map[Int, Bool]
+  WRITE empty-map IS Map[String, Int]
+  ; FALSE - annotated as Map[Int, Bool]
 
-; === Inline annotation syntax ===
+  ; === Inline annotation syntax ===
 
-; Verify inline annotations also refine types
-LET inline-arr = ([]) : Array[Char]
-WRITE inline-arr IS Array[Char]
-; TRUE
+  ; Verify inline annotations also refine types
+  LET inline-arr = ([]) : Array[Char]
+  WRITE inline-arr IS Array[Char]
+  ; TRUE
 
-WRITE inline-arr IS Array[Int]
-; FALSE - inline annotation makes it concrete
+  WRITE inline-arr IS Array[Int]
+  ; FALSE - inline annotation makes it concrete
+
+  LET box-int = { inner: 42 }
+  WRITE box-int IS Box[Int]
+  ; TRUE
+
+  WRITE box-int IS Box[String]
+  ; FALSE
+
+  WRITE box-int IS Box[Float]
+  ; FALSE
+
+  ; === Tuple type checks ===
+
+  WRITE (1, 'a') IS (Int, Char)
+  ; TRUE
+
+  WRITE (1, 'a') IS (Char, Int)
+  ; FALSE - order matters
+
+  WRITE (1, 2) IS (Int, Int)
+  ; TRUE
+
+  WRITE (1, 2, 3) IS (Int, Int, Int)
+  ; TRUE
+
+  ; Single-element tuples
+  LET single: (Int,) = (42,)
+  WRITE single IS (Int,)
+  ; TRUE
+
+  ; Single-element tuple in closure annotations
+  LET f = (x: (Int,)) -> (Int,) => x
+  WRITE f((1,))
+  ; (1,)
+
+  ; Empty tuple
+  WRITE () IS ()
+  ; TRUE
+
+  WRITE "parameterized IS tests complete"
+}
 
 ; === User-defined parameterized types ===
 
 NEWTYPE Box[T] = { inner: T }
-
-LET box-int = { inner: 42 }
-WRITE box-int IS Box[Int]
-; TRUE
-
-WRITE box-int IS Box[String]
-; FALSE
-
-WRITE box-int IS Box[Float]
-; FALSE
-
-; === Tuple type checks ===
-
-WRITE (1, 'a') IS (Int, Char)
-; TRUE
-
-WRITE (1, 'a') IS (Char, Int)
-; FALSE - order matters
-
-WRITE (1, 2) IS (Int, Int)
-; TRUE
-
-WRITE (1, 2, 3) IS (Int, Int, Int)
-; TRUE
-
-; Single-element tuples
-LET single: (Int,) = (42,)
-WRITE single IS (Int,)
-; TRUE
-
-; Single-element tuple in closure annotations
-LET f = (x: (Int,)) -> (Int,) => x
-WRITE f((1,))
-; (1,)
-
-; Empty tuple
-WRITE () IS ()
-; TRUE
-
-WRITE "parameterized IS tests complete"

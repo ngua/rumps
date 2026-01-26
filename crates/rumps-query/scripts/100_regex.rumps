@@ -1,112 +1,114 @@
 ; Regex pattern matching
 ; Tests regex literals and MATCHES operator
 
-; ============ Basic matching ============
+FUN main() {
+  ; ============ Basic matching ============
 
-; Simple pattern
-WRITE "hello" MATCHES /hello/  ; true
-WRITE "world" MATCHES /hello/  ; false
+  ; Simple pattern
+  WRITE "hello" MATCHES /hello/  ; true
+  WRITE "world" MATCHES /hello/  ; false
 
-; Partial match (regex finds pattern anywhere)
-WRITE "hello world" MATCHES /world/  ; true
-WRITE "say hello" MATCHES /hello/  ; true
+  ; Partial match (regex finds pattern anywhere)
+  WRITE "hello world" MATCHES /world/  ; true
+  WRITE "say hello" MATCHES /hello/  ; true
 
-; ============ Character classes ============
+  ; ============ Character classes ============
 
-; Digit matching
-WRITE "abc123" MATCHES /\d+/  ; true
-WRITE "abc" MATCHES /\d+/  ; false
+  ; Digit matching
+  WRITE "abc123" MATCHES /\d+/  ; true
+  WRITE "abc" MATCHES /\d+/  ; false
 
-; Word characters
-WRITE "hello_world" MATCHES /\w+/  ; true
+  ; Word characters
+  WRITE "hello_world" MATCHES /\w+/  ; true
 
-; Whitespace
-WRITE "hello world" MATCHES /\s/  ; true
-WRITE "helloworld" MATCHES /\s/  ; false
+  ; Whitespace
+  WRITE "hello world" MATCHES /\s/  ; true
+  WRITE "helloworld" MATCHES /\s/  ; false
 
-; ============ Anchors ============
+  ; ============ Anchors ============
 
-; Start anchor
-WRITE "hello world" MATCHES /^hello/  ; true
-WRITE "say hello" MATCHES /^hello/  ; false
+  ; Start anchor
+  WRITE "hello world" MATCHES /^hello/  ; true
+  WRITE "say hello" MATCHES /^hello/  ; false
 
-; End anchor
-WRITE "hello world" MATCHES /world$/  ; true
-WRITE "worldly" MATCHES /world$/  ; false
+  ; End anchor
+  WRITE "hello world" MATCHES /world$/  ; true
+  WRITE "worldly" MATCHES /world$/  ; false
 
-; Full match with both anchors
-WRITE "hello" MATCHES /^hello$/  ; true
-WRITE "hello world" MATCHES /^hello$/  ; false
+  ; Full match with both anchors
+  WRITE "hello" MATCHES /^hello$/  ; true
+  WRITE "hello world" MATCHES /^hello$/  ; false
 
-; ============ Quantifiers ============
+  ; ============ Quantifiers ============
 
-; Zero or more
-WRITE "goood" MATCHES /go*d/  ; true
-WRITE "gd" MATCHES /go*d/  ; true
+  ; Zero or more
+  WRITE "goood" MATCHES /go*d/  ; true
+  WRITE "gd" MATCHES /go*d/  ; true
 
-; One or more
-WRITE "goood" MATCHES /go+d/  ; true
-WRITE "gd" MATCHES /go+d/  ; false
+  ; One or more
+  WRITE "goood" MATCHES /go+d/  ; true
+  WRITE "gd" MATCHES /go+d/  ; false
 
-; Optional
-WRITE "color" MATCHES /colou?r/  ; true
-WRITE "colour" MATCHES /colou?r/  ; true
+  ; Optional
+  WRITE "color" MATCHES /colou?r/  ; true
+  WRITE "colour" MATCHES /colou?r/  ; true
 
-; ============ Alternation ============
+  ; ============ Alternation ============
 
-WRITE "cat" MATCHES /cat|dog/  ; true
-WRITE "dog" MATCHES /cat|dog/  ; true
-WRITE "bird" MATCHES /cat|dog/  ; false
+  WRITE "cat" MATCHES /cat|dog/  ; true
+  WRITE "dog" MATCHES /cat|dog/  ; true
+  WRITE "bird" MATCHES /cat|dog/  ; false
 
-; ============ Groups ============
+  ; ============ Groups ============
 
-WRITE "abab" MATCHES /(ab)+/  ; true
-WRITE "ab" MATCHES /(ab)+/  ; true
+  WRITE "abab" MATCHES /(ab)+/  ; true
+  WRITE "ab" MATCHES /(ab)+/  ; true
 
-; ============ Stringable operand ============
+  ; ============ Stringable operand ============
 
-; Integer (converts to string)
-WRITE 123 MATCHES /\d+/  ; true
-WRITE 123 MATCHES /^123$/  ; true
+  ; Integer (converts to string)
+  WRITE 123 MATCHES /\d+/  ; true
+  WRITE 123 MATCHES /^123$/  ; true
 
-; Float
-WRITE 3.14 MATCHES /3\.14/  ; true
+  ; Float
+  WRITE 3.14 MATCHES /3\.14/  ; true
 
-; Boolean
-WRITE true MATCHES /true/  ; true
-WRITE false MATCHES /false/  ; true
+  ; Boolean
+  WRITE true MATCHES /true/  ; true
+  WRITE false MATCHES /false/  ; true
 
-; ============ Variables ============
+  ; ============ Variables ============
 
-LET text = "The quick brown fox"
-LET pat = /quick/
-WRITE text MATCHES pat  ; true
+  LET text = "The quick brown fox"
+  LET pat = /quick/
+  WRITE text MATCHES pat  ; true
 
-LET email-pattern = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/
-WRITE "test@example.com" MATCHES email-pattern  ; true
-WRITE "invalid-email" MATCHES email-pattern  ; false
+  LET email-pattern = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/
+  WRITE "test@example.com" MATCHES email-pattern  ; true
+  WRITE "invalid-email" MATCHES email-pattern  ; false
 
-; ============ Case sensitivity ============
+  ; ============ Case sensitivity ============
 
-; Regex is case-sensitive by default
-WRITE "Hello" MATCHES /hello/  ; false
-WRITE "Hello" MATCHES /Hello/  ; true
+  ; Regex is case-sensitive by default
+  WRITE "Hello" MATCHES /hello/  ; false
+  WRITE "Hello" MATCHES /Hello/  ; true
 
-; ============ Special characters ============
+  ; ============ Special characters ============
 
-; Escaped special chars
-WRITE "a.b" MATCHES /a\.b/  ; true
-WRITE "a*b" MATCHES /a\*b/  ; true
-WRITE "a+b" MATCHES /a\+b/  ; true
+  ; Escaped special chars
+  WRITE "a.b" MATCHES /a\.b/  ; true
+  WRITE "a*b" MATCHES /a\*b/  ; true
+  WRITE "a+b" MATCHES /a\+b/  ; true
 
-; ============ Keyword case insensitivity ============
+  ; ============ Keyword case insensitivity ============
 
-; MATCHES keyword is case-insensitive
-WRITE "hello" matches /hello/  ; true
-WRITE "hello" Matches /hello/  ; true
+  ; MATCHES keyword is case-insensitive
+  WRITE "hello" matches /hello/  ; true
+  WRITE "hello" Matches /hello/  ; true
 
-; ============ Precedence ============
+  ; ============ Precedence ============
 
-; MATCHES has lower precedence than comparison
-LET x = 5
-WRITE (x > 3) AND ("test" MATCHES /test/)  ; true
+  ; MATCHES has lower precedence than comparison
+  LET x = 5
+  WRITE (x > 3) AND ("test" MATCHES /test/)  ; true
+}

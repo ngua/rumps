@@ -1,9 +1,11 @@
 ; Test TryInto constraint errors
 
+FUN main() {
+  LET f = (x: Int) -> Int => x + 1
+  WRITE bad-read(f)
+}
+
 ; Function types cannot satisfy TryInto
 FUN bad-read[T: TryInto[Int]](x: T) -> Result[Int, String] {
   x READ Int
 }
-
-LET f = (x: Int) -> Int => x + 1
-WRITE bad-read(f)

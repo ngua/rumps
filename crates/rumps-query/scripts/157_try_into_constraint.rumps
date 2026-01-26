@@ -1,42 +1,44 @@
 ; Test TryInto constraint for fallible READ conversions
 
-; ============================================================================
-; Basic TryInto usage
-; ============================================================================
+FUN main() {
+  ; ============================================================================
+  ; Basic TryInto usage
+  ; ============================================================================
+
+  WRITE read-int("42")
+  WRITE read-int("abc")
+
+  WRITE read-bool("true")
+  WRITE read-bool(1)
+
+  ; ============================================================================
+  ; Multiple constraints including TryInto
+  ; ============================================================================
+
+  WRITE numeric-to-bool(0)
+  WRITE numeric-to-bool(1)
+
+  ; ============================================================================
+  ; Closure with TryInto constraint
+  ; ============================================================================
+
+  LET parse-int = [T: TryInto[Int]](x: T) -> Result[Int, String] => x READ Int
+
+  WRITE parse-int("100")
+  WRITE parse-int("not a number")
+}
 
 ; Function that reads any type into Int
 FUN read-int[T: TryInto[Int]](x: T) -> Result[Int, String] {
   x READ Int
 }
 
-WRITE read-int("42")
-WRITE read-int("abc")
-
 ; Function that reads any type into Bool
 FUN read-bool[T: TryInto[Bool]](x: T) -> Result[Bool, String] {
   x READ Bool
 }
 
-WRITE read-bool("true")
-WRITE read-bool(1)
-
-; ============================================================================
-; Multiple constraints including TryInto
-; ============================================================================
-
 ; Numeric AND TryInto[Bool]
 FUN numeric-to-bool[T: Numeric + TryInto[Bool]](x: T) -> Result[Bool, String] {
   x READ Bool
 }
-
-WRITE numeric-to-bool(0)
-WRITE numeric-to-bool(1)
-
-; ============================================================================
-; Closure with TryInto constraint
-; ============================================================================
-
-LET parse-int = [T: TryInto[Int]](x: T) -> Result[Int, String] => x READ Int
-
-WRITE parse-int("100")
-WRITE parse-int("not a number")

@@ -1,59 +1,61 @@
 ; Test: WRITE statement
 ; Tests various WRITE scenarios
 
-; Output literal integer
-WRITE 42
-; Expected: 42
+FUN main() {
+  ; Output literal integer
+  WRITE 42
+  ; Expected: 42
 
-; Output literal float
-WRITE 3.14159
-; Expected: 3.14159
+  ; Output literal float
+  WRITE 3.14159
+  ; Expected: 3.14159
 
-; Output literal string
-WRITE "Hello, World!"
-; Expected: Hello, World!
+  ; Output literal string
+  WRITE "Hello, World!"
+  ; Expected: Hello, World!
 
-; Output literal boolean
-WRITE TRUE
-WRITE FALSE
-; Expected: true, false
+  ; Output literal boolean
+  WRITE TRUE
+  WRITE FALSE
+  ; Expected: true, false
 
-; Output variable
-LET x = 123
-WRITE x
-; Expected: 123
+  ; Output variable
+  LET x = 123
+  WRITE x
+  ; Expected: 123
 
-; Output expression result
-WRITE 10 + 20 * 3
-; Expected: 70
+  ; Output expression result
+  WRITE 10 + 20 * 3
+  ; Expected: 70
 
-; Output string interpolation
-WRITE "{"Hello"} {"RUMPS"}"
-; Expected: Hello RUMPS
+  ; Output string interpolation
+  WRITE "{"Hello"} {"RUMPS"}"
+  ; Expected: Hello RUMPS
 
-; Output comparison result
-WRITE 5 < 10
-; Expected: true
+  ; Output comparison result
+  WRITE 5 < 10
+  ; Expected: true
 
-; Output logical result
-WRITE TRUE AND FALSE
-; Expected: false
+  ; Output logical result
+  WRITE TRUE AND FALSE
+  ; Expected: false
 
-WRITE NOT FALSE
-; Expected: true
+  WRITE NOT FALSE
+  ; Expected: true
 
-; Output from block result
-LET result = {
-  LET a = 5
-  LET b = 10
-  a + b
+  ; Output from block result
+  LET result = {
+    LET a = 5
+    LET b = 10
+    a + b
+  }
+  WRITE result
+  ; Expected: 15
+
+  ; Multiple outputs in sequence
+  WRITE "Line 1"
+  WRITE "Line 2"
+  WRITE "Line 3"
+
+  WRITE "WRITE test complete"
 }
-WRITE result
-; Expected: 15
-
-; Multiple outputs in sequence
-WRITE "Line 1"
-WRITE "Line 2"
-WRITE "Line 3"
-
-WRITE "WRITE test complete"

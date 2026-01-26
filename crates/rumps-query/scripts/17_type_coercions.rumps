@@ -1,102 +1,104 @@
 ; Test: type conversions
 ; Tests explicit type conversion with AS and string interpolation
 
-; === Explicit Type Conversion with AS ===
+FUN main() {
+  ; === Explicit Type Conversion with AS ===
 
-; Addition with explicit conversion to Float
-LET a = (10 AS Float) + 3.5
-WRITE a
-; Expected: 13.5 (Float)
+  ; Addition with explicit conversion to Float
+  LET a = (10 AS Float) + 3.5
+  WRITE a
+  ; Expected: 13.5 (Float)
 
-LET b = 3.5 + (10 AS Float)
-WRITE b
-; Expected: 13.5 (Float)
+  LET b = 3.5 + (10 AS Float)
+  WRITE b
+  ; Expected: 13.5 (Float)
 
-; Subtraction with explicit conversion
-LET c = (10 AS Float) - 2.5
-WRITE c
-; Expected: 7.5 (Float)
+  ; Subtraction with explicit conversion
+  LET c = (10 AS Float) - 2.5
+  WRITE c
+  ; Expected: 7.5 (Float)
 
-LET d = 10.5 - (3 AS Float)
-WRITE d
-; Expected: 7.5 (Float)
+  LET d = 10.5 - (3 AS Float)
+  WRITE d
+  ; Expected: 7.5 (Float)
 
-; Multiplication with explicit conversion
-LET e = (5 AS Float) * 2.5
-WRITE e
-; Expected: 12.5 (Float)
+  ; Multiplication with explicit conversion
+  LET e = (5 AS Float) * 2.5
+  WRITE e
+  ; Expected: 12.5 (Float)
 
-LET f = 2.5 * (4 AS Float)
-WRITE f
-; Expected: 10.0 (Float)
+  LET f = 2.5 * (4 AS Float)
+  WRITE f
+  ; Expected: 10.0 (Float)
 
-; Division (requires Float operands)
-LET g = (10 AS Float) / 4.0
-WRITE g
-; Expected: 2.5 (Float)
+  ; Division (requires Float operands)
+  LET g = (10 AS Float) / 4.0
+  WRITE g
+  ; Expected: 2.5 (Float)
 
-LET h = 10.0 / (4 AS Float)
-WRITE h
-; Expected: 2.5 (Float)
+  LET h = 10.0 / (4 AS Float)
+  WRITE h
+  ; Expected: 2.5 (Float)
 
-; Float division
-LET i = 10.0 / 5.0
-WRITE i
-; Expected: 2.0 (Float)
+  ; Float division
+  LET i = 10.0 / 5.0
+  WRITE i
+  ; Expected: 2.0 (Float)
 
-; Floor division (same-type operands)
-LET j = 10.0 // 3.0
-WRITE j
-; Expected: 3.0 (Float)
+  ; Floor division (same-type operands)
+  LET j = 10.0 // 3.0
+  WRITE j
+  ; Expected: 3.0 (Float)
 
-LET k = 10 // 3
-WRITE k
-; Expected: 3 (Int)
+  LET k = 10 // 3
+  WRITE k
+  ; Expected: 3 (Int)
 
-; Modulo (same-type operands)
-LET l = 10.0 % 3.5
-WRITE l
-; Expected: 3.0 (Float; 10.0 % 3.5 = 3.0)
+  ; Modulo (same-type operands)
+  LET l = 10.0 % 3.5
+  WRITE l
+  ; Expected: 3.0 (Float; 10.0 % 3.5 = 3.0)
 
-LET m = 10.5 % 3.0
-WRITE m
-; Expected: 1.5 (Float; 10.5 % 3.0 = 1.5)
+  LET m = 10.5 % 3.0
+  WRITE m
+  ; Expected: 1.5 (Float; 10.5 % 3.0 = 1.5)
 
-; === String Conversion (via interpolation) ===
+  ; === String Conversion (via interpolation) ===
 
-; Int to string
-WRITE "Number: {42}"
-; Expected: Number: 42
+  ; Int to string
+  WRITE "Number: {42}"
+  ; Expected: Number: 42
 
-; Float to string
-WRITE "Pi: {3.14159}"
-; Expected: Pi: 3.14159
+  ; Float to string
+  WRITE "Pi: {3.14159}"
+  ; Expected: Pi: 3.14159
 
-; Bool to string
-WRITE "Flag: {TRUE}"
-; Expected: Flag: true
+  ; Bool to string
+  WRITE "Flag: {TRUE}"
+  ; Expected: Flag: true
 
-WRITE "Flag: {FALSE}"
-; Expected: Flag: false
+  WRITE "Flag: {FALSE}"
+  ; Expected: Flag: false
 
-; === Same-type Numeric Comparison ===
+  ; === Same-type Numeric Comparison ===
 
-WRITE 5 == 5
-; Expected: true
+  WRITE 5 == 5
+  ; Expected: true
 
-WRITE 5.0 == 5.0
-; Expected: true
+  WRITE 5.0 == 5.0
+  ; Expected: true
 
-WRITE 10 < 11
-; Expected: true
+  WRITE 10 < 11
+  ; Expected: true
 
-WRITE 10.5 > 10.0
-; Expected: true
+  WRITE 10.5 > 10.0
+  ; Expected: true
 
-WRITE 3 >= 3
-; Expected: true
+  WRITE 3 >= 3
+  ; Expected: true
 
-WRITE 3.0 <= 3.0
-; Expected: true
+  WRITE 3.0 <= 3.0
+  ; Expected: true
 
-WRITE "Type conversion test complete"
+  WRITE "Type conversion test complete"
+}

@@ -1,42 +1,87 @@
 ; Test: Polymorphic inference and generalization
 ; Tests that the type checker correctly handles polymorphic functions
 
+FUN main() {
+  ; Use at Int
+  LET int-result = identity(42)
+  WRITE int-result  ; 42
+
+  ; Use at String
+  LET str-result = identity("hello")
+  WRITE str-result  ; hello
+
+  ; Use at Bool
+  LET bool-result = identity(TRUE)
+  WRITE bool-result  ; true
+
+  ; Use at Array[Int]
+  LET arr-result = identity([1, 2, 3])
+  WRITE arr-result  ; [1, 2, 3]
+
+  WRITE const(1, "ignored")  ; 1
+  WRITE const("kept", 999)   ; kept
+
+  LET flipped-int-str = flip((1, "hello"))
+  WRITE flipped-int-str  ; ("hello", 1)
+
+  LET flipped-bool-float = flip((TRUE, 3.14))
+  WRITE flipped-bool-float  ; (3.14, true)
+
+  WRITE apply-twice(inc, 0)           ; 2
+  WRITE apply-twice(double-str, "a")  ; aaaa
+
+  LET neg-triple = compose(negate, triple)
+  WRITE neg-triple(5)  ; -15
+
+  WRITE wrap-some(42)       ; Option.Some(42)
+  WRITE wrap-some("hello")  ; Option.Some("hello")
+  WRITE wrap-some(TRUE)     ; Option.Some(true)
+
+  ; === Polymorphic with Mappable:map ===
+
+  ; Same closure structure, different element types
+  LET nums = [1, 2, 3]
+  LET strs = ["a", "b", "c"]
+
+  LET mapped-nums = Mappable:map(x => identity(x), nums)
+  WRITE mapped-nums  ; [1, 2, 3]
+
+  LET mapped-strs = Mappable:map(x => identity(x), strs)
+  WRITE mapped-strs  ; [a, b, c]
+
+  WRITE pair-with-zero("hello")  ; ("hello", 0)
+  WRITE pair-with-zero(TRUE)     ; (true, 0)
+
+  ; === Polymorphic empty array ===
+
+  LET empty-int: Array[Int] = []
+  LET empty-str: Array[String] = []
+
+  WRITE empty-int   ; []
+  WRITE empty-str   ; []
+
+  LET p1 = make-pair(1, 2)
+  LET p2 = make-pair("x", "y")
+  LET p3 = make-pair(TRUE, 3.14)
+
+  WRITE p1  ; (1, 2)
+  WRITE p2  ; ("x", "y")
+  WRITE p3  ; (true, 3.14)
+
+  WRITE "Polymorphic inference test complete"
+}
+
 ; === Identity function at multiple types ===
 
 FUN identity(x) { x }
-
-; Use at Int
-LET int-result = identity(42)
-WRITE int-result  ; 42
-
-; Use at String
-LET str-result = identity("hello")
-WRITE str-result  ; hello
-
-; Use at Bool
-LET bool-result = identity(TRUE)
-WRITE bool-result  ; true
-
-; Use at Array[Int]
-LET arr-result = identity([1, 2, 3])
-WRITE arr-result  ; [1, 2, 3]
 
 ; === Const function at multiple types ===
 
 FUN const(a, b) { a }
 
-WRITE const(1, "ignored")  ; 1
-WRITE const("kept", 999)   ; kept
-
 ; === Flip function ===
 
 FUN flip(pair) { (pair.1, pair.0) }
-
-LET flipped-int-str = flip((1, "hello"))
-WRITE flipped-int-str  ; ("hello", 1)
-
-LET flipped-bool-float = flip((TRUE, 3.14))
-WRITE flipped-bool-float  ; (3.14, true)
 
 ; === Generic higher-order function ===
 
@@ -47,9 +92,6 @@ FUN apply-twice(f, x) {
 FUN inc(n: Int) -> Int { n + 1 }
 FUN double-str(s: String) -> String { "{s}{s}" }
 
-WRITE apply-twice(inc, 0)           ; 2
-WRITE apply-twice(double-str, "a")  ; aaaa
-
 ; === Compose functions ===
 
 FUN compose(f, g) {
@@ -59,30 +101,11 @@ FUN compose(f, g) {
 FUN negate(n: Int) -> Int { 0 - n }
 FUN triple(n: Int) -> Int { n * 3 }
 
-LET neg-triple = compose(negate, triple)
-WRITE neg-triple(5)  ; -15
-
 ; === Polymorphic with Option ===
 
 FUN wrap-some(x) {
   Option.Some(x)
 }
-
-WRITE wrap-some(42)       ; Option.Some(42)
-WRITE wrap-some("hello")  ; Option.Some("hello")
-WRITE wrap-some(TRUE)     ; Option.Some(true)
-
-; === Polymorphic with Mappable:map ===
-
-; Same closure structure, different element types
-LET nums = [1, 2, 3]
-LET strs = ["a", "b", "c"]
-
-LET mapped-nums = Mappable:map(x => identity(x), nums)
-WRITE mapped-nums  ; [1, 2, 3]
-
-LET mapped-strs = Mappable:map(x => identity(x), strs)
-WRITE mapped-strs  ; [a, b, c]
 
 ; === Generic function returning different types ===
 
@@ -90,27 +113,6 @@ FUN pair-with-zero(x) {
   (x, 0)
 }
 
-WRITE pair-with-zero("hello")  ; ("hello", 0)
-WRITE pair-with-zero(TRUE)     ; (true, 0)
-
-; === Polymorphic empty array ===
-
-LET empty-int: Array[Int] = []
-LET empty-str: Array[String] = []
-
-WRITE empty-int   ; []
-WRITE empty-str   ; []
-
 ; === Test generalization: same fn, multiple instantiations in sequence ===
 
 FUN make-pair(a, b) { (a, b) }
-
-LET p1 = make-pair(1, 2)
-LET p2 = make-pair("x", "y")
-LET p3 = make-pair(TRUE, 3.14)
-
-WRITE p1  ; (1, 2)
-WRITE p2  ; ("x", "y")
-WRITE p3  ; (true, 3.14)
-
-WRITE "Polymorphic inference test complete"

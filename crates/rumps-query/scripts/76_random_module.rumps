@@ -4,125 +4,127 @@
 ;
 ; NOTE: Random values are non-deterministic, so we test types and constraints
 
-; ============ Random.random ============
+FUN main() {
+  ; ============ Random.random ============
 
-LET rand-val = Random.random()
-; Result is a Float in [0, 1)
-WRITE rand-val >= 0.0  ; true
-WRITE rand-val < 1.0   ; true
+  LET rand-val = Random.random()
+  ; Result is a Float in [0, 1)
+  WRITE rand-val >= 0.0  ; true
+  WRITE rand-val < 1.0   ; true
 
-; ============ Random.range ============
+  ; ============ Random.range ============
 
-LET range-val = Random.range(10.0, 20.0)
-WRITE range-val >= 10.0  ; true
-WRITE range-val < 20.0   ; true
+  LET range-val = Random.range(10.0, 20.0)
+  WRITE range-val >= 10.0  ; true
+  WRITE range-val < 20.0   ; true
 
-LET range-neg = Random.range(-5.0, 5.0)
-WRITE range-neg >= -5.0  ; true
-WRITE range-neg < 5.0    ; true
+  LET range-neg = Random.range(-5.0, 5.0)
+  WRITE range-neg >= -5.0  ; true
+  WRITE range-neg < 5.0    ; true
 
-; ============ Random.int ============
+  ; ============ Random.int ============
 
-LET int-val = Random.int(1, 10)
-WRITE int-val >= 1   ; true
-WRITE int-val <= 10  ; true
+  LET int-val = Random.int(1, 10)
+  WRITE int-val >= 1   ; true
+  WRITE int-val <= 10  ; true
 
-LET int-single = Random.int(5, 5)
-WRITE int-single  ; 5 (only possible value)
+  LET int-single = Random.int(5, 5)
+  WRITE int-single  ; 5 (only possible value)
 
-LET int-neg = Random.int(-10, -5)
-WRITE int-neg >= -10  ; true
-WRITE int-neg <= -5   ; true
+  LET int-neg = Random.int(-10, -5)
+  WRITE int-neg >= -10  ; true
+  WRITE int-neg <= -5   ; true
 
-; ============ Random.bool ============
+  ; ============ Random.bool ============
 
-LET bool-val = Random.bool()
-; Result is a Bool
-WRITE bool-val OR NOT bool-val  ; true (tautology to verify it's a bool)
+  LET bool-val = Random.bool()
+  ; Result is a Bool
+  WRITE bool-val OR NOT bool-val  ; true (tautology to verify it's a bool)
 
-; ============ Random.choice ============
+  ; ============ Random.choice ============
 
-LET choice-arr = [10, 20, 30]
-LET choice-result = Random.choice(choice-arr)
-; Returns Option.Some(element)
-WRITE choice-result IS Option.Some(_)  ; true
+  LET choice-arr = [10, 20, 30]
+  LET choice-result = Random.choice(choice-arr)
+  ; Returns Option.Some(element)
+  WRITE choice-result IS Option.Some(_)  ; true
 
-LET choice-inner = choice-result!
-WRITE choice-inner == 10 OR choice-inner == 20 OR choice-inner == 30  ; true
+  LET choice-inner = choice-result!
+  WRITE choice-inner == 10 OR choice-inner == 20 OR choice-inner == 30  ; true
 
-; Empty array returns Option.None
-LET choice-empty = Random.choice([])
-WRITE choice-empty IS Option.None  ; true
+  ; Empty array returns Option.None
+  LET choice-empty = Random.choice([])
+  WRITE choice-empty IS Option.None  ; true
 
-; ============ Random.shuffle ============
+  ; ============ Random.shuffle ============
 
-LET shuffle-arr = [1, 2, 3, 4, 5]
-LET shuffled = Random.shuffle(shuffle-arr)
-WRITE Iterable:length(shuffled)  ; 5
+  LET shuffle-arr = [1, 2, 3, 4, 5]
+  LET shuffled = Random.shuffle(shuffle-arr)
+  WRITE Iterable:length(shuffled)  ; 5
 
-; All elements preserved (check contains)
-WRITE Iterable:contains(shuffled, 1)  ; true
-WRITE Iterable:contains(shuffled, 2)  ; true
-WRITE Iterable:contains(shuffled, 3)  ; true
-WRITE Iterable:contains(shuffled, 4)  ; true
-WRITE Iterable:contains(shuffled, 5)  ; true
+  ; All elements preserved (check contains)
+  WRITE Iterable:contains(shuffled, 1)  ; true
+  WRITE Iterable:contains(shuffled, 2)  ; true
+  WRITE Iterable:contains(shuffled, 3)  ; true
+  WRITE Iterable:contains(shuffled, 4)  ; true
+  WRITE Iterable:contains(shuffled, 5)  ; true
 
-; Empty shuffle
-LET shuffle-empty = Random.shuffle([])
-WRITE Iterable:length(shuffle-empty)  ; 0
+  ; Empty shuffle
+  LET shuffle-empty = Random.shuffle([])
+  WRITE Iterable:length(shuffle-empty)  ; 0
 
-; Single element shuffle
-LET shuffle-single = Random.shuffle([42])
-WRITE shuffle-single  ; [42]
+  ; Single element shuffle
+  LET shuffle-single = Random.shuffle([42])
+  WRITE shuffle-single  ; [42]
 
-; ============ Random.sample ============
+  ; ============ Random.sample ============
 
-LET sample-arr = [1, 2, 3, 4, 5]
+  LET sample-arr = [1, 2, 3, 4, 5]
 
-; Sample fewer than array length
-LET sample-result = Random.sample(sample-arr, 3)
-WRITE sample-result IS Result.Ok(_)  ; true
+  ; Sample fewer than array length
+  LET sample-result = Random.sample(sample-arr, 3)
+  WRITE sample-result IS Result.Ok(_)  ; true
 
-LET sample-inner = sample-result!
-WRITE Iterable:length(sample-inner)  ; 3
+  LET sample-inner = sample-result!
+  WRITE Iterable:length(sample-inner)  ; 3
 
-; Sample zero elements
-LET sample-zero = Random.sample(sample-arr, 0)
-WRITE sample-zero IS Result.Ok(_)  ; true
-WRITE Iterable:length(sample-zero!)  ; 0
+  ; Sample zero elements
+  LET sample-zero = Random.sample(sample-arr, 0)
+  WRITE sample-zero IS Result.Ok(_)  ; true
+  WRITE Iterable:length(sample-zero!)  ; 0
 
-; Sample all elements
-LET sample-all = Random.sample(sample-arr, 5)
-WRITE sample-all IS Result.Ok(_)  ; true
-WRITE Iterable:length(sample-all!)  ; 5
+  ; Sample all elements
+  LET sample-all = Random.sample(sample-arr, 5)
+  WRITE sample-all IS Result.Ok(_)  ; true
+  WRITE Iterable:length(sample-all!)  ; 5
 
-; Sample more than array length returns Result.Err
-LET sample-too-many = Random.sample(sample-arr, 10)
-WRITE sample-too-many IS Result.Err(_)  ; true
+  ; Sample more than array length returns Result.Err
+  LET sample-too-many = Random.sample(sample-arr, 10)
+  WRITE sample-too-many IS Result.Err(_)  ; true
 
-; ============ Random.uuid ============
+  ; ============ Random.uuid ============
 
-LET uuid-val = Random.uuid()
-; UUID v4 format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
-WRITE String.length(uuid-val)  ; 36
+  LET uuid-val = Random.uuid()
+  ; UUID v4 format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
+  WRITE String.length(uuid-val)  ; 36
 
-; Check for hyphens at correct positions
-LET uuid-parts = String.split(uuid-val, "-")
-WRITE Iterable:length(uuid-parts)  ; 5
+  ; Check for hyphens at correct positions
+  LET uuid-parts = String.split(uuid-val, "-")
+  WRITE Iterable:length(uuid-parts)  ; 5
 
-; Check segment lengths: 8-4-4-4-12
-LET uuid-p1 = Array.head(uuid-parts)!
-WRITE String.length(uuid-p1)  ; 8
+  ; Check segment lengths: 8-4-4-4-12
+  LET uuid-p1 = Array.head(uuid-parts)!
+  WRITE String.length(uuid-p1)  ; 8
 
-; Two UUIDs should be different
-LET uuid-a = Random.uuid()
-LET uuid-b = Random.uuid()
-WRITE uuid-a != uuid-b  ; true (extremely likely)
+  ; Two UUIDs should be different
+  LET uuid-a = Random.uuid()
+  LET uuid-b = Random.uuid()
+  WRITE uuid-a != uuid-b  ; true (extremely likely)
 
-; ============ Pipeline usage ============
+  ; ============ Pipeline usage ============
 
-LET pipe-arr = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-LET pipe-result = pipe-arr
-  |> Random.shuffle
-  |> Iterable:length
-WRITE pipe-result  ; 10
+  LET pipe-arr = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  LET pipe-result = pipe-arr
+    |> Random.shuffle
+    |> Iterable:length
+  WRITE pipe-result  ; 10
+}

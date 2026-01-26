@@ -1,4 +1,7 @@
 ; Error: unknown constraint name
+
+FUN main() {}
+
 FUN bad[T: Unknown](x: T) -> T {
   x
 }

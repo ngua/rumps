@@ -1,294 +1,295 @@
 ; MATCH expression tests
 
-; === Simple matching ===
-
-; Literal matching
-LET n = 2
-LET result = MATCH n {
-  1 => { "one" }
-  2 => { "two" }
-  3 => { "three" }
-  _ => { "other" }
-}
-WRITE result
-
-; Variable binding
-LET x = 42
-LET doubled = MATCH x {
-  n => { n * 2 }
-}
-WRITE doubled
-
-; Wildcard
-LET ignored = MATCH "anything" {
-  _ => { "matched wildcard" }
-}
-WRITE ignored
-
-; === Sum type matching ===
-
-; Option.Some
-LET opt = Option.Some(10)
-LET unwrapped = MATCH opt {
-  Option.Some(v) => { v }
-  Option.None => { 0 }
-}
-WRITE unwrapped
-
-; Option.None
-LET none-opt = Option.None
-LET default = MATCH none-opt {
-  Option.Some(v) => { v }
-  Option.None => { -1 }
-}
-WRITE default
-
-; Nested Option
-LET nested-opt = Option.Some(Option.Some(5))
-LET deep = MATCH nested-opt {
-  Option.Some(Option.Some(v)) => { v }
-  Option.Some(Option.None) => { -1 }
-  Option.None => { -2 }
-}
-WRITE deep
-
-; Result type
-LET ok = Result.Ok(100)
-LET ok-val = MATCH ok {
-  Result.Ok(v) => { v }
-  Result.Err(e) => { 0 }
-}
-WRITE ok-val
-
-LET err = Result.Err("oops")
-LET err-val = MATCH err {
-  Result.Ok(v) => { v }
-  Result.Err(e) => { -1 }
-}
-WRITE err-val
-
-; === User-defined sum types ===
-
 TYPE Status = Pending | Active(String) | Completed
 
-LET s1 = Status.Pending
-LET s1-label = MATCH s1 {
-  Status.Pending => { "waiting" }
-  Status.Active(msg) => { "active: {msg}" }
-  Status.Completed => { "done" }
-}
-WRITE s1-label
-
-LET s2 = Status.Active("step 1")
-LET s2-label = MATCH s2 {
-  Status.Pending => { "waiting" }
-  Status.Active(msg) => { "active: {msg}" }
-  Status.Completed => { "done" }
-}
-WRITE s2-label
-
-LET s3 = Status.Completed
-LET s3-label = MATCH s3 {
-  Status.Pending => { "waiting" }
-  Status.Active(msg) => { "active: {msg}" }
-  Status.Completed => { "done" }
-}
-WRITE s3-label
-
-; === Tuple matching ===
-
-LET pair = (1, 2)
-LET pair-sum = MATCH pair {
-  (a, b) => { a + b }
-}
-WRITE pair-sum
-
-; With literal in tuple
-LET point = (0, 5)
-LET axis = MATCH point {
-  (0, y) => { "on y-axis at {y}" }
-  (x, 0) => { "on x-axis at {x}" }
-  (x, y) => { "at ({x}, {y})" }
-}
-WRITE axis
-
-LET point2 = (3, 0)
-LET axis2 = MATCH point2 {
-  (0, y) => { "on y-axis" }
-  (x, 0) => { "on x-axis" }
-  _ => { "elsewhere" }
-}
-WRITE axis2
-
-LET point3 = (3, 4)
-LET axis3 = MATCH point3 {
-  (0, _) => { "on y-axis" }
-  (_, 0) => { "on x-axis" }
-  _ => { "elsewhere" }
-}
-WRITE axis3
-
-; === Object matching ===
-
-LET user = { name: "Alice", age: 30, role: "admin" }
-LET greeting = MATCH user {
-  { name, role: "admin" } => { "{name} is an admin" }
-  { name } => { "{name} is a user" }
-}
-WRITE greeting
-
-LET user2 = { name: "Bob", age: 25, role: "user" }
-LET greeting2 = MATCH user2 {
-  { name, role: "admin" } => { "{name} is an admin" }
-  { name } => { "{name} is a user" }
-}
-WRITE greeting2
-
-; === Pattern guards ===
-
-LET val = 50
-LET size = MATCH val {
-  x IF x > 100 => { "large" }
-  x IF x > 10 => { "medium" }
-  x IF x > 0 => { "small" }
-  0 => { "zero" }
-  _ => { "negative" }
-}
-WRITE size
-
-LET val2 = 150
-LET size2 = MATCH val2 {
-  x IF x > 100 => { "large" }
-  x IF x > 10 => { "medium" }
-  _ => { "other" }
-}
-WRITE size2
-
-; Guard with Option
-LET maybe-num = Option.Some(42)
-LET check = MATCH maybe-num {
-  Option.Some(n) IF n > 50 => { "large some" }
-  Option.Some(n) IF n > 0 => { "small some" }
-  Option.Some(_) => { "non-positive some" }
-  Option.None => { "none" }
-}
-WRITE check
-
-; === MATCH as expression ===
-
-; Bind to variable (already tested above)
-
-; Use in larger expression
-LET base = 10
-LET computed = base + MATCH Option.Some(5) {
-  Option.Some(n) => { n * 2 }
-  Option.None => { 0 }
-}
-WRITE computed
-
-; Return from function
 FUN describe(opt: Option[Int]) -> String {
   MATCH opt {
     Option.Some(n) => { "got {n}" }
     Option.None => { "nothing" }
   }
 }
-WRITE describe(Option.Some(7))
-WRITE describe(Option.None)
 
-; === Array matching ===
+FUN main() {
+  ; === Simple matching ===
 
-; Exact length match
-LET arr = [1, 2, 3]
-LET arr-sum = MATCH arr {
-  [a, b, c] => { a + b + c }
-  [..] => { 0 }
-}
-WRITE arr-sum
-
-; Single element
-LET single = [42]
-LET single-val = MATCH single {
-  [x] => { x }
-  [..] => { -1 }
-}
-WRITE single-val
-
-; With rest (ignore)
-LET long = [10, 20, 30, 40, 50]
-LET first-two-sum = MATCH long {
-  [a, b, ..] => { a + b }
-  [..] => { 0 }
-}
-WRITE first-two-sum
-
-; With rest (bind)
-LET nums = [1, 2, 3, 4, 5]
-LET head-tail = MATCH nums {
-  [h, ...t] => {
-    LET strs = Mappable:map((x: Int) => x as String, t)
-    "{h}:{String.join(strs, ",")}"
+  ; Literal matching
+  LET n = 2
+  LET result = MATCH n {
+    1 => { "one" }
+    2 => { "two" }
+    3 => { "three" }
+    _ => { "other" }
   }
-  [..] => { "empty" }
-}
-WRITE head-tail
+  WRITE result
 
-; Empty array with rest
-LET empty: Array[Int] = []
-LET empty-result = MATCH empty {
-  [x, ..] => { "has elements" }
-  [..] => { "empty" }
-}
-WRITE empty-result
+  ; Variable binding
+  LET x = 42
+  LET doubled = MATCH x {
+    n => { n * 2 }
+  }
+  WRITE doubled
 
-; Nested patterns in array
-LET pairs = [(1, 2), (3, 4)]
-LET first-pair-sum = MATCH pairs {
-  [(a, b), ..] => { a + b }
-  [..] => { 0 }
-}
-WRITE first-pair-sum
+  ; Wildcard
+  LET ignored = MATCH "anything" {
+    _ => { "matched wildcard" }
+  }
+  WRITE ignored
 
-; Array of Options
-LET opts = [Option.Some(1), Option.None, Option.Some(2)]
-LET first-opt = MATCH opts {
-  [Option.Some(x), ..] => { "first is Some({x})" }
-  [Option.None, ..] => { "first is None" }
-  [..] => { "empty" }
-}
-WRITE first-opt
+  ; === Sum type matching ===
 
-; Wildcard in array
-LET mixed = [1, 2, 3]
-LET second-elem = MATCH mixed {
-  [_, x, ..] => { x }
-  [..] => { 0 }
-}
-WRITE second-elem
+  ; Option.Some
+  LET opt = Option.Some(10)
+  LET unwrapped = MATCH opt {
+    Option.Some(v) => { v }
+    Option.None => { 0 }
+  }
+  WRITE unwrapped
 
-; Multiple exact lengths
-LET len2 = [10, 20]
-LET len-check = MATCH len2 {
-  [] => { "zero" }
-  [_] => { "one" }
-  [_, _] => { "two" }
-  [..] => { "many" }
-}
-WRITE len-check
+  ; Option.None
+  LET none-opt = Option.None
+  LET default = MATCH none-opt {
+    Option.Some(v) => { v }
+    Option.None => { -1 }
+  }
+  WRITE default
 
-; Guard with array
-LET arr2 = [5, 10, 15]
-LET arr-guard = MATCH arr2 {
-  [a, ..] IF a > 10 => { "first > 10" }
-  [a, ..] IF a > 0 => { "first positive" }
-  [..] => { "other" }
-}
-WRITE arr-guard
+  ; Nested Option
+  LET nested-opt = Option.Some(Option.Some(5))
+  LET deep = MATCH nested-opt {
+    Option.Some(Option.Some(v)) => { v }
+    Option.Some(Option.None) => { -1 }
+    Option.None => { -2 }
+  }
+  WRITE deep
 
-; Rest binding produces correct array
-LET rest-test = [100, 200, 300, 400]
-LET rest-len = MATCH rest-test {
-  [_, ...rest] => { Iterable:length(rest) }
-  [..] => { 0 }
+  ; Result type
+  LET ok = Result.Ok(100)
+  LET ok-val = MATCH ok {
+    Result.Ok(v) => { v }
+    Result.Err(e) => { 0 }
+  }
+  WRITE ok-val
+
+  LET err = Result.Err("oops")
+  LET err-val = MATCH err {
+    Result.Ok(v) => { v }
+    Result.Err(e) => { -1 }
+  }
+  WRITE err-val
+
+  ; === User-defined sum types ===
+
+  LET s1 = Status.Pending
+  LET s1-label = MATCH s1 {
+    Status.Pending => { "waiting" }
+    Status.Active(msg) => { "active: {msg}" }
+    Status.Completed => { "done" }
+  }
+  WRITE s1-label
+
+  LET s2 = Status.Active("step 1")
+  LET s2-label = MATCH s2 {
+    Status.Pending => { "waiting" }
+    Status.Active(msg) => { "active: {msg}" }
+    Status.Completed => { "done" }
+  }
+  WRITE s2-label
+
+  LET s3 = Status.Completed
+  LET s3-label = MATCH s3 {
+    Status.Pending => { "waiting" }
+    Status.Active(msg) => { "active: {msg}" }
+    Status.Completed => { "done" }
+  }
+  WRITE s3-label
+
+  ; === Tuple matching ===
+
+  LET pair = (1, 2)
+  LET pair-sum = MATCH pair {
+    (a, b) => { a + b }
+  }
+  WRITE pair-sum
+
+  ; With literal in tuple
+  LET point = (0, 5)
+  LET axis = MATCH point {
+    (0, y) => { "on y-axis at {y}" }
+    (x, 0) => { "on x-axis at {x}" }
+    (x, y) => { "at ({x}, {y})" }
+  }
+  WRITE axis
+
+  LET point2 = (3, 0)
+  LET axis2 = MATCH point2 {
+    (0, y) => { "on y-axis" }
+    (x, 0) => { "on x-axis" }
+    _ => { "elsewhere" }
+  }
+  WRITE axis2
+
+  LET point3 = (3, 4)
+  LET axis3 = MATCH point3 {
+    (0, _) => { "on y-axis" }
+    (_, 0) => { "on x-axis" }
+    _ => { "elsewhere" }
+  }
+  WRITE axis3
+
+  ; === Object matching ===
+
+  LET user = { name: "Alice", age: 30, role: "admin" }
+  LET greeting = MATCH user {
+    { name, role: "admin" } => { "{name} is an admin" }
+    { name } => { "{name} is a user" }
+  }
+  WRITE greeting
+
+  LET user2 = { name: "Bob", age: 25, role: "user" }
+  LET greeting2 = MATCH user2 {
+    { name, role: "admin" } => { "{name} is an admin" }
+    { name } => { "{name} is a user" }
+  }
+  WRITE greeting2
+
+  ; === Pattern guards ===
+
+  LET val = 50
+  LET size = MATCH val {
+    x IF x > 100 => { "large" }
+    x IF x > 10 => { "medium" }
+    x IF x > 0 => { "small" }
+    0 => { "zero" }
+    _ => { "negative" }
+  }
+  WRITE size
+
+  LET val2 = 150
+  LET size2 = MATCH val2 {
+    x IF x > 100 => { "large" }
+    x IF x > 10 => { "medium" }
+    _ => { "other" }
+  }
+  WRITE size2
+
+  ; Guard with Option
+  LET maybe-num = Option.Some(42)
+  LET check = MATCH maybe-num {
+    Option.Some(n) IF n > 50 => { "large some" }
+    Option.Some(n) IF n > 0 => { "small some" }
+    Option.Some(_) => { "non-positive some" }
+    Option.None => { "none" }
+  }
+  WRITE check
+
+  ; === MATCH as expression ===
+
+  ; Use in larger expression
+  LET base = 10
+  LET computed = base + MATCH Option.Some(5) {
+    Option.Some(n) => { n * 2 }
+    Option.None => { 0 }
+  }
+  WRITE computed
+
+  ; Return from function
+  WRITE describe(Option.Some(7))
+  WRITE describe(Option.None)
+
+  ; === Array matching ===
+
+  ; Exact length match
+  LET arr = [1, 2, 3]
+  LET arr-sum = MATCH arr {
+    [a, b, c] => { a + b + c }
+    [..] => { 0 }
+  }
+  WRITE arr-sum
+
+  ; Single element
+  LET single = [42]
+  LET single-val = MATCH single {
+    [x] => { x }
+    [..] => { -1 }
+  }
+  WRITE single-val
+
+  ; With rest (ignore)
+  LET long = [10, 20, 30, 40, 50]
+  LET first-two-sum = MATCH long {
+    [a, b, ..] => { a + b }
+    [..] => { 0 }
+  }
+  WRITE first-two-sum
+
+  ; With rest (bind)
+  LET nums = [1, 2, 3, 4, 5]
+  LET head-tail = MATCH nums {
+    [h, ...t] => {
+      LET strs = Mappable:map((x: Int) => x as String, t)
+      "{h}:{String.join(strs, ",")}"
+    }
+    [..] => { "empty" }
+  }
+  WRITE head-tail
+
+  ; Empty array with rest
+  LET empty: Array[Int] = []
+  LET empty-result = MATCH empty {
+    [x, ..] => { "has elements" }
+    [..] => { "empty" }
+  }
+  WRITE empty-result
+
+  ; Nested patterns in array
+  LET pairs = [(1, 2), (3, 4)]
+  LET first-pair-sum = MATCH pairs {
+    [(a, b), ..] => { a + b }
+    [..] => { 0 }
+  }
+  WRITE first-pair-sum
+
+  ; Array of Options
+  LET opts = [Option.Some(1), Option.None, Option.Some(2)]
+  LET first-opt = MATCH opts {
+    [Option.Some(x), ..] => { "first is Some({x})" }
+    [Option.None, ..] => { "first is None" }
+    [..] => { "empty" }
+  }
+  WRITE first-opt
+
+  ; Wildcard in array
+  LET mixed = [1, 2, 3]
+  LET second-elem = MATCH mixed {
+    [_, x, ..] => { x }
+    [..] => { 0 }
+  }
+  WRITE second-elem
+
+  ; Multiple exact lengths
+  LET len2 = [10, 20]
+  LET len-check = MATCH len2 {
+    [] => { "zero" }
+    [_] => { "one" }
+    [_, _] => { "two" }
+    [..] => { "many" }
+  }
+  WRITE len-check
+
+  ; Guard with array
+  LET arr2 = [5, 10, 15]
+  LET arr-guard = MATCH arr2 {
+    [a, ..] IF a > 10 => { "first > 10" }
+    [a, ..] IF a > 0 => { "first positive" }
+    [..] => { "other" }
+  }
+  WRITE arr-guard
+
+  ; Rest binding produces correct array
+  LET rest-test = [100, 200, 300, 400]
+  LET rest-len = MATCH rest-test {
+    [_, ...rest] => { Iterable:length(rest) }
+    [..] => { 0 }
+  }
+  WRITE rest-len
 }
-WRITE rest-len

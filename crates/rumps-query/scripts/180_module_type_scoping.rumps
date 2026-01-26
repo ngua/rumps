@@ -6,7 +6,43 @@
 ; Import to bring class instances into scope
 IMPORT Shapes.{ }
 
-; ============ TYPE variants with unqualified type names ============
+FUN main() {
+  ; ============ TYPE variants with unqualified type names ============
+
+  LET c = Shapes.Circle.Circle(2.0)
+  WRITE Display:display(c)
+  WRITE Shapes.area(c)
+
+  ; ============ NEWTYPE with unqualified type names ============
+
+  LET dist: Units.Meters = 10.0
+  WRITE Units.meters-to-feet(dist)
+  WRITE Units.double(dist)
+
+  ; ============ UNION with unqualified type names ============
+
+  LET v1: Data.Value = 42
+  LET v2: Data.Value = "hello"
+  LET v3: Data.Value = TRUE
+  WRITE Data.describe(v1)
+  WRITE Data.describe(v2)
+  WRITE Data.describe(v3)
+
+  ; ============ TYPE with type parameters unqualified ============
+
+  LET box1 = Container.Box.Box(42)
+  LET box2: Container.Box[Int] = Container.Box.Empty
+  WRITE Container.unwrap-or(box1, 0)
+  WRITE Container.unwrap-or(box2, -1)
+  WRITE Container.unwrap-or(Container.wrap(100), 0)
+
+  ; ============ Mixed types in same module ============
+
+  LET id: Mixed.Id = 123
+  LET status = Mixed.Status.Done
+  LET payload: Mixed.Payload = "data"
+  WRITE Mixed.process(id, status, payload)
+}
 
 MODULE Shapes {
   +TYPE Circle = Circle(Float)
@@ -28,12 +64,6 @@ MODULE Shapes {
   }
 }
 
-LET c = Shapes.Circle.Circle(2.0)
-WRITE Display:display(c)
-WRITE Shapes.area(c)
-
-; ============ NEWTYPE with unqualified type names ============
-
 MODULE Units {
   +NEWTYPE Meters = Float
   +NEWTYPE Feet = Float
@@ -49,12 +79,6 @@ MODULE Units {
   }
 }
 
-LET dist: Units.Meters = 10.0
-WRITE Units.meters-to-feet(dist)
-WRITE Units.double(dist)
-
-; ============ UNION with unqualified type names ============
-
 MODULE Data {
   +UNION Value = Int | String | Bool
 
@@ -65,15 +89,6 @@ MODULE Data {
     }
   }
 }
-
-LET v1: Data.Value = 42
-LET v2: Data.Value = "hello"
-LET v3: Data.Value = TRUE
-WRITE Data.describe(v1)
-WRITE Data.describe(v2)
-WRITE Data.describe(v3)
-
-; ============ TYPE with type parameters unqualified ============
 
 MODULE Container {
   +TYPE Box[T] = Box(T) | Empty
@@ -92,14 +107,6 @@ MODULE Container {
   }
 }
 
-LET box1 = Container.Box.Box(42)
-LET box2: Container.Box[Int] = Container.Box.Empty
-WRITE Container.unwrap-or(box1, 0)
-WRITE Container.unwrap-or(box2, -1)
-WRITE Container.unwrap-or(Container.wrap(100), 0)
-
-; ============ Mixed types in same module ============
-
 MODULE Mixed {
   +TYPE Status = Pending | Done
   +NEWTYPE Id = Int
@@ -115,8 +122,3 @@ MODULE Mixed {
     "id={id}, status={s}, payload={p}"
   }
 }
-
-LET id: Mixed.Id = 123
-LET status = Mixed.Status.Done
-LET payload: Mixed.Payload = "data"
-WRITE Mixed.process(id, status, payload)

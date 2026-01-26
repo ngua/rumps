@@ -1,73 +1,75 @@
 ; Test: Extended WRITE statement
 ; Tests WRITE with JSON format and TO ERROR/FILE targets
 
-; === Basic WRITE (unchanged behavior) ===
-WRITE "Hello, World!"
-; Expected: Hello, World!
+FUN main() {
+  ; === Basic WRITE (unchanged behavior) ===
+  WRITE "Hello, World!"
+  ; Expected: Hello, World!
 
-LET my-x = 42
-WRITE my-x
-; Expected: 42
+  LET my-x = 42
+  WRITE my-x
+  ; Expected: 42
 
-LET my-obj = { name: "Alice", age: 30 }
-WRITE my-obj
-; Expected: { name: Alice, age: 30 }
+  LET my-obj = { name: "Alice", age: 30 }
+  WRITE my-obj
+  ; Expected: { name: Alice, age: 30 }
 
-; === WRITE JSON (format modifier) ===
-WRITE "Test JSON format" JSON
-; Expected: "Test JSON format"
+  ; === WRITE JSON (format modifier) ===
+  WRITE "Test JSON format" JSON
+  ; Expected: "Test JSON format"
 
-WRITE 42 JSON
-; Expected: 42
+  WRITE 42 JSON
+  ; Expected: 42
 
-WRITE TRUE JSON
-; Expected: true
+  WRITE TRUE JSON
+  ; Expected: true
 
-LET my-arr = [1, 2, 3]
-WRITE my-arr JSON
-; Expected: [1, 2, 3] (or pretty-printed)
+  LET my-arr = [1, 2, 3]
+  WRITE my-arr JSON
+  ; Expected: [1, 2, 3] (or pretty-printed)
 
-LET my-data = { name: "Bob", scores: [90, 85, 95] }
-WRITE my-data JSON
-; Expected: pretty-printed JSON object
+  LET my-data = { name: "Bob", scores: [90, 85, 95] }
+  WRITE my-data JSON
+  ; Expected: pretty-printed JSON object
 
-; === WRITE TO ERROR (target modifier) ===
-WRITE "This goes to stderr" TO ERROR
-; Expected: (on stderr) This goes to stderr
+  ; === WRITE TO ERROR (target modifier) ===
+  WRITE "This goes to stderr" TO ERROR
+  ; Expected: (on stderr) This goes to stderr
 
-WRITE 123 TO ERROR
-; Expected: (on stderr) 123
+  WRITE 123 TO ERROR
+  ; Expected: (on stderr) 123
 
-; === WRITE JSON TO ERROR (format + target) ===
-WRITE { status: "error", code: 500 } JSON TO ERROR
-; Expected: (on stderr) pretty-printed JSON
+  ; === WRITE JSON TO ERROR (format + target) ===
+  WRITE { status: "error", code: 500 } JSON TO ERROR
+  ; Expected: (on stderr) pretty-printed JSON
 
-; === Contextual identifiers as variable names ===
-; These must work as regular identifiers
-LET json = "my json var"
-WRITE json
-; Expected: my json var
+  ; === Contextual identifiers as variable names ===
+  ; These must work as regular identifiers
+  LET json = "my json var"
+  WRITE json
+  ; Expected: my json var
 
-LET to = 10
-WRITE to
-; Expected: 10
+  LET to = 10
+  WRITE to
+  ; Expected: 10
 
-LET error = "an error message"
-WRITE error
-; Expected: an error message
+  LET error = "an error message"
+  WRITE error
+  ; Expected: an error message
 
-LET file = "/path/to/file"
-WRITE file
-; Expected: /path/to/file
+  LET file = "/path/to/file"
+  WRITE file
+  ; Expected: /path/to/file
 
-; === Verify case-insensitivity of modifiers ===
-WRITE "lowercase json" json
-; Expected: "lowercase json"
+  ; === Verify case-insensitivity of modifiers ===
+  WRITE "lowercase json" json
+  ; Expected: "lowercase json"
 
-WRITE "mixed case" Json
-; Expected: "mixed case"
+  WRITE "mixed case" Json
+  ; Expected: "mixed case"
 
-WRITE "uppercase error" TO error
-; Expected: (on stderr) uppercase error
+  WRITE "uppercase error" TO error
+  ; Expected: (on stderr) uppercase error
 
-WRITE "Complete!"
+  WRITE "Complete!"
+}

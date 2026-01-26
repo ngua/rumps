@@ -1,161 +1,13 @@
 ; Array module functions
 ; Tests Mappable:map, Filterable:filter, Foldable:reduce, Iterable:foreach
 
-; Mappable:map with closure
-LET nums = [1, 2, 3, 4, 5]
-LET doubled = Mappable:map(x => x * 2, nums)
-WRITE doubled  ; [2, 4, 6, 8, 10]
+FUN square(n: Int) -> Int { n * n }
 
-; Mappable:map on empty array
-LET empty = []
-LET mapped-empty = Mappable:map(x => x + 1, empty)
-WRITE mapped-empty  ; []
+FUN is-positive(n: Int) -> Bool { n > 0 }
 
-; Mappable:map with named function
-FUN square (n: Int) -> Int { n * n }
-LET squares = Mappable:map(square, [1, 2, 3])
-WRITE squares  ; [1, 4, 9]
-
-; Filterable:filter with closure
-LET evens = Filterable:filter(x => x % 2 == 0, nums)
-WRITE evens  ; [2, 4]
-
-; Filterable:filter on empty array
-LET filtered-empty = Filterable:filter(x => x > 0, empty)
-WRITE filtered-empty  ; []
-
-; Filterable:filter with named function
-FUN is-positive (n: Int) -> Bool { n > 0 }
-LET positives = Filterable:filter(is-positive, [-1, 0, 1, 2])
-WRITE positives  ; [1, 2]
-
-; Filterable:filter keeping all
-LET all-kept = Filterable:filter(x => TRUE, [1, 2, 3])
-WRITE all-kept  ; [1, 2, 3]
-
-; Filterable:filter keeping none
-LET none-kept = Filterable:filter(x => FALSE, [1, 2, 3])
-WRITE none-kept  ; []
-
-; Foldable:reduce with sum
-LET sum = Foldable:reduce((acc, x) => acc + x, 0, nums)
-WRITE sum  ; 15
-
-; Foldable:reduce on empty array returns initial value
-LET empty-sum = Foldable:reduce((acc, x) => acc + x, 100, empty)
-WRITE empty-sum  ; 100
-
-; Foldable:reduce with string concatenation
-LET words = ["hello", " ", "world"]
-LET combined = Foldable:reduce((acc, s) => "{acc}{s}", "", words)
-WRITE combined  ; "hello world"
-
-; Foldable:reduce with named function
-FUN add (a: Int, b: Int) -> Int { a + b }
-LET total = Foldable:reduce(add, 0, [1, 2, 3, 4])
-WRITE total  ; 10
-
-; Combining Array functions
-LET result = Foldable:reduce(
-  (acc, x) => acc + x,
-  0,
-  Mappable:map(x => x * x, Filterable:filter(x => x % 2 == 1, [1, 2, 3, 4, 5]))
-)
-WRITE result  ; 1 + 9 + 25 = 35
-
-; Pipeline usage with Array functions (using wrapper closures)
-LET piped = [1, 2, 3, 4, 5]
-  |> (arr => Filterable:filter(x => x > 2, arr))
-  |> (arr => Mappable:map(x => x * 10, arr))
-WRITE piped  ; [30, 40, 50]
-
-; Module functions can be passed as first-class values
-LET filter-fn = Filterable:filter
-LET data = [1, 2, 3, 4, 5]
-LET filtered = filter-fn(x => x > 2, data)
-WRITE filtered  ; [3, 4, 5]
-
-; Mappable:map with Option results (homogeneous tagged values)
-LET with-opts = Mappable:map(x => Option.Some(x), [1, 2, 3])
-WRITE with-opts  ; [Option.Some(1), Option.Some(2), Option.Some(3)]
-
-; Nested Mappable:map (callback uses Array function)
-LET nested = [[1, 2], [3, 4]]
-LET doubled-nested = Mappable:map(arr => Mappable:map(x => x * 2, arr), nested)
-WRITE doubled-nested  ; [[2, 4], [6, 8]]
-
-; === Iterable:foreach ===
-
-; Iterable:foreach for side effects (outputs each element)
-WRITE "foreach:"
-LET fe-result = Iterable:foreach(x => { WRITE x }, [10, 20, 30])
-WRITE fe-result  ; Unit
-
-; Iterable:foreach on empty array (no side effects)
-LET fe-empty = Iterable:foreach(x => { WRITE x }, [])
-WRITE fe-empty  ; Unit
-
-; Iterable:foreach with range
-WRITE "range foreach:"
-LET fe-range = Iterable:foreach(n => { WRITE n }, 1 .. 4)
-WRITE fe-range  ; Unit
-
-; === Array.zip ===
-
-LET a = [1, 2, 3]
-LET b = ["a", "b", "c"]
-LET zipped = Array.zip(a, b)
-WRITE zipped
-
-; Shorter array determines length
-LET short = [1, 2]
-LET long = ["a", "b", "c", "d"]
-WRITE Array.zip(short, long)
-
-; === Array.unzip ===
-
-LET pairs: Array[(Int, String)] = [(1, "one"), (2, "two"), (3, "three")]
-LET (unzip-nums, unzip-strs) = Array.unzip(pairs)
-WRITE unzip-nums
-WRITE unzip-strs
-
-; Round-trip
-LET x = [10, 20, 30]
-LET y = [true, false, true]
-LET (x2, y2) = Array.unzip(Array.zip(x, y))
-WRITE x2
-WRITE y2
-
-; === Array.intersperse ===
-
-LET inter-words = ["hello", "world", "!"]
-WRITE Array.intersperse(",", inter-words)
-
-LET inter-nums = [1, 2, 3, 4]
-WRITE Array.intersperse(0, inter-nums)
-
-; Empty array
-LET inter-empty: Array[Int] = []
-WRITE Array.intersperse(0, inter-empty)
-
-; Single element
-WRITE Array.intersperse(0, [42])
-
-; === Array.zip-with ===
+FUN add(a: Int, b: Int) -> Int { a + b }
 
 FUN zip-add(za: Int, zb: Int) -> Int { za + zb }
-LET xs = [1, 2, 3]
-LET ys = [10, 20, 30]
-WRITE Array.zip-with(zip-add, xs, ys)
-
-; With closure
-LET multiplied = Array.zip-with((ma, mb) => ma * mb, [2, 3, 4], [5, 6, 7])
-WRITE multiplied
-
-; With shorter array
-WRITE Array.zip-with(zip-add, [1, 2, 3, 4, 5], [10, 20])
-
-; === Array.sort-by ===
 
 FUN cmp-int(ca: Int, cb: Int) -> Ordering {
   IF ca < cb { Ordering.Lt } ELSE {
@@ -163,70 +15,226 @@ FUN cmp-int(ca: Int, cb: Int) -> Ordering {
   }
 }
 
-LET unsorted = [3, 1, 4, 1, 5, 9, 2, 6]
-WRITE Array.sort-by(cmp-int, unsorted)
-
-; Sort descending (reverse comparator)
 FUN cmp-desc(da: Int, db: Int) -> Ordering {
   IF da > db { Ordering.Lt } ELSE {
     IF da == db { Ordering.Eq } ELSE { Ordering.Gt }
   }
 }
-WRITE Array.sort-by(cmp-desc, unsorted)
 
-; Sort by absolute value
 FUN cmp-abs(aa: Int, ab: Int) -> Ordering {
   LET abs-a = IF aa < 0 { 0 - aa } ELSE { aa }
   LET abs-b = IF ab < 0 { 0 - ab } ELSE { ab }
   cmp-int(abs-a, abs-b)
 }
-LET signed = [-5, 3, -1, 4, -2]
-WRITE Array.sort-by(cmp-abs, signed)
 
-; Sort objects by field
 NEWTYPE SortPerson = { name: String, age: Int }
 
 FUN cmp-by-age(pa: SortPerson, pb: SortPerson) -> Ordering {
   cmp-int(pa.age, pb.age)
 }
 
-LET people = [
-  { name: "Alice", age: 30 },
-  { name: "Bob", age: 25 },
-  { name: "Carol", age: 35 }
-]
-LET by-age = Array.sort-by(cmp-by-age, people)
-WRITE Mappable:map(p => p.name, by-age)
-
-; === Chained operations ===
-
-; zip, map, filter chain
-LET indices = [0, 1, 2, 3, 4]
-LET values = [10, 25, 30, 15, 40]
-LET indexed = Array.zip(indices, values)
-LET chain-filtered = Filterable:filter(pair => pair.1 > 20, indexed)
-WRITE chain-filtered
-
-; zip-with to compute differences
-LET before = [10, 20, 30]
-LET after = [15, 18, 35]
-LET diffs = Array.zip-with((db, da) => da - db, before, after)
-WRITE diffs
-
-; === Union types with Iterable constraint ===
-
-; Union of iterable types should satisfy Iterable[T] constraint
 FUN iter-len(i: Range | Array[Int]) -> Int {
   Iterable:length(i)
 }
 
-WRITE iter-len(1 ..= 20)
-WRITE iter-len([1, 2, 3, 4, 5])
-
-; Using Mappable:map with union type
 FUN iter-sum(i: Range | Array[Int]) -> Int {
   Foldable:reduce((acc, x) => acc + x, 0, i)
 }
 
-WRITE iter-sum(1 ..= 5)
-WRITE iter-sum([10, 20, 30])
+FUN main() {
+  ; Mappable:map with closure
+  LET nums = [1, 2, 3, 4, 5]
+  LET doubled = Mappable:map(x => x * 2, nums)
+  WRITE doubled  ; [2, 4, 6, 8, 10]
+
+  ; Mappable:map on empty array
+  LET empty = []
+  LET mapped-empty = Mappable:map(x => x + 1, empty)
+  WRITE mapped-empty  ; []
+
+  ; Mappable:map with named function
+  LET squares = Mappable:map(square, [1, 2, 3])
+  WRITE squares  ; [1, 4, 9]
+
+  ; Filterable:filter with closure
+  LET evens = Filterable:filter(x => x % 2 == 0, nums)
+  WRITE evens  ; [2, 4]
+
+  ; Filterable:filter on empty array
+  LET filtered-empty = Filterable:filter(x => x > 0, empty)
+  WRITE filtered-empty  ; []
+
+  ; Filterable:filter with named function
+  LET positives = Filterable:filter(is-positive, [-1, 0, 1, 2])
+  WRITE positives  ; [1, 2]
+
+  ; Filterable:filter keeping all
+  LET all-kept = Filterable:filter(x => TRUE, [1, 2, 3])
+  WRITE all-kept  ; [1, 2, 3]
+
+  ; Filterable:filter keeping none
+  LET none-kept = Filterable:filter(x => FALSE, [1, 2, 3])
+  WRITE none-kept  ; []
+
+  ; Foldable:reduce with sum
+  LET sum = Foldable:reduce((acc, x) => acc + x, 0, nums)
+  WRITE sum  ; 15
+
+  ; Foldable:reduce on empty array returns initial value
+  LET empty-sum = Foldable:reduce((acc, x) => acc + x, 100, empty)
+  WRITE empty-sum  ; 100
+
+  ; Foldable:reduce with string concatenation
+  LET words = ["hello", " ", "world"]
+  LET combined = Foldable:reduce((acc, s) => "{acc}{s}", "", words)
+  WRITE combined  ; "hello world"
+
+  ; Foldable:reduce with named function
+  LET total = Foldable:reduce(add, 0, [1, 2, 3, 4])
+  WRITE total  ; 10
+
+  ; Combining Array functions
+  LET result = Foldable:reduce(
+    (acc, x) => acc + x,
+    0,
+    Mappable:map(x => x * x, Filterable:filter(x => x % 2 == 1, [1, 2, 3, 4, 5]))
+  )
+  WRITE result  ; 1 + 9 + 25 = 35
+
+  ; Pipeline usage with Array functions (using wrapper closures)
+  LET piped = [1, 2, 3, 4, 5]
+    |> (arr => Filterable:filter(x => x > 2, arr))
+    |> (arr => Mappable:map(x => x * 10, arr))
+  WRITE piped  ; [30, 40, 50]
+
+  ; Module functions can be passed as first-class values
+  LET filter-fn = Filterable:filter
+  LET data = [1, 2, 3, 4, 5]
+  LET filtered = filter-fn(x => x > 2, data)
+  WRITE filtered  ; [3, 4, 5]
+
+  ; Mappable:map with Option results (homogeneous tagged values)
+  LET with-opts = Mappable:map(x => Option.Some(x), [1, 2, 3])
+  WRITE with-opts  ; [Option.Some(1), Option.Some(2), Option.Some(3)]
+
+  ; Nested Mappable:map (callback uses Array function)
+  LET nested = [[1, 2], [3, 4]]
+  LET doubled-nested = Mappable:map(arr => Mappable:map(x => x * 2, arr), nested)
+  WRITE doubled-nested  ; [[2, 4], [6, 8]]
+
+  ; === Iterable:foreach ===
+
+  ; Iterable:foreach for side effects (outputs each element)
+  WRITE "foreach:"
+  LET fe-result = Iterable:foreach(x => { WRITE x }, [10, 20, 30])
+  WRITE fe-result  ; Unit
+
+  ; Iterable:foreach on empty array (no side effects)
+  LET fe-empty = Iterable:foreach(x => { WRITE x }, [])
+  WRITE fe-empty  ; Unit
+
+  ; Iterable:foreach with range
+  WRITE "range foreach:"
+  LET fe-range = Iterable:foreach(n => { WRITE n }, 1 .. 4)
+  WRITE fe-range  ; Unit
+
+  ; === Array.zip ===
+
+  LET a = [1, 2, 3]
+  LET b = ["a", "b", "c"]
+  LET zipped = Array.zip(a, b)
+  WRITE zipped
+
+  ; Shorter array determines length
+  LET short = [1, 2]
+  LET long = ["a", "b", "c", "d"]
+  WRITE Array.zip(short, long)
+
+  ; === Array.unzip ===
+
+  LET pairs: Array[(Int, String)] = [(1, "one"), (2, "two"), (3, "three")]
+  LET (unzip-nums, unzip-strs) = Array.unzip(pairs)
+  WRITE unzip-nums
+  WRITE unzip-strs
+
+  ; Round-trip
+  LET x = [10, 20, 30]
+  LET y = [true, false, true]
+  LET (x2, y2) = Array.unzip(Array.zip(x, y))
+  WRITE x2
+  WRITE y2
+
+  ; === Array.intersperse ===
+
+  LET inter-words = ["hello", "world", "!"]
+  WRITE Array.intersperse(",", inter-words)
+
+  LET inter-nums = [1, 2, 3, 4]
+  WRITE Array.intersperse(0, inter-nums)
+
+  ; Empty array
+  LET inter-empty: Array[Int] = []
+  WRITE Array.intersperse(0, inter-empty)
+
+  ; Single element
+  WRITE Array.intersperse(0, [42])
+
+  ; === Array.zip-with ===
+
+  LET xs = [1, 2, 3]
+  LET ys = [10, 20, 30]
+  WRITE Array.zip-with(zip-add, xs, ys)
+
+  ; With closure
+  LET multiplied = Array.zip-with((ma, mb) => ma * mb, [2, 3, 4], [5, 6, 7])
+  WRITE multiplied
+
+  ; With shorter array
+  WRITE Array.zip-with(zip-add, [1, 2, 3, 4, 5], [10, 20])
+
+  ; === Array.sort-by ===
+
+  LET unsorted = [3, 1, 4, 1, 5, 9, 2, 6]
+  WRITE Array.sort-by(cmp-int, unsorted)
+
+  ; Sort descending (reverse comparator)
+  WRITE Array.sort-by(cmp-desc, unsorted)
+
+  ; Sort by absolute value
+  LET signed = [-5, 3, -1, 4, -2]
+  WRITE Array.sort-by(cmp-abs, signed)
+
+  ; Sort objects by field
+  LET people = [
+    { name: "Alice", age: 30 },
+    { name: "Bob", age: 25 },
+    { name: "Carol", age: 35 }
+  ]
+  LET by-age = Array.sort-by(cmp-by-age, people)
+  WRITE Mappable:map(p => p.name, by-age)
+
+  ; === Chained operations ===
+
+  ; zip, map, filter chain
+  LET indices = [0, 1, 2, 3, 4]
+  LET values = [10, 25, 30, 15, 40]
+  LET indexed = Array.zip(indices, values)
+  LET chain-filtered = Filterable:filter(pair => pair.1 > 20, indexed)
+  WRITE chain-filtered
+
+  ; zip-with to compute differences
+  LET before = [10, 20, 30]
+  LET after = [15, 18, 35]
+  LET diffs = Array.zip-with((db, da) => da - db, before, after)
+  WRITE diffs
+
+  ; === Union types with Iterable constraint ===
+
+  ; Union of iterable types should satisfy Iterable[T] constraint
+  WRITE iter-len(1 ..= 20)
+  WRITE iter-len([1, 2, 3, 4, 5])
+
+  ; Using Mappable:map with union type
+  WRITE iter-sum(1 ..= 5)
+  WRITE iter-sum([10, 20, 30])
+}

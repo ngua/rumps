@@ -2,6 +2,8 @@
 ;
 ; Only one instance of a class is allowed per type.
 
+FUN main() { }
+
 TYPE Point = Point(Int, Int)
 
 CLASS Display FOR Point {

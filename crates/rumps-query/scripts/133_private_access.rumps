@@ -1,6 +1,23 @@
 ; Private module member access errors
 ; Tests that private members (without `+`) cannot be accessed outside the module
 
+FUN main() {
+  ; Accessing private constant should produce a type error
+  LET x = Secrets.hidden
+
+  ; Accessing private function should produce a type error
+  LET y = Secrets.internal()
+
+  ; Accessing private TYPE should produce a type error
+  LET z: Secrets.Status = Secrets.Status.Pending
+
+  ; Accessing private NEWTYPE should produce a type error
+  LET w: Secrets.UserId = 123
+
+  ; Accessing private UNION should produce a type error
+  LET v: Secrets.Payload = 456
+}
+
 MODULE Secrets {
   ; Private constant (no `+` prefix)
   LET hidden = 42
@@ -17,18 +34,3 @@ MODULE Secrets {
   ; Private UNION
   UNION Payload = Int | String
 }
-
-; Accessing private constant should produce a type error
-LET x = Secrets.hidden
-
-; Accessing private function should produce a type error
-LET y = Secrets.internal()
-
-; Accessing private TYPE should produce a type error
-LET z: Secrets.Status = Secrets.Status.Pending
-
-; Accessing private NEWTYPE should produce a type error
-LET w: Secrets.UserId = 123
-
-; Accessing private UNION should produce a type error
-LET v: Secrets.Payload = 456

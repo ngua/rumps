@@ -1,27 +1,29 @@
 ; Function hoisting: forward references and mutual recursion
 
-; Forward reference to function defined later
-WRITE add-one(5)
+FUN main() {
+  ; Forward reference to function defined later
+  WRITE add-one(5)
 
-; Mutual recursion
-WRITE is-even(4)
-WRITE is-even(7)
-WRITE is-odd(3)
+  ; Mutual recursion
+  WRITE is-even(4)
+  WRITE is-even(7)
+  WRITE is-odd(3)
 
-; Generic forward reference
-WRITE identity("hello")
-WRITE identity(42)
+  ; Generic forward reference
+  WRITE identity("hello")
+  WRITE identity(42)
 
-; Inference without return annotation
-WRITE double-it(10)
+  ; Inference without return annotation
+  WRITE double-it(10)
 
-; Block-local function hoisting
-LET result = {
-  LET x = local-fn(5)
-  FUN local-fn(n: Int) -> Int { n * 3 }
-  x
+  ; Block-local function hoisting
+  LET result = {
+    LET x = local-fn(5)
+    FUN local-fn(n: Int) -> Int { n * 3 }
+    x
+  }
+  WRITE result
 }
-WRITE result
 
 ; Definitions
 

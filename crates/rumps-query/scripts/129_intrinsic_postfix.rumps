@@ -1,31 +1,33 @@
 ; Test postfix operators on intrinsic expressions (@GET, @DATA, @ORDER, @QUERY)
 
-; Setup test data
-@SET d{1} "one"
-@SET d{2} "two"
-@SET d{3} "three"
+FUN main() {
+  ; Setup test data
+  @SET d{1} "one"
+  @SET d{2} "two"
+  @SET d{3} "three"
 
-; @GET with postfix ! (no parens needed)
-WRITE @GET d{1}! AS String
-WRITE @GET d{2}! AS String
+  ; @GET with postfix ! (no parens needed)
+  WRITE @GET d{1}! AS String
+  WRITE @GET d{2}! AS String
 
-; @ORDER with postfix ! (returns Option[Subscript])
-WRITE @ORDER d{0}!
+  ; @ORDER with postfix ! (returns Option[Subscript])
+  WRITE @ORDER d{0}!
 
-; @QUERY with postfix ! (returns Option[Array[Subscript]])
-WRITE @QUERY d{0}!
+  ; @QUERY with postfix ! (returns Option[Array[Subscript]])
+  WRITE @QUERY d{0}!
 
-; Combined with other operations
-LET val = "{@GET d{1}! AS String} appended"
-WRITE val
+  ; Combined with other operations
+  LET val = "{@GET d{1}! AS String} appended"
+  WRITE val
 
-; Nested in expression context
-WRITE "{@GET d{3}! AS String} suffix"
+  ; Nested in expression context
+  WRITE "{@GET d{3}! AS String} suffix"
 
-; Works with subscript expressions too
-LET key = 2
-WRITE @GET d{key}! AS String
+  ; Works with subscript expressions too
+  LET key = 2
+  WRITE @GET d{key}! AS String
 
-; Multiple postfix ops chained on @GET
-@SET arr{1} 42
-WRITE (@GET arr{1}! AS Int) + 8
+  ; Multiple postfix ops chained on @GET
+  @SET arr{1} 42
+  WRITE (@GET arr{1}! AS Int) + 8
+}

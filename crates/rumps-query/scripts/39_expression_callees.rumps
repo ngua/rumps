@@ -7,32 +7,9 @@ FUN make-adder (n) {
   x => x + n
 }
 
-LET add5 = make-adder(5)
-WRITE add5(10)
-; Expected: 15
-
-WRITE make-adder(100)(42)
-; Expected: 142
-
 FUN make-multiplier (n) {
   x => x * n
 }
-
-WRITE make-multiplier(2)(7)
-; Expected: 14
-
-; === IIFE (Immediately Invoked Function Expression) ===
-
-WRITE (x => x * 2)(21)
-; Expected: 42
-
-WRITE ((a, b) => a + b)(10, 32)
-; Expected: 42
-
-; IIFE with captured variable
-LET factor = 10
-WRITE (x => x * factor)(5)
-; Expected: 50
 
 ; === Higher-order functions ===
 
@@ -40,15 +17,9 @@ FUN apply (f, x) {
   f(x)
 }
 
-WRITE apply(x => x + 1, 41)
-; Expected: 42
-
 FUN square (x) {
   x * x
 }
-
-WRITE apply(square, 6)
-; Expected: 36
 
 ; === Function composition ===
 
@@ -59,29 +30,15 @@ FUN compose (f, g) {
 FUN double (x) { x * 2 }
 FUN inc (x) { x + 1 }
 
-LET double-then-inc = compose(inc, double)
-WRITE double-then-inc(20)
-; Expected: 41 (double(20)=40, inc(40)=41)
-
-LET inc-then-double = compose(double, inc)
-WRITE inc-then-double(20)
-; Expected: 42 (inc(20)=21, double(21)=42)
-
 ; === Typed functions with valid calls ===
 
 FUN add-typed (a: Int, b: Int) -> Int {
   a + b
 }
 
-WRITE add-typed(10, 32)
-; Expected: 42
-
 FUN greet (name: String) -> String {
   "Hello, {name}!"
 }
-
-WRITE greet("World")
-; Expected: Hello, World!
 
 ; === Higher-order with typed parameters ===
 
@@ -89,58 +46,15 @@ FUN apply-twice (f: (Int) -> Int, x: Int) -> Int {
   f(f(x))
 }
 
-WRITE apply-twice(x => x + 1, 40)
-; Expected: 42
-
-WRITE apply-twice(x => x * 2, 5)
-; Expected: 20
-
 ; === Functions returning functions with types ===
 
 FUN make-scaler (n: Int) -> (Int) -> Int {
   x => x * n
 }
 
-LET triple = make-scaler(3)
-WRITE triple(14)
-; Expected: 42
-
-WRITE make-scaler(7)(6)
-; Expected: 42
-
-; === Complex nested calls ===
-
-WRITE make-multiplier(2)(make-adder(3)(4))
-; Expected: 14 (add3(4)=7, mult2(7)=14)
-
 FUN chain-a (x) { x + 1 }
 FUN chain-b (x) { x * 2 }
 FUN chain-c (x) { x - 3 }
-
-WRITE chain-c(chain-b(chain-a(10)))
-; Expected: 19 ((10+1)*2-3 = 22-3 = 19)
-
-; === Passing named functions to higher-order functions ===
-
-WRITE apply(double, 21)
-; Expected: 42
-
-WRITE apply(inc, 41)
-; Expected: 42
-
-WRITE apply-twice(double, 3)
-; Expected: 12 (double(3)=6, double(6)=12)
-
-WRITE apply-twice(inc, 40)
-; Expected: 42
-
-; === Closure capturing multiple variables ===
-
-LET a = 10
-LET b = 20
-LET sum-with-ab = x => x + a + b
-WRITE sum-with-ab(12)
-; Expected: 42
 
 ; === Factorial via currying ===
 
@@ -151,30 +65,118 @@ FUN make-factorial () {
   fact
 }
 
-LET factorial = make-factorial()
-WRITE factorial(5)
-; Expected: 120
+FUN main() {
+  LET add5 = make-adder(5)
+  WRITE add5(10)
+  ; Expected: 15
 
-; === Object field closures ===
+  WRITE make-adder(100)(42)
+  ; Expected: 142
 
-LET ops = { inc: x => x + 1, mul: x => x * 2 }
-WRITE ops.inc(5)
-; Expected: 6
+  WRITE make-multiplier(2)(7)
+  ; Expected: 14
 
-WRITE ops.mul(21)
-; Expected: 42
+  ; === IIFE (Immediately Invoked Function Expression) ===
 
-; Nullary closure in object
-LET counter = { value: () => 42 }
-WRITE counter.value()
-; Expected: 42
+  WRITE (x => x * 2)(21)
+  ; Expected: 42
 
-; Chained object field calls
-LET math = {
-  add: (a, b) => a + b,
-  sq: x => x * x
+  WRITE ((a, b) => a + b)(10, 32)
+  ; Expected: 42
+
+  ; IIFE with captured variable
+  LET factor = 10
+  WRITE (x => x * factor)(5)
+  ; Expected: 50
+
+  WRITE apply(x => x + 1, 41)
+  ; Expected: 42
+
+  WRITE apply(square, 6)
+  ; Expected: 36
+
+  LET double-then-inc = compose(inc, double)
+  WRITE double-then-inc(20)
+  ; Expected: 41 (double(20)=40, inc(40)=41)
+
+  LET inc-then-double = compose(double, inc)
+  WRITE inc-then-double(20)
+  ; Expected: 42 (inc(20)=21, double(21)=42)
+
+  WRITE add-typed(10, 32)
+  ; Expected: 42
+
+  WRITE greet("World")
+  ; Expected: Hello, World!
+
+  WRITE apply-twice(x => x + 1, 40)
+  ; Expected: 42
+
+  WRITE apply-twice(x => x * 2, 5)
+  ; Expected: 20
+
+  LET triple = make-scaler(3)
+  WRITE triple(14)
+  ; Expected: 42
+
+  WRITE make-scaler(7)(6)
+  ; Expected: 42
+
+  ; === Complex nested calls ===
+
+  WRITE make-multiplier(2)(make-adder(3)(4))
+  ; Expected: 14 (add3(4)=7, mult2(7)=14)
+
+  WRITE chain-c(chain-b(chain-a(10)))
+  ; Expected: 19 ((10+1)*2-3 = 22-3 = 19)
+
+  ; === Passing named functions to higher-order functions ===
+
+  WRITE apply(double, 21)
+  ; Expected: 42
+
+  WRITE apply(inc, 41)
+  ; Expected: 42
+
+  WRITE apply-twice(double, 3)
+  ; Expected: 12 (double(3)=6, double(6)=12)
+
+  WRITE apply-twice(inc, 40)
+  ; Expected: 42
+
+  ; === Closure capturing multiple variables ===
+
+  LET a = 10
+  LET b = 20
+  LET sum-with-ab = x => x + a + b
+  WRITE sum-with-ab(12)
+  ; Expected: 42
+
+  LET factorial = make-factorial()
+  WRITE factorial(5)
+  ; Expected: 120
+
+  ; === Object field closures ===
+
+  LET ops = { inc: x => x + 1, mul: x => x * 2 }
+  WRITE ops.inc(5)
+  ; Expected: 6
+
+  WRITE ops.mul(21)
+  ; Expected: 42
+
+  ; Nullary closure in object
+  LET counter = { value: () => 42 }
+  WRITE counter.value()
+  ; Expected: 42
+
+  ; Chained object field calls
+  LET math = {
+    add: (a, b) => a + b,
+    sq: x => x * x
+  }
+  WRITE math.sq(math.add(3, 4))
+  ; Expected: 49 (3+4=7, 7*7=49)
+
+  WRITE "Expression callees test complete"
 }
-WRITE math.sq(math.add(3, 4))
-; Expected: 49 (3+4=7, 7*7=49)
-
-WRITE "Expression callees test complete"

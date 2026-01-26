@@ -2,6 +2,8 @@
 ;
 ; The Display class requires a `display` method but none is provided.
 
+FUN main() { }
+
 TYPE Point = Point(Int, Int)
 
 CLASS Display FOR Point {

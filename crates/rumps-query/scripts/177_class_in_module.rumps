@@ -12,7 +12,45 @@ IMPORT Collections.{ ... }
 ; Instances are also brought into scope by empty import
 IMPORT EmptyImport.{ }
 
-; ============ Display CLASS in MODULE ============
+FUN main() {
+  ; ============ Display CLASS in MODULE ============
+
+  LET c = Shapes.Circle.Circle(3.14)
+  WRITE Display:display(c)
+
+  ; ============ Ord CLASS in MODULE ============
+
+  LET low: Prio.Priority = 10
+  LET high: Prio.Priority = 1
+  WRITE Ord:compare(low, high)
+  WRITE Ord:compare(high, low)
+  WRITE Ord:compare(low, low)
+
+  ; ============ Numeric CLASS in MODULE ============
+
+  LET a: Nums.MyInt = 10
+  LET b: Nums.MyInt = 3
+  WRITE Numeric:add(a, b)
+  WRITE Numeric:mul(a, b)
+
+  ; ============ Constrained type params in MODULE ============
+
+  LET p1 = Container.Pair.Pair(1, 2)
+  LET p2 = Container.Pair.Pair("hello", "world")
+  WRITE Display:display(p1)
+  WRITE Display:display(p2)
+
+  ; ============ Indexable with associated type in MODULE ============
+
+  LET arr = Collections.IntArray.IntArray([10, 20, 30])
+  WRITE Indexable:get(arr, 1)
+  WRITE Indexable:index(arr, 2)
+
+  ; ============ Empty import brings instance into scope ============
+
+  LET thing = EmptyImport.Thing.Thing(42)
+  WRITE Display:display(thing)
+}
 
 MODULE Shapes {
   +TYPE Circle = Circle(Float)
@@ -25,11 +63,6 @@ MODULE Shapes {
     }
   }
 }
-
-LET c = Shapes.Circle.Circle(3.14)
-WRITE Display:display(c)
-
-; ============ Ord CLASS in MODULE ============
 
 MODULE Prio {
   +NEWTYPE Priority = Int
@@ -44,14 +77,6 @@ MODULE Prio {
   }
 }
 
-LET low: Prio.Priority = 10
-LET high: Prio.Priority = 1
-WRITE Ord:compare(low, high)
-WRITE Ord:compare(high, low)
-WRITE Ord:compare(low, low)
-
-; ============ Numeric CLASS in MODULE ============
-
 MODULE Nums {
   +NEWTYPE MyInt = Int
 
@@ -64,13 +89,6 @@ MODULE Nums {
     FUN pow(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a ** b }
   }
 }
-
-LET a: Nums.MyInt = 10
-LET b: Nums.MyInt = 3
-WRITE Numeric:add(a, b)
-WRITE Numeric:mul(a, b)
-
-; ============ Constrained type params in MODULE ============
 
 MODULE Container {
   +TYPE Pair[L, R] = Pair(L, R)
@@ -87,13 +105,6 @@ MODULE Container {
     }
   }
 }
-
-LET p1 = Container.Pair.Pair(1, 2)
-LET p2 = Container.Pair.Pair("hello", "world")
-WRITE Display:display(p1)
-WRITE Display:display(p2)
-
-; ============ Indexable with associated type in MODULE ============
 
 MODULE Collections {
   +TYPE IntArray = IntArray(Array[Int])
@@ -115,12 +126,6 @@ MODULE Collections {
   }
 }
 
-LET arr = Collections.IntArray.IntArray([10, 20, 30])
-WRITE Indexable:get(arr, 1)
-WRITE Indexable:index(arr, 2)
-
-; ============ Empty import brings instance into scope ============
-
 MODULE EmptyImport {
   +TYPE Thing = Thing(Int)
 
@@ -132,6 +137,3 @@ MODULE EmptyImport {
     }
   }
 }
-
-LET thing = EmptyImport.Thing.Thing(42)
-WRITE Display:display(thing)

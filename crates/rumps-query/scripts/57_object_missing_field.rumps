@@ -2,5 +2,7 @@
 
 NEWTYPE Person = { name: String, age: Int }
 
-; Missing `age` field
-LET p: Person = { name: "Alice" }
+FUN main() {
+  ; Missing `age` field
+  LET p: Person = { name: "Alice" }
+}

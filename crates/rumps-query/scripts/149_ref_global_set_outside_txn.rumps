@@ -1,7 +1,9 @@
 ; Error test: @SET on global ref outside transaction
 
-; Even with Ref annotation, concrete type is preserved
-LET x: Ref = ^global{}
+FUN main() {
+  ; Even with Ref annotation, concrete type is preserved
+  LET x: Ref = ^global{}
 
-; This should fail: global writes require transaction
-@SET x "should fail"
+  ; This should fail: global writes require transaction
+  @SET x "should fail"
+}

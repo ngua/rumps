@@ -1,101 +1,103 @@
 ; Test: unary operators
 ; Tests negation and logical NOT
 
-; === Numeric Negation ===
+FUN main() {
+  ; === Numeric Negation ===
 
-; Negate integer
-WRITE -5
-; Expected: -5
+  ; Negate integer
+  WRITE -5
+  ; Expected: -5
 
-WRITE -0
-; Expected: 0
+  WRITE -0
+  ; Expected: 0
 
-WRITE -(-5)
-; Expected: 5
+  WRITE -(-5)
+  ; Expected: 5
 
-; Negate float
-WRITE -3.14
-; Expected: -3.14
+  ; Negate float
+  WRITE -3.14
+  ; Expected: -3.14
 
-WRITE -0.0
-; Expected: -0.0 (or 0.0)
+  WRITE -0.0
+  ; Expected: -0.0 (or 0.0)
 
-WRITE -(-2.5)
-; Expected: 2.5
+  WRITE -(-2.5)
+  ; Expected: 2.5
 
-; Negate variable
-LET x = 42
-WRITE -x
-; Expected: -42
+  ; Negate variable
+  LET x = 42
+  WRITE -x
+  ; Expected: -42
 
-LET y = -10
-WRITE -y
-; Expected: 10
+  LET y = -10
+  WRITE -y
+  ; Expected: 10
 
-; Negate expression
-WRITE -(5 + 3)
-; Expected: -8
+  ; Negate expression
+  WRITE -(5 + 3)
+  ; Expected: -8
 
-WRITE -(10 - 15)
-; Expected: 5
+  WRITE -(10 - 15)
+  ; Expected: 5
 
-; Negate in larger expression
-WRITE 10 + -3
-; Expected: 7
+  ; Negate in larger expression
+  WRITE 10 + -3
+  ; Expected: 7
 
-WRITE 10 - -5
-; Expected: 15
+  WRITE 10 - -5
+  ; Expected: 15
 
-WRITE -5 * 2
-; Expected: -10
+  WRITE -5 * 2
+  ; Expected: -10
 
-WRITE -5 * -2
-; Expected: 10
+  WRITE -5 * -2
+  ; Expected: 10
 
-; === Logical NOT ===
+  ; === Logical NOT ===
 
-WRITE NOT TRUE
-; Expected: FALSE
+  WRITE NOT TRUE
+  ; Expected: FALSE
 
-WRITE NOT FALSE
-; Expected: TRUE
+  WRITE NOT FALSE
+  ; Expected: TRUE
 
-WRITE !TRUE
-; Expected: FALSE
+  WRITE !TRUE
+  ; Expected: FALSE
 
-WRITE !FALSE
-; Expected: TRUE
+  WRITE !FALSE
+  ; Expected: TRUE
 
-; NOT with variable
-LET flag = TRUE
-WRITE NOT flag
-; Expected: FALSE
+  ; NOT with variable
+  LET flag = TRUE
+  WRITE NOT flag
+  ; Expected: FALSE
 
-WRITE !flag
-; Expected: FALSE
+  WRITE !flag
+  ; Expected: FALSE
 
-; Double NOT
-WRITE NOT NOT TRUE
-; Expected: TRUE
+  ; Double NOT
+  WRITE NOT NOT TRUE
+  ; Expected: TRUE
 
-WRITE !!FALSE
-; Expected: FALSE
+  WRITE !!FALSE
+  ; Expected: FALSE
 
-; NOT in expression
-WRITE NOT (5 > 10)
-; Expected: TRUE
+  ; NOT in expression
+  WRITE NOT (5 > 10)
+  ; Expected: TRUE
 
-WRITE !(3 == 4)
-; Expected: TRUE
+  WRITE !(3 == 4)
+  ; Expected: TRUE
 
-; NOT with AND/OR
-WRITE NOT TRUE AND FALSE
-; Expected: FALSE (NOT binds tighter: (NOT TRUE) AND FALSE = FALSE AND FALSE)
+  ; NOT with AND/OR
+  WRITE NOT TRUE AND FALSE
+  ; Expected: FALSE (NOT binds tighter: (NOT TRUE) AND FALSE = FALSE AND FALSE)
 
-WRITE NOT (TRUE AND FALSE)
-; Expected: TRUE (NOT applied to result: NOT FALSE = TRUE)
+  WRITE NOT (TRUE AND FALSE)
+  ; Expected: TRUE (NOT applied to result: NOT FALSE = TRUE)
 
-WRITE NOT FALSE OR TRUE
-; Expected: TRUE ((NOT FALSE) OR TRUE = TRUE OR TRUE)
+  WRITE NOT FALSE OR TRUE
+  ; Expected: TRUE ((NOT FALSE) OR TRUE = TRUE OR TRUE)
 
-WRITE "Unary ops test complete"
+  WRITE "Unary ops test complete"
+}

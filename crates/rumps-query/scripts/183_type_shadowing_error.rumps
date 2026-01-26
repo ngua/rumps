@@ -3,6 +3,8 @@
 ; Tests that defining a type that shadows a builtin or parent module type
 ; produces a compile-time error.
 
+FUN main() { }
+
 ; ============ Shadowing a builtin type ============
 
 MODULE Builtins {

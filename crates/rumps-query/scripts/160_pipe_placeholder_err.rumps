@@ -1,4 +1,6 @@
 ; Pipe placeholder `.` must only appear in call arguments on RHS of `|>`
 
-; Error: placeholder outside pipe context
-LET x = .
+FUN main() {
+  ; Error: placeholder outside pipe context
+  LET x = .
+}

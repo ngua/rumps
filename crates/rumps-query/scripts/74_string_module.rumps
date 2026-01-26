@@ -2,197 +2,199 @@
 ; Tests String.length, String.upper, String.lower, String.trim,
 ; String.split, String.join, String.slice, String.contains, String.replace
 
-; ============ String.length ============
+FUN main() {
+  ; ============ String.length ============
 
-WRITE String.length("hello")  ; 5
+  WRITE String.length("hello")  ; 5
 
-LET empty-str = ""
-WRITE String.length(empty-str)  ; 0
+  LET empty-str = ""
+  WRITE String.length(empty-str)  ; 0
 
-LET single-char = "x"
-WRITE String.length(single-char)  ; 1
+  LET single-char = "x"
+  WRITE String.length(single-char)  ; 1
 
-LET with-spaces = "hello world"
-WRITE String.length(with-spaces)  ; 11
+  LET with-spaces = "hello world"
+  WRITE String.length(with-spaces)  ; 11
 
-; ============ String.upper ============
+  ; ============ String.upper ============
 
-WRITE String.upper("hello")  ; "HELLO"
+  WRITE String.upper("hello")  ; "HELLO"
 
-LET mixed-case = "Hello World"
-WRITE String.upper(mixed-case)  ; "HELLO WORLD"
+  LET mixed-case = "Hello World"
+  WRITE String.upper(mixed-case)  ; "HELLO WORLD"
 
-WRITE String.upper("ALREADY UPPER")  ; "ALREADY UPPER"
+  WRITE String.upper("ALREADY UPPER")  ; "ALREADY UPPER"
 
-WRITE String.upper("")  ; ""
+  WRITE String.upper("")  ; ""
 
-LET with-nums = "abc123"
-WRITE String.upper(with-nums)  ; "ABC123"
+  LET with-nums = "abc123"
+  WRITE String.upper(with-nums)  ; "ABC123"
 
-; ============ String.lower ============
+  ; ============ String.lower ============
 
-WRITE String.lower("HELLO")  ; "hello"
+  WRITE String.lower("HELLO")  ; "hello"
 
-LET upper-mixed = "Hello World"
-WRITE String.lower(upper-mixed)  ; "hello world"
+  LET upper-mixed = "Hello World"
+  WRITE String.lower(upper-mixed)  ; "hello world"
 
-WRITE String.lower("already lower")  ; "already lower"
+  WRITE String.lower("already lower")  ; "already lower"
 
-WRITE String.lower("")  ; ""
+  WRITE String.lower("")  ; ""
 
-LET lower-nums = "ABC123"
-WRITE String.lower(lower-nums)  ; "abc123"
+  LET lower-nums = "ABC123"
+  WRITE String.lower(lower-nums)  ; "abc123"
 
-; ============ String.trim ============
+  ; ============ String.trim ============
 
-WRITE String.trim("  hello  ")  ; "hello"
+  WRITE String.trim("  hello  ")  ; "hello"
 
-LET leading-space = "   world"
-WRITE String.trim(leading-space)  ; "world"
+  LET leading-space = "   world"
+  WRITE String.trim(leading-space)  ; "world"
 
-LET trailing-space = "hello   "
-WRITE String.trim(trailing-space)  ; "hello"
+  LET trailing-space = "hello   "
+  WRITE String.trim(trailing-space)  ; "hello"
 
-WRITE String.trim("no spaces")  ; "no spaces"
+  WRITE String.trim("no spaces")  ; "no spaces"
 
-WRITE String.trim("")  ; ""
+  WRITE String.trim("")  ; ""
 
-LET only-spaces = "     "
-WRITE String.trim(only-spaces)  ; ""
+  LET only-spaces = "     "
+  WRITE String.trim(only-spaces)  ; ""
 
-; ============ String.split ============
+  ; ============ String.split ============
 
-LET csv = "a,b,c"
-LET parts = String.split(csv, ",")
-WRITE parts  ; ["a", "b", "c"]
+  LET csv = "a,b,c"
+  LET parts = String.split(csv, ",")
+  WRITE parts  ; ["a", "b", "c"]
 
-; Split on space
-LET sentence = "hello world foo"
-LET words = String.split(sentence, " ")
-WRITE words  ; ["hello", "world", "foo"]
+  ; Split on space
+  LET sentence = "hello world foo"
+  LET words = String.split(sentence, " ")
+  WRITE words  ; ["hello", "world", "foo"]
 
-; Split on multi-char delimiter
-LET multi-delim = "foo::bar::baz"
-LET multi-parts = String.split(multi-delim, "::")
-WRITE multi-parts  ; ["foo", "bar", "baz"]
+  ; Split on multi-char delimiter
+  LET multi-delim = "foo::bar::baz"
+  LET multi-parts = String.split(multi-delim, "::")
+  WRITE multi-parts  ; ["foo", "bar", "baz"]
 
-; Split with no delimiter found
-LET no-match = String.split("hello", ",")
-WRITE no-match  ; ["hello"]
+  ; Split with no delimiter found
+  LET no-match = String.split("hello", ",")
+  WRITE no-match  ; ["hello"]
 
-; Split empty string
-LET split-empty = String.split("", ",")
-WRITE split-empty  ; [""]
+  ; Split empty string
+  LET split-empty = String.split("", ",")
+  WRITE split-empty  ; [""]
 
-; Split on empty delimiter (splits every char)
-LET split-chars = String.split("abc", "")
-WRITE split-chars  ; ["", "a", "b", "c", ""]
+  ; Split on empty delimiter (splits every char)
+  LET split-chars = String.split("abc", "")
+  WRITE split-chars  ; ["", "a", "b", "c", ""]
 
-; ============ String.join ============
+  ; ============ String.join ============
 
-LET join-arr = ["a", "b", "c"]
-LET joined = String.join(join-arr, ",")
-WRITE joined  ; "a,b,c"
+  LET join-arr = ["a", "b", "c"]
+  LET joined = String.join(join-arr, ",")
+  WRITE joined  ; "a,b,c"
 
-; Join with space
-LET join-words = ["hello", "world"]
-LET joined-words = String.join(join-words, " ")
-WRITE joined-words  ; "hello world"
+  ; Join with space
+  LET join-words = ["hello", "world"]
+  LET joined-words = String.join(join-words, " ")
+  WRITE joined-words  ; "hello world"
 
-; Join with empty delimiter
-LET join-no-sep = String.join(["a", "b", "c"], "")
-WRITE join-no-sep  ; "abc"
+  ; Join with empty delimiter
+  LET join-no-sep = String.join(["a", "b", "c"], "")
+  WRITE join-no-sep  ; "abc"
 
-; Join single element
-LET join-single = String.join(["alone"], ",")
-WRITE join-single  ; "alone"
+  ; Join single element
+  LET join-single = String.join(["alone"], ",")
+  WRITE join-single  ; "alone"
 
-; Join empty array
-LET join-empty = String.join([], ",")
-WRITE join-empty  ; ""
+  ; Join empty array
+  LET join-empty = String.join([], ",")
+  WRITE join-empty  ; ""
 
-; ============ String.slice ============
+  ; ============ String.slice ============
 
-LET slice-str = "hello world"
-WRITE String.slice(slice-str, 0, 5)  ; "hello"
-WRITE String.slice(slice-str, 6, 11)  ; "world"
+  LET slice-str = "hello world"
+  WRITE String.slice(slice-str, 0, 5)  ; "hello"
+  WRITE String.slice(slice-str, 6, 11)  ; "world"
 
-; Slice middle
-WRITE String.slice(slice-str, 3, 8)  ; "lo wo"
+  ; Slice middle
+  WRITE String.slice(slice-str, 3, 8)  ; "lo wo"
 
-; Slice empty range
-WRITE String.slice(slice-str, 5, 5)  ; ""
+  ; Slice empty range
+  WRITE String.slice(slice-str, 5, 5)  ; ""
 
-; Slice with clamped bounds
-WRITE String.slice("abc", 0, 100)  ; "abc"
-WRITE String.slice("abc", -5, 2)  ; "ab"
+  ; Slice with clamped bounds
+  WRITE String.slice("abc", 0, 100)  ; "abc"
+  WRITE String.slice("abc", -5, 2)  ; "ab"
 
-; Slice from start
-WRITE String.slice("hello", 0, 3)  ; "hel"
+  ; Slice from start
+  WRITE String.slice("hello", 0, 3)  ; "hel"
 
-; ============ String.contains ============
+  ; ============ String.contains ============
 
-LET haystack = "hello world"
-WRITE String.contains(haystack, "wor")  ; true
-WRITE String.contains(haystack, "xyz")  ; false
-WRITE String.contains(haystack, "hello")  ; true
-WRITE String.contains(haystack, "world")  ; true
+  LET haystack = "hello world"
+  WRITE String.contains(haystack, "wor")  ; true
+  WRITE String.contains(haystack, "xyz")  ; false
+  WRITE String.contains(haystack, "hello")  ; true
+  WRITE String.contains(haystack, "world")  ; true
 
-; Contains empty string (always true)
-WRITE String.contains("hello", "")  ; true
+  ; Contains empty string (always true)
+  WRITE String.contains("hello", "")  ; true
 
-; Contains itself
-WRITE String.contains("abc", "abc")  ; true
+  ; Contains itself
+  WRITE String.contains("abc", "abc")  ; true
 
-; Contains in empty string
-WRITE String.contains("", "x")  ; false
-WRITE String.contains("", "")  ; true
+  ; Contains in empty string
+  WRITE String.contains("", "x")  ; false
+  WRITE String.contains("", "")  ; true
 
-; ============ String.replace ============
+  ; ============ String.replace ============
 
-WRITE String.replace("foo", "o", "a")  ; "faa"
+  WRITE String.replace("foo", "o", "a")  ; "faa"
 
-LET banana = "banana"
-WRITE String.replace(banana, "a", "o")  ; "bonono"
+  LET banana = "banana"
+  WRITE String.replace(banana, "a", "o")  ; "bonono"
 
-; Replace substring
-LET greeting = "hello world"
-WRITE String.replace(greeting, "world", "there")  ; "hello there"
+  ; Replace substring
+  LET greeting = "hello world"
+  WRITE String.replace(greeting, "world", "there")  ; "hello there"
 
-; Replace not found
-WRITE String.replace("hello", "x", "y")  ; "hello"
+  ; Replace not found
+  WRITE String.replace("hello", "x", "y")  ; "hello"
 
-; Replace with empty
-WRITE String.replace("hello", "l", "")  ; "heo"
+  ; Replace with empty
+  WRITE String.replace("hello", "l", "")  ; "heo"
 
-; Replace empty pattern (inserts between chars)
-WRITE String.replace("ab", "", "-")  ; "-a-b-"
+  ; Replace empty pattern (inserts between chars)
+  WRITE String.replace("ab", "", "-")  ; "-a-b-"
 
-; ============ Chaining operations ============
+  ; ============ Chaining operations ============
 
-; Upper then slice
-LET chain-str = "hello world"
-LET chain-upper = String.slice(String.upper(chain-str), 0, 5)
-WRITE chain-upper  ; "HELLO"
+  ; Upper then slice
+  LET chain-str = "hello world"
+  LET chain-upper = String.slice(String.upper(chain-str), 0, 5)
+  WRITE chain-upper  ; "HELLO"
 
-; Trim then split
-LET messy = "  a,b,c  "
-LET clean-parts = String.split(String.trim(messy), ",")
-WRITE clean-parts  ; ["a", "b", "c"]
+  ; Trim then split
+  LET messy = "  a,b,c  "
+  LET clean-parts = String.split(String.trim(messy), ",")
+  WRITE clean-parts  ; ["a", "b", "c"]
 
-; Split then join with different separator
-LET csv-to-tabs = String.join(String.split("a,b,c", ","), "\t")
-WRITE csv-to-tabs  ; "a	b	c"
+  ; Split then join with different separator
+  LET csv-to-tabs = String.join(String.split("a,b,c", ","), "\t")
+  WRITE csv-to-tabs  ; "a	b	c"
 
-; ============ Pipeline usage ============
+  ; ============ Pipeline usage ============
 
-LET pipeline-str = "  HELLO WORLD  "
-LET pipeline-result = pipeline-str
-  |> String.trim
-  |> String.lower
-WRITE pipeline-result  ; "hello world"
+  LET pipeline-str = "  HELLO WORLD  "
+  LET pipeline-result = pipeline-str
+    |> String.trim
+    |> String.lower
+  WRITE pipeline-result  ; "hello world"
 
-LET pipeline-words = "apple,banana,cherry"
-  |> (s => String.split(s, ","))
-  |> (arr => String.join(arr, " - "))
-WRITE pipeline-words  ; "apple - banana - cherry"
+  LET pipeline-words = "apple,banana,cherry"
+    |> (s => String.split(s, ","))
+    |> (arr => String.join(arr, " - "))
+  WRITE pipeline-words  ; "apple - banana - cherry"
+}

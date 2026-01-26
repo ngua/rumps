@@ -1,5 +1,7 @@
 ; Test: Empty interpolation is an error
 ; Empty `{}` in a string should produce a parse error
 
-LET x = "{}"
-WRITE x
+FUN main() {
+  LET x = "{}"
+  WRITE x
+}

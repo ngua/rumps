@@ -1,111 +1,113 @@
 ; Test: Type cast operator (AS)
 ; Tests infallible type conversions with the `as` keyword
 
-; === Int -> Float (widen) ===
+FUN main() {
+  ; === Int -> Float (widen) ===
 
-LET i = 42
-LET f = i AS Float
-WRITE f
-; Expected: 42
+  LET i = 42
+  LET f = i AS Float
+  WRITE f
+  ; Expected: 42
 
-; === Float -> Int (truncate) ===
+  ; === Float -> Int (truncate) ===
 
-LET pi = 3.7
-LET truncated = pi AS Int
-WRITE truncated
-; Expected: 3
+  LET pi = 3.7
+  LET truncated = pi AS Int
+  WRITE truncated
+  ; Expected: 3
 
-LET neg = -2.9
-LET neg-trunc = neg AS Int
-WRITE neg-trunc
-; Expected: -2
+  LET neg = -2.9
+  LET neg-trunc = neg AS Int
+  WRITE neg-trunc
+  ; Expected: -2
 
-; === Bool -> Int ===
+  ; === Bool -> Int ===
 
-LET t = TRUE AS Int
-WRITE t
-; Expected: 1
+  LET t = TRUE AS Int
+  WRITE t
+  ; Expected: 1
 
-LET f = FALSE AS Int
-WRITE f
-; Expected: 0
+  LET f = FALSE AS Int
+  WRITE f
+  ; Expected: 0
 
-; === T -> String (stringify anything) ===
+  ; === T -> String (stringify anything) ===
 
-; Int to String
-LET n = 123
-LET n-str = n AS String
-WRITE n-str
-; Expected: 123
+  ; Int to String
+  LET n = 123
+  LET n-str = n AS String
+  WRITE n-str
+  ; Expected: 123
 
-; Float to String
-LET pi-str = 3.14 AS String
-WRITE pi-str
-; Expected: 3.14
+  ; Float to String
+  LET pi-str = 3.14 AS String
+  WRITE pi-str
+  ; Expected: 3.14
 
-; Bool to String
-LET b-str = TRUE AS String
-WRITE b-str
-; Expected: TRUE
+  ; Bool to String
+  LET b-str = TRUE AS String
+  WRITE b-str
+  ; Expected: TRUE
 
-LET b-str2 = FALSE AS String
-WRITE b-str2
-; Expected: FALSE
+  LET b-str2 = FALSE AS String
+  WRITE b-str2
+  ; Expected: FALSE
 
-; Array to String
-LET arr = [1, 2, 3]
-LET arr-str = arr AS String
-WRITE arr-str
-; Expected: [ 1, 2, 3 ]
+  ; Array to String
+  LET arr = [1, 2, 3]
+  LET arr-str = arr AS String
+  WRITE arr-str
+  ; Expected: [ 1, 2, 3 ]
 
-; Object to String
-LET obj = { name: "Alice", age: 30 }
-LET obj-str = obj AS String
-WRITE obj-str
-; Expected: { name: Alice, age: 30 }
+  ; Object to String
+  LET obj = { name: "Alice", age: 30 }
+  LET obj-str = obj AS String
+  WRITE obj-str
+  ; Expected: { name: Alice, age: 30 }
 
-; Option to String
-LET some = Option.Some(42)
-LET some-str = some AS String
-WRITE some-str
-; Expected: Option.Some(42)
+  ; Option to String
+  LET some = Option.Some(42)
+  LET some-str = some AS String
+  WRITE some-str
+  ; Expected: Option.Some(42)
 
-LET none = Option.None
-LET none-str = none AS String
-WRITE none-str
-; Expected: Option.None
+  LET none = Option.None
+  LET none-str = none AS String
+  WRITE none-str
+  ; Expected: Option.None
 
-; === Identity casts ===
+  ; === Identity casts ===
 
-LET x = 42 AS Int
-WRITE x
-; Expected: 42
+  LET x = 42 AS Int
+  WRITE x
+  ; Expected: 42
 
-LET s = "hello" AS String
-WRITE s
-; Expected: hello
+  LET s = "hello" AS String
+  WRITE s
+  ; Expected: hello
 
-; Tuple identity cast
-LET tup = (1, 2)
-WRITE tup AS (Int, Int)
-; Expected: (1, 2)
+  ; Tuple identity cast
+  LET tup = (1, 2)
+  WRITE tup AS (Int, Int)
+  ; Expected: (1, 2)
 
-; Object identity cast
-LET obj2 = { a: 1, b: 2 }
-WRITE obj2 AS { a: Int, b: Int }
-; Expected: { a: 1, b: 2 }
+  ; Object identity cast
+  LET obj2 = { a: 1, b: 2 }
+  WRITE obj2 AS { a: Int, b: Int }
+  ; Expected: { a: 1, b: 2 }
 
-; === Chained casts ===
+  ; === Chained casts ===
 
-; Note: Chained casts like `3.7 AS Int AS Float` require parentheses
-LET chain = (3.7 AS Int) AS Float
-WRITE chain
-; Expected: 3
+  ; Note: Chained casts like `3.7 AS Int AS Float` require parentheses
+  LET chain = (3.7 AS Int) AS Float
+  WRITE chain
+  ; Expected: 3
 
-; === Cast with expressions ===
+  ; === Cast with expressions ===
 
-LET result = (10 + 5) AS Float
-WRITE result
-; Expected: 15
+  LET result = (10 + 5) AS Float
+  WRITE result
+  ; Expected: 15
 
-WRITE "Type cast test complete"
+  WRITE "Type cast test complete"
+}

@@ -1,92 +1,94 @@
 ; Test: safe indexing with `?[]` syntax
 ; Tests optional index access that returns `Option` instead of panicking
 
-; Array safe indexing
-LET arr = [10, 20, 30]
+FUN main() {
+  ; Array safe indexing
+  LET arr = [10, 20, 30]
 
-; Valid indices return Some
-WRITE arr?[0]
-; Expected: Option.Some(10)
+  ; Valid indices return Some
+  WRITE arr?[0]
+  ; Expected: Option.Some(10)
 
-WRITE arr?[1]
-; Expected: Option.Some(20)
+  WRITE arr?[1]
+  ; Expected: Option.Some(20)
 
-WRITE arr?[2]
-; Expected: Option.Some(30)
+  WRITE arr?[2]
+  ; Expected: Option.Some(30)
 
-; Negative indices
-WRITE arr?[-1]
-; Expected: Option.Some(30)
+  ; Negative indices
+  WRITE arr?[-1]
+  ; Expected: Option.Some(30)
 
-WRITE arr?[-2]
-; Expected: Option.Some(20)
+  WRITE arr?[-2]
+  ; Expected: Option.Some(20)
 
-; Out of bounds returns None
-WRITE arr?[3]
-; Expected: Option.None
+  ; Out of bounds returns None
+  WRITE arr?[3]
+  ; Expected: Option.None
 
-WRITE arr?[100]
-; Expected: Option.None
+  WRITE arr?[100]
+  ; Expected: Option.None
 
-WRITE arr?[-4]
-; Expected: Option.None
+  WRITE arr?[-4]
+  ; Expected: Option.None
 
-WRITE arr?[-100]
-; Expected: Option.None
+  WRITE arr?[-100]
+  ; Expected: Option.None
 
-; String safe indexing
-LET s = "hello"
+  ; String safe indexing
+  LET s = "hello"
 
-WRITE s?[0]
-; Expected: Option.Some('h')
+  WRITE s?[0]
+  ; Expected: Option.Some('h')
 
-WRITE s?[4]
-; Expected: Option.Some('o')
+  WRITE s?[4]
+  ; Expected: Option.Some('o')
 
-WRITE s?[-1]
-; Expected: Option.Some('o')
+  WRITE s?[-1]
+  ; Expected: Option.Some('o')
 
-WRITE s?[5]
-; Expected: Option.None
+  WRITE s?[5]
+  ; Expected: Option.None
 
-WRITE s?[-6]
-; Expected: Option.None
+  WRITE s?[-6]
+  ; Expected: Option.None
 
-; Empty collections
-LET empty: Array[Int] = []
-WRITE empty?[0]
-; Expected: Option.None
+  ; Empty collections
+  LET empty: Array[Int] = []
+  WRITE empty?[0]
+  ; Expected: Option.None
 
-LET empty-str = ""
-WRITE empty-str?[0]
-; Expected: Option.None
+  LET empty-str = ""
+  WRITE empty-str?[0]
+  ; Expected: Option.None
 
-; Map safe indexing (same as regular indexing since maps already return Option)
-LET m = { "a" => 1, "b" => 2 }
-WRITE m?["a"]
-; Expected: Option.Some(1)
+  ; Map safe indexing (same as regular indexing since maps already return Option)
+  LET m = { "a" => 1, "b" => 2 }
+  WRITE m?["a"]
+  ; Expected: Option.Some(1)
 
-WRITE m?["z"]
-; Expected: Option.None
+  WRITE m?["z"]
+  ; Expected: Option.None
 
-; Chain with unwrap or coalesce
-WRITE arr?[0] ?? -1
-; Expected: 10
+  ; Chain with unwrap or coalesce
+  WRITE arr?[0] ?? -1
+  ; Expected: 10
 
-WRITE arr?[100] ?? -1
-; Expected: -1
+  WRITE arr?[100] ?? -1
+  ; Expected: -1
 
-; Use with pattern matching
-MATCH arr?[0] {
-  Option.Some(x) => WRITE "Got: {x}"
-  Option.None => WRITE "Nothing"
+  ; Use with pattern matching
+  MATCH arr?[0] {
+    Option.Some(x) => WRITE "Got: {x}"
+    Option.None => WRITE "Nothing"
+  }
+  ; Expected: Got: 10
+
+  MATCH arr?[999] {
+    Option.Some(x) => WRITE "Got: {x}"
+    Option.None => WRITE "Nothing"
+  }
+  ; Expected: Nothing
+
+  WRITE "Safe indexing test complete"
 }
-; Expected: Got: 10
-
-MATCH arr?[999] {
-  Option.Some(x) => WRITE "Got: {x}"
-  Option.None => WRITE "Nothing"
-}
-; Expected: Nothing
-
-WRITE "Safe indexing test complete"

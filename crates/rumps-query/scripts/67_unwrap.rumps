@@ -1,39 +1,42 @@
 ; Test postfix `!` unwrap operator
 
-; Unwrap Option.Some
-LET some-val = Option.Some(42)
-WRITE some-val!
+FUN make-some(n) { Option.Some(n * 2) }
 
-; Unwrap Result.Ok
-LET ok-val = Result.Ok("success")
-WRITE ok-val!
+FUN main() {
+  ; Unwrap Option.Some
+  LET some-val = Option.Some(42)
+  WRITE some-val!
 
-; Chained with field access
-LET obj = { x: Option.Some(99) }
-WRITE obj.x!
+  ; Unwrap Result.Ok
+  LET ok-val = Result.Ok("success")
+  WRITE ok-val!
 
-; Chained with function call
-FUN make-some (n) { Option.Some(n * 2) }
-WRITE make-some(25)!
+  ; Chained with field access
+  LET obj = { x: Option.Some(99) }
+  WRITE obj.x!
 
-; Unwrap result from Map.entries (which returns Array)
-LET map = Map.from-entries([("a", 1), ("b", 2)])
-LET entries = Map.entries(map)
-WRITE entries
+  ; Chained with function call
+  WRITE make-some(25)!
 
-; Double unwrap (nested Option)
-LET nested = Option.Some(Option.Some("deep"))
-WRITE nested!!
+  ; Unwrap result from Map.entries (which returns Array)
+  LET map = Map.from-entries([("a", 1), ("b", 2)])
+  LET entries = Map.entries(map)
+  WRITE entries
 
-; Combining with other postfix ops
-LET arr = [Option.Some(10), Option.Some(20)]
-WRITE arr[0]!
-WRITE arr[1]!
+  ; Double unwrap (nested Option)
+  LET nested = Option.Some(Option.Some("deep"))
+  WRITE nested!!
 
-; In arithmetic expression
-LET num = Option.Some(5)
-WRITE num! * 10
+  ; Combining with other postfix ops
+  LET arr = [Option.Some(10), Option.Some(20)]
+  WRITE arr[0]!
+  WRITE arr[1]!
 
-; With pipeline
-LET doubled = { val: 3 } |> (o => Option.Some(o.val * 2))
-WRITE doubled!
+  ; In arithmetic expression
+  LET num = Option.Some(5)
+  WRITE num! * 10
+
+  ; With pipeline
+  LET doubled = { val: 3 } |> (o => Option.Some(o.val * 2))
+  WRITE doubled!
+}

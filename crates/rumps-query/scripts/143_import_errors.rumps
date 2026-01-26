@@ -13,15 +13,17 @@ IMPORT Priv.{ internal }
 ; Error: Exclusion without wildcard
 IMPORT Math.{ floor, -ceil }
 
+FUN main() {
+  ; Error: Import must appear at top of scope
+  {
+    LET x = 1
+    IMPORT Math.{ abs }
+  }
+}
+
 ; Module must be defined for import to resolve
 MODULE Priv {
   LET secret = 42
   FUN internal() -> Int { secret }
   +FUN public() -> Int { 1 }
-}
-
-; Error: Import must appear at top of scope
-{
-  LET x = 1
-  IMPORT Math.{ abs }
 }

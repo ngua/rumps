@@ -1,97 +1,99 @@
 ; Test: logical operators
 ; Tests AND, OR, NOT with both keyword and symbol forms
 
-; AND operator (keyword)
-WRITE TRUE AND TRUE
-; Expected: true
+FUN main() {
+  ; AND operator (keyword)
+  WRITE TRUE AND TRUE
+  ; Expected: true
 
-WRITE TRUE AND FALSE
-; Expected: false
+  WRITE TRUE AND FALSE
+  ; Expected: false
 
-WRITE FALSE AND TRUE
-; Expected: false
+  WRITE FALSE AND TRUE
+  ; Expected: false
 
-WRITE FALSE AND FALSE
-; Expected: false
+  WRITE FALSE AND FALSE
+  ; Expected: false
 
-; AND operator (symbol)
-WRITE TRUE && TRUE
-; Expected: true
+  ; AND operator (symbol)
+  WRITE TRUE && TRUE
+  ; Expected: true
 
-WRITE TRUE && FALSE
-; Expected: false
+  WRITE TRUE && FALSE
+  ; Expected: false
 
-; OR operator (keyword)
-WRITE TRUE OR TRUE
-; Expected: true
+  ; OR operator (keyword)
+  WRITE TRUE OR TRUE
+  ; Expected: true
 
-WRITE TRUE OR FALSE
-; Expected: true
+  WRITE TRUE OR FALSE
+  ; Expected: true
 
-WRITE FALSE OR TRUE
-; Expected: true
+  WRITE FALSE OR TRUE
+  ; Expected: true
 
-WRITE FALSE OR FALSE
-; Expected: false
+  WRITE FALSE OR FALSE
+  ; Expected: false
 
-; OR operator (symbol)
-WRITE TRUE || FALSE
-; Expected: true
+  ; OR operator (symbol)
+  WRITE TRUE || FALSE
+  ; Expected: true
 
-WRITE FALSE || FALSE
-; Expected: false
+  WRITE FALSE || FALSE
+  ; Expected: false
 
-; NOT operator (keyword)
-WRITE NOT TRUE
-; Expected: false
+  ; NOT operator (keyword)
+  WRITE NOT TRUE
+  ; Expected: false
 
-WRITE NOT FALSE
-; Expected: true
+  WRITE NOT FALSE
+  ; Expected: true
 
-; NOT operator (symbol)
-WRITE !TRUE
-; Expected: false
+  ; NOT operator (symbol)
+  WRITE !TRUE
+  ; Expected: false
 
-WRITE !FALSE
-; Expected: true
+  WRITE !FALSE
+  ; Expected: true
 
-; Precedence: NOT before AND before OR
-WRITE NOT FALSE AND TRUE
-; Expected: true (NOT binds tighter)
+  ; Precedence: NOT before AND before OR
+  WRITE NOT FALSE AND TRUE
+  ; Expected: true (NOT binds tighter)
 
-WRITE TRUE OR FALSE AND FALSE
-; Expected: true (AND binds tighter than OR)
+  WRITE TRUE OR FALSE AND FALSE
+  ; Expected: true (AND binds tighter than OR)
 
-WRITE FALSE OR TRUE AND TRUE
-; Expected: true
+  WRITE FALSE OR TRUE AND TRUE
+  ; Expected: true
 
-; Parentheses override precedence
-WRITE (TRUE OR FALSE) AND FALSE
-; Expected: false
+  ; Parentheses override precedence
+  WRITE (TRUE OR FALSE) AND FALSE
+  ; Expected: false
 
-WRITE NOT (TRUE AND FALSE)
-; Expected: true
+  WRITE NOT (TRUE AND FALSE)
+  ; Expected: true
 
-; Complex expressions
-WRITE (TRUE AND FALSE) OR (FALSE OR TRUE)
-; Expected: true
+  ; Complex expressions
+  WRITE (TRUE AND FALSE) OR (FALSE OR TRUE)
+  ; Expected: true
 
-WRITE NOT (FALSE OR FALSE)
-; Expected: true
+  WRITE NOT (FALSE OR FALSE)
+  ; Expected: true
 
-WRITE (NOT FALSE) AND (NOT FALSE)
-; Expected: true
+  WRITE (NOT FALSE) AND (NOT FALSE)
+  ; Expected: true
 
-; With variables
-LET a = TRUE
-LET b = FALSE
-WRITE a AND NOT b
-; Expected: true
+  ; With variables
+  LET a = TRUE
+  LET b = FALSE
+  WRITE a AND NOT b
+  ; Expected: true
 
-WRITE NOT a OR b
-; Expected: false
+  WRITE NOT a OR b
+  ; Expected: false
 
-WRITE (a OR b) AND (NOT b)
-; Expected: true
+  WRITE (a OR b) AND (NOT b)
+  ; Expected: true
 
-WRITE "Logical operators test complete"
+  WRITE "Logical operators test complete"
+}

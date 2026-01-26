@@ -1,91 +1,93 @@
 ; Test spread operators for arrays and objects
 ; Section 8 of phase-4c.md
 
-; ====== Array Spread ======
+FUN main() {
+  ; ====== Array Spread ======
 
-; Basic array spread
-LET arr1 = [1, 2, 3]
-LET arr2 = [4, 5, 6]
-LET combined = [...arr1, ...arr2]
-WRITE combined
+  ; Basic array spread
+  LET arr1 = [1, 2, 3]
+  LET arr2 = [4, 5, 6]
+  LET combined = [...arr1, ...arr2]
+  WRITE combined
 
-; Prepend/append with spread
-LET with-zero = [0, ...arr1]
-WRITE with-zero
+  ; Prepend/append with spread
+  LET with-zero = [0, ...arr1]
+  WRITE with-zero
 
-LET with-four = [...arr1, 4]
-WRITE with-four
+  LET with-four = [...arr1, 4]
+  WRITE with-four
 
-; Mixed elements and spreads
-LET mixed = [0, ...arr1, 4, 5]
-WRITE mixed
+  ; Mixed elements and spreads
+  LET mixed = [0, ...arr1, 4, 5]
+  WRITE mixed
 
-; Empty array spread
-LET empty: Array[Int] = []
-LET spread-empty = [...empty, 1, 2]
-WRITE spread-empty
+  ; Empty array spread
+  LET empty: Array[Int] = []
+  LET spread-empty = [...empty, 1, 2]
+  WRITE spread-empty
 
-; Spread with single element array
-LET single = [42]
-LET spread-single = [...single, ...single]
-WRITE spread-single
+  ; Spread with single element array
+  LET single = [42]
+  LET spread-single = [...single, ...single]
+  WRITE spread-single
 
-; ====== Object Spread ======
+  ; ====== Object Spread ======
 
-; Basic object spread
-LET base = { name: "Alice", age: 30 }
-LET updated = { ...base, age: 31 }
-WRITE updated.name
-WRITE updated.age
+  ; Basic object spread
+  LET base = { name: "Alice", age: 30 }
+  LET updated = { ...base, age: 31 }
+  WRITE updated.name
+  WRITE updated.age
 
-; Merge multiple objects
-LET defaults = { color: "red", size: "medium" }
-LET user-prefs = { size: "large" }
-LET config = { ...defaults, ...user-prefs }
-WRITE config.color
-WRITE config.size
+  ; Merge multiple objects
+  LET defaults = { color: "red", size: "medium" }
+  LET user-prefs = { size: "large" }
+  LET config = { ...defaults, ...user-prefs }
+  WRITE config.color
+  WRITE config.size
 
-; Add new fields
-LET extended = { ...base, city: "NYC" }
-WRITE extended.name
-WRITE extended.city
+  ; Add new fields
+  LET extended = { ...base, city: "NYC" }
+  WRITE extended.name
+  WRITE extended.city
 
-; Empty object spread
-LET empty-obj = { }
-LET spread-empty-obj = { ...empty-obj, x: 1 }
-WRITE spread-empty-obj.x
+  ; Empty object spread
+  LET empty-obj = { }
+  LET spread-empty-obj = { ...empty-obj, x: 1 }
+  WRITE spread-empty-obj.x
 
-; ====== Struct Spread with Preservation ======
+  ; ====== Struct Spread with Preservation ======
+
+  ; Spread a struct value (should preserve type)
+  LET alice: Person = { name: "Alice", age: 30 }
+  LET alice-older: Person = { ...alice, age: 31 }
+  WRITE alice-older.name
+  WRITE alice-older.age
+
+  ; Adding fields to a struct (extensible record semantics)
+  LET alice-with-city = { ...alice, city: "NYC" }
+  WRITE alice-with-city.city
+
+  ; ====== Nested Spreads ======
+
+  ; Spread of spreads
+  LET a = [1, 2]
+  LET b = [3, 4]
+  LET c = [5, 6]
+  LET all = [...a, ...b, ...c]
+  WRITE all
+
+  ; Nested object spreads
+  LET o1 = { x: 1 }
+  LET o2 = { y: 2 }
+  LET o3 = { z: 3 }
+  LET merged = { ...o1, ...o2, ...o3 }
+  WRITE merged.x
+  WRITE merged.y
+  WRITE merged.z
+
+  WRITE "--- TESTS PASSED ---"
+}
 
 ; Define a struct
 NEWTYPE Person = { name: String, age: Int }
-
-; Spread a struct value (should preserve type)
-LET alice: Person = { name: "Alice", age: 30 }
-LET alice-older: Person = { ...alice, age: 31 }
-WRITE alice-older.name
-WRITE alice-older.age
-
-; Adding fields to a struct (extensible record semantics)
-LET alice-with-city = { ...alice, city: "NYC" }
-WRITE alice-with-city.city
-
-; ====== Nested Spreads ======
-
-; Spread of spreads
-LET a = [1, 2]
-LET b = [3, 4]
-LET c = [5, 6]
-LET all = [...a, ...b, ...c]
-WRITE all
-
-; Nested object spreads
-LET o1 = { x: 1 }
-LET o2 = { y: 2 }
-LET o3 = { z: 3 }
-LET merged = { ...o1, ...o2, ...o3 }
-WRITE merged.x
-WRITE merged.y
-WRITE merged.z
-
-WRITE "--- TESTS PASSED ---"

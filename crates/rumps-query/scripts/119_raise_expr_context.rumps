@@ -1,7 +1,10 @@
 ; Test RAISE in expression context (match arm)
 ; The RAISE branch is not taken, so we get the value 1
-LET x = MATCH Option.Some(1) {
-  Option.Some(n) => n
-  Option.None => RAISE "unreachable"
+
+FUN main() {
+  LET x = MATCH Option.Some(1) {
+    Option.Some(n) => n
+    Option.None => RAISE "unreachable"
+  }
+  WRITE x
 }
-WRITE x

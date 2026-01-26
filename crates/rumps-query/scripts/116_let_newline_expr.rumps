@@ -1,26 +1,28 @@
 ; LET with expression on next line (after `=`)
 
-LET x =
-  MATCH Unit {
-    Unit => Unit
-  }
+FUN main() {
+  LET x =
+    MATCH Unit {
+      Unit => Unit
+    }
 
-WRITE x
+  WRITE x
 
-; Also test with other expressions
-LET y =
-  1
-  + 2
-  + 3
+  ; Also test with other expressions
+  LET y =
+    1
+    + 2
+    + 3
 
-WRITE y
+  WRITE y
 
-; Nested
-LET z =
-  IF true {
-    "yes"
-  } ELSE {
-    "no"
-  }
+  ; Nested
+  LET z =
+    IF true {
+      "yes"
+    } ELSE {
+      "no"
+    }
 
-WRITE z
+  WRITE z
+}

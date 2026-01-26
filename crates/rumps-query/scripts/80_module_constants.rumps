@@ -1,80 +1,82 @@
 ; Module constants
 ; Tests Math.pi, Math.e, Math.tau, Math.inf, Math.neg-inf
 
-; ============ Math.pi ============
+FUN main() {
+  ; ============ Math.pi ============
 
-WRITE Math.pi  ; ~3.14159...
+  WRITE Math.pi  ; ~3.14159...
 
-LET pi-val = Math.pi
-WRITE pi-val > 3.14  ; true
-WRITE pi-val < 3.15  ; true
+  LET pi-val = Math.pi
+  WRITE pi-val > 3.14  ; true
+  WRITE pi-val < 3.15  ; true
 
-; Use in calculations
-LET area = Math.pi * 4.0  ; area of circle with r=2
-WRITE area > 12.0  ; true
+  ; Use in calculations
+  LET area = Math.pi * 4.0  ; area of circle with r=2
+  WRITE area > 12.0  ; true
 
-; ============ Math.e ============
+  ; ============ Math.e ============
 
-WRITE Math.e  ; ~2.71828...
+  WRITE Math.e  ; ~2.71828...
 
-LET e-val = Math.e
-WRITE e-val > 2.71  ; true
-WRITE e-val < 2.72  ; true
+  LET e-val = Math.e
+  WRITE e-val > 2.71  ; true
+  WRITE e-val < 2.72  ; true
 
-; Use with log
-LET log-e = Math.log(Math.e)
-WRITE Math.round(log-e)  ; 1
+  ; Use with log
+  LET log-e = Math.log(Math.e)
+  WRITE Math.round(log-e)  ; 1
 
-; ============ Math.tau ============
+  ; ============ Math.tau ============
 
-WRITE Math.tau  ; ~6.28318... (2*pi)
+  WRITE Math.tau  ; ~6.28318... (2*pi)
 
-LET tau-val = Math.tau
-WRITE tau-val > 6.28  ; true
-WRITE tau-val < 6.29  ; true
+  LET tau-val = Math.tau
+  WRITE tau-val > 6.28  ; true
+  WRITE tau-val < 6.29  ; true
 
-; tau = 2*pi
-LET two-pi = Math.pi * 2.0
-LET diff = Math.abs(Math.tau - two-pi)
-WRITE diff < 0.0001  ; true (essentially equal)
+  ; tau = 2*pi
+  LET two-pi = Math.pi * 2.0
+  LET diff = Math.abs(Math.tau - two-pi)
+  WRITE diff < 0.0001  ; true (essentially equal)
 
-; ============ Math.inf ============
+  ; ============ Math.inf ============
 
-WRITE Math.inf  ; inf
+  WRITE Math.inf  ; inf
 
-LET inf-val = Math.inf
-WRITE inf-val > 1000000.0  ; true
-WRITE inf-val > 0.0  ; true
+  LET inf-val = Math.inf
+  WRITE inf-val > 1000000.0  ; true
+  WRITE inf-val > 0.0  ; true
 
-; ============ Math.neg-inf ============
+  ; ============ Math.neg-inf ============
 
-WRITE Math.neg-inf  ; -inf
+  WRITE Math.neg-inf  ; -inf
 
-LET neg-inf-val = Math.neg-inf
-WRITE neg-inf-val < -1000000.0  ; true
-WRITE neg-inf-val < 0.0  ; true
+  LET neg-inf-val = Math.neg-inf
+  WRITE neg-inf-val < -1000000.0  ; true
+  WRITE neg-inf-val < 0.0  ; true
 
-; ============ Constants in expressions ============
+  ; ============ Constants in expressions ============
 
-; Circle circumference: 2 * pi * r
-LET radius = 5.0
-LET circ = Math.tau * radius
-WRITE circ > 31.0  ; true
+  ; Circle circumference: 2 * pi * r
+  LET radius = 5.0
+  LET circ = Math.tau * radius
+  WRITE circ > 31.0  ; true
 
-; Constants work with pipeline
-LET doubled-pi = Math.pi
-  |> (x => x * 2.0)
-WRITE Math.abs(doubled-pi - Math.tau) < 0.0001  ; true
+  ; Constants work with pipeline
+  LET doubled-pi = Math.pi
+    |> (x => x * 2.0)
+  WRITE Math.abs(doubled-pi - Math.tau) < 0.0001  ; true
 
-; Constants in array
-LET consts = [Math.pi, Math.e, Math.tau]
-WRITE Iterable:length(consts)  ; 3
+  ; Constants in array
+  LET consts = [Math.pi, Math.e, Math.tau]
+  WRITE Iterable:length(consts)  ; 3
 
-; Constants in object
-LET math-consts = {
-  pi: Math.pi,
-  e: Math.e,
-  tau: Math.tau
+  ; Constants in object
+  LET math-consts = {
+    pi: Math.pi,
+    e: Math.e,
+    tau: Math.tau
+  }
+  WRITE math-consts.pi > 3.0  ; true
+  WRITE math-consts.e > 2.0  ; true
 }
-WRITE math-consts.pi > 3.0  ; true
-WRITE math-consts.e > 2.0  ; true

@@ -1,5 +1,11 @@
 ; CLASS instance without import; should error with helpful suggestion
 
+FUN main() {
+  ; No import; should error
+  LET c = Shapes.Circle.Circle(3.14)
+  WRITE Display:display(c)
+}
+
 MODULE Shapes {
   +TYPE Circle = Circle(Float)
 
@@ -11,7 +17,3 @@ MODULE Shapes {
     }
   }
 }
-
-; No import; should error
-LET c = Shapes.Circle.Circle(3.14)
-WRITE Display:display(c)

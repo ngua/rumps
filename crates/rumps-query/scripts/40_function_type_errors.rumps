@@ -8,5 +8,7 @@ FUN add (a: Int, b: Int) -> Int {
   a + b
 }
 
-; Passing string to Int parameter
-WRITE add("hello", 5)
+FUN main() {
+  ; Passing string to Int parameter
+  WRITE add("hello", 5)
+}

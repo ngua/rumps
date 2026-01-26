@@ -5,87 +5,89 @@
 ; fall back to JSON for heterogeneous elements; instead, each element is checked
 ; against the union type.
 
-; === Comparison: without vs with annotation ===
+FUN main() {
+  ; === Comparison: without vs with annotation ===
 
-; WITHOUT annotation: heterogeneous array becomes Json
-LET json-arr = [1, "a", true]
-WRITE json-arr IS Json
+  ; WITHOUT annotation: heterogeneous array becomes Json
+  LET json-arr = [1, "a", true]
+  WRITE json-arr IS Json
 
-; WITH annotation: stays as native Array (not Json)
-LET sub-arr: Array[Subscript] = [1, "a", true]
-WRITE sub-arr IS Json
-WRITE Iterable:length(sub-arr)
+  ; WITH annotation: stays as native Array (not Json)
+  LET sub-arr: Array[Subscript] = [1, "a", true]
+  WRITE sub-arr IS Json
+  WRITE Iterable:length(sub-arr)
 
-; === Named union: Subscript ===
+  ; === Named union: Subscript ===
 
-LET subscript-arr: Array[Subscript] = [42, "hello", 3.14, 'x', true]
-WRITE Iterable:length(subscript-arr)
+  LET subscript-arr: Array[Subscript] = [42, "hello", 3.14, 'x', true]
+  WRITE Iterable:length(subscript-arr)
 
-; === Named union: Storable ===
+  ; === Named union: Storable ===
 
-LET storable-arr: Array[Storable] = [true, 42, 3.14, 'x', "str"]
-WRITE Iterable:length(storable-arr)
+  LET storable-arr: Array[Storable] = [true, 42, 3.14, 'x', "str"]
+  WRITE Iterable:length(storable-arr)
 
-; === Named union: Scalar ===
+  ; === Named union: Scalar ===
 
-LET scalar-arr: Array[Scalar] = [true, 42, 3.14, "str"]
-WRITE Iterable:length(scalar-arr)
+  LET scalar-arr: Array[Scalar] = [true, 42, 3.14, "str"]
+  WRITE Iterable:length(scalar-arr)
 
-; === Anonymous union ===
+  ; === Anonymous union ===
 
-LET anon-arr: Array[Int | String] = [42, "hello", 99, "world"]
-WRITE Iterable:length(anon-arr)
+  LET anon-arr: Array[Int | String] = [42, "hello", 99, "world"]
+  WRITE Iterable:length(anon-arr)
 
-; === User-defined union ===
+  ; === User-defined union ===
+
+  LET ids: Array[Id] = [1, "abc", 2, "def"]
+  WRITE Iterable:length(ids)
+
+  ; === Empty array with union element type ===
+
+  LET empty: Array[Int | String] = []
+  WRITE Iterable:length(empty)
+
+  ; === Spread in union arrays ===
+
+  LET ints = [1, 2, 3]
+  LET strs: Array[String] = ["a", "b"]
+
+  ; Spread homogeneous arrays into union array
+  LET combined: Array[Int | String] = [...ints, "x", ...strs, 4]
+  WRITE Iterable:length(combined)
+
+  ; === Iteration over union array ===
+
+  LET arr: Array[Int | String] = [1, "two", 3, "four"]
+
+  ; Iterable:foreach works on union arrays
+  Iterable:foreach(x => {
+    MATCH x {
+      n IS Int => { WRITE "int: {n}" }
+      s IS String => { WRITE "str: {s}" }
+      _ => { WRITE "other" }
+    }
+  }, arr)
+
+  ; Mappable:map with union elements
+  LET mapped = Mappable:map(x => {
+    MATCH x {
+      n IS Int => { n * 2 }
+      s IS String => { String.length(s) }
+      _ => { 0 }
+    }
+  }, arr)
+  WRITE mapped
+
+  ; === Verify elements preserve their concrete types ===
+
+  ; Use Filterable:filter to extract Int elements
+  LET ints-only = Filterable:filter(x => x IS Int, arr)
+  WRITE Iterable:length(ints-only)
+
+  ; Use Filterable:filter to extract String elements
+  LET strs-only = Filterable:filter(x => x IS String, arr)
+  WRITE Iterable:length(strs-only)
+}
 
 UNION Id = Int | String
-
-LET ids: Array[Id] = [1, "abc", 2, "def"]
-WRITE Iterable:length(ids)
-
-; === Empty array with union element type ===
-
-LET empty: Array[Int | String] = []
-WRITE Iterable:length(empty)
-
-; === Spread in union arrays ===
-
-LET ints = [1, 2, 3]
-LET strs: Array[String] = ["a", "b"]
-
-; Spread homogeneous arrays into union array
-LET combined: Array[Int | String] = [...ints, "x", ...strs, 4]
-WRITE Iterable:length(combined)
-
-; === Iteration over union array ===
-
-LET arr: Array[Int | String] = [1, "two", 3, "four"]
-
-; Iterable:foreach works on union arrays
-Iterable:foreach(x => {
-  MATCH x {
-    n IS Int => { WRITE "int: {n}" }
-    s IS String => { WRITE "str: {s}" }
-    _ => { WRITE "other" }
-  }
-}, arr)
-
-; Mappable:map with union elements
-LET mapped = Mappable:map(x => {
-  MATCH x {
-    n IS Int => { n * 2 }
-    s IS String => { String.length(s) }
-    _ => { 0 }
-  }
-}, arr)
-WRITE mapped
-
-; === Verify elements preserve their concrete types ===
-
-; Use Filterable:filter to extract Int elements
-LET ints-only = Filterable:filter(x => x IS Int, arr)
-WRITE Iterable:length(ints-only)
-
-; Use Filterable:filter to extract String elements
-LET strs-only = Filterable:filter(x => x IS String, arr)
-WRITE Iterable:length(strs-only)

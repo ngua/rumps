@@ -1,87 +1,89 @@
 ; Test: object field access
 ; Tests dot notation for objects (bracket notation is for arrays/maps only)
 
-LET obj = { name: "Alice", age: 30, active: TRUE }
-
-; Dot notation
-WRITE obj.name
-; Expected: Alice
-
-WRITE obj.age
-; Expected: 30
-
-WRITE obj.active
-; Expected: TRUE
-
-; Nested object access (dot notation)
-LET rec = {
-  user: {
-    profile: {
-      first-name: "Bob",
-      last-name: "Smith"
-    },
-    scores: [90, 85, 95]
-  }
-}
-
-WRITE rec.user.profile.first-name
-; Expected: Bob
-
-WRITE rec.user.profile.last-name
-; Expected: Smith
-
-WRITE rec.user.scores[0]
-; Expected: 90
-
-WRITE rec.user.scores[-1]
-; Expected: 95
-
-; Object with dashed keys (valid RUMPS identifiers)
-LET special = { my-key: "value1", another-key: "value2" }
-WRITE special.my-key
-; Expected: value1
-
-WRITE special.another-key
-; Expected: value2
-
-; Optional field access (`?.`) on objects
-; Returns `Some(value)` if field exists, `None` if missing
-
-LET person = { name: "Carol", age: 25 }
-
-WRITE person?.name
-; Expected: Option.Some("Carol")
-
-WRITE person?.age
-; Expected: Option.Some(25)
-
-WRITE person?.email
-; Expected: Option.None
-
-WRITE person?.address
-; Expected: Option.None
-
-; Chained optional access
-LET nested = { user: { name: "Dan" } }
-WRITE nested?.user?.name
-; Expected: Option.Some("Dan")
-
-WRITE nested?.user?.missing
-; Expected: Option.None
-
-WRITE nested?.missing?.anything
-; Expected: Option.None
-
 ; Optional field access in function with typed parameter
 ; The type `{ a: Int }` should allow `?.` on fields not in the type
-fun get_b(x: { a: Int }) {
+FUN get_b(x: { a: Int }) {
   x?.b
 }
 
-WRITE get_b({ a: 1 })
-; Expected: Option.None
+FUN main() {
+  LET obj = { name: "Alice", age: 30, active: TRUE }
 
-WRITE get_b({ a: 1, b: 2 })
-; Expected: Option.Some(2)
+  ; Dot notation
+  WRITE obj.name
+  ; Expected: Alice
 
-WRITE "Object access test complete"
+  WRITE obj.age
+  ; Expected: 30
+
+  WRITE obj.active
+  ; Expected: TRUE
+
+  ; Nested object access (dot notation)
+  LET rec = {
+    user: {
+      profile: {
+        first-name: "Bob",
+        last-name: "Smith"
+      },
+      scores: [90, 85, 95]
+    }
+  }
+
+  WRITE rec.user.profile.first-name
+  ; Expected: Bob
+
+  WRITE rec.user.profile.last-name
+  ; Expected: Smith
+
+  WRITE rec.user.scores[0]
+  ; Expected: 90
+
+  WRITE rec.user.scores[-1]
+  ; Expected: 95
+
+  ; Object with dashed keys (valid RUMPS identifiers)
+  LET special = { my-key: "value1", another-key: "value2" }
+  WRITE special.my-key
+  ; Expected: value1
+
+  WRITE special.another-key
+  ; Expected: value2
+
+  ; Optional field access (`?.`) on objects
+  ; Returns `Some(value)` if field exists, `None` if missing
+
+  LET person = { name: "Carol", age: 25 }
+
+  WRITE person?.name
+  ; Expected: Option.Some("Carol")
+
+  WRITE person?.age
+  ; Expected: Option.Some(25)
+
+  WRITE person?.email
+  ; Expected: Option.None
+
+  WRITE person?.address
+  ; Expected: Option.None
+
+  ; Chained optional access
+  LET nested = { user: { name: "Dan" } }
+  WRITE nested?.user?.name
+  ; Expected: Option.Some("Dan")
+
+  WRITE nested?.user?.missing
+  ; Expected: Option.None
+
+  WRITE nested?.missing?.anything
+  ; Expected: Option.None
+
+  WRITE get_b({ a: 1 })
+  ; Expected: Option.None
+
+  WRITE get_b({ a: 1, b: 2 })
+  ; Expected: Option.Some(2)
+
+  WRITE "Object access test complete"
+}

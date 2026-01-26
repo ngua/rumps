@@ -1,77 +1,79 @@
 ; Test: parse and evaluate arithmetic
 ; Tests arithmetic operators with correct precedence
 
-; Basic operations
-LET add = 10 + 5
-WRITE add
-; Expected: 15
+FUN main() {
+  ; Basic operations
+  LET add = 10 + 5
+  WRITE add
+  ; Expected: 15
 
-LET sub = 10 - 5
-WRITE sub
-; Expected: 5
+  LET sub = 10 - 5
+  WRITE sub
+  ; Expected: 5
 
-LET mul = 10 * 5
-WRITE mul
-; Expected: 50
+  LET mul = 10 * 5
+  WRITE mul
+  ; Expected: 50
 
-; Division requires Float operands
-LET div = 10.0 / 4.0
-WRITE div
-; Expected: 2.5
+  ; Division requires Float operands
+  LET div = 10.0 / 4.0
+  WRITE div
+  ; Expected: 2.5
 
-LET intdiv = 10 // 4
-WRITE intdiv
-; Expected: 2
+  LET intdiv = 10 // 4
+  WRITE intdiv
+  ; Expected: 2
 
-LET modulo = 10 % 3
-WRITE modulo
-; Expected: 1
+  LET modulo = 10 % 3
+  WRITE modulo
+  ; Expected: 1
 
-; Precedence: mul/div before add/sub
-LET prec1 = 2 + 3 * 4
-WRITE prec1
-; Expected: 14 (not 20)
+  ; Precedence: mul/div before add/sub
+  LET prec1 = 2 + 3 * 4
+  WRITE prec1
+  ; Expected: 14 (not 20)
 
-; Division with floats
-LET prec2 = 10.0 - 6.0 / 2.0
-WRITE prec2
-; Expected: 7.0 (not 2.0)
+  ; Division with floats
+  LET prec2 = 10.0 - 6.0 / 2.0
+  WRITE prec2
+  ; Expected: 7.0 (not 2.0)
 
-; Parentheses override precedence
-LET paren1 = (2 + 3) * 4
-WRITE paren1
-; Expected: 20
+  ; Parentheses override precedence
+  LET paren1 = (2 + 3) * 4
+  WRITE paren1
+  ; Expected: 20
 
-LET paren2 = (10.0 - 6.0) / 2.0
-WRITE paren2
-; Expected: 2.0
+  LET paren2 = (10.0 - 6.0) / 2.0
+  WRITE paren2
+  ; Expected: 2.0
 
-; Unary minus
-LET neg = -5
-WRITE neg
-; Expected: -5
+  ; Unary minus
+  LET neg = -5
+  WRITE neg
+  ; Expected: -5
 
-LET neg2 = 10 + -3
-WRITE neg2
-; Expected: 7
+  LET neg2 = 10 + -3
+  WRITE neg2
+  ; Expected: 7
 
-; Nested operations (using floor division for integers)
-LET complex = ((1 + 2) * (3 + 4)) // 7
-WRITE complex
-; Expected: 3
+  ; Nested operations (using floor division for integers)
+  LET complex = ((1 + 2) * (3 + 4)) // 7
+  WRITE complex
+  ; Expected: 3
 
-; Float arithmetic
-LET f1 = 3.14 * 2.0
-WRITE f1
-; Expected: 6.28
+  ; Float arithmetic
+  LET f1 = 3.14 * 2.0
+  WRITE f1
+  ; Expected: 6.28
 
-LET f2 = 10.0 / 4.0
-WRITE f2
-; Expected: 2.5
+  LET f2 = 10.0 / 4.0
+  WRITE f2
+  ; Expected: 2.5
 
-; Same-type arithmetic with explicit conversion
-LET mixed = (10 AS Float) + 0.5
-WRITE mixed
-; Expected: 10.5
+  ; Same-type arithmetic with explicit conversion
+  LET mixed = (10 AS Float) + 0.5
+  WRITE mixed
+  ; Expected: 10.5
 
-WRITE "Arithmetic test complete"
+  WRITE "Arithmetic test complete"
+}

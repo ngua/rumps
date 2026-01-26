@@ -1,5 +1,7 @@
 ; Test: Undefined variable error
 ; Type checker should catch use of undefined variables
 
-; This should fail: `y` is not defined
-LET x = y + 1
+FUN main() {
+  ; This should fail: `y` is not defined
+  LET x = y + 1
+}

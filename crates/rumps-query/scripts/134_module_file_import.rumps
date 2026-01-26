@@ -4,29 +4,31 @@
 ; Import module from file (path relative to script directory)
 MODULE MyMath FROM "../modules/lib/mymath.rumps"
 
-; ============ Test constants from imported module ============
+FUN main() {
+  ; ============ Test constants from imported module ============
 
-WRITE MyMath.pi > 3.0  ; true
-WRITE MyMath.e > 2.0  ; true
+  WRITE MyMath.pi > 3.0  ; true
+  WRITE MyMath.e > 2.0  ; true
 
-; ============ Test functions from imported module ============
+  ; ============ Test functions from imported module ============
 
-WRITE MyMath.square(5)  ; 25
-WRITE MyMath.double(7)  ; 14
-WRITE MyMath.is-positive(10)  ; true
-WRITE MyMath.is-positive(-5)  ; false
+  WRITE MyMath.square(5)  ; 25
+  WRITE MyMath.double(7)  ; 14
+  WRITE MyMath.is-positive(10)  ; true
+  WRITE MyMath.is-positive(-5)  ; false
 
-; ============ Use imported functions in expressions ============
+  ; ============ Use imported functions in expressions ============
 
-LET sq = MyMath.square(4)
-LET dbl = MyMath.double(sq)
-WRITE dbl  ; 32
+  LET sq = MyMath.square(4)
+  LET dbl = MyMath.double(sq)
+  WRITE dbl  ; 32
 
-; ============ Pass imported function as value ============
+  ; ============ Pass imported function as value ============
 
-LET f = MyMath.double
-WRITE f(100)  ; 200
+  LET f = MyMath.double
+  WRITE f(100)  ; 200
 
-; ============ Test function referencing sibling constant ============
+  ; ============ Test function referencing sibling constant ============
 
-WRITE MyMath.area(2.0)  ; pi * 4 = 12.56636
+  WRITE MyMath.area(2.0)  ; pi * 4 = 12.56636
+}

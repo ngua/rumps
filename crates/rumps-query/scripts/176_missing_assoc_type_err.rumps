@@ -2,6 +2,8 @@
 ;
 ; Indexable requires NEWTYPE Index = ... to be defined
 
+FUN main() { }
+
 TYPE MyList = MyList(Array[Int])
 
 ; Missing NEWTYPE Index = ... declaration; should error

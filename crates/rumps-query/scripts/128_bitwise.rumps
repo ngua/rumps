@@ -1,162 +1,164 @@
 ; Test: Bitwise operators
 ; Tests `&`, `|`, `<<`, `>>` for `BitLike` types (`Bool`, `Int`, `Word`)
 
-; === Bool bitwise operations ===
+FUN main() {
+  ; === Bool bitwise operations ===
 
-; Bool AND (bitwise and logical are the same for Bool)
-WRITE TRUE & TRUE
-; Expected: TRUE
+  ; Bool AND (bitwise and logical are the same for Bool)
+  WRITE TRUE & TRUE
+  ; Expected: TRUE
 
-WRITE TRUE & FALSE
-; Expected: FALSE
+  WRITE TRUE & FALSE
+  ; Expected: FALSE
 
-WRITE FALSE & FALSE
-; Expected: FALSE
+  WRITE FALSE & FALSE
+  ; Expected: FALSE
 
-; Bool OR
-WRITE TRUE | TRUE
-; Expected: TRUE
+  ; Bool OR
+  WRITE TRUE | TRUE
+  ; Expected: TRUE
 
-WRITE TRUE | FALSE
-; Expected: TRUE
+  WRITE TRUE | FALSE
+  ; Expected: TRUE
 
-WRITE FALSE | FALSE
-; Expected: FALSE
+  WRITE FALSE | FALSE
+  ; Expected: FALSE
 
-; Bool shift (always produces FALSE; shifts out the single bit)
-WRITE TRUE << TRUE
-; Expected: FALSE
+  ; Bool shift (always produces FALSE; shifts out the single bit)
+  WRITE TRUE << TRUE
+  ; Expected: FALSE
 
-WRITE TRUE >> TRUE
-; Expected: FALSE
+  WRITE TRUE >> TRUE
+  ; Expected: FALSE
 
-; === Int bitwise operations ===
+  ; === Int bitwise operations ===
 
-; Basic AND: 12 & 10 = 8 (binary: 1100 & 1010 = 1000)
-LET a = 12 & 10
-WRITE a
-; Expected: 8
+  ; Basic AND: 12 & 10 = 8 (binary: 1100 & 1010 = 1000)
+  LET a = 12 & 10
+  WRITE a
+  ; Expected: 8
 
-; Basic OR: 12 | 10 = 14 (binary: 1100 | 1010 = 1110)
-LET b = 12 | 10
-WRITE b
-; Expected: 14
+  ; Basic OR: 12 | 10 = 14 (binary: 1100 | 1010 = 1110)
+  LET b = 12 | 10
+  WRITE b
+  ; Expected: 14
 
-; Shift left
-LET c = 1 << 4
-WRITE c
-; Expected: 16
+  ; Shift left
+  LET c = 1 << 4
+  WRITE c
+  ; Expected: 16
 
-LET d = 3 << 2
-WRITE d
-; Expected: 12
+  LET d = 3 << 2
+  WRITE d
+  ; Expected: 12
 
-; Shift right
-LET e = 16 >> 2
-WRITE e
-; Expected: 4
+  ; Shift right
+  LET e = 16 >> 2
+  WRITE e
+  ; Expected: 4
 
-LET f = 12 >> 2
-WRITE f
-; Expected: 3
+  LET f = 12 >> 2
+  WRITE f
+  ; Expected: 3
 
-; Negative Int shift right (arithmetic shift; preserves sign)
-LET g = (-8) >> 1
-WRITE g
-; Expected: -4
+  ; Negative Int shift right (arithmetic shift; preserves sign)
+  LET g = (-8) >> 1
+  WRITE g
+  ; Expected: -4
 
-; Combined operations
-LET h = (1 << 8) | (1 << 4) | (1 << 0)
-WRITE h
-; Expected: 273
+  ; Combined operations
+  LET h = (1 << 8) | (1 << 4) | (1 << 0)
+  WRITE h
+  ; Expected: 273
 
-; === Word bitwise operations ===
+  ; === Word bitwise operations ===
 
-LET w1: Word = 12
-LET w2: Word = 10
-LET w3: Word = 8
+  LET w1: Word = 12
+  LET w2: Word = 10
+  LET w3: Word = 8
 
-; Word AND
-LET wa: Word = w1 & w2
-WRITE wa
-; Expected: 8
+  ; Word AND
+  LET wa: Word = w1 & w2
+  WRITE wa
+  ; Expected: 8
 
-; Word OR
-LET wb: Word = w1 | w2
-WRITE wb
-; Expected: 14
+  ; Word OR
+  LET wb: Word = w1 | w2
+  WRITE wb
+  ; Expected: 14
 
-; Word shift left
-LET w4: Word = 1
-LET w5: Word = 4
-LET wc: Word = w4 << w5
-WRITE wc
-; Expected: 16
+  ; Word shift left
+  LET w4: Word = 1
+  LET w5: Word = 4
+  LET wc: Word = w4 << w5
+  WRITE wc
+  ; Expected: 16
 
-; Word shift right
-LET w16: Word = 16
-LET w2a: Word = 2
-LET we: Word = w16 >> w2a
-WRITE we
-; Expected: 4
+  ; Word shift right
+  LET w16: Word = 16
+  LET w2a: Word = 2
+  LET we: Word = w16 >> w2a
+  WRITE we
+  ; Expected: 4
 
-; === Operator precedence ===
+  ; === Operator precedence ===
 
-; `&` binds tighter than `|`
-; (15 & 10) | 5 = 10 | 5 = 15
-LET p1 = 15 & 10 | 5
-WRITE p1
-; Expected: 15
+  ; `&` binds tighter than `|`
+  ; (15 & 10) | 5 = 10 | 5 = 15
+  LET p1 = 15 & 10 | 5
+  WRITE p1
+  ; Expected: 15
 
-; Shifts bind tighter than addition
-; (1 << 4) + 2 = 16 + 2 = 18
-LET p2 = 1 << 4 + 2
-WRITE p2
-; Expected: 18
+  ; Shifts bind tighter than addition
+  ; (1 << 4) + 2 = 16 + 2 = 18
+  LET p2 = 1 << 4 + 2
+  WRITE p2
+  ; Expected: 18
 
-; Shift binds tighter than addition, so: 2 + (1 << 4) = 2 + 16 = 18
-LET p3 = 2 + 1 << 4
-WRITE p3
-; Expected: 18
+  ; Shift binds tighter than addition, so: 2 + (1 << 4) = 2 + 16 = 18
+  LET p3 = 2 + 1 << 4
+  WRITE p3
+  ; Expected: 18
 
-; === BitLike constraint on generic functions ===
+  ; === BitLike constraint on generic functions ===
+
+  WRITE bitwise-and-int(12, 10)
+  ; Expected: 8
+
+  WRITE bitwise-and-bool(TRUE, FALSE)
+  ; Expected: FALSE
+
+  LET w10: Word = 10
+  LET w6: Word = 6
+  WRITE bitwise-and-word(w10, w6)
+  ; Expected: 2
+
+  WRITE bitwise-or-int(12, 10)
+  ; Expected: 14
+
+  WRITE bitwise-or-bool(TRUE, FALSE)
+  ; Expected: TRUE
+
+  WRITE "Bitwise operators test complete"
+}
 
 ; Each generic function only works with one type per call due to monomorphization
 FUN bitwise-and-int[T: BitLike](a: T, b: T) -> T {
   a & b
 }
 
-WRITE bitwise-and-int(12, 10)
-; Expected: 8
-
 FUN bitwise-and-bool[T: BitLike](a: T, b: T) -> T {
   a & b
 }
-
-WRITE bitwise-and-bool(TRUE, FALSE)
-; Expected: FALSE
 
 FUN bitwise-and-word[T: BitLike](a: T, b: T) -> T {
   a & b
 }
 
-LET w10: Word = 10
-LET w6: Word = 6
-WRITE bitwise-and-word(w10, w6)
-; Expected: 2
-
 FUN bitwise-or-int[T: BitLike](a: T, b: T) -> T {
   a | b
 }
 
-WRITE bitwise-or-int(12, 10)
-; Expected: 14
-
 FUN bitwise-or-bool[T: BitLike](a: T, b: T) -> T {
   a | b
 }
-
-WRITE bitwise-or-bool(TRUE, FALSE)
-; Expected: TRUE
-
-WRITE "Bitwise operators test complete"

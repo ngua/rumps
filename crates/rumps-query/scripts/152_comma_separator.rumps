@@ -1,13 +1,41 @@
 ; Test comma as separator for statements and match arms
 
-; Comma-separated statements on single line
-LET a = 1, LET b = 2, LET c = 3
-WRITE a + b + c
+FUN main() {
+  ; Comma-separated statements on single line
+  LET a = 1, LET b = 2, LET c = 3
+  WRITE a + b + c
 
-; Mixed: comma and newlines
-LET x = 10, LET y = 20
-LET z = x + y
-WRITE z
+  ; Mixed: comma and newlines
+  LET x = 10, LET y = 20
+  LET z = x + y
+  WRITE z
+
+  WRITE color-name(Color.Red)
+  WRITE color-name(Color.Green)
+  WRITE color-name(Color.Blue)
+
+  WRITE describe(Color.Red)
+  WRITE describe(Color.Blue)
+  WRITE describe(Color.Green)
+
+  ; Inline match inside string interpolation
+  LET val: Option[Int] = ?42
+  WRITE "The value is: {MATCH val { Option.None => "nothing", Option.Some(x) => "{x}" }}"
+
+  LET empty: Option[Int] = Option.None
+  WRITE "Empty is: {MATCH empty { Option.None => "N/A", Option.Some(x) => "{x}" }}"
+
+  ; Block with comma-separated statements
+  LET result = {
+    LET p = 5, LET q = 6
+    p * q
+  }
+  WRITE result
+
+  ; Trailing comma allowed
+  LET t1 = 1, LET t2 = 2,
+  WRITE t1 + t2
+}
 
 ; Comma-separated match arms (inline)
 TYPE Color = Red | Green | Blue
@@ -16,10 +44,6 @@ FUN color-name(c: Color) -> String {
   MATCH c { Color.Red => "red", Color.Green => "green", Color.Blue => "blue" }
 }
 
-WRITE color-name(Color.Red)
-WRITE color-name(Color.Green)
-WRITE color-name(Color.Blue)
-
 ; Mixed comma and newline in match
 FUN describe(c: Color) -> String {
   MATCH c {
@@ -27,25 +51,3 @@ FUN describe(c: Color) -> String {
     Color.Green => "secondary"
   }
 }
-
-WRITE describe(Color.Red)
-WRITE describe(Color.Blue)
-WRITE describe(Color.Green)
-
-; Inline match inside string interpolation
-LET val: Option[Int] = ?42
-WRITE "The value is: {MATCH val { Option.None => "nothing", Option.Some(x) => "{x}" }}"
-
-LET empty: Option[Int] = Option.None
-WRITE "Empty is: {MATCH empty { Option.None => "N/A", Option.Some(x) => "{x}" }}"
-
-; Block with comma-separated statements
-LET result = {
-  LET p = 5, LET q = 6
-  p * q
-}
-WRITE result
-
-; Trailing comma allowed
-LET t1 = 1, LET t2 = 2,
-WRITE t1 + t2

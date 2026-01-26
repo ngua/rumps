@@ -2,92 +2,94 @@
 ; Returns full key path to the next node with a value
 ; NOTE: Uses locals only; globals require TRANSACTION blocks
 
-; Set up single-level test data
-@SET items{1} "one"
-@SET items{2} "two"
-@SET items{10} "ten"
+FUN main() {
+  ; Set up single-level test data
+  @SET items{1} "one"
+  @SET items{2} "two"
+  @SET items{10} "ten"
 
-; First key path (no after position, use {} for root)
-LET first = @QUERY items{}
-WRITE first
+  ; First key path (no after position, use {} for root)
+  LET first = @QUERY items{}
+  WRITE first
 
-; Next key path after {1}
-LET after-1 = @QUERY items{1}
-WRITE after-1
+  ; Next key path after {1}
+  LET after-1 = @QUERY items{1}
+  WRITE after-1
 
-; Next key path after {2}
-LET after-2 = @QUERY items{2}
-WRITE after-2
+  ; Next key path after {2}
+  LET after-2 = @QUERY items{2}
+  WRITE after-2
 
-; Past the last key
-LET after-10 = @QUERY items{10}
-WRITE after-10
+  ; Past the last key
+  LET after-10 = @QUERY items{10}
+  WRITE after-10
 
-; @QUERY on non-existent variable (use {} for root)
-LET no-keys = @QUERY empty{}
-WRITE no-keys
+  ; @QUERY on non-existent variable (use {} for root)
+  LET no-keys = @QUERY empty{}
+  WRITE no-keys
 
-; Type annotation
-LET typed: Option[Array[Subscript]] = @QUERY items{}
-WRITE typed
+  ; Type annotation
+  LET typed: Option[Array[Subscript]] = @QUERY items{}
+  WRITE typed
 
-; Use with MATCH
-LET msg = MATCH @QUERY items{} {
-  Option.Some(path) => { "found path of length: {Iterable:length(path)}" }
-  Option.None => { "no nodes" }
+  ; Use with MATCH
+  LET msg = MATCH @QUERY items{} {
+    Option.Some(path) => { "found path of length: {Iterable:length(path)}" }
+    Option.None => { "no nodes" }
+  }
+  WRITE msg
+
+  ; Use with coalesce
+  LET path = @QUERY items{} ?? []
+  WRITE path
+
+  ; Using unwrap on result
+  LET path2 = (@QUERY items{1})!
+  WRITE path2
+
+  ; Spread syntax to continue iteration
+  @SET data{1} "a"
+  @SET data{2} "b"
+  @SET data{3} "c"
+
+  LET k1 = @QUERY data{} ?? []
+  WRITE k1
+  LET k2 = @QUERY data{...k1} ?? []
+  WRITE k2
+  LET k3 = @QUERY data{...k2} ?? []
+  WRITE k3
+  LET k4 = @QUERY data{...k3}
+  WRITE k4
+
+  ; === Nested data tests ===
+  ; @QUERY should skip intermediate nodes (ancestors with no value)
+
+  @SET patients{1, "age"} 30
+  @SET patients{1, "name"} "Alice"
+  @SET patients{2, "name"} "Bob"
+
+  ; First key should be [1, "age"], not [1]
+  LET p1 = @QUERY patients{} ?? []
+  WRITE p1
+
+  ; After [1, "age"] should be [1, "name"], not [1] or [2]
+  LET p2 = @QUERY patients{1, "age"} ?? []
+  WRITE p2
+
+  ; After [1, "name"] should be [2, "name"], skipping intermediate [2]
+  LET p3 = @QUERY patients{1, "name"} ?? []
+  WRITE p3
+
+  ; After [2, "name"] should be None
+  LET p4 = @QUERY patients{2, "name"}
+  WRITE p4
+
+  ; Deep nesting test
+  @SET deep{1, 2, 3, "leaf"} "value"
+
+  ; Should return [1, 2, 3, "leaf"], skipping [1], [1, 2], [1, 2, 3]
+  LET d1 = @QUERY deep{} ?? []
+  WRITE d1
+
+  WRITE "@QUERY test complete"
 }
-WRITE msg
-
-; Use with coalesce
-LET path = @QUERY items{} ?? []
-WRITE path
-
-; Using unwrap on result
-LET path2 = (@QUERY items{1})!
-WRITE path2
-
-; Spread syntax to continue iteration
-@SET data{1} "a"
-@SET data{2} "b"
-@SET data{3} "c"
-
-LET k1 = @QUERY data{} ?? []
-WRITE k1
-LET k2 = @QUERY data{...k1} ?? []
-WRITE k2
-LET k3 = @QUERY data{...k2} ?? []
-WRITE k3
-LET k4 = @QUERY data{...k3}
-WRITE k4
-
-; === Nested data tests ===
-; @QUERY should skip intermediate nodes (ancestors with no value)
-
-@SET patients{1, "age"} 30
-@SET patients{1, "name"} "Alice"
-@SET patients{2, "name"} "Bob"
-
-; First key should be [1, "age"], not [1]
-LET p1 = @QUERY patients{} ?? []
-WRITE p1
-
-; After [1, "age"] should be [1, "name"], not [1] or [2]
-LET p2 = @QUERY patients{1, "age"} ?? []
-WRITE p2
-
-; After [1, "name"] should be [2, "name"], skipping intermediate [2]
-LET p3 = @QUERY patients{1, "name"} ?? []
-WRITE p3
-
-; After [2, "name"] should be None
-LET p4 = @QUERY patients{2, "name"}
-WRITE p4
-
-; Deep nesting test
-@SET deep{1, 2, 3, "leaf"} "value"
-
-; Should return [1, 2, 3, "leaf"], skipping [1], [1, 2], [1, 2, 3]
-LET d1 = @QUERY deep{} ?? []
-WRITE d1
-
-WRITE "@QUERY test complete"

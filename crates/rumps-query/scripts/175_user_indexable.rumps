@@ -3,22 +3,29 @@
 ; Tests implementing Indexable for user types with NEWTYPE Index = ...
 ; to define the associated index type.
 
-; === Usage (hoisted) ===
+FUN main() {
+  ; === Usage (hoisted) ===
 
-; StringMap uses String as index type (via NEWTYPE Index = String)
-LET sm = StringMap.StringMap({ "a" => 1, "b" => 2, "c" => 3 })
+  ; StringMap uses String as index type (via NEWTYPE Index = String)
+  LET sm = StringMap.StringMap({ "a" => 1, "b" => 2, "c" => 3 })
 
-; Direct class method calls
-WRITE Indexable:index(sm, "a")
-WRITE Indexable:get(sm, "b")
+  ; Direct class method calls
+  WRITE Indexable:index(sm, "a")
+  WRITE Indexable:get(sm, "b")
 
-; Subscript syntax dispatches to user Indexable instance
-WRITE sm["a"]
-WRITE sm["c"]
+  ; Subscript syntax dispatches to user Indexable instance
+  WRITE sm["a"]
+  WRITE sm["c"]
 
-; Safe subscript (uses `get` method)
-WRITE sm?["b"]
-WRITE sm?["missing"]
+  ; Safe subscript (uses `get` method)
+  WRITE sm?["b"]
+  WRITE sm?["missing"]
+
+  LET im = ({ 1 => "one", 2 => "two" } : IntMap)
+  WRITE im[1]
+  WRITE im[2]
+  WRITE im?[3]
+}
 
 ; === Type and Class Definitions ===
 
@@ -59,8 +66,3 @@ CLASS Indexable[String] FOR IntMap {
     im?[i]
   }
 }
-
-LET im = ({ 1 => "one", 2 => "two" } : IntMap)
-WRITE im[1]
-WRITE im[2]
-WRITE im?[3]

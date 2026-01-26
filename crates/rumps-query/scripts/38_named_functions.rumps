@@ -7,20 +7,11 @@ FUN double (x) {
   x * 2
 }
 
-WRITE double(21)
-; Expected: 42
-
-WRITE double(0)
-; Expected: 0
-
 ; === Function with multiple parameters ===
 
 FUN add (a, b) {
   a + b
 }
-
-WRITE add(10, 32)
-; Expected: 42
 
 ; === Typed function ===
 
@@ -28,20 +19,11 @@ FUN square (x: Int) -> Int {
   x * x
 }
 
-WRITE square(7)
-; Expected: 49
-
-WRITE square(0)
-; Expected: 0
-
 ; === Nullary function ===
 
 FUN greeting () {
   "Hello, World!"
 }
-
-WRITE greeting()
-; Expected: Hello, World!
 
 ; === Function returning computed value ===
 
@@ -49,26 +31,11 @@ FUN hypotenuse (a: Int, b: Int) -> Float {
   (a ** 2 + b ** 2) ** 0.5
 }
 
-WRITE hypotenuse(3, 4)
-; Expected: 5
-
 ; === Recursive function ===
 
 FUN factorial (n) {
   IF n <= 1 { 1 } ELSE { n * factorial(n - 1) }
 }
-
-WRITE factorial(0)
-; Expected: 1
-
-WRITE factorial(1)
-; Expected: 1
-
-WRITE factorial(5)
-; Expected: 120
-
-WRITE factorial(10)
-; Expected: 3628800
 
 ; === Recursive Fibonacci ===
 
@@ -76,35 +43,16 @@ FUN fib (n) {
   IF n <= 1 { n } ELSE { fib(n - 1) + fib(n - 2) }
 }
 
-WRITE fib(0)
-; Expected: 0
-
-WRITE fib(1)
-; Expected: 1
-
-WRITE fib(10)
-; Expected: 55
-
 ; === Function as first-class value ===
 
 FUN triple (x) {
   x * 3
 }
 
-LET f = triple
-WRITE f(14)
-; Expected: 42
-
 ; === Multiple functions ===
 
 FUN inc (x) { x + 1 }
 FUN dec (x) { x - 1 }
-
-WRITE inc(5)
-; Expected: 6
-
-WRITE dec(5)
-; Expected: 4
 
 ; === Function with local state ===
 
@@ -113,20 +61,6 @@ FUN compute (a, b, c) {
   temp * c
 }
 
-WRITE compute(2, 3, 4)
-; Expected: 20
-
-; === Nested function calls ===
-
-WRITE square(double(3))
-; Expected: 36 (double(3)=6, square(6)=36)
-
-WRITE double(square(3))
-; Expected: 18 (square(3)=9, double(9)=18)
-
-WRITE add(double(5), triple(3))
-; Expected: 19 (double(5)=10, triple(3)=9)
-
 ; === Function shadowing parameter ===
 
 FUN shadow-test (x) {
@@ -134,7 +68,75 @@ FUN shadow-test (x) {
   x
 }
 
-WRITE shadow-test(42)
-; Expected: 100
+FUN main() {
+  WRITE double(21)
+  ; Expected: 42
 
-WRITE "Named functions test complete"
+  WRITE double(0)
+  ; Expected: 0
+
+  WRITE add(10, 32)
+  ; Expected: 42
+
+  WRITE square(7)
+  ; Expected: 49
+
+  WRITE square(0)
+  ; Expected: 0
+
+  WRITE greeting()
+  ; Expected: Hello, World!
+
+  WRITE hypotenuse(3, 4)
+  ; Expected: 5
+
+  WRITE factorial(0)
+  ; Expected: 1
+
+  WRITE factorial(1)
+  ; Expected: 1
+
+  WRITE factorial(5)
+  ; Expected: 120
+
+  WRITE factorial(10)
+  ; Expected: 3628800
+
+  WRITE fib(0)
+  ; Expected: 0
+
+  WRITE fib(1)
+  ; Expected: 1
+
+  WRITE fib(10)
+  ; Expected: 55
+
+  LET f = triple
+  WRITE f(14)
+  ; Expected: 42
+
+  WRITE inc(5)
+  ; Expected: 6
+
+  WRITE dec(5)
+  ; Expected: 4
+
+  WRITE compute(2, 3, 4)
+  ; Expected: 20
+
+  ; === Nested function calls ===
+
+  WRITE square(double(3))
+  ; Expected: 36 (double(3)=6, square(6)=36)
+
+  WRITE double(square(3))
+  ; Expected: 18 (square(3)=9, double(9)=18)
+
+  WRITE add(double(5), triple(3))
+  ; Expected: 19 (double(5)=10, triple(3)=9)
+
+  WRITE shadow-test(42)
+  ; Expected: 100
+
+  WRITE "Named functions test complete"
+}

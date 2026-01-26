@@ -4,44 +4,46 @@
 ; NOTE: Io.get-line is not tested here because it blocks waiting for stdin.
 ; It can be tested manually by running an interactive RUMPS session.
 
-; ============ Test Io.println ============
+FUN main() {
+  ; ============ Test Io.println ============
 
-; This will print to stdout during test execution
-LET result = Io.println("Hello from Io.println")
-WRITE result IS Unit  ; true
+  ; This will print to stdout during test execution
+  LET result = Io.println("Hello from Io.println")
+  WRITE result IS Unit  ; true
 
-; ============ Test Io.print ============
+  ; ============ Test Io.print ============
 
-LET result2 = Io.print("Hello from Io.print (no newline)")
-WRITE result2 IS Unit  ; true
+  LET result2 = Io.print("Hello from Io.print (no newline)")
+  WRITE result2 IS Unit  ; true
 
-; Print a newline after the previous print
-LET _ = Io.println("")
+  ; Print a newline after the previous print
+  LET _ = Io.println("")
 
-; ============ Test Io.eprintln ============
+  ; ============ Test Io.eprintln ============
 
-; This will print to stderr during test execution
-LET result3 = Io.eprintln("Hello from Io.eprintln")
-WRITE result3 IS Unit  ; true
+  ; This will print to stderr during test execution
+  LET result3 = Io.eprintln("Hello from Io.eprintln")
+  WRITE result3 IS Unit  ; true
 
-; ============ Test Io.eprint ============
+  ; ============ Test Io.eprint ============
 
-LET result4 = Io.eprint("Hello from Io.eprint (no newline)")
-WRITE result4 IS Unit  ; true
+  LET result4 = Io.eprint("Hello from Io.eprint (no newline)")
+  WRITE result4 IS Unit  ; true
 
-; Print a newline to stderr after the previous eprint
-LET _ = Io.eprintln("")
+  ; Print a newline to stderr after the previous eprint
+  LET _ = Io.eprintln("")
 
-; ============ Chaining Io operations ============
+  ; ============ Chaining Io operations ============
 
-; Use with pipeline
-LET msg = "Hello world"
-LET _ = msg |> Io.println
+  ; Use with pipeline
+  LET msg = "Hello world"
+  LET _ = msg |> Io.println
 
-; Use with semicolon sequencing
-{
-  Io.print("Line 1: ");
-  Io.println("value")
+  ; Use with semicolon sequencing
+  {
+    Io.print("Line 1: ");
+    Io.println("value")
+  }
+
+  WRITE "All Io tests passed"
 }
-
-WRITE "All Io tests passed"

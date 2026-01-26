@@ -1,11 +1,13 @@
 ; Test: Nested transactions are rejected at compile time
 ; This test should fail during typechecking, not at runtime.
 
-; Directly nested transaction
-LET r = TRANSACTION {
-  TRANSACTION {
-    @SET ^data{1} "inner"
+FUN main() {
+  ; Directly nested transaction
+  LET r = TRANSACTION {
+    TRANSACTION {
+      @SET ^data{1} "inner"
+    }
   }
-}
 
-WRITE r
+  WRITE r
+}

@@ -1,4 +1,6 @@
 ; Destructuring error cases
 
-; Array destructuring not allowed in LET (only in MATCH)
-LET [a, b, c] = [1, 2, 3]
+FUN main() {
+  ; Array destructuring not allowed in LET (only in MATCH)
+  LET [a, b, c] = [1, 2, 3]
+}

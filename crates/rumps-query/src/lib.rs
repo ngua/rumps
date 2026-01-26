@@ -146,8 +146,7 @@ async fn run_with_io<I: IoContext>(
     io: I,
 ) -> Result<I> {
     let mut result = Parser::parse_with_path(src, src_path)?;
-    // Use interactive mode for now; will flip to `false` after migrating scripts
-    let interactive = true;
+    let interactive = false;
     let interp =
         Interpreter::new(&mut result.ast, &result.stmts, db, io, interactive)?;
     let interp = interp.run(&result.stmts, interactive).await?;

@@ -431,6 +431,26 @@ impl Class {
         }
     }
 
+    /// Collect free type variables from any inner types.
+    pub(crate) fn free_vars(&self) -> HashSet<TyVar> {
+        match self {
+            Self::Iterable(t)
+            | Self::Fallible(t)
+            | Self::Into(t)
+            | Self::TryInto(t)
+            | Self::Indexable(t)
+            | Self::Mappable(t)
+            | Self::Foldable(t)
+            | Self::Filterable(t) => t.free_vars(),
+            Self::Numeric
+            | Self::Monoid
+            | Self::BitLike
+            | Self::Negatable
+            | Self::Ord
+            | Self::Display => HashSet::new(),
+        }
+    }
+
     /// Get the `ClassKind` for dispatch table lookup.
     pub(crate) const fn kind(&self) -> ClassKind {
         match self {

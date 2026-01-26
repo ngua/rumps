@@ -1,105 +1,107 @@
 ; Variant constructor tests
 ; Tests explicit construction of Option and Result variants
 
-; === Option.Some ===
+FUN main() {
+  ; === Option.Some ===
 
-LET some1 = Option.Some(42)
-WRITE some1
-; Expected: Option.Some(42)
+  LET some1 = Option.Some(42)
+  WRITE some1
+  ; Expected: Option.Some(42)
 
-LET some2 = Option.Some("hello")
-WRITE some2
-; Expected: Option.Some(hello)
+  LET some2 = Option.Some("hello")
+  WRITE some2
+  ; Expected: Option.Some(hello)
 
-; === Option.None ===
+  ; === Option.None ===
 
-LET none = Option.None
-WRITE none
-; Expected: Option.None
+  LET none = Option.None
+  WRITE none
+  ; Expected: Option.None
 
-; === Result.Ok ===
+  ; === Result.Ok ===
 
-LET ok1 = Result.Ok(100)
-WRITE ok1
-; Expected: Result.Ok(100)
+  LET ok1 = Result.Ok(100)
+  WRITE ok1
+  ; Expected: Result.Ok(100)
 
-LET ok2 = Result.Ok("success")
-WRITE ok2
-; Expected: Result.Ok(success)
+  LET ok2 = Result.Ok("success")
+  WRITE ok2
+  ; Expected: Result.Ok(success)
 
-; === Result.Err ===
+  ; === Result.Err ===
 
-LET err1 = Result.Err("failed")
-WRITE err1
-; Expected: Result.Err(failed)
+  LET err1 = Result.Err("failed")
+  WRITE err1
+  ; Expected: Result.Err(failed)
 
-LET err2 = Result.Err(404)
-WRITE err2
-; Expected: Result.Err(404)
+  LET err2 = Result.Err(404)
+  WRITE err2
+  ; Expected: Result.Err(404)
 
-; === Nested variants ===
+  ; === Nested variants ===
 
-LET nested1 = Option.Some(Result.Ok(1))
-WRITE nested1
-; Expected: Option.Some(Result.Ok(1))
+  LET nested1 = Option.Some(Result.Ok(1))
+  WRITE nested1
+  ; Expected: Option.Some(Result.Ok(1))
 
-LET nested2 = Result.Ok(Option.Some("inner"))
-WRITE nested2
-; Expected: Result.Ok(Option.Some(inner))
+  LET nested2 = Result.Ok(Option.Some("inner"))
+  WRITE nested2
+  ; Expected: Result.Ok(Option.Some(inner))
 
-LET nested3 = Option.Some(Option.None)
-WRITE nested3
-; Expected: Option.Some(Option.None)
+  LET nested3 = Option.Some(Option.None)
+  WRITE nested3
+  ; Expected: Option.Some(Option.None)
 
-; === Variants with expressions ===
+  ; === Variants with expressions ===
 
-LET x = 10
-LET computed = Option.Some(x * 2)
-WRITE computed
-; Expected: Option.Some(20)
+  LET x = 10
+  LET computed = Option.Some(x * 2)
+  WRITE computed
+  ; Expected: Option.Some(20)
 
-LET cond = TRUE
-LET conditional = Result.Ok(IF cond { "yes" } ELSE { "no" })
-WRITE conditional
-; Expected: Result.Ok(yes)
+  LET cond = TRUE
+  LET conditional = Result.Ok(IF cond { "yes" } ELSE { "no" })
+  WRITE conditional
+  ; Expected: Result.Ok(yes)
 
-; === Coalesce with explicit variants ===
+  ; === Coalesce with explicit variants ===
 
-LET some-val = Option.Some(42)
-WRITE some-val ?? 0
-; Expected: 42
+  LET some-val = Option.Some(42)
+  WRITE some-val ?? 0
+  ; Expected: 42
 
-LET none-val = Option.None
-WRITE none-val ?? 99
-; Expected: 99
+  LET none-val = Option.None
+  WRITE none-val ?? 99
+  ; Expected: 99
 
-LET ok-val = Result.Ok("data")
-WRITE ok-val ?? "fallback"
-; Expected: data
+  LET ok-val = Result.Ok("data")
+  WRITE ok-val ?? "fallback"
+  ; Expected: data
 
-LET err-val = Result.Err("oops")
-WRITE err-val ?? "recovered"
-; Expected: recovered
+  LET err-val = Result.Err("oops")
+  WRITE err-val ?? "recovered"
+  ; Expected: recovered
 
-; === Variant in object ===
+  ; === Variant in object ===
 
-LET obj = {
-  status: Result.Ok("active"),
-  value: Option.Some(123)
+  LET obj = {
+    status: Result.Ok("active"),
+    value: Option.Some(123)
+  }
+  WRITE obj.status
+  ; Expected: Result.Ok(active)
+  WRITE obj.value
+  ; Expected: Option.Some(123)
+
+  ; === Variant in array ===
+
+  LET arr = [Option.Some(1), Option.None, Option.Some(3)]
+  WRITE arr[0]
+  ; Expected: Option.Some(1)
+  WRITE arr[1]
+  ; Expected: Option.None
+  WRITE arr[2]
+  ; Expected: Option.Some(3)
+
+  WRITE "Variant constructor tests complete"
 }
-WRITE obj.status
-; Expected: Result.Ok(active)
-WRITE obj.value
-; Expected: Option.Some(123)
-
-; === Variant in array ===
-
-LET arr = [Option.Some(1), Option.None, Option.Some(3)]
-WRITE arr[0]
-; Expected: Option.Some(1)
-WRITE arr[1]
-; Expected: Option.None
-WRITE arr[2]
-; Expected: Option.Some(3)
-
-WRITE "Variant constructor tests complete"

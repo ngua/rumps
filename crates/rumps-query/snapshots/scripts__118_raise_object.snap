@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test RAISE with an object (stringified)\nRAISE { error: \"not found\", code: 404 }\n"
+description: "; Test RAISE with an object (stringified)\n\nFUN main() {\n  RAISE { error: \"not found\", code: 404 }\n  Unit\n}\n"
 ---
-ERROR: RAISE at 42..81: { error: "not found", code: 404 }
+ERROR: RAISE at 58..97: { error: "not found", code: 404 }

@@ -2,6 +2,8 @@
 ;
 ; The Display class requires `display(self) -> String` but we return Int.
 
+FUN main() { }
+
 TYPE Point = Point(Int, Int)
 
 CLASS Display FOR Point {

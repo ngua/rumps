@@ -1,49 +1,51 @@
 ; Test: @GET locals
 ; Tests retrieving values from local B-tree variables
 
-; Set up test data
-@SET x{} 42
-@SET items{1} "first"
-@SET items{2} "second"
-@SET patient{123, "name"} "John"
-@SET patient{123, "age"} 30
+FUN main() {
+  ; Set up test data
+  @SET x{} 42
+  @SET items{1} "first"
+  @SET items{2} "second"
+  @SET patient{123, "name"} "John"
+  @SET patient{123, "age"} 30
 
-; @GET simple local (use {} for root ref)
-LET val = @GET x{}
-WRITE val
-; Expected: 42 (or Option.Some(42))
+  ; @GET simple local (use {} for root ref)
+  LET val = @GET x{}
+  WRITE val
+  ; Expected: 42 (or Option.Some(42))
 
-; @GET with subscript
-LET d1 = @GET items{1}
-WRITE d1
-; Expected: first
+  ; @GET with subscript
+  LET d1 = @GET items{1}
+  WRITE d1
+  ; Expected: first
 
-LET d2 = @GET items{2}
-WRITE d2
-; Expected: second
+  LET d2 = @GET items{2}
+  WRITE d2
+  ; Expected: second
 
-; @GET with multiple subscripts
-LET name = @GET patient{123, "name"}
-WRITE name
-; Expected: John
+  ; @GET with multiple subscripts
+  LET name = @GET patient{123, "name"}
+  WRITE name
+  ; Expected: John
 
-LET age = @GET patient{123, "age"}
-WRITE age
-; Expected: 30
+  LET age = @GET patient{123, "age"}
+  WRITE age
+  ; Expected: 30
 
-; @GET non-existent key (should return Option.None)
-LET missing = @GET items{999}
-WRITE missing
-; Expected: Option.None (or similar)
+  ; @GET non-existent key (should return Option.None)
+  LET missing = @GET items{999}
+  WRITE missing
+  ; Expected: Option.None (or similar)
 
-LET missing2 = @GET nonexistent{}
-WRITE missing2
-; Expected: Option.None
+  LET missing2 = @GET nonexistent{}
+  WRITE missing2
+  ; Expected: Option.None
 
-; @GET after overwrite
-@SET x{} 100
-LET newval = @GET x{}
-WRITE newval
-; Expected: 100
+  ; @GET after overwrite
+  @SET x{} 100
+  LET newval = @GET x{}
+  WRITE newval
+  ; Expected: 100
 
-WRITE "@GET locals test complete"
+  WRITE "@GET locals test complete"
+}

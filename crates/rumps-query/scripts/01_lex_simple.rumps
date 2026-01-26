@@ -1,47 +1,49 @@
 ; Test: lex simple expressions
 ; Tests basic tokenization of literals, identifiers, and operators
 
-; Integer literals
-LET a = 42
-LET b = 0
-LET c = -123
+FUN main() {
+  ; Integer literals
+  LET a = 42
+  LET b = 0
+  LET c = -123
 
-; Float literals
-LET d = 3.14
-LET e = 0.5
-LET f = -2.718
+  ; Float literals
+  LET d = 3.14
+  LET e = 0.5
+  LET f = -2.718
 
-; String literals
-LET s1 = "hello"
-LET s2 = "world with spaces"
-LET s3 = ""
+  ; String literals
+  LET s1 = "hello"
+  LET s2 = "world with spaces"
+  LET s3 = ""
 
-; Boolean keywords
-LET t = TRUE
-LET f = FALSE
+  ; Boolean keywords
+  LET t = TRUE
+  LET f = FALSE
 
-; Train-case identifier
-LET my-var = 100
+  ; Train-case identifier
+  LET my-var = 100
 
-; All operators in one place
-LET x = 1 + 2 - 3 * 4 // 5 % 6
-LET cmp = 1 < 2
-LET eq = 3 == 3
-LET neq = 4 != 5
-LET ge = 10 >= 5
-LET le = 5 <= 10
-LET gt = 10 > 5
-LET lt = 5 < 10
+  ; All operators in one place
+  LET x = 1 + 2 - 3 * 4 // 5 % 6
+  LET cmp = 1 < 2
+  LET eq = 3 == 3
+  LET neq = 4 != 5
+  LET ge = 10 >= 5
+  LET le = 5 <= 10
+  LET gt = 10 > 5
+  LET lt = 5 < 10
 
-; Logical operators
-LET and1 = TRUE AND FALSE
-LET or1 = TRUE OR FALSE
-LET not1 = NOT TRUE
-LET and2 = TRUE && FALSE
-LET or2 = TRUE || FALSE
-LET not2 = !FALSE
+  ; Logical operators
+  LET and1 = TRUE AND FALSE
+  LET or1 = TRUE OR FALSE
+  LET not1 = NOT TRUE
+  LET and2 = TRUE && FALSE
+  LET or2 = TRUE || FALSE
+  LET not2 = !FALSE
 
-; String interpolation (replaces concat)
-LET concat = "{"hello"} {"world"}"
+  ; String interpolation (replaces concat)
+  LET concat = "{"hello"} {"world"}"
 
-WRITE "Lexer test complete"
+  WRITE "Lexer test complete"
+}

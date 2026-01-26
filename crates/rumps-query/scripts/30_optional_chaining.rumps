@@ -1,78 +1,80 @@
 ; Optional chaining operator (?.) tests
 ; `?.` short-circuits to Option.None if base is None, otherwise wraps result in Some
 
-; === Basic optional chaining on objects ===
+FUN main() {
+  ; === Basic optional chaining on objects ===
 
-; Regular object: wrap result in Some, then coalesce to unwrap
-LET obj = { name: "Alice", age: 30 }
-WRITE obj?.name ?? "N/A"
-; Expected: Alice
+  ; Regular object: wrap result in Some, then coalesce to unwrap
+  LET obj = { name: "Alice", age: 30 }
+  WRITE obj?.name ?? "N/A"
+  ; Expected: Alice
 
-WRITE obj?.age ?? 0
-; Expected: 30
+  WRITE obj?.age ?? 0
+  ; Expected: 30
 
-; === Optional chaining on Option.None ===
+  ; === Optional chaining on Option.None ===
 
-; None short-circuits; field access is never attempted
-LET none = Option.None
-WRITE none?.name ?? "fallback"
-; Expected: fallback
+  ; None short-circuits; field access is never attempted
+  LET none = Option.None
+  WRITE none?.name ?? "fallback"
+  ; Expected: fallback
 
-WRITE none?.anything ?? "default"
-; Expected: default
+  WRITE none?.anything ?? "default"
+  ; Expected: default
 
-; === Optional chaining on Option.Some ===
+  ; === Optional chaining on Option.Some ===
 
-; Some unwraps, accesses field, re-wraps in Some
-LET some = Option.Some({ x: 42, y: 99 })
-WRITE some?.x ?? 0
-; Expected: 42
+  ; Some unwraps, accesses field, re-wraps in Some
+  LET some = Option.Some({ x: 42, y: 99 })
+  WRITE some?.x ?? 0
+  ; Expected: 42
 
-WRITE some?.y ?? 0
-; Expected: 99
+  WRITE some?.y ?? 0
+  ; Expected: 99
 
-; === Chained optional access ===
+  ; === Chained optional access ===
 
-; Multiple ?. in sequence
-LET nested = { inner: { value: 123 } }
-WRITE nested?.inner?.value ?? -1
-; Expected: 123
+  ; Multiple ?. in sequence
+  LET nested = { inner: { value: 123 } }
+  WRITE nested?.inner?.value ?? -1
+  ; Expected: 123
 
-; Chain through None
-LET outer = Option.None
-WRITE outer?.inner?.value ?? -1
-; Expected: -1
+  ; Chain through None
+  LET outer = Option.None
+  WRITE outer?.inner?.value ?? -1
+  ; Expected: -1
 
-; Mixed regular and optional access
-LET obj2 = { data: { num: 55 } }
-WRITE obj2.data?.num ?? 0
-; Expected: 55
+  ; Mixed regular and optional access
+  LET obj2 = { data: { num: 55 } }
+  WRITE obj2.data?.num ?? 0
+  ; Expected: 55
 
-; === Combining with coalesce ===
+  ; === Combining with coalesce ===
 
-; Optional chaining always returns Option, coalesce unwraps
-LET person = { city: "NYC" }
-LET city = person?.city ?? "Unknown"
-WRITE city
-; Expected: NYC
+  ; Optional chaining always returns Option, coalesce unwraps
+  LET person = { city: "NYC" }
+  LET city = person?.city ?? "Unknown"
+  WRITE city
+  ; Expected: NYC
 
-; Missing field with coalesce fallback
-LET empty = Option.None
-LET missing = empty?.nonexistent ?? "not found"
-WRITE missing
-; Expected: not found
+  ; Missing field with coalesce fallback
+  LET empty = Option.None
+  LET missing = empty?.nonexistent ?? "not found"
+  WRITE missing
+  ; Expected: not found
 
-; === Optional chaining result is always Option ===
+  ; === Optional chaining result is always Option ===
 
-; Without coalesce, result is Option.Some
-LET result = { value: 10 }?.value
-; result is Option.Some(10); check with IS
-WRITE IF result IS Option.Some(_) { "has value" } ELSE { "no value" }
-; Expected: has value
+  ; Without coalesce, result is Option.Some
+  LET result = { value: 10 }?.value
+  ; result is Option.Some(10); check with IS
+  WRITE IF result IS Option.Some(_) { "has value" } ELSE { "no value" }
+  ; Expected: has value
 
-; None result
-LET result2 = Option.None?.value
-WRITE IF result2 IS Option.Some(_) { "has value" } ELSE { "no value" }
-; Expected: no value
+  ; None result
+  LET result2 = Option.None?.value
+  WRITE IF result2 IS Option.Some(_) { "has value" } ELSE { "no value" }
+  ; Expected: no value
 
-WRITE "Optional chaining tests complete"
+  WRITE "Optional chaining tests complete"
+}

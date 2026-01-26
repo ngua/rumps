@@ -3,260 +3,262 @@
 ;
 ; NOTE: Uses a unique temp directory under /tmp that is cleaned up at the end
 
-; ============ Setup: create temp directory ============
+FUN main() {
+  ; ============ Setup: create temp directory ============
 
-; Generate unique directory name using Random.uuid
-LET test-uuid = Random.uuid()
-LET test-dir-path = "/tmp/rumps-test-{test-uuid}"
-LET test-dir = test-dir-path AS FilePath
+  ; Generate unique directory name using Random.uuid
+  LET test-uuid = Random.uuid()
+  LET test-dir-path = "/tmp/rumps-test-{test-uuid}"
+  LET test-dir = test-dir-path AS FilePath
 
-; Create the test directory
-LET _ = Io.Directory.create-dir(test-dir)
+  ; Create the test directory
+  LET _ = Io.Directory.create-dir(test-dir)
 
-; ============ FilePath coercion ============
+  ; ============ FilePath coercion ============
 
-; Create FilePath via AS cast
-LET p1 = "/tmp/rumps-test" AS FilePath
-WRITE p1 IS FilePath  ; true
+  ; Create FilePath via AS cast
+  LET p1 = "/tmp/rumps-test" AS FilePath
+  WRITE p1 IS FilePath  ; true
 
-; ============ pwd ============
+  ; ============ pwd ============
 
-; Get current working directory
-LET cwd = Io.Directory.pwd()
-WRITE cwd IS FilePath  ; true
+  ; Get current working directory
+  LET cwd = Io.Directory.pwd()
+  WRITE cwd IS FilePath  ; true
 
-; ============ exists / is-file / is-dir ============
+  ; ============ exists / is-file / is-dir ============
 
-; Check if test directory exists and is a directory
-LET dir-exists = Io.Directory.exists(test-dir)
-WRITE dir-exists  ; true
+  ; Check if test directory exists and is a directory
+  LET dir-exists = Io.Directory.exists(test-dir)
+  WRITE dir-exists  ; true
 
-LET dir-is-dir = Io.Directory.is-dir(test-dir)
-WRITE dir-is-dir  ; true
+  LET dir-is-dir = Io.Directory.is-dir(test-dir)
+  WRITE dir-is-dir  ; true
 
-LET dir-is-file = Io.Directory.is-file(test-dir)
-WRITE dir-is-file  ; false
+  LET dir-is-file = Io.Directory.is-file(test-dir)
+  WRITE dir-is-file  ; false
 
-; Check non-existent path
-LET fake = "/nonexistent/path/xyz123" AS FilePath
-LET fake-exists = Io.Directory.exists(fake)
-WRITE fake-exists  ; false
+  ; Check non-existent path
+  LET fake = "/nonexistent/path/xyz123" AS FilePath
+  LET fake-exists = Io.Directory.exists(fake)
+  WRITE fake-exists  ; false
 
-; ============ get-env ============
+  ; ============ get-env ============
 
-; PATH environment variable should exist on most systems
-LET path-env = Io.Directory.get-env("PATH")
-WRITE path-env IS Option[String]  ; true
+  ; PATH environment variable should exist on most systems
+  LET path-env = Io.Directory.get-env("PATH")
+  WRITE path-env IS Option[String]  ; true
 
-; Non-existent env var
-LET no-such-var = Io.Directory.get-env("RUMPS_NONEXISTENT_VAR_12345")
-WRITE no-such-var  ; Option.None
+  ; Non-existent env var
+  LET no-such-var = Io.Directory.get-env("RUMPS_NONEXISTENT_VAR_12345")
+  WRITE no-such-var  ; Option.None
 
-; ============ write-file / read-file ============
+  ; ============ write-file / read-file ============
 
-; Write a file to our temp directory
-LET test-file-path = "{test-dir-path}/test-file.txt"
-LET test-file = test-file-path AS FilePath
-LET test-contents = "Hello, RUMPS!"
+  ; Write a file to our temp directory
+  LET test-file-path = "{test-dir-path}/test-file.txt"
+  LET test-file = test-file-path AS FilePath
+  LET test-contents = "Hello, RUMPS!"
 
-LET _ = Io.Directory.write-file({ path: test-file, contents: test-contents })
+  LET _ = Io.Directory.write-file({ path: test-file, contents: test-contents })
 
-; Verify the file exists
-LET file-exists = Io.Directory.exists(test-file)
-WRITE file-exists  ; true
+  ; Verify the file exists
+  LET file-exists = Io.Directory.exists(test-file)
+  WRITE file-exists  ; true
 
-LET file-is-file = Io.Directory.is-file(test-file)
-WRITE file-is-file  ; true
+  LET file-is-file = Io.Directory.is-file(test-file)
+  WRITE file-is-file  ; true
 
-; Read the file back
-LET read-contents = Io.Directory.read-file(test-file)
-WRITE read-contents  ; Hello, RUMPS!
+  ; Read the file back
+  LET read-contents = Io.Directory.read-file(test-file)
+  WRITE read-contents  ; Hello, RUMPS!
 
-; ============ append-file ============
+  ; ============ append-file ============
 
-; Append to the file
-LET append-str = "\nAppended line"
-LET _ = Io.Directory.append-file({ path: test-file, contents: append-str })
+  ; Append to the file
+  LET append-str = "\nAppended line"
+  LET _ = Io.Directory.append-file({ path: test-file, contents: append-str })
 
-; Read the updated file
-LET appended-contents = Io.Directory.read-file(test-file)
-WRITE appended-contents  ; Hello, RUMPS!\nAppended line
+  ; Read the updated file
+  LET appended-contents = Io.Directory.read-file(test-file)
+  WRITE appended-contents  ; Hello, RUMPS!\nAppended line
 
-; ============ create-dir / create-dir-all ============
+  ; ============ create-dir / create-dir-all ============
 
-; Create a single directory
-LET subdir-path = "{test-dir-path}/subdir"
-LET subdir = subdir-path AS FilePath
-LET _ = Io.Directory.create-dir(subdir)
+  ; Create a single directory
+  LET subdir-path = "{test-dir-path}/subdir"
+  LET subdir = subdir-path AS FilePath
+  LET _ = Io.Directory.create-dir(subdir)
 
-LET subdir-exists = Io.Directory.exists(subdir)
-WRITE subdir-exists  ; true
+  LET subdir-exists = Io.Directory.exists(subdir)
+  WRITE subdir-exists  ; true
 
-; Create nested directories
-LET nested-path = "{test-dir-path}/a/b/c"
-LET nested = nested-path AS FilePath
-LET _ = Io.Directory.create-dir-all(nested)
+  ; Create nested directories
+  LET nested-path = "{test-dir-path}/a/b/c"
+  LET nested = nested-path AS FilePath
+  LET _ = Io.Directory.create-dir-all(nested)
 
-LET nested-exists = Io.Directory.exists(nested)
-WRITE nested-exists  ; true
+  LET nested-exists = Io.Directory.exists(nested)
+  WRITE nested-exists  ; true
 
-; ============ list-dir ============
+  ; ============ list-dir ============
 
-; List contents of test directory (should have at least test-file.txt and subdir)
-LET entries = Io.Directory.list-dir(test-dir)
-WRITE entries IS Array[Path]  ; true
+  ; List contents of test directory (should have at least test-file.txt and subdir)
+  LET entries = Io.Directory.list-dir(test-dir)
+  WRITE entries IS Array[Path]  ; true
 
-; Each entry is a Path (File or Dir)
-LET first = Array.head(entries)
-WRITE first IS Option[Path]  ; true
+  ; Each entry is a Path (File or Dir)
+  LET first = Array.head(entries)
+  WRITE first IS Option[Path]  ; true
 
-; Should have multiple entries
-LET entry-count = Iterable:length(entries)
-WRITE entry-count >= 2  ; true (at least test-file.txt and subdir)
+  ; Should have multiple entries
+  LET entry-count = Iterable:length(entries)
+  WRITE entry-count >= 2  ; true (at least test-file.txt and subdir)
 
-; ============ copy-path ============
+  ; ============ copy-path ============
 
-; Copy the test file
-LET copy-dest-path = "{test-dir-path}/test-file-copy.txt"
-LET copy-dest = copy-dest-path AS FilePath
-LET _ = Io.Directory.copy-path({ src: test-file, dest: copy-dest })
+  ; Copy the test file
+  LET copy-dest-path = "{test-dir-path}/test-file-copy.txt"
+  LET copy-dest = copy-dest-path AS FilePath
+  LET _ = Io.Directory.copy-path({ src: test-file, dest: copy-dest })
 
-LET copy-exists = Io.Directory.exists(copy-dest)
-WRITE copy-exists  ; true
+  LET copy-exists = Io.Directory.exists(copy-dest)
+  WRITE copy-exists  ; true
 
-; Verify contents are the same
-LET copy-contents = Io.Directory.read-file(copy-dest)
-WRITE copy-contents == appended-contents  ; true
+  ; Verify contents are the same
+  LET copy-contents = Io.Directory.read-file(copy-dest)
+  WRITE copy-contents == appended-contents  ; true
 
-; ============ move-path ============
+  ; ============ move-path ============
 
-; Move (rename) the copy
-LET move-dest-path = "{test-dir-path}/test-file-moved.txt"
-LET move-dest = move-dest-path AS FilePath
-LET _ = Io.Directory.move-path({ src: copy-dest, dest: move-dest })
+  ; Move (rename) the copy
+  LET move-dest-path = "{test-dir-path}/test-file-moved.txt"
+  LET move-dest = move-dest-path AS FilePath
+  LET _ = Io.Directory.move-path({ src: copy-dest, dest: move-dest })
 
-; Original should not exist
-LET old-exists = Io.Directory.exists(copy-dest)
-WRITE old-exists  ; false
+  ; Original should not exist
+  LET old-exists = Io.Directory.exists(copy-dest)
+  WRITE old-exists  ; false
 
-; New location should exist
-LET new-exists = Io.Directory.exists(move-dest)
-WRITE new-exists  ; true
+  ; New location should exist
+  LET new-exists = Io.Directory.exists(move-dest)
+  WRITE new-exists  ; true
 
-; ============ remove ============
+  ; ============ remove ============
 
-; Remove the moved file
-LET _ = Io.Directory.remove(move-dest)
+  ; Remove the moved file
+  LET _ = Io.Directory.remove(move-dest)
 
-LET removed-exists = Io.Directory.exists(move-dest)
-WRITE removed-exists  ; false
+  LET removed-exists = Io.Directory.exists(move-dest)
+  WRITE removed-exists  ; false
 
-; ============ set-pwd ============
+  ; ============ set-pwd ============
 
-; Save current directory, change to temp dir, then restore
-LET orig-cwd = Io.Directory.pwd()
-LET _ = Io.Directory.set-pwd(test-dir)
+  ; Save current directory, change to temp dir, then restore
+  LET orig-cwd = Io.Directory.pwd()
+  LET _ = Io.Directory.set-pwd(test-dir)
 
-LET new-cwd = Io.Directory.pwd()
-; The new cwd should end with our test dir name
-WRITE Io.Directory.is-dir(new-cwd)  ; true
+  LET new-cwd = Io.Directory.pwd()
+  ; The new cwd should end with our test dir name
+  WRITE Io.Directory.is-dir(new-cwd)  ; true
 
-; Restore original cwd
-LET _ = Io.Directory.set-pwd(orig-cwd)
+  ; Restore original cwd
+  LET _ = Io.Directory.set-pwd(orig-cwd)
 
-; ============ set-env ============
+  ; ============ set-env ============
 
-; Set an environment variable
-LET _ = Io.Directory.set-env({ name: "RUMPS_TEST_VAR", value: "test-value-123" })
+  ; Set an environment variable
+  LET _ = Io.Directory.set-env({ name: "RUMPS_TEST_VAR", value: "test-value-123" })
 
-; Read it back
-LET env-val = Io.Directory.get-env("RUMPS_TEST_VAR")
-WRITE env-val  ; Option.Some("test-value-123")
+  ; Read it back
+  LET env-val = Io.Directory.get-env("RUMPS_TEST_VAR")
+  WRITE env-val  ; Option.Some("test-value-123")
 
-; ============ Path AS FilePath ============
+  ; ============ Path AS FilePath ============
 
-; Path.File can be cast to FilePath
-LET file-path = Path.File(test-file) AS FilePath
-WRITE file-path IS FilePath  ; true
+  ; Path.File can be cast to FilePath
+  LET file-path = Path.File(test-file) AS FilePath
+  WRITE file-path IS FilePath  ; true
 
-; Path.Dir can be cast to FilePath
-LET dir-path = Path.Dir(test-dir) AS FilePath
-WRITE dir-path IS FilePath  ; true
+  ; Path.Dir can be cast to FilePath
+  LET dir-path = Path.Dir(test-dir) AS FilePath
+  WRITE dir-path IS FilePath  ; true
 
-; ============ canonicalize ============
+  ; ============ canonicalize ============
 
-; Canonicalize the test directory
-LET canonical = Io.Directory.canonicalize(test-dir)
-WRITE canonical IS FilePath  ; true
-WRITE Io.Directory.exists(canonical)  ; true
+  ; Canonicalize the test directory
+  LET canonical = Io.Directory.canonicalize(test-dir)
+  WRITE canonical IS FilePath  ; true
+  WRITE Io.Directory.exists(canonical)  ; true
 
-; ============ parent ============
+  ; ============ parent ============
 
-; Get parent of test file
-LET file-parent = Io.Directory.parent(test-file)
-WRITE file-parent IS Option[FilePath]  ; true
+  ; Get parent of test file
+  LET file-parent = Io.Directory.parent(test-file)
+  WRITE file-parent IS Option[FilePath]  ; true
 
-; The parent should exist (use unwrap-or to get the value)
-LET parent-fp = Option.unwrap-or(file-parent, "/" AS FilePath)
-WRITE Io.Directory.exists(parent-fp)  ; true
+  ; The parent should exist (use unwrap-or to get the value)
+  LET parent-fp = Option.unwrap-or(file-parent, "/" AS FilePath)
+  WRITE Io.Directory.exists(parent-fp)  ; true
 
-; Root has no parent (or returns empty)
-LET root-parent = Io.Directory.parent("/" AS FilePath)
-WRITE root-parent  ; Option.None
+  ; Root has no parent (or returns empty)
+  LET root-parent = Io.Directory.parent("/" AS FilePath)
+  WRITE root-parent  ; Option.None
 
-; ============ file-name ============
+  ; ============ file-name ============
 
-; Get file name of test file
-LET fname = Io.Directory.file-name(test-file)
-WRITE fname  ; Option.Some("test-file.txt")
+  ; Get file name of test file
+  LET fname = Io.Directory.file-name(test-file)
+  WRITE fname  ; Option.Some("test-file.txt")
 
-; Get file name of directory
-LET dname = Io.Directory.file-name(test-dir)
-WRITE dname IS Option[String]  ; true
+  ; Get file name of directory
+  LET dname = Io.Directory.file-name(test-dir)
+  WRITE dname IS Option[String]  ; true
 
-; ============ extension ============
+  ; ============ extension ============
 
-; Get extension of test file
-LET ext = Io.Directory.extension(test-file)
-WRITE ext  ; Option.Some("txt")
+  ; Get extension of test file
+  LET ext = Io.Directory.extension(test-file)
+  WRITE ext  ; Option.Some("txt")
 
-; Get extension of file without extension
-LET no-ext-path = "{test-dir-path}/noext"
-LET no-ext-file = no-ext-path AS FilePath
-LET _ = Io.Directory.write-file({ path: no-ext-file, contents: "no extension" })
-LET no-ext = Io.Directory.extension(no-ext-file)
-WRITE no-ext  ; Option.None
+  ; Get extension of file without extension
+  LET no-ext-path = "{test-dir-path}/noext"
+  LET no-ext-file = no-ext-path AS FilePath
+  LET _ = Io.Directory.write-file({ path: no-ext-file, contents: "no extension" })
+  LET no-ext = Io.Directory.extension(no-ext-file)
+  WRITE no-ext  ; Option.None
 
-; ============ with-extension ============
+  ; ============ with-extension ============
 
-; Change extension
-LET new-ext = Io.Directory.with-extension(test-file, "md")
-WRITE Io.Directory.extension(new-ext)  ; Option.Some("md")
+  ; Change extension
+  LET new-ext = Io.Directory.with-extension(test-file, "md")
+  WRITE Io.Directory.extension(new-ext)  ; Option.Some("md")
 
-; Add extension
-LET added-ext = Io.Directory.with-extension(no-ext-file, "json")
-WRITE Io.Directory.extension(added-ext)  ; Option.Some("json")
+  ; Add extension
+  LET added-ext = Io.Directory.with-extension(no-ext-file, "json")
+  WRITE Io.Directory.extension(added-ext)  ; Option.Some("json")
 
-; ============ join ============
+  ; ============ join ============
 
-; Join path components
-LET joined = Io.Directory.join(test-dir, ["foo", "bar", "baz.txt"])
-WRITE joined IS FilePath  ; true
-WRITE Io.Directory.file-name(joined)  ; Option.Some("baz.txt")
+  ; Join path components
+  LET joined = Io.Directory.join(test-dir, ["foo", "bar", "baz.txt"])
+  WRITE joined IS FilePath  ; true
+  WRITE Io.Directory.file-name(joined)  ; Option.Some("baz.txt")
 
-; ============ temp-dir ============
+  ; ============ temp-dir ============
 
-; Get system temp directory
-LET tmp = Io.Directory.temp-dir()
-WRITE tmp IS FilePath  ; true
-WRITE Io.Directory.is-dir(tmp)  ; true
+  ; Get system temp directory
+  LET tmp = Io.Directory.temp-dir()
+  WRITE tmp IS FilePath  ; true
+  WRITE Io.Directory.is-dir(tmp)  ; true
 
-; ============ Cleanup: remove-all ============
+  ; ============ Cleanup: remove-all ============
 
-; Clean up the entire test directory
-LET _ = Io.Directory.remove-all(test-dir)
+  ; Clean up the entire test directory
+  LET _ = Io.Directory.remove-all(test-dir)
 
-LET cleanup-exists = Io.Directory.exists(test-dir)
-WRITE cleanup-exists  ; false
+  LET cleanup-exists = Io.Directory.exists(test-dir)
+  WRITE cleanup-exists  ; false
 
-WRITE "All Io.Directory tests passed"
+  WRITE "All Io.Directory tests passed"
+}

@@ -1,118 +1,120 @@
 ; Test: Monoid concatenation (`++` operator)
 ; Tests polymorphic `++` on String, Array, and Map
 
-; === String concatenation ===
-LET s1 = "Hello"
-LET s2 = "World"
-WRITE s1 ++ ", " ++ s2
+FUN main() {
+  ; === String concatenation ===
+  LET s1 = "Hello"
+  LET s2 = "World"
+  WRITE s1 ++ ", " ++ s2
 
-; === Array concatenation ===
-LET a1 = [1, 2, 3]
-LET a2 = [4, 5, 6]
-WRITE a1 ++ a2
+  ; === Array concatenation ===
+  LET a1 = [1, 2, 3]
+  LET a2 = [4, 5, 6]
+  WRITE a1 ++ a2
 
-; Nested arrays
-LET nested1 = [[1, 2], [3, 4]]
-LET nested2 = [[5, 6]]
-WRITE nested1 ++ nested2
+  ; Nested arrays
+  LET nested1 = [[1, 2], [3, 4]]
+  LET nested2 = [[5, 6]]
+  WRITE nested1 ++ nested2
 
-; === Map concatenation (RHS bias) ===
-LET m1 = { "a" => 1, "b" => 2 }
-LET m2 = { "c" => 3, "d" => 4 }
-WRITE m1 ++ m2
+  ; === Map concatenation (RHS bias) ===
+  LET m1 = { "a" => 1, "b" => 2 }
+  LET m2 = { "c" => 3, "d" => 4 }
+  WRITE m1 ++ m2
 
-; RHS bias: right value wins for duplicate keys
-LET left = { "x" => 10, "y" => 20 }
-LET right = { "y" => 999, "z" => 30 }
-LET merged = left ++ right
-WRITE Map.lookup(merged, "x")  ; Some(10)
-WRITE Map.lookup(merged, "y")  ; Some(999) - right wins
-WRITE Map.lookup(merged, "z")  ; Some(30)
+  ; RHS bias: right value wins for duplicate keys
+  LET left = { "x" => 10, "y" => 20 }
+  LET right = { "y" => 999, "z" => 30 }
+  LET merged = left ++ right
+  WRITE Map.lookup(merged, "x")  ; Some(10)
+  WRITE Map.lookup(merged, "y")  ; Some(999) - right wins
+  WRITE Map.lookup(merged, "z")  ; Some(30)
 
-; === Type constraint: Monoid ===
+  ; === Type constraint: Monoid ===
+  WRITE concat3("a", "b", "c")
+  WRITE concat3([1], [2], [3])
+  WRITE concat3({ 1 => "x" }, { 2 => "y" }, { 3 => "z" })
+
+  ; === Option alternative (`<|>` semantics) ===
+  ; First `Some` wins; `None` acts as identity
+
+  LET some10 = Option.Some(10)
+  LET some9 = Option.Some(9)
+  LET none: Option[Int] = Option.None
+
+  ; Some ++ None = Some (left wins)
+  WRITE some10 ++ none
+
+  ; None ++ Some = Some (right wins)
+  WRITE none ++ some9
+
+  ; None ++ None = None
+  WRITE none ++ none
+
+  ; Some ++ Some = first Some (left-biased, like Haskell `<|>`)
+  WRITE some10 ++ some9
+
+  ; Chaining: first Some in chain wins
+  WRITE none ++ none ++ some10 ++ some9
+
+  ; With generic Monoid function
+  WRITE concat3(none, some10, some9)  ; first non-None wins
+  WRITE concat3(none, none, some9)    ; last Some wins
+  WRITE concat3(none, none, none)     ; all None
+
+  ; === Mempty: `_` (monoid identity) ===
+  ; `_` produces the empty value for any Monoid type, inferred from context
+
+  ; String mempty
+  WRITE _ ++ "hello"      ; "" ++ "hello" = "hello"
+  WRITE "world" ++ _      ; "world" ++ "" = "world"
+
+  ; Array mempty
+  WRITE _ ++ [1, 2, 3]    ; [] ++ [1, 2, 3] = [1, 2, 3]
+  WRITE [4, 5] ++ _       ; [4, 5] ++ [] = [4, 5]
+
+  ; Map mempty
+  LET m = { "x" => 10 }
+  WRITE _ ++ m            ; {} ++ m = m
+  WRITE m ++ _            ; m ++ {} = m
+
+  ; Option mempty (None)
+  WRITE _ ++ Option.Some(99)   ; None ++ Some(99) = Some(99)
+  WRITE Option.Some(77) ++ _   ; Some(77) ++ None = Some(77)
+  WRITE Option.None ++ _       ; None ++ None = None
+  WRITE _ ++ Option.None       ; None ++ None = None
+
+  ; Mempty with generic Monoid function
+  WRITE concat3(_, "a", "b")   ; "" ++ "a" ++ "b" = "ab"
+  WRITE concat3([0], _, [2])   ; [0] ++ [] ++ [2] = [0, 2]
+
+  ; Mempty as FOREVER seed (common pattern for accumulating)
+  ; Collect squares of 1..5 into an array starting from `_` (empty array)
+  LET squares = FOREVER { i: 1, acc: _ } (state, cont) => {
+    IF state.i > 5 {
+      state.acc
+    } ELSE {
+      cont({ i: state.i + 1, acc: state.acc ++ [state.i * state.i] })
+    }
+  }
+  WRITE squares
+
+  ; Build a string using `_` as initial accumulator
+  LET words = FOREVER { i: 0, s: _ } (state, cont) => {
+    LET items = ["hello", "world", "!"]
+    IF state.i >= 3 {
+      state.s
+    } ELSE {
+      ; Note that `?? _` works fine since `_ == ""` for `String`
+      LET word = items?[state.i] ?? _
+      LET sep = IF state.i == 0 { _ } ELSE { " " }
+      cont({ i: state.i + 1, s: state.s ++ sep ++ word })
+    }
+  }
+  WRITE words
+
+  WRITE "Monoid concatenation complete"
+}
+
 ; This function works on any Monoid type
 FUN concat3[T: Monoid](a: T, b: T, c: T) -> T { a ++ b ++ c }
-
-WRITE concat3("a", "b", "c")
-WRITE concat3([1], [2], [3])
-WRITE concat3({ 1 => "x" }, { 2 => "y" }, { 3 => "z" })
-
-; === Option alternative (`<|>` semantics) ===
-; First `Some` wins; `None` acts as identity
-
-LET some10 = Option.Some(10)
-LET some9 = Option.Some(9)
-LET none: Option[Int] = Option.None
-
-; Some ++ None = Some (left wins)
-WRITE some10 ++ none
-
-; None ++ Some = Some (right wins)
-WRITE none ++ some9
-
-; None ++ None = None
-WRITE none ++ none
-
-; Some ++ Some = first Some (left-biased, like Haskell `<|>`)
-WRITE some10 ++ some9
-
-; Chaining: first Some in chain wins
-WRITE none ++ none ++ some10 ++ some9
-
-; With generic Monoid function
-WRITE concat3(none, some10, some9)  ; first non-None wins
-WRITE concat3(none, none, some9)    ; last Some wins
-WRITE concat3(none, none, none)     ; all None
-
-; === Mempty: `_` (monoid identity) ===
-; `_` produces the empty value for any Monoid type, inferred from context
-
-; String mempty
-WRITE _ ++ "hello"      ; "" ++ "hello" = "hello"
-WRITE "world" ++ _      ; "world" ++ "" = "world"
-
-; Array mempty
-WRITE _ ++ [1, 2, 3]    ; [] ++ [1, 2, 3] = [1, 2, 3]
-WRITE [4, 5] ++ _       ; [4, 5] ++ [] = [4, 5]
-
-; Map mempty
-LET m = { "x" => 10 }
-WRITE _ ++ m            ; {} ++ m = m
-WRITE m ++ _            ; m ++ {} = m
-
-; Option mempty (None)
-WRITE _ ++ Option.Some(99)   ; None ++ Some(99) = Some(99)
-WRITE Option.Some(77) ++ _   ; Some(77) ++ None = Some(77)
-WRITE Option.None ++ _       ; None ++ None = None
-WRITE _ ++ Option.None       ; None ++ None = None
-
-; Mempty with generic Monoid function
-WRITE concat3(_, "a", "b")   ; "" ++ "a" ++ "b" = "ab"
-WRITE concat3([0], _, [2])   ; [0] ++ [] ++ [2] = [0, 2]
-
-; Mempty as FOREVER seed (common pattern for accumulating)
-; Collect squares of 1..5 into an array starting from `_` (empty array)
-LET squares = FOREVER { i: 1, acc: _ } (state, cont) => {
-  IF state.i > 5 {
-    state.acc
-  } ELSE {
-    cont({ i: state.i + 1, acc: state.acc ++ [state.i * state.i] })
-  }
-}
-WRITE squares
-
-; Build a string using `_` as initial accumulator
-LET words = FOREVER { i: 0, s: _ } (state, cont) => {
-  LET items = ["hello", "world", "!"]
-  IF state.i >= 3 {
-    state.s
-  } ELSE {
-    ; Note that `?? _` works fine since `_ == ""` for `String`
-    LET word = items?[state.i] ?? _
-    LET sep = IF state.i == 0 { _ } ELSE { " " }
-    cont({ i: state.i + 1, s: state.s ++ sep ++ word })
-  }
-}
-WRITE words
-
-WRITE "Monoid concatenation complete"

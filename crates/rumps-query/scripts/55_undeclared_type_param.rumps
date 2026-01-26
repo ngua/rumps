@@ -3,3 +3,5 @@
 
 ; This should fail: U is not declared
 TYPE Foo[T] = Bar(U)
+
+FUN main() {}

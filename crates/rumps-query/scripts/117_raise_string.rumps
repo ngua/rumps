@@ -1,2 +1,6 @@
 ; Test RAISE with a string message
-RAISE "something went wrong"
+
+FUN main() {
+  RAISE "something went wrong"
+  Unit
+}

@@ -1,117 +1,120 @@
 ; Test: String interpolation
 ; Tests `"{expr}"` syntax with various types and expressions
 
-; Basic variable interpolation
-LET my-name = "World"
-WRITE "Hello, {my-name}!"
+FUN main() {
+  ; Basic variable interpolation
+  LET my-name = "World"
+  WRITE "Hello, {my-name}!"
 
-; Multiple interpolations
-LET x = 1
-LET y = 2
-WRITE "{x} + {y} = {x + y}"
+  ; Multiple interpolations
+  LET x = 1
+  LET y = 2
+  WRITE "{x} + {y} = {x + y}"
 
-; Inline expressions
-WRITE "Result: {10 * 5 + 2}"
+  ; Inline expressions
+  WRITE "Result: {10 * 5 + 2}"
 
-; Various scalar types
-LET my-int = 42
-LET my-float = 3.14
-LET my-bool = TRUE
-LET my-char = 'X'
-WRITE "Int: {my-int}, Float: {my-float}, Bool: {my-bool}, Char: {my-char}"
+  ; Various scalar types
+  LET my-int = 42
+  LET my-float = 3.14
+  LET my-bool = TRUE
+  LET my-char = 'X'
+  WRITE "Int: {my-int}, Float: {my-float}, Bool: {my-bool}, Char: {my-char}"
 
-; Nested object field access
-LET my-obj = { x: 10, y: 20 }
-WRITE "Point: ({my-obj.x}, {my-obj.y})"
+  ; Nested object field access
+  LET my-obj = { x: 10, y: 20 }
+  WRITE "Point: ({my-obj.x}, {my-obj.y})"
 
-; Array elements
-LET my-arr = [1, 2, 3]
-WRITE "First: {my-arr[0]}, Second: {my-arr[1]}"
+  ; Array elements
+  LET my-arr = [1, 2, 3]
+  WRITE "First: {my-arr[0]}, Second: {my-arr[1]}"
 
-; Function call in interpolation
+  ; Function call in interpolation
+  WRITE "Double of 5: {double(5)}"
+
+  ; Closure in interpolation
+  LET inc = (n: Int) => n + 1
+  WRITE "Incremented: {inc(99)}"
+
+  ; Tuple access
+  LET my-tup = (100, "hello")
+  WRITE "Tuple: {my-tup.0}, {my-tup.1}"
+
+  ; Escaped braces: `{{` becomes `{`, `}}` becomes `}`
+  WRITE "Braces: {{ and }}"
+  WRITE "Mixed: {my-int} in {{curly}} braces"
+
+  ; Empty interpolation parts
+  LET my-msg = "test"
+  WRITE "{my-msg}"
+  WRITE "prefix{my-msg}"
+  WRITE "{my-msg}suffix"
+
+  ; Complex expressions (if-else)
+  LET cmp-result = IF x < y { "less" } ELSE { "not less" }
+  WRITE "Ternary-like: {cmp-result}"
+
+  ; String values pass through without extra quotes
+  LET my-str = "no quotes"
+  WRITE "Value: {my-str}"
+
+  ; Array length
+  LET my-nums = [1, 2, 3, 4, 5]
+  WRITE "Length: {Iterable:length(my-nums)}"
+
+  ; Map literal
+  LET my-map = { 1 => "one", 2 => "two" }
+  LET has-key = Map.has(my-map, 1)
+  WRITE "Map has key 1: {has-key}"
+
+  ; Option values
+  LET some-val = ?42
+  LET none-val = Option.None
+  WRITE "Some: {some-val}, None: {none-val}"
+
+  ; Range
+  LET my-range = 1 .. 5
+  WRITE "Range: {my-range}"
+
+  ; With arithmetic precedence
+  WRITE "Precedence: {2 + 3 * 4}"
+
+  ; Boolean expressions
+  WRITE "And: {TRUE AND FALSE}, Or: {TRUE OR FALSE}"
+
+  ; Comparison in interpolation
+  WRITE "Compare: {5 < 10}, {5 == 5}, {5 != 3}"
+
+  ; Using coalesce
+  LET my-maybe: Option[Int] = ?10
+  WRITE "Coalesced: {my-maybe ?? 0}"
+
+  ; Pipe operator
+  WRITE "Piped: {5 |> double}"
+
+  ; Nested string interpolation
+  LET inner = 100
+  WRITE "Outer: {"Inner: {inner}"}"
+
+  ; IF expression directly in interpolation
+  LET val = 7
+  WRITE "Direct IF: {IF val > 5 { "big" } ELSE { "small" }}"
+
+  ; DbRef in interpolation (requires the merge_dbref fix)
+  @SET d{1, 2} "nested-key"
+  WRITE "DbRef: {@GET d{1, 2}!}"
+
+  ; Complex subscript expression
+  LET idx = 2
+  @SET d{1, idx} "dynamic"
+  WRITE "Dynamic key: {@GET d{1, idx}!}"
+
+  ; Block expression in interpolation (note: `{{` is escape, so `{{{ ... }}}` needed)
+  WRITE "Block: {{{ 2 * 21 }}}"
+
+  ; Unwrap in interpolation
+  LET opt: Option[Int] = ?999
+  WRITE "Unwrapped: {opt!}"
+}
+
 FUN double(n: Int) -> Int { n * 2 }
-WRITE "Double of 5: {double(5)}"
-
-; Closure in interpolation
-LET inc = (n: Int) => n + 1
-WRITE "Incremented: {inc(99)}"
-
-; Tuple access
-LET my-tup = (100, "hello")
-WRITE "Tuple: {my-tup.0}, {my-tup.1}"
-
-; Escaped braces: `{{` becomes `{`, `}}` becomes `}`
-WRITE "Braces: {{ and }}"
-WRITE "Mixed: {my-int} in {{curly}} braces"
-
-; Empty interpolation parts
-LET my-msg = "test"
-WRITE "{my-msg}"
-WRITE "prefix{my-msg}"
-WRITE "{my-msg}suffix"
-
-; Complex expressions (if-else)
-LET cmp-result = IF x < y { "less" } ELSE { "not less" }
-WRITE "Ternary-like: {cmp-result}"
-
-; String values pass through without extra quotes
-LET my-str = "no quotes"
-WRITE "Value: {my-str}"
-
-; Array length
-LET my-nums = [1, 2, 3, 4, 5]
-WRITE "Length: {Iterable:length(my-nums)}"
-
-; Map literal
-LET my-map = { 1 => "one", 2 => "two" }
-LET has-key = Map.has(my-map, 1)
-WRITE "Map has key 1: {has-key}"
-
-; Option values
-LET some-val = ?42
-LET none-val = Option.None
-WRITE "Some: {some-val}, None: {none-val}"
-
-; Range
-LET my-range = 1 .. 5
-WRITE "Range: {my-range}"
-
-; With arithmetic precedence
-WRITE "Precedence: {2 + 3 * 4}"
-
-; Boolean expressions
-WRITE "And: {TRUE AND FALSE}, Or: {TRUE OR FALSE}"
-
-; Comparison in interpolation
-WRITE "Compare: {5 < 10}, {5 == 5}, {5 != 3}"
-
-; Using coalesce
-LET my-maybe: Option[Int] = ?10
-WRITE "Coalesced: {my-maybe ?? 0}"
-
-; Pipe operator
-WRITE "Piped: {5 |> double}"
-
-; Nested string interpolation
-LET inner = 100
-WRITE "Outer: {"Inner: {inner}"}"
-
-; IF expression directly in interpolation
-LET val = 7
-WRITE "Direct IF: {IF val > 5 { "big" } ELSE { "small" }}"
-
-; DbRef in interpolation (requires the merge_dbref fix)
-@SET d{1, 2} "nested-key"
-WRITE "DbRef: {@GET d{1, 2}!}"
-
-; Complex subscript expression
-LET idx = 2
-@SET d{1, idx} "dynamic"
-WRITE "Dynamic key: {@GET d{1, idx}!}"
-
-; Block expression in interpolation (note: `{{` is escape, so `{{{ ... }}}` needed)
-WRITE "Block: {{{ 2 * 21 }}}"
-
-; Unwrap in interpolation
-LET opt: Option[Int] = ?999
-WRITE "Unwrapped: {opt!}"

@@ -1,52 +1,54 @@
 ; Iter module: works on any Iterable[T] (Array[T] or Range)
 
-; Iterable:length on Array
-LET arr = [1, 2, 3, 4, 5]
-WRITE "Array length: {Iterable:length(arr)}"
+FUN main() {
+  ; Iterable:length on Array
+  LET arr = [1, 2, 3, 4, 5]
+  WRITE "Array length: {Iterable:length(arr)}"
 
-; Iterable:length on Range
-WRITE "Range (1..=10) length: {Iterable:length(1 ..= 10)}"
-WRITE "Range (1..10) length: {Iterable:length(1 .. 10)}"
+  ; Iterable:length on Range
+  WRITE "Range (1..=10) length: {Iterable:length(1 ..= 10)}"
+  WRITE "Range (1..10) length: {Iterable:length(1 .. 10)}"
 
-; Iterable:contains on Array
-WRITE "Array contains 3: {Iterable:contains(arr, 3)}"
-WRITE "Array contains 99: {Iterable:contains(arr, 99)}"
+  ; Iterable:contains on Array
+  WRITE "Array contains 3: {Iterable:contains(arr, 3)}"
+  WRITE "Array contains 99: {Iterable:contains(arr, 99)}"
 
-; Iterable:contains on Range
-WRITE "Range contains 5: {Iterable:contains(1 ..= 10, 5)}"
-WRITE "Range contains 11: {Iterable:contains(1 ..= 10, 11)}"
+  ; Iterable:contains on Range
+  WRITE "Range contains 5: {Iterable:contains(1 ..= 10, 5)}"
+  WRITE "Range contains 11: {Iterable:contains(1 ..= 10, 11)}"
 
-; Mappable:map on Array and Range
-WRITE "Doubled array: {Mappable:map(x => x * 2, arr)}"
-WRITE "Doubled range: {Mappable:map(x => x * 2, 1 ..= 5)}"
+  ; Mappable:map on Array and Range
+  WRITE "Doubled array: {Mappable:map(x => x * 2, arr)}"
+  WRITE "Doubled range: {Mappable:map(x => x * 2, 1 ..= 5)}"
 
-; Filterable:filter on Array and Range
-WRITE "Evens from array: {Filterable:filter(x => x % 2 == 0, arr)}"
-WRITE "Evens from range: {Filterable:filter(x => x % 2 == 0, 1 ..= 10)}"
+  ; Filterable:filter on Array and Range
+  WRITE "Evens from array: {Filterable:filter(x => x % 2 == 0, arr)}"
+  WRITE "Evens from range: {Filterable:filter(x => x % 2 == 0, 1 ..= 10)}"
 
-; Foldable:reduce on Array and Range
-WRITE "Sum of array: {Foldable:reduce((a, x) => a + x, 0, arr)}"
-WRITE "Sum of range: {Foldable:reduce((a, x) => a + x, 0, 1 ..= 10)}"
+  ; Foldable:reduce on Array and Range
+  WRITE "Sum of array: {Foldable:reduce((a, x) => a + x, 0, arr)}"
+  WRITE "Sum of range: {Foldable:reduce((a, x) => a + x, 0, 1 ..= 10)}"
+
+  WRITE "Generic sum (array): {sum-iter(arr)}"
+  WRITE "Generic sum (range): {sum-iter(1 ..= 10)}"
+
+  WRITE "Generic count (array): {count-iter(arr)}"
+  WRITE "Generic count (range): {count-iter(1 ..= 10)}"
+
+  ; Iterable:reverse on Array and Range
+  WRITE "Reversed array: {Iterable:reverse(arr)}"
+  WRITE "Reversed range: {Iterable:reverse(1 ..= 5)}"
+
+  ; Iterable:foreach on Array and Range
+  Iterable:foreach(x => WRITE "foreach array: {x}", [10, 20])
+  Iterable:foreach(x => WRITE "foreach range: {x}", 1 ..= 3)
+}
 
 ; Generic functions with Iterable constraint
 FUN sum-iter[I: Iterable[Int]](i: I) -> Int {
   Foldable:reduce((a, x) => a + x, 0, i)
 }
 
-WRITE "Generic sum (array): {sum-iter(arr)}"
-WRITE "Generic sum (range): {sum-iter(1 ..= 10)}"
-
 FUN count-iter[I: Iterable[Int]](i: I) -> Int {
   Iterable:length(i)
 }
-
-WRITE "Generic count (array): {count-iter(arr)}"
-WRITE "Generic count (range): {count-iter(1 ..= 10)}"
-
-; Iterable:reverse on Array and Range
-WRITE "Reversed array: {Iterable:reverse(arr)}"
-WRITE "Reversed range: {Iterable:reverse(1 ..= 5)}"
-
-; Iterable:foreach on Array and Range
-Iterable:foreach(x => WRITE "foreach array: {x}", [10, 20])
-Iterable:foreach(x => WRITE "foreach range: {x}", 1 ..= 3)

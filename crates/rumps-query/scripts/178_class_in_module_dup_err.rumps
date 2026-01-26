@@ -1,5 +1,7 @@
 ; Duplicate CLASS instance across modules; should error
 
+FUN main() { }
+
 MODULE A {
   +TYPE MyInt = MyInt(Int)
 }

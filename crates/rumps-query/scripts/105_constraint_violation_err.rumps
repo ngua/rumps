@@ -1,6 +1,9 @@
 ; Error: constraint violation; calling a Numeric function with String
+
+FUN main() {
+  WRITE add-numeric("foo", "bar")
+}
+
 FUN add-numeric[T: Numeric](a: T, b: T) -> T {
   a + b
 }
-
-WRITE add-numeric("foo", "bar")

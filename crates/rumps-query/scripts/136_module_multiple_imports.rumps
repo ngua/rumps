@@ -3,14 +3,16 @@
 MODULE MyMath FROM "../modules/lib/mymath.rumps"
 MODULE Utils FROM "../modules/lib/utils.rumps"
 
-; Use functions from both modules
-WRITE MyMath.square(4)  ; 16
-WRITE Utils.is-even(4)  ; true
+FUN main() {
+  ; Use functions from both modules
+  WRITE MyMath.square(4)  ; 16
+  WRITE Utils.is-even(4)  ; true
 
-; Combine results
-LET sq = MyMath.square(5)
-LET str = Utils.stringify(sq)
-WRITE str  ; 25
+  ; Combine results
+  LET sq = MyMath.square(5)
+  LET str = Utils.stringify(sq)
+  WRITE str  ; 25
 
-WRITE Utils.version  ; 1.0
-WRITE MyMath.pi > 3.0  ; true
+  WRITE Utils.version  ; 1.0
+  WRITE MyMath.pi > 3.0  ; true
+}

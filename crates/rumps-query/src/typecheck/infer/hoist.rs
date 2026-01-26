@@ -98,11 +98,12 @@ impl InferCtx<'_> {
         }
     }
 
-    /// Hoist a function declaration with a provisional type.
+    /// Hoist a function declaration with a polymorphic type scheme.
     ///
-    /// Creates fresh type variables for type parameters and binds the function
-    /// name with a monomorphic function type. The actual generalization happens
-    /// in Pass 2 when the function body is inferred.
+    /// Creates fresh type variables for type parameters and unannotated
+    /// params/returns, then generalizes over all free type variables not
+    /// bound in the outer environment. Constraints are collected and stored
+    /// in the scheme.
     fn hoist_fun(
         &mut self,
         name: &str,
@@ -128,6 +129,22 @@ impl InferCtx<'_> {
             })
             .collect();
 
+        // Process type parameter constraints
+        let mut scheme_constraints: SmallVec<[(TyVar, Class); 2]> =
+            SmallVec::new();
+
+        type_param_vars.iter().for_each(|(tp_name, tv)| {
+            let tp = type_params
+                .iter()
+                .find(|p| p.name.as_str() == *tp_name)
+                .expect("type param exists");
+
+            tp.constraints.iter().for_each(|c| {
+                let class = self.ast_class_to_ty_class(c, &type_param_subst);
+                scheme_constraints.push((*tv, class));
+            });
+        });
+
         // Infer parameter types (using type param substitution)
         let param_tys = self.param_tys_with_subst(params, &type_param_subst);
 
@@ -140,16 +157,28 @@ impl InferCtx<'_> {
         // Build function type
         let fn_ty = Ty::Fn(param_tys, Box::new(ret_ty));
 
-        // Generalize over type parameter variables for polymorphic functions.
-        // NOTE: Type parameter constraints (e.g. `T: Numeric`) are NOT processed
-        // here; the `constraints` field is left empty. Constraint handling is
-        // deferred to Pass 2 when `stmt()` processes the full function definition
-        // and emits constraint-checking constraints during body inference.
-        let vars: Vec<_> = type_param_vars.iter().map(|(_, tv)| *tv).collect();
+        // Generalize over ALL free type variables in both the function type
+        // and the constraints. This includes:
+        // - Explicit type parameters (e.g., `T` in `FUN f[T](x: T) -> T`)
+        // - Inferred type variables from unannotated params/returns (e.g., `FUN id(x) { x }`)
+        // - Type variables that only appear in constraints (e.g., `T` in `FUN f[T, F: Fallible[T]](x: F)`)
+        let outer_free = self.env.free_vars();
+        let mut fn_free = fn_ty.free_vars();
+
+        // Add free variables from constraints
+        scheme_constraints.iter().for_each(|(tv, class)| {
+            fn_free.insert(*tv);
+            fn_free.extend(class.free_vars());
+        });
+
+        let vars: Vec<_> = fn_free
+            .into_iter()
+            .filter(|v| !outer_free.contains(v))
+            .collect();
         let scheme = Scheme {
             vars,
             ty: fn_ty,
-            constraints: smallvec::SmallVec::new(),
+            constraints: scheme_constraints,
         };
         self.env.bind(name, scheme);
     }
