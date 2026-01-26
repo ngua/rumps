@@ -28,63 +28,29 @@ pub(crate) use infer::{Constraint, InferCtx};
 pub(crate) use instance::{Instance, InstanceRegistry};
 pub(crate) use ty::{Class, ClassKind, Scheme, Subst, Ty, TyVar};
 
-use crate::ast::{Ast, ExprId, StmtId};
-use crate::env::Environment;
-use crate::intern::StringInterner;
-use crate::value::{TypeExprArena, TypeRegistry, ValueArena};
+use crate::ast::ExprId;
+use crate::TypeId;
 
-/// Run the type checker on an AST.
+/// Output from type checking.
 ///
-/// Performs type inference and constraint solving on all statements. Returns
-/// a cache of compiled regex patterns and mempty types on success, or `Err`
-/// with collected type errors.
-///
-/// # Arguments
-///
-/// * `ast` - The AST after name resolution (mutable for `TxnId` population)
-/// * `stmts` - Top-level statement IDs to type-check
-/// * `registry` - Type registry with builtin and user-defined types
-/// * `type_exprs` - Type expression arena for union member lookups
-/// * `runtime_env` - Runtime environment for module function type lookups
-/// * `arena` - Value arena for string lookups in error messages
-/// * `strings` - String interner shared with the registry
-pub(crate) fn check(
-    ast: &mut Ast,
-    stmts: &[StmtId],
-    registry: &TypeRegistry,
-    type_exprs: &TypeExprArena,
-    runtime_env: &Environment,
-    arena: &ValueArena,
-    strings: StringInterner,
-) -> crate::Result<(
-    Vec<regex::Regex>,
-    HashMap<ExprId, u32>,
-    HashMap<ExprId, Ty>,
-    HashMap<ExprId, Ty>,
-    HashMap<ExprId, Ty>,
-    HashMap<ExprId, Ty>,
-    HashMap<ExprId, crate::TypeId>,
-)> {
-    let mut ctx =
-        InferCtx::new(ast, registry, type_exprs, runtime_env, strings);
-
-    // Pass 1: Hoist function and module declarations for forward references
-    ctx.hoist_declarations(stmts);
-
-    // Pass 2: Infer types for all statement bodies
-    stmts.iter().for_each(|id| ctx.stmt(*id));
-
-    // Solve collected constraints
-    let subst = ctx.solve_constraints();
-
-    // Apply substitution to all inferred types
-    ctx.apply_subst(&subst);
-
-    // Resolve deferred instance calls (now that types are resolved)
-    ctx.resolve_deferred_instance_calls(&subst);
-
-    // Check for remaining unresolved type variables
-    ctx.check_remaining_unknowns();
-
-    ctx.into_result_formatted(registry, arena)
+/// Contains runtime metadata needed by the interpreter: compiled regex
+/// patterns, type information for polymorphic expressions, and instance
+/// dispatch tables.
+pub(crate) struct TypecheckOutput {
+    /// Compiled regex patterns, indexed by `regex_indices`.
+    pub(crate) regex_cache: Vec<regex::Regex>,
+    /// Mapping from regex expression IDs to cache indices.
+    pub(crate) regex_indices: HashMap<ExprId, u32>,
+    /// Resolved types for `MEMPTY` expressions (monoid identity values).
+    pub(crate) mempty_types: HashMap<ExprId, Ty>,
+    /// Resolved types for numeric literals (defaulted to `Int` if ambiguous).
+    pub(crate) numeric_types: HashMap<ExprId, Ty>,
+    /// Target types for `Into::into` and `TryInto::try_into` conversions.
+    pub(crate) convert_targets: HashMap<ExprId, Ty>,
+    /// Target types for `?` (wrap) operators on `Fallible` types.
+    pub(crate) wrap_types: HashMap<ExprId, Ty>,
+    /// Type IDs for class method calls on user-defined types.
+    ///
+    /// Used to dispatch to user-defined class instances at runtime.
+    pub(crate) instance_calls: HashMap<ExprId, TypeId>,
 }

@@ -112,6 +112,20 @@ pub async fn run(
     run_with_io(src, src_path, db, Io).await.map(|_| ())
 }
 
+/// Run a RUMPS script in interactive mode, outputting to stdout.
+///
+/// Interactive mode executes top-level expressions sequentially without
+/// requiring a `main` function. The `src_path` is used to resolve relative
+/// module imports.
+#[allow(unused_variables)]
+pub async fn run_interactive(
+    src: &str,
+    src_path: &std::path::Path,
+    db: Database,
+) -> Result<()> {
+    todo!("REPL/interactive mode is not yet supported")
+}
+
 /// Run a RUMPS script and capture output to a string.
 ///
 /// The `src_path` is used to resolve relative module imports.
@@ -132,7 +146,9 @@ async fn run_with_io<I: IoContext>(
     io: I,
 ) -> Result<I> {
     let mut result = Parser::parse_with_path(src, src_path)?;
-    let interp = Interpreter::new(&mut result.ast, &result.stmts, db, io)?;
+    // Use interactive mode for now; will flip to `false` after migrating scripts
+    let interp =
+        Interpreter::new(&mut result.ast, &result.stmts, db, io, true)?;
     let interp = interp.run(&result.stmts).await?;
     Ok(interp.into_io())
 }

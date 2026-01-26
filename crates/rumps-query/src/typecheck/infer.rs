@@ -36,8 +36,10 @@ use super::env::TypeEnv;
 use super::error::{TyPrinter, TypeError};
 use super::instance::InstanceRegistry;
 use super::ty::{Class, ClassKind, Scheme, Subst, Ty, TyVar};
-use crate::ast::{ExprId, TxnId};
+use super::TypecheckOutput;
+use crate::ast::{ExprId, Stmt, StmtId, TxnId};
 use crate::env::Environment;
+use crate::error::Result;
 use crate::intern::{StringId, StringInterner};
 use crate::value::{TypeExprArena, TypeId, TypeRegistry};
 use crate::Span;
@@ -235,6 +237,12 @@ pub(crate) struct InferCtx<'a> {
     /// `None` when at top-level; `Some(path)` inside a module.
     /// Used to resolve unqualified type names within modules.
     pub(super) current_module: Option<String>,
+    /// Whether running in interactive mode (no `main` required).
+    ///
+    /// In interactive mode, top-level expression statements are allowed and
+    /// executed sequentially. In normal mode, a `main` function is required
+    /// and top-level expressions are rejected.
+    interactive: bool,
 }
 
 impl<'a> InferCtx<'a> {
@@ -244,12 +252,15 @@ impl<'a> InferCtx<'a> {
     /// type name lookups produce consistent `StringId`s. The `runtime_env`
     /// is used to look up module function type schemes. The `type_exprs`
     /// arena is used to convert `TypeExprId` to `Ty` for user-defined unions.
+    /// Set `interactive` to `true` to allow top-level expressions without
+    /// requiring a `main` function.
     pub(crate) fn new(
         ast: &'a mut crate::ast::Ast,
         registry: &'a TypeRegistry,
         type_exprs: &'a TypeExprArena,
         runtime_env: &'a Environment,
         strings: StringInterner,
+        interactive: bool,
     ) -> Self {
         Self {
             ast,
@@ -276,6 +287,7 @@ impl<'a> InferCtx<'a> {
             next_txn_id: 0,
             class_context: None,
             current_module: None,
+            interactive,
         }
     }
 
@@ -529,32 +541,98 @@ impl<'a> InferCtx<'a> {
             });
     }
 
-    /// Consume the context, returning the regex cache, index map, mempty
-    /// types, numeric types, convert targets, wrap types, and instance calls
-    /// on success, or formatted type errors on failure.
-    pub(crate) fn into_result_formatted(
+    /// Validate that the script has a valid `main` entry point.
+    ///
+    /// In non-interactive mode:
+    /// - Top-level `Stmt::Expr` is rejected (must be inside `main`)
+    /// - A `main` function must exist
+    /// - `main` must have signature `() -> Unit`
+    ///
+    /// In interactive mode, this validation is skipped entirely.
+    pub(crate) fn validate_main_entry_point(&mut self, stmts: &[StmtId]) {
+        if !self.interactive {
+            // Reject top-level expression statements
+            stmts.iter().for_each(|id| {
+                if let Some(Stmt::Expr(_)) = self.ast.get_stmt(*id) {
+                    let span = self
+                        .ast
+                        .stmt_span(*id)
+                        .unwrap_or_else(|| Span::new(0, 0));
+                    self.errors.push(TypeError::TopLevelExpr(span));
+                }
+            });
+
+            // Check for `main` function
+            let file_span = Span::new(0, 0);
+            let main_err = self.env.lookup("main").map_or_else(
+                || Some(TypeError::MissingMain(file_span)),
+                |scheme| {
+                    let expected = Ty::Fn(vec![], Box::new(Ty::Unit));
+                    if scheme.ty == expected {
+                        None
+                    } else {
+                        Some(TypeError::InvalidMainSignature {
+                            got: scheme.ty.clone(),
+                            span: file_span,
+                        })
+                    }
+                },
+            );
+            main_err.into_iter().for_each(|e| self.errors.push(e));
+        };
+    }
+
+    /// Run type checking on the given statements.
+    ///
+    /// Performs type inference, constraint solving, and validation. Returns
+    /// `TypecheckOutput` on success, or formatted type errors on failure.
+    pub(crate) fn check(
+        mut self,
+        stmts: &[StmtId],
+        registry: &TypeRegistry,
+        arena: &crate::value::ValueArena,
+    ) -> Result<TypecheckOutput> {
+        // Pass 1: Hoist function and module declarations for forward references
+        self.hoist_declarations(stmts);
+
+        // Pass 2: Infer types for all statement bodies
+        stmts.iter().for_each(|id| self.stmt(*id));
+
+        // Solve collected constraints
+        let subst = self.solve_constraints();
+
+        // Apply substitution to all inferred types
+        self.apply_subst(&subst);
+
+        // Resolve deferred instance calls (now that types are resolved)
+        self.resolve_deferred_instance_calls(&subst);
+
+        // Check for remaining unresolved type variables
+        self.check_remaining_unknowns();
+
+        // Validate main entry point (in non-interactive mode)
+        self.validate_main_entry_point(stmts);
+
+        self.into_output(registry, arena)
+    }
+
+    /// Consume the context, returning `TypecheckOutput` on success or
+    /// formatted type errors on failure.
+    fn into_output(
         self,
         registry: &TypeRegistry,
         arena: &crate::value::ValueArena,
-    ) -> crate::Result<(
-        Vec<regex::Regex>,
-        HashMap<ExprId, u32>,
-        HashMap<ExprId, Ty>,
-        HashMap<ExprId, Ty>,
-        HashMap<ExprId, Ty>,
-        HashMap<ExprId, Ty>,
-        HashMap<ExprId, crate::TypeId>,
-    )> {
+    ) -> Result<TypecheckOutput> {
         NonEmpty::from_vec(self.errors).map_or(
-            Ok((
-                self.regex_cache,
-                self.regex_indices,
-                self.mempty_types,
-                self.numeric_types,
-                self.convert_targets,
-                self.wrap_types,
-                self.instance_calls,
-            )),
+            Ok(TypecheckOutput {
+                regex_cache: self.regex_cache,
+                regex_indices: self.regex_indices,
+                mempty_types: self.mempty_types,
+                numeric_types: self.numeric_types,
+                convert_targets: self.convert_targets,
+                wrap_types: self.wrap_types,
+                instance_calls: self.instance_calls,
+            }),
             |errs| {
                 let printer = TyPrinter::new(
                     registry,

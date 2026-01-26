@@ -496,6 +496,28 @@ pub(crate) enum TypeError {
         module: String,
         span: Span,
     },
+
+    /// Top-level expression statement outside of `main`.
+    ///
+    /// Scripts must define a `main` function as the entry point. Expression
+    /// statements (including `WRITE`, function calls, etc.) must appear inside
+    /// `main` or other functions, not at the top level.
+    #[error("top-level expression statements are not allowed; move code into `main`")]
+    TopLevelExpr(Span),
+
+    /// Missing required `main` function.
+    ///
+    /// Every script must define a `main` function as the entry point.
+    /// Use `--interactive` mode to run without a `main` function.
+    #[error("missing required `main` function")]
+    MissingMain(Span),
+
+    /// Invalid `main` function signature.
+    ///
+    /// The `main` function must have signature `() -> Unit`; it takes no
+    /// arguments and returns nothing.
+    #[error("`main` must have signature `() -> Unit`; got `{got}`")]
+    InvalidMainSignature { got: Ty, span: Span },
 }
 
 impl TypeError {
@@ -544,7 +566,10 @@ impl TypeError {
             | Self::AssocTypeConstraint { span, .. }
             | Self::AssocTypeOutsideClass { span, .. }
             | Self::NoSuchAssocType { span, .. }
-            | Self::InstanceNotImported { span, .. } => *span,
+            | Self::InstanceNotImported { span, .. }
+            | Self::TopLevelExpr(span)
+            | Self::MissingMain(span)
+            | Self::InvalidMainSignature { span, .. } => *span,
         }
     }
 
@@ -843,6 +868,18 @@ impl TypeError {
                 Some(format!(
                     "an instance is defined in module `{module}`; try adding `IMPORT {module}.{{ }}`"
                 )),
+            ),
+            Self::TopLevelExpr(_) => (
+                "top-level expression statements are not allowed".to_owned(),
+                Some("move code into a `FUN main() { ... }` function".to_owned()),
+            ),
+            Self::MissingMain(_) => (
+                "missing required `main` function".to_owned(),
+                Some("add `FUN main() { ... }` or use `--interactive` mode".to_owned()),
+            ),
+            Self::InvalidMainSignature { got, .. } => (
+                format!("`main` must have signature `() -> Unit`; got `{}`", p.format(got)),
+                None,
             ),
         };
 

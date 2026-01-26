@@ -243,12 +243,14 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
     /// sets up the interpreter.
     ///
     /// Takes `&mut Ast` because resolution mutates it, but stores `&Ast`
-    /// since interpretation only reads.
+    /// since interpretation only reads. Set `interactive` to `true` to skip
+    /// the `main` function requirement.
     pub(crate) fn new(
         ast: &'a mut Ast,
         stmts: &[StmtId],
         db: Database,
         io: I,
+        interactive: bool,
     ) -> Result<Self> {
         let mut arena = ValueArena::new();
         let mut type_exprs = TypeExprArena::new();
@@ -264,23 +266,15 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         let env = Environment::new();
 
         // Run type checking after resolution
-        let (
-            regex_cache,
-            regex_indices,
-            mempty_types,
-            numeric_types,
-            convert_targets,
-            wrap_types,
-            instance_calls,
-        ) = crate::typecheck::check(
+        let tc = crate::typecheck::InferCtx::new(
             ast,
-            stmts,
             &registry,
             &type_exprs,
             &env,
-            &arena,
             arena.interner(),
-        )?;
+            interactive,
+        )
+        .check(stmts, &registry, &arena)?;
 
         Ok(Self {
             ast,
@@ -289,12 +283,12 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             txns: HashMap::new(),
             arena,
             registry,
-            regex_cache,
-            regex_indices,
-            mempty_types,
-            numeric_types,
-            convert_targets,
-            wrap_types,
+            regex_cache: tc.regex_cache,
+            regex_indices: tc.regex_indices,
+            mempty_types: tc.mempty_types,
+            numeric_types: tc.numeric_types,
+            convert_targets: tc.convert_targets,
+            wrap_types: tc.wrap_types,
             type_exprs,
             functions: HashMap::new(),
             io,
@@ -305,7 +299,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             },
             module_hofs: hof::ModuleHofs::new(),
             user_instances: instance::RuntimeInstanceRegistry::new(),
-            instance_calls,
+            instance_calls: tc.instance_calls,
             resolved_instances,
         })
     }
