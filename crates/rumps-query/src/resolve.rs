@@ -34,14 +34,7 @@ use smallvec::{smallvec, SmallVec};
 use crate::ast::{Ast, AstTypeExpr, Expr, ExprId, Stmt, StmtId};
 use crate::env::BUILTIN_MODULE_NAMES;
 use crate::typecheck::ClassKind;
-#[cfg(test)]
-use crate::value::TypeExprArena;
 use crate::value::{TypeRegistry, ValueArena};
-
-/// Check if a name is a known module (builtin or user-defined).
-fn is_known_module(name: &str, user_modules: &HashSet<String>) -> bool {
-    BUILTIN_MODULE_NAMES.contains(&name) || user_modules.contains(name)
-}
 
 /// Resolved class instance info.
 ///
@@ -53,340 +46,369 @@ pub(crate) struct ResolvedInstance {
     pub(crate) class: ClassKind,
     /// The name of the implementing type (e.g., `"Point"`, `"MyModule.Point"`).
     pub(crate) type_name: String,
-    /// Method mappings: (method_name, generated_fn_name).
+    /// Method mappings: `(method_name, generated_fn_name)`.
     pub(crate) methods: Vec<(String, String)>,
 }
 
 /// Map from `StmtId` to resolved instance info.
 pub(crate) type InstanceMap = HashMap<StmtId, ResolvedInstance>;
 
-/// Extract the type name from an `AstTypeExpr`.
+/// Name resolution context.
 ///
-/// Returns the simple name for `Named` types and the qualified name for
-/// parameterized types (e.g., `"Point"` or `"Either"`).
-fn extract_type_name(
-    ast: &Ast,
-    id: crate::ast::AstTypeExprId,
-) -> Option<String> {
-    ast.get_type_expr(id).and_then(|te| match te {
-        AstTypeExpr::Named(name) => Some(name.clone()),
-        AstTypeExpr::App(name, _) => Some(name.clone()),
-        _ => None,
-    })
+/// Converts type-qualified paths (`Option.None`, `String.length`) to proper
+/// AST nodes (`Expr::Variant`, `Expr::Path`) before interpretation.
+pub(crate) struct ResolveCtx<'a> {
+    ast: &'a mut Ast,
+    arena: &'a mut ValueArena,
+    registry: &'a TypeRegistry,
+    user_modules: HashSet<String>,
 }
 
-/// Collect all user-defined module names from the AST.
-///
-/// Recursively finds `Stmt::Module` statements and extracts their names.
-fn collect_user_module_names(ast: &Ast) -> HashSet<String> {
-    fn collect_from_stmt(ast: &Ast, stmt: &Stmt, names: &mut HashSet<String>) {
-        if let Stmt::Module { name, body } = stmt {
-            names.insert(name.clone());
-            // Also collect nested modules
-            body.iter()
-                .filter_map(|&id| ast.get_stmt(id))
-                .for_each(|s| collect_from_stmt(ast, s, names));
+impl<'a> ResolveCtx<'a> {
+    pub(crate) fn new(
+        ast: &'a mut Ast,
+        arena: &'a mut ValueArena,
+        registry: &'a TypeRegistry,
+    ) -> Self {
+        let user_modules = Self::collect_user_modules(ast);
+        Self {
+            ast,
+            arena,
+            registry,
+            user_modules,
         }
     }
 
-    let mut names = HashSet::new();
-    ast.stmt_ids()
-        .filter_map(|id| ast.get_stmt(id))
-        .for_each(|stmt| collect_from_stmt(ast, stmt, &mut names));
-    names
-}
+    /// Run name resolution on the AST.
+    ///
+    /// Converts:
+    /// - `Expr::Field(Var(type), variant)` to `Expr::Variant` for zero-arity variants
+    /// - `Expr::Call(Field(Var(type), variant), args)` to `Expr::Variant` for
+    ///   variant constructors with arguments
+    /// - Module paths (builtin and user-defined) to `Expr::Path`
+    ///
+    /// Also processes `Stmt::ClassInstance` to validate class names and generate
+    /// internal function names. Returns a map of resolved instance info.
+    pub(crate) fn resolve(mut self) -> InstanceMap {
+        // Collect replacements first to avoid borrowing issues
+        let replacements: Vec<(ExprId, Expr)> = self
+            .ast
+            .expr_ids()
+            .filter_map(|id| self.resolve_expr(id).map(|e| (id, e)))
+            .collect();
 
-/// Collect path segments from a chain of `Field` expressions.
-///
-/// Given `Field(Field(Var("A"), "B"), "C")`, returns `Some(["A", "B", "C"])`.
-/// Returns `None` if the base is not a `Var` or `Field` chain.
-fn collect_path_segments(
-    ast: &Ast,
-    id: ExprId,
-) -> Option<SmallVec<[String; 4]>> {
-    ast.get_expr(id).and_then(|e| match e {
-        Expr::Var(name) => Some(smallvec![name.clone()]),
-        Expr::Field(base_id, field) => collect_path_segments(ast, *base_id)
-            .map(|mut segs: SmallVec<[String; 4]>| {
-                segs.push(field.clone());
-                segs
-            }),
-        _ => None,
-    })
-}
+        // Apply replacements
+        replacements
+            .into_iter()
+            .for_each(|(id, expr)| self.ast.set_expr(id, expr));
 
-/// Run name resolution on the AST.
-///
-/// Converts:
-/// - `Expr::Field(Var(type), variant)` to `Expr::Variant` for zero-arity variants
-/// - `Expr::Call(Field(Var(type), variant), args)` to `Expr::Variant` for
-///   variant constructors with arguments
-/// - Module paths (builtin and user-defined) to `Expr::Path`
-///
-/// Also processes `Stmt::ClassInstance` to validate class names and generate
-/// internal function names. Returns a map of resolved instance info.
-pub(crate) fn resolve(
-    ast: &mut Ast,
-    arena: &mut ValueArena,
-    registry: &TypeRegistry,
-) -> InstanceMap {
-    // First, collect user-defined module names from MODULE statements
-    let user_modules = collect_user_module_names(ast);
+        // Process class instances
+        self.resolve_class_instances()
+    }
 
-    // Collect replacements first to avoid borrowing issues
-    let replacements: Vec<(ExprId, Expr)> = ast
-        .expr_ids()
-        .filter_map(|id| {
-            resolve_expr(ast, arena, registry, &user_modules, id)
-                .map(|e| (id, e))
+    /// Collect all user-defined module names from the AST.
+    fn collect_user_modules(ast: &Ast) -> HashSet<String> {
+        fn collect_from_stmt(
+            ast: &Ast,
+            stmt: &Stmt,
+            names: &mut HashSet<String>,
+        ) {
+            if let Stmt::Module { name, body } = stmt {
+                names.insert(name.clone());
+                body.iter()
+                    .filter_map(|&id| ast.get_stmt(id))
+                    .for_each(|s| collect_from_stmt(ast, s, names));
+            }
+        }
+
+        let mut names = HashSet::new();
+        ast.stmt_ids()
+            .filter_map(|id| ast.get_stmt(id))
+            .for_each(|stmt| collect_from_stmt(ast, stmt, &mut names));
+        names
+    }
+
+    /// Collect path segments from a chain of `Field` expressions.
+    ///
+    /// Given `Field(Field(Var("A"), "B"), "C")`, returns `Some(["A", "B", "C"])`.
+    fn collect_path_segments(
+        &self,
+        id: ExprId,
+    ) -> Option<SmallVec<[String; 4]>> {
+        self.ast.get_expr(id).and_then(|e| match e {
+            Expr::Var(name) => Some(smallvec![name.clone()]),
+            Expr::Field(base_id, field) => self
+                .collect_path_segments(*base_id)
+                .map(|mut segs: SmallVec<[String; 4]>| {
+                    segs.push(field.clone());
+                    segs
+                }),
+            _ => None,
         })
-        .collect();
-
-    // Apply replacements
-    replacements
-        .into_iter()
-        .for_each(|(id, expr)| ast.set_expr(id, expr));
-
-    // Process class instances
-    resolve_class_instances(ast)
-}
-
-/// Process all `Stmt::ClassInstance` statements and return resolved info.
-///
-/// Recursively processes modules to find instances defined inside them.
-fn resolve_class_instances(ast: &Ast) -> InstanceMap {
-    let mut map = InstanceMap::new();
-    let ids: Vec<_> = ast.stmt_ids().collect();
-    resolve_class_instances_rec(ast, &ids, None, &mut map);
-    map
-}
-
-/// Recursively collect class instances from statements.
-fn resolve_class_instances_rec(
-    ast: &Ast,
-    ids: &[StmtId],
-    module: Option<&str>,
-    map: &mut InstanceMap,
-) {
-    ids.iter().for_each(|&id| {
-        // Check for CLASS instance
-        resolve_class_instance(ast, id, module)
-            .into_iter()
-            .for_each(|inst| {
-                map.insert(id, inst);
-            });
-        // Recurse into modules
-        ast.get_stmt(id)
-            .into_iter()
-            .filter_map(|s| match s {
-                Stmt::Module { name, body } => Some((name, body)),
-                _ => None,
-            })
-            .for_each(|(name, body)| {
-                let mod_path = module.map_or_else(
-                    || name.clone(),
-                    |m| format!("{}.{}", m, name),
-                );
-                resolve_class_instances_rec(ast, body, Some(&mod_path), map);
-            });
-    });
-}
-
-/// Resolve a single `Stmt::ClassInstance`, generating function names.
-fn resolve_class_instance(
-    ast: &Ast,
-    id: StmtId,
-    module: Option<&str>,
-) -> Option<ResolvedInstance> {
-    let stmt = ast.get_stmt(id)?;
-
-    match stmt {
-        Stmt::ClassInstance {
-            class_name,
-            for_type,
-            methods,
-            ..
-        } => {
-            // Validate class name
-            let class = ClassKind::from_str(class_name)?;
-
-            // Extract the raw type name from AST
-            let raw_name = extract_type_name(ast, *for_type)?;
-
-            // Qualify with module path if inside a module and name is unqualified
-            let type_name = match module {
-                Some(m) if !raw_name.contains('.') => {
-                    format!("{}.{}", m, raw_name)
-                }
-                _ => raw_name,
-            };
-
-            // Generate function names for each method
-            let mappings: Vec<(String, String)> = methods
-                .iter()
-                .map(|m| {
-                    let fn_name =
-                        crate::interpreter::instance::instance_fn_name(
-                            class, &type_name, &m.name,
-                        );
-                    (m.name.clone(), fn_name)
-                })
-                .collect();
-
-            Some(ResolvedInstance {
-                class,
-                type_name,
-                methods: mappings,
-            })
-        }
-        _ => None,
     }
-}
 
-/// Resolve a single expression, returning `Some(replacement)` if it should
-/// be replaced.
-fn resolve_expr(
-    ast: &Ast,
-    arena: &mut ValueArena,
-    registry: &TypeRegistry,
-    user_modules: &HashSet<String>,
-    id: ExprId,
-) -> Option<Expr> {
-    ast.get_expr(id).and_then(|expr| match expr {
-        // Field access: `Name.field` or `A.B.C` (nested modules/types)
-        // - If base is `Var(Type)` with zero-arity variant -> `Variant(Type, field, [])`
-        // - If base path is a qualified type with zero-arity variant -> `Variant`
-        // - If full path starts with a module -> `Path([...])`
-        // - Otherwise -> leave as Field (runtime field access)
-        //
-        // Important: Type variants take priority over module paths. This allows
-        // `Option.None` and `Result.Err` to work even though `Option` and `Result`
-        // are also module names (for `Option.map`, `Result.map`, etc.).
-        Expr::Field(base_id, field) => {
-            // First check if it's a simple Type.Variant pattern (takes priority)
-            let variant_expr =
-                ast.get_expr(*base_id).and_then(|base| match base {
+    /// Resolve a single expression, returning `Some(replacement)` if needed.
+    fn resolve_expr(&mut self, id: ExprId) -> Option<Expr> {
+        self.ast.get_expr(id).cloned().and_then(|expr| match expr {
+            // Field access: `Name.field` or `A.B.C` (nested modules/types)
+            // - If base is `Var(Type)` with zero-arity variant -> `Variant`
+            // - If base path is a qualified type with zero-arity variant -> `Variant`
+            // - If full path starts with a module -> `Path([...])`
+            // - Otherwise -> leave as Field (runtime field access)
+            //
+            // Type variants take priority over module paths. This allows
+            // `Option.None` and `Result.Err` to work even though `Option` and
+            // `Result` are also module names.
+            Expr::Field(base_id, ref field) => {
+                self.resolve_field_expr(id, base_id, field)
+            }
+
+            // Function calls: resolve variant constructors
+            // `Call(Field(Var(Type), Variant), args)` -> `Variant`
+            // `Call(Field(Field(...), Variant), args)` -> `Variant` (qualified)
+            Expr::Call(callee_id, ref args) => {
+                self.resolve_call_expr(callee_id, args)
+            }
+
+            _ => None,
+        })
+    }
+
+    fn resolve_field_expr(
+        &mut self,
+        id: ExprId,
+        base_id: ExprId,
+        field: &str,
+    ) -> Option<Expr> {
+        // First check if it's a simple Type.Variant pattern (takes priority)
+        let variant_expr =
+            self.ast
+                .get_expr(base_id)
+                .cloned()
+                .and_then(|base| match base {
                     Expr::Var(name) => {
-                        let name_id = arena.intern(name);
-                        let field_id = arena.intern(field);
+                        let name_id = self.arena.intern(&name);
+                        let field_id = self.arena.intern(field);
 
-                        // Check if it's a zero-arity type variant
-                        registry.lookup(name_id).and_then(|type_id| {
-                            registry.lookup_variant(type_id, field_id).and_then(
-                                |v| {
+                        self.registry.lookup(name_id).and_then(|type_id| {
+                            self.registry
+                                .lookup_variant(type_id, field_id)
+                                .and_then(|v| {
                                     (v.arity == 0).then(|| {
                                         Expr::Variant(
-                                            name.clone(),
-                                            field.clone(),
+                                            name,
+                                            field.to_owned(),
                                             smallvec![],
                                         )
                                     })
-                                },
-                            )
+                                })
                         })
                     }
                     _ => None,
                 });
 
-            // Check for module-qualified type variant: Module.Type.Variant
-            let qualified_variant_expr = variant_expr.or_else(|| {
-                // Collect the full path and check if prefix is a qualified type
-                let base_path = collect_path_segments(ast, *base_id)?;
-                let qtype = base_path.join(".");
-                let qtype_id = arena.intern(&qtype);
-                let field_id = arena.intern(field);
+        // Check for module-qualified type variant: Module.Type.Variant
+        let qualified_variant_expr = variant_expr.or_else(|| {
+            let base_path = self.collect_path_segments(base_id)?;
+            let qtype = base_path.join(".");
+            let qtype_id = self.arena.intern(&qtype);
+            let field_id = self.arena.intern(field);
 
-                registry.lookup(qtype_id).and_then(|type_id| {
-                    registry.lookup_variant(type_id, field_id).and_then(|v| {
+            self.registry.lookup(qtype_id).and_then(|type_id| {
+                self.registry
+                    .lookup_variant(type_id, field_id)
+                    .and_then(|v| {
                         (v.arity == 0).then(|| {
-                            Expr::Variant(qtype, field.clone(), smallvec![])
+                            Expr::Variant(qtype, field.to_owned(), smallvec![])
                         })
                     })
-                })
-            });
-
-            // If it's a type variant (simple or qualified), use that
-            qualified_variant_expr.or_else(|| {
-                // Otherwise, check if this is a module path
-                let full_path = collect_path_segments(ast, id);
-
-                let is_module_path = full_path
-                    .as_ref()
-                    .and_then(|segs: &SmallVec<[String; 4]>| segs.first())
-                    .is_some_and(|first| is_known_module(first, user_modules));
-
-                is_module_path.then(|| full_path.map(Expr::Path)).flatten()
             })
-        }
+        });
 
-        // Function calls: resolve variant constructors
-        // `Call(Field(Var(Type), Variant), args)` -> `Variant(Type, Variant, args)`
-        // `Call(Field(Field(...), Variant), args)` -> `Variant(QualifiedType, Variant, args)`
-        //
-        // Module calls like `Object.keys(x)` don't need special handling:
-        // the Field becomes Path (above), so it becomes `Call(Path(...), args)`
-        // which the interpreter handles normally.
-        Expr::Call(callee_id, args) => {
-            ast.get_expr(*callee_id).and_then(|callee| match callee {
+        // If it's a type variant (simple or qualified), use that
+        qualified_variant_expr.or_else(|| {
+            let full_path = self.collect_path_segments(id);
+
+            let is_module_path = full_path
+                .as_ref()
+                .and_then(|segs: &SmallVec<[String; 4]>| segs.first())
+                .is_some_and(|first| {
+                    BUILTIN_MODULE_NAMES.contains(&first.as_str())
+                        || self.user_modules.contains(first)
+                });
+
+            is_module_path.then(|| full_path.map(Expr::Path)).flatten()
+        })
+    }
+
+    fn resolve_call_expr(
+        &mut self,
+        callee_id: ExprId,
+        args: &SmallVec<[ExprId; 4]>,
+    ) -> Option<Expr> {
+        self.ast
+            .get_expr(callee_id)
+            .cloned()
+            .and_then(|callee| match callee {
                 Expr::Field(base_id, var_name) => {
                     // First try simple Type.Variant(args) pattern
                     let simple_variant =
-                        ast.get_expr(*base_id).and_then(|base| match base {
-                            Expr::Var(ty_name) => {
-                                let ty_id = arena.intern(ty_name);
-                                let var_id = arena.intern(var_name);
-                                registry.lookup(ty_id).and_then(|type_id| {
-                                    registry
-                                        .lookup_variant(type_id, var_id)
-                                        .map(|_| {
-                                            Expr::Variant(
-                                                ty_name.clone(),
-                                                var_name.clone(),
-                                                args.clone(),
-                                            )
-                                        })
-                                })
+                        self.ast.get_expr(base_id).cloned().and_then(|base| {
+                            match base {
+                                Expr::Var(ty_name) => {
+                                    let ty_id = self.arena.intern(&ty_name);
+                                    let var_id = self.arena.intern(&var_name);
+                                    self.registry.lookup(ty_id).and_then(
+                                        |type_id| {
+                                            self.registry
+                                                .lookup_variant(type_id, var_id)
+                                                .map(|_| {
+                                                    Expr::Variant(
+                                                        ty_name,
+                                                        var_name.clone(),
+                                                        args.clone(),
+                                                    )
+                                                })
+                                        },
+                                    )
+                                }
+                                _ => None,
                             }
-                            _ => None,
                         });
 
                     // Try module-qualified type: Module.Type.Variant(args)
                     simple_variant.or_else(|| {
-                        let base_path = collect_path_segments(ast, *base_id)?;
+                        let base_path = self.collect_path_segments(base_id)?;
                         let qtype = base_path.join(".");
-                        let qtype_id = arena.intern(&qtype);
-                        let var_id = arena.intern(var_name);
+                        let qtype_id = self.arena.intern(&qtype);
+                        let var_id = self.arena.intern(&var_name);
 
-                        registry.lookup(qtype_id).and_then(|type_id| {
-                            registry.lookup_variant(type_id, var_id).map(|_| {
-                                Expr::Variant(
-                                    qtype,
-                                    var_name.clone(),
-                                    args.clone(),
-                                )
-                            })
+                        self.registry.lookup(qtype_id).and_then(|type_id| {
+                            self.registry.lookup_variant(type_id, var_id).map(
+                                |_| {
+                                    Expr::Variant(qtype, var_name, args.clone())
+                                },
+                            )
                         })
                     })
                 }
                 _ => None,
             })
-        }
+    }
 
-        _ => None,
-    })
+    /// Process all `Stmt::ClassInstance` statements and return resolved info.
+    fn resolve_class_instances(&self) -> InstanceMap {
+        let mut map = InstanceMap::new();
+        let ids: Vec<_> = self.ast.stmt_ids().collect();
+        self.resolve_class_instances_rec(&ids, None, &mut map);
+        map
+    }
+
+    fn resolve_class_instances_rec(
+        &self,
+        ids: &[StmtId],
+        module: Option<&str>,
+        map: &mut InstanceMap,
+    ) {
+        ids.iter().for_each(|&id| {
+            self.resolve_class_instance(id, module)
+                .into_iter()
+                .for_each(|inst| {
+                    map.insert(id, inst);
+                });
+
+            self.ast
+                .get_stmt(id)
+                .into_iter()
+                .filter_map(|s| match s {
+                    Stmt::Module { name, body } => Some((name, body)),
+                    _ => None,
+                })
+                .for_each(|(name, body)| {
+                    let mod_path = module.map_or_else(
+                        || name.clone(),
+                        |m| format!("{}.{}", m, name),
+                    );
+                    self.resolve_class_instances_rec(
+                        body,
+                        Some(&mod_path),
+                        map,
+                    );
+                });
+        });
+    }
+
+    fn resolve_class_instance(
+        &self,
+        id: StmtId,
+        module: Option<&str>,
+    ) -> Option<ResolvedInstance> {
+        let stmt = self.ast.get_stmt(id)?;
+
+        match stmt {
+            Stmt::ClassInstance {
+                class_name,
+                for_type,
+                methods,
+                ..
+            } => {
+                let class = ClassKind::from_str(class_name)?;
+                let raw_name = Self::extract_type_name(self.ast, *for_type)?;
+
+                let type_name = match module {
+                    Some(m) if !raw_name.contains('.') => {
+                        format!("{}.{}", m, raw_name)
+                    }
+                    _ => raw_name,
+                };
+
+                let mappings: Vec<(String, String)> = methods
+                    .iter()
+                    .map(|m| {
+                        let fn_name =
+                            crate::interpreter::instance::instance_fn_name(
+                                class, &type_name, &m.name,
+                            );
+                        (m.name.clone(), fn_name)
+                    })
+                    .collect();
+
+                Some(ResolvedInstance {
+                    class,
+                    type_name,
+                    methods: mappings,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// Extract the type name from an `AstTypeExpr`.
+    fn extract_type_name(
+        ast: &Ast,
+        id: crate::ast::AstTypeExprId,
+    ) -> Option<String> {
+        ast.get_type_expr(id).and_then(|te| match te {
+            AstTypeExpr::Named(name) => Some(name.clone()),
+            AstTypeExpr::App(name, _) => Some(name.clone()),
+            _ => None,
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::parser::Parser;
+    use crate::value::TypeExprArena;
 
     fn parse_and_resolve(src: &str) -> Ast {
         let mut result = Parser::parse(src).expect("parse failed");
         let mut arena = ValueArena::new();
         let mut type_exprs = TypeExprArena::new();
         let registry = TypeRegistry::new(&mut arena, &mut type_exprs);
-        let _ = resolve(&mut result.ast, &mut arena, &registry);
+        let _ =
+            ResolveCtx::new(&mut result.ast, &mut arena, &registry).resolve();
         result.ast
     }
 

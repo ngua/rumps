@@ -55,7 +55,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
         // Check if the first segment is a module
         if self.env.has_module(first) {
-            self.module_path(segments, span)
+            self.module_path(segments)
         } else {
             // Fall back to type + variant interpretation
             self.type_variant_path(segments, span)
@@ -67,11 +67,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// The path must have at least two segments. The last segment is the
     /// function/constant name; all preceding segments form the module path.
     /// Checks both builtin and user-defined modules.
-    fn module_path(
-        &mut self,
-        segments: &[String],
-        _span: Span,
-    ) -> Result<Value> {
+    fn module_path(&mut self, segments: &[String]) -> Result<Value> {
         let path_strs: SmallVec<[&str; 4]> =
             segments.iter().map(String::as_str).collect();
 

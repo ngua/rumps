@@ -124,6 +124,7 @@ use crate::ast::{
 use crate::env::Environment;
 use crate::intern::StringId;
 use crate::io::IoContext;
+use crate::resolve::ResolveCtx;
 use crate::value::{
     CapturedEnv, FunctionDef, TypeExprArena, TypeExprId, TypeId, TypeRegistry,
     Value, ValueArena,
@@ -258,7 +259,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         registry.register_from_ast(ast, stmts, &mut arena, &mut type_exprs);
 
         let resolved_instances =
-            crate::resolve::resolve(ast, &mut arena, &registry);
+            ResolveCtx::new(ast, &mut arena, &registry).resolve();
 
         let env = Environment::new();
 
