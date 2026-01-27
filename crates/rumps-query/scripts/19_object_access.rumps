@@ -1,12 +1,6 @@
 ; Test: object field access
 ; Tests dot notation for objects (bracket notation is for arrays/maps only)
 
-; Optional field access in function with typed parameter
-; The type `{ a: Int }` should allow `?.` on fields not in the type
-FUN get_b(x: { a: Int }) {
-  x?.b
-}
-
 FUN main() {
   LET obj = { name: "Alice", age: 30, active: TRUE }
 
@@ -79,11 +73,17 @@ FUN main() {
   WRITE nested?.missing?.anything
   ; Expected: Option.None
 
-  WRITE get_b({ a: 1 })
+  WRITE get-b({ a: 1 })
   ; Expected: Option.None
 
-  WRITE get_b({ a: 1, b: 2 })
+  WRITE get-b({ a: 1, b: 2 })
   ; Expected: Option.Some(2)
 
   WRITE "Object access test complete"
+}
+
+; Optional field access in function with typed parameter
+; The type `{ a: Int }` should allow `?.` on fields not in the type
+FUN get-b(x: { a: Int }) {
+  x?.b
 }
