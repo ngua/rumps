@@ -34,7 +34,7 @@ impl InferCtx<'_> {
     /// Currently handles Phase 4.3 expressions (literals and variables).
     /// Other expression types will be added in subsequent phases.
     pub(crate) fn expr(&mut self, id: ExprId) -> Ty {
-        let span = self.ast.expr_span(id).unwrap_or(Span::new(0, 0));
+        let span = self.ast.expr_span(id).unwrap_or_default();
         // Clone the expression to avoid borrow issues with mutable ast reference
         let ty = match self.ast.get_expr(id).cloned() {
             None => Ty::Error,

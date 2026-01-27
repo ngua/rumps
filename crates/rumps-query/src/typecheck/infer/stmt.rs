@@ -27,7 +27,7 @@ impl InferCtx<'_> {
     /// Most statements don't produce a type, but function definitions
     /// bind the function name with its inferred type scheme in the environment.
     pub(crate) fn stmt(&mut self, id: StmtId) {
-        let span = self.ast.stmt_span(id).unwrap_or(Span::new(0, 0));
+        let span = self.ast.stmt_span(id).unwrap_or_default();
         let stmt = self.ast.get_stmt(id).cloned();
 
         match stmt {

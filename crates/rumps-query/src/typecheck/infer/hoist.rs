@@ -37,7 +37,7 @@ impl InferCtx<'_> {
         stmts.iter().for_each(|&id| {
             let stmt = self.ast.get_stmt(id).cloned();
             if let Some(Stmt::Module { ref name, ref body }) = stmt {
-                let span = self.ast.stmt_span(id).unwrap_or(Span::new(0, 0));
+                let span = self.ast.stmt_span(id).unwrap_or_default();
                 self.hoist_module(name, body, span);
             }
         });
@@ -46,7 +46,7 @@ impl InferCtx<'_> {
         stmts.iter().for_each(|&id| {
             let stmt = self.ast.get_stmt(id).cloned();
             if let Some(Stmt::Import(ref import)) = stmt {
-                let span = self.ast.stmt_span(id).unwrap_or(Span::new(0, 0));
+                let span = self.ast.stmt_span(id).unwrap_or_default();
                 self.import_stmt(import, span);
             }
         });
@@ -59,7 +59,7 @@ impl InferCtx<'_> {
     ///
     /// Called in Phase 3 after modules have been hoisted and imports processed.
     fn hoist_non_module(&mut self, id: StmtId) {
-        let span = self.ast.stmt_span(id).unwrap_or(Span::new(0, 0));
+        let span = self.ast.stmt_span(id).unwrap_or_default();
         let stmt = self.ast.get_stmt(id).cloned();
 
         match stmt {

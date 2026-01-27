@@ -496,10 +496,8 @@ impl InferCtx<'_> {
                 }
                 AstTypeExpr::Union(members) => {
                     if members.is_empty() {
-                        let span = self
-                            .ast
-                            .type_expr_span(id)
-                            .unwrap_or(Span::new(0, 0));
+                        let span =
+                            self.ast.type_expr_span(id).unwrap_or_default();
                         self.error(TypeError::EmptyUnion(span));
                         Ty::Error
                     } else {

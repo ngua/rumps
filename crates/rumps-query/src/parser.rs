@@ -104,7 +104,7 @@ impl Parser {
         let eof_span = tokens
             .iter()
             .find_map(|s| matches!(s.tok, Token::Eof).then_some(s.span))
-            .unwrap_or(Span::new(0, 0));
+            .unwrap_or_default();
 
         // Filter out EOF token; chumsky handles end-of-input separately
         let stream = chumsky::Stream::from_iter(
@@ -141,7 +141,7 @@ impl Parser {
         let eof_span = tokens
             .iter()
             .find_map(|s| matches!(s.tok, Token::Eof).then_some(s.span))
-            .unwrap_or(Span::new(0, 0));
+            .unwrap_or_default();
 
         let stream = chumsky::Stream::from_iter(
             eof_span,
