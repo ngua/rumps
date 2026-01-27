@@ -1,0 +1,610 @@
+//! Statement parsing for RUMPS.
+
+use chumsky::prelude::{choice, just, recursive, select};
+use chumsky::Parser as _;
+use smallvec::SmallVec;
+
+use super::{ParseErr, Parser};
+use crate::ast::Intrinsic;
+use crate::parser::cst;
+use crate::Token;
+
+impl Parser {
+    pub(super) fn stmt(
+    ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
+        recursive(|stmt| {
+            let import_stmt = Self::import_stmt();
+            let let_stmt = Self::let_stmt(stmt.clone());
+            let set_stmt = Self::set_stmt(stmt.clone());
+            let kill_stmt = Self::kill_stmt(stmt.clone());
+            let output_stmt = Self::output_stmt(stmt.clone());
+            let fun_stmt = Self::fun_stmt(stmt.clone());
+            let type_stmt = Self::type_stmt();
+            let newtype_stmt = Self::newtype_stmt();
+            let union_stmt = Self::union_stmt();
+            let class_stmt = Self::class_stmt(stmt.clone());
+            let module_stmt = Self::module_stmt(stmt.clone());
+            let expr_stmt = Self::expr_stmt(stmt);
+
+            choice((
+                import_stmt,
+                let_stmt,
+                set_stmt,
+                kill_stmt,
+                output_stmt,
+                fun_stmt,
+                type_stmt,
+                newtype_stmt,
+                union_stmt,
+                class_stmt,
+                module_stmt,
+                expr_stmt,
+            ))
+        })
+    }
+
+    fn let_stmt(
+        stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
+        let type_ann =
+            just(Token::Colon).ignore_then(Self::type_expr()).or_not();
+
+        // Optional `+` visibility prefix
+        let vis = just(Token::Plus)
+            .to(cst::Visibility::Public)
+            .or_not()
+            .map(|v| v.unwrap_or_default());
+
+        vis.then_ignore(just(Token::Let))
+            .then(Self::binding_pattern())
+            .then(type_ann)
+            .then_ignore(just(Token::Assign))
+            .then_ignore(Self::opt_newlines())
+            .then(Self::expr(stmt))
+            .map_with_span(|(((vis, pat), ty_ann), val), span| {
+                cst::Stmt::new(cst::StmtKind::Let(pat, ty_ann, val, vis), span)
+            })
+    }
+
+    fn set_stmt(
+        stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
+        let expr = Self::expr(stmt);
+
+        just(Token::Set)
+            .ignore_then(Self::ref_expr(expr.clone()))
+            .then_ignore(Self::opt_newlines())
+            .then(expr)
+            .map_with_span(|(r, val), span| {
+                cst::Stmt::new(
+                    cst::StmtKind::Intrinsic(Intrinsic::Set, r, Some(val)),
+                    span,
+                )
+            })
+    }
+
+    fn kill_stmt(
+        stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
+        let expr = Self::expr(stmt);
+
+        just(Token::Kill)
+            .ignore_then(Self::ref_expr(expr))
+            .map_with_span(|r, span| {
+                cst::Stmt::new(
+                    cst::StmtKind::Intrinsic(Intrinsic::Kill, r, None),
+                    span,
+                )
+            })
+    }
+
+    fn output_stmt(
+        stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
+        let format = Self::ctx_ident("JSON")
+            .to(cst::OutputFormat::Json)
+            .or(Self::ctx_ident("RAW").to(cst::OutputFormat::Raw))
+            .or_not()
+            .map(|f| f.unwrap_or_default());
+
+        let to_error = Self::ctx_ident("TO")
+            .ignore_then(Self::ctx_ident("ERROR"))
+            .to(cst::OutputTarget::Stderr);
+
+        let to_file = Self::ctx_ident("TO")
+            .ignore_then(Self::ctx_ident("FILE"))
+            .ignore_then(Self::expr(stmt.clone()))
+            .map(|e| cst::OutputTarget::File(Box::new(e)));
+
+        let target =
+            to_error.or(to_file).or_not().map(|t| t.unwrap_or_default());
+
+        just(Token::Write)
+            .ignore_then(Self::expr(stmt))
+            .then(format)
+            .then(target)
+            .map_with_span(|((expr, format), target), span| {
+                let output = cst::WriteStmt {
+                    expr,
+                    format,
+                    target,
+                };
+                cst::Stmt::new(cst::StmtKind::Write(output), span)
+            })
+    }
+
+    /// `FUN name (params) { body }` or `FUN name[T](params) -> Type { body }`
+    fn fun_stmt(
+        stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
+        // Parameter: `name` or `name: Type`
+        let param = Self::ident()
+            .then(
+                just(Token::Colon)
+                    .ignore_then(Self::opt_newlines())
+                    .ignore_then(Self::type_expr())
+                    .or_not(),
+            )
+            .map(|(name, ty)| (name, ty));
+
+        let param_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
+
+        // Parameter list: `(params...)`
+        let params = just(Token::LParen)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(param.separated_by(param_sep).allow_trailing())
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RParen));
+
+        // Optional return type: `-> Type`
+        let ret_ty = Self::opt_newlines()
+            .ignore_then(just(Token::Arrow))
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(Self::type_expr())
+            .or_not();
+
+        // Body block
+        let body = Self::block(stmt);
+
+        // Optional `+` visibility prefix
+        let vis = just(Token::Plus)
+            .to(cst::Visibility::Public)
+            .or_not()
+            .map(|v| v.unwrap_or_default());
+
+        vis.then_ignore(just(Token::Fun))
+            .then_ignore(Self::opt_newlines())
+            .then(Self::ident())
+            .then_ignore(Self::opt_newlines())
+            .then(Self::type_params())
+            .then_ignore(Self::opt_newlines())
+            .then(params)
+            .then(ret_ty)
+            .then(body)
+            .map_with_span(
+                |(
+                    ((((vis, name), type_params), params_vec), ret),
+                    (stmts, blk_span),
+                ),
+                 span| {
+                    let params = SmallVec::from_vec(params_vec);
+                    let body = Self::stmts_to_block(stmts, blk_span);
+                    cst::Stmt::new(
+                        cst::StmtKind::Fun {
+                            name,
+                            type_params,
+                            params,
+                            ret,
+                            body,
+                            vis,
+                        },
+                        span,
+                    )
+                },
+            )
+    }
+
+    fn type_stmt() -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
+        // Variant: `Name` or `Name(Type, Type, ...)`
+        let payload_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
+        let payloads = just(Token::LParen)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(
+                Self::type_expr().separated_by(payload_sep).allow_trailing(),
+            )
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RParen))
+            .or_not()
+            .map(|ps| ps.unwrap_or_default());
+
+        // Uses `ident_or_contextual_keyword` because variant names like `Raise` may
+        // also be keywords
+        let variant = Self::ident_or_contextual_keyword()
+            .then(payloads)
+            .map(|(name, payloads)| cst::VariantCst { name, payloads });
+
+        // Variants separated by `|`, allowing newlines
+        let variant_sep = Self::opt_newlines()
+            .ignore_then(just(Token::SinglePipe))
+            .then_ignore(Self::opt_newlines());
+
+        let sum_def = variant
+            .separated_by(variant_sep)
+            .at_least(1)
+            .allow_leading() // Allow leading `|` for multi-line formatting
+            .map(cst::TypeDefCst::Sum);
+
+        // Optional `+` visibility prefix
+        let vis = just(Token::Plus)
+            .to(cst::Visibility::Public)
+            .or_not()
+            .map(|v| v.unwrap_or_default());
+
+        vis.then_ignore(just(Token::Type))
+            .then_ignore(Self::opt_newlines())
+            .then(Self::ident())
+            .then(Self::type_params())
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::Assign))
+            .then_ignore(Self::opt_newlines())
+            .then(sum_def)
+            .map_with_span(|(((vis, name), type_params), def), span| {
+                cst::Stmt::new(
+                    cst::StmtKind::Type {
+                        name,
+                        type_params,
+                        def,
+                        vis,
+                    },
+                    span,
+                )
+            })
+    }
+
+    fn newtype_stmt() -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
+    {
+        // Optional `+` visibility prefix
+        let vis = just(Token::Plus)
+            .to(cst::Visibility::Public)
+            .or_not()
+            .map(|v| v.unwrap_or_default());
+
+        vis.then_ignore(just(Token::NewType))
+            .then_ignore(Self::opt_newlines())
+            .then(Self::ident())
+            .then(Self::type_params())
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::Assign))
+            .then_ignore(Self::opt_newlines())
+            .then(Self::type_expr())
+            .map_with_span(|(((vis, name), type_params), target), span| {
+                cst::Stmt::new(
+                    cst::StmtKind::NewType {
+                        name,
+                        type_params,
+                        target,
+                        vis,
+                    },
+                    span,
+                )
+            })
+    }
+
+    fn union_stmt() -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
+    {
+        // Type members separated by `|`
+        let member_sep = Self::opt_newlines()
+            .ignore_then(just(Token::SinglePipe))
+            .then_ignore(Self::opt_newlines());
+
+        let members = Self::type_expr_atom()
+            .separated_by(member_sep)
+            .at_least(2)
+            .allow_leading();
+
+        // Optional `+` visibility prefix
+        let vis = just(Token::Plus)
+            .to(cst::Visibility::Public)
+            .or_not()
+            .map(|v| v.unwrap_or_default());
+
+        vis.then_ignore(just(Token::Union))
+            .then_ignore(Self::opt_newlines())
+            .then(Self::ident())
+            .then(Self::type_params())
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::Assign))
+            .then_ignore(Self::opt_newlines())
+            .then(members)
+            .map_with_span(|(((vis, name), type_params), members), span| {
+                cst::Stmt::new(
+                    cst::StmtKind::Union {
+                        name,
+                        type_params,
+                        members,
+                        vis,
+                    },
+                    span,
+                )
+            })
+    }
+
+    /// `CLASS ClassName[ClassArgs] FOR TypeExpr [WHERE constraints] { methods }`
+    ///
+    /// User-defined class instance declaration. Implements a builtin class
+    /// (e.g., `Display`, `Into`, `Ord`) for a user type.
+
+    fn class_stmt(
+        stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
+        // Optional class type arguments: `[String]` for `Into[String]`
+        let class_args = just(Token::LBracket)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(
+                Self::type_expr()
+                    .separated_by(
+                        just(Token::Comma).then_ignore(Self::opt_newlines()),
+                    )
+                    .at_least(1)
+                    .allow_trailing(),
+            )
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RBracket))
+            .or_not()
+            .map(|ps| ps.unwrap_or_default());
+
+        // WHERE clause constraint: `name: Class1 + Class2`
+        let where_constraint = Self::ident()
+            .then_ignore(just(Token::Colon))
+            .then_ignore(Self::opt_newlines())
+            .then(
+                Self::constraint()
+                    .separated_by(
+                        Self::opt_newlines()
+                            .ignore_then(just(Token::Plus))
+                            .then_ignore(Self::opt_newlines()),
+                    )
+                    .at_least(1),
+            );
+
+        // Optional WHERE clause: `WHERE A: Display, B: Display`
+        let where_clause = Self::ctx_ident("WHERE")
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(
+                where_constraint
+                    .separated_by(
+                        just(Token::Comma).then_ignore(Self::opt_newlines()),
+                    )
+                    .at_least(1)
+                    .allow_trailing(),
+            )
+            .or_not()
+            .map(|cs| cs.unwrap_or_default());
+
+        // Instance method: `FUN name(params) [-> Type] { body }`
+        let method_param = Self::ident().then(
+            just(Token::Colon)
+                .ignore_then(Self::opt_newlines())
+                .ignore_then(Self::type_expr())
+                .or_not(),
+        );
+        let method_param_sep =
+            just(Token::Comma).then_ignore(Self::opt_newlines());
+        let method_params = just(Token::LParen)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(
+                method_param.separated_by(method_param_sep).allow_trailing(),
+            )
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RParen));
+        let method_ret = Self::opt_newlines()
+            .ignore_then(just(Token::Arrow))
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(Self::type_expr())
+            .or_not();
+        let method_body = Self::block(stmt.clone());
+
+        let method = just(Token::Fun)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(Self::ident())
+            .then_ignore(Self::opt_newlines())
+            .then(method_params)
+            .then(method_ret)
+            .then(method_body)
+            .map_with_span(
+                |(((name, params_vec), ret), (stmts, blk_span)), span| {
+                    let params = SmallVec::from_vec(params_vec);
+                    let body = Self::stmts_to_block(stmts, blk_span);
+                    cst::InstanceMethodDef {
+                        name,
+                        params,
+                        ret,
+                        body,
+                        span,
+                    }
+                },
+            );
+
+        // Associated type: `NEWTYPE Index = Int` or `NEWTYPE Index: Ord = Int`
+        let assoc_type_constraint = just(Token::Colon)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(Self::constraint())
+            .or_not();
+        let assoc_type = just(Token::NewType)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(Self::ident())
+            .then(assoc_type_constraint)
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::Assign))
+            .then_ignore(Self::opt_newlines())
+            .then(Self::type_expr())
+            .map_with_span(|((name, constraint), target), span| {
+                cst::AssocTypeCst {
+                    name,
+                    constraint,
+                    target,
+                    span,
+                }
+            });
+
+        // Instance body item: either NEWTYPE or FUN
+        #[derive(Clone)]
+        #[allow(clippy::large_enum_variant)]
+        enum InstanceItem {
+            AssocType(cst::AssocTypeCst),
+            Method(cst::InstanceMethodDef),
+        }
+        let instance_item = assoc_type
+            .map(InstanceItem::AssocType)
+            .or(method.map(InstanceItem::Method));
+
+        // Instance body: `{ NEWTYPE ... FUN ... }`
+        let instance_body = just(Token::LBrace)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(
+                instance_item
+                    .separated_by(Self::item_sep())
+                    .allow_trailing(),
+            )
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RBrace))
+            .map(|items| {
+                let mut assoc_types = Vec::new();
+                let mut methods = Vec::new();
+                items.into_iter().for_each(|item| match item {
+                    InstanceItem::AssocType(a) => assoc_types.push(a),
+                    InstanceItem::Method(m) => methods.push(m),
+                });
+                (assoc_types, methods)
+            });
+
+        // Full CLASS statement
+        just(Token::Class)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(Self::ident())
+            .then(class_args)
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(Self::ctx_ident("FOR"))
+            .then_ignore(Self::opt_newlines())
+            .then(Self::type_expr())
+            .then_ignore(Self::opt_newlines())
+            .then(where_clause)
+            .then_ignore(Self::opt_newlines())
+            .then(instance_body)
+            .map_with_span(
+                |(
+                    (((class_name, class_args), for_type), constraints),
+                    (assoc_types, methods),
+                ),
+                 span| {
+                    cst::Stmt::new(
+                        cst::StmtKind::ClassInstance {
+                            class_name,
+                            class_args,
+                            type_params: vec![], // Derived during resolution
+                            for_type,
+                            constraints,
+                            assoc_types,
+                            methods,
+                        },
+                        span,
+                    )
+                },
+            )
+    }
+
+    /// User-defined module declaration.
+    ///
+    /// Two forms are supported:
+    /// - Inline: `MODULE Name { ... }`
+
+    fn module_stmt(
+        stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
+        // Inline body: `{ ... }`
+        let inline_body = just(Token::LBrace)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(stmt.separated_by(Self::item_sep()).allow_trailing())
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RBrace))
+            .map(cst::ModuleSource::Inline);
+        // File import: `FROM "path"`
+        let file_import = just(Token::From)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(select! { Token::String(s) => s })
+            .map(cst::ModuleSource::File);
+        just(Token::Module)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(Self::ident())
+            .then_ignore(Self::opt_newlines())
+            .then(inline_body.or(file_import))
+            .map_with_span(|(name, source), span| {
+                cst::Stmt::new(cst::StmtKind::Module { name, source }, span)
+            })
+    }
+
+    /// `IMPORT Module.{ member, ... }` or `IMPORT Module.{ ... }`.
+    ///
+    /// Imports members from a module into the current scope.
+    fn import_stmt() -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
+    {
+        // Module path: idents separated by `.`
+        let path = Self::ident().separated_by(just(Token::Dot)).at_least(1);
+
+        // Named with optional alias: `name` or `name AS alias`
+        let named = Self::ident()
+            .then(just(Token::As).ignore_then(Self::ident()).or_not())
+            .map(|(name, alias)| cst::ImportItem::Named { name, alias });
+
+        // Wildcard: `...`
+        let wildcard = just(Token::DotDotDot).to(cst::ImportItem::Wildcard);
+
+        // Exclusion: `-name`
+        let exclude = just(Token::Minus)
+            .ignore_then(Self::ident())
+            .map(cst::ImportItem::Exclude);
+
+        let item = choice((wildcard, exclude, named));
+
+        let items = item
+            .separated_by(just(Token::Comma))
+            .allow_trailing()
+            .delimited_by(just(Token::LBrace), just(Token::RBrace));
+
+        just(Token::Import)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(path)
+            .then_ignore(just(Token::Dot))
+            .then(items)
+            .map_with_span(|(path, items), span| {
+                cst::Stmt::new(
+                    cst::StmtKind::Import(cst::ImportStmt { path, items }),
+                    span,
+                )
+            })
+    }
+
+    fn expr_stmt(
+        stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
+        Self::expr(stmt).map_with_span(|expr, span| {
+            cst::Stmt::new(cst::StmtKind::Expr(expr), span)
+        })
+    }
+}
