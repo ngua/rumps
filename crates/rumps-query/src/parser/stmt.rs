@@ -5,7 +5,6 @@ use chumsky::Parser as _;
 use smallvec::SmallVec;
 
 use super::{ParseErr, Parser};
-use crate::ast::Intrinsic;
 use crate::parser::cst;
 use crate::Token;
 
@@ -15,8 +14,6 @@ impl Parser {
         recursive(|stmt| {
             let import_stmt = Self::import_stmt();
             let let_stmt = Self::let_stmt(stmt.clone());
-            let set_stmt = Self::set_stmt(stmt.clone());
-            let kill_stmt = Self::kill_stmt(stmt.clone());
             let output_stmt = Self::output_stmt(stmt.clone());
             let fun_stmt = Self::fun_stmt(stmt.clone());
             let type_stmt = Self::type_stmt();
@@ -29,8 +26,6 @@ impl Parser {
             choice((
                 import_stmt,
                 let_stmt,
-                set_stmt,
-                kill_stmt,
                 output_stmt,
                 fun_stmt,
                 type_stmt,
@@ -65,42 +60,6 @@ impl Parser {
             .then(Self::expr(stmt))
             .map_with_span(|(((vis, pat), ty_ann), val), span| {
                 cst::Stmt::new(cst::StmtKind::Let(pat, ty_ann, val, vis), span)
-            })
-    }
-
-    fn set_stmt(
-        stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
-            + Clone
-            + 'static,
-    ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
-        let expr = Self::expr(stmt);
-
-        just(Token::Set)
-            .ignore_then(Self::ref_expr(expr.clone()))
-            .then_ignore(Self::opt_newlines())
-            .then(expr)
-            .map_with_span(|(r, val), span| {
-                cst::Stmt::new(
-                    cst::StmtKind::Intrinsic(Intrinsic::Set, r, Some(val)),
-                    span,
-                )
-            })
-    }
-
-    fn kill_stmt(
-        stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
-            + Clone
-            + 'static,
-    ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
-        let expr = Self::expr(stmt);
-
-        just(Token::Kill)
-            .ignore_then(Self::ref_expr(expr))
-            .map_with_span(|r, span| {
-                cst::Stmt::new(
-                    cst::StmtKind::Intrinsic(Intrinsic::Kill, r, None),
-                    span,
-                )
             })
     }
 

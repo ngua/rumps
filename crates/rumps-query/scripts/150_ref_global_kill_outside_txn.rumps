@@ -5,5 +5,5 @@ FUN main() {
   LET x: Ref = ^global{}
 
   ; This should fail: global writes require transaction
-  @KILL x
+  LET _ = @KILL x
 }

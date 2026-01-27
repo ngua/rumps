@@ -226,13 +226,6 @@ fn lower_stmt(ast: &mut Ast, ctx: &mut Ctx, stmt: cst::Stmt) -> Result<StmtId> {
             let expr_id = lower_expr(ast, ctx, expr)?;
             Stmt::Let(pat, ty_id, expr_id, lower_visibility(vis))
         }
-        cst::StmtKind::Intrinsic(op, r, value) => {
-            let rt = lower_ref_arg(ast, ctx, r)?;
-            let val = value.map(|v| lower_expr(ast, ctx, v)).transpose()?;
-            let expr = Expr::Intrinsic(op, rt, val, None);
-            let expr_id = ast.add_expr(expr, span)?;
-            Stmt::Expr(expr_id)
-        }
         cst::StmtKind::Write(output) => {
             let inner_id = lower_expr(ast, ctx, output.expr)?;
             let format = match output.format {

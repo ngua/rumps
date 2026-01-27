@@ -490,13 +490,6 @@ pub(crate) enum StmtKind {
     /// The visibility is only meaningful inside modules (`+LET` for public).
     Let(BindingPattern, Option<TypeExpr>, Expr, Visibility),
 
-    /// Database intrinsic as statement: `@SET` or `@KILL`.
-    ///
-    /// - `Intrinsic`: which operation (`Set` or `Kill`)
-    /// - `Expr`: the reference target
-    /// - `Option<Expr>`: value argument (only for `@SET`)
-    Intrinsic(Intrinsic, Expr, Option<Expr>),
-
     /// Write a value with optional format and target.
     Write(WriteStmt),
 

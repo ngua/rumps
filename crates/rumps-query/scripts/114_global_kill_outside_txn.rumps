@@ -1,3 +1,3 @@
 FUN main() {
-  @KILL ^data{1}
+  LET _ = @KILL ^data{1}
 }

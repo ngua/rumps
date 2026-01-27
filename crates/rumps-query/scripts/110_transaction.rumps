@@ -15,7 +15,7 @@ FUN main() {
 
   ; Transaction returning unit (write-only)
   LET unit-result = TRANSACTION {
-    @SET ^TEST{2, "status"} "active"
+    LET _ = @SET ^TEST{2, "status"} "active"
   }
   WRITE unit-result
   WRITE @GET ^TEST{2, "status"}

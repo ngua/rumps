@@ -5,5 +5,5 @@ FUN main() {
   LET x: Ref = ^global{}
 
   ; This should fail: global writes require transaction
-  @SET x "should fail"
+  LET _ = @SET x "should fail"
 }

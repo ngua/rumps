@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Error test: @KILL on global ref outside transaction\n\n; Even with Ref annotation, concrete type is preserved\nLET x: Ref = ^global{}\n\n; This should fail: global writes require transaction\n@KILL x\n"
+description: "; Error test: @KILL on global ref outside transaction\n\nFUN main() {\n  ; Even with Ref annotation, concrete type is preserved\n  LET x: Ref = ^global{}\n\n  ; This should fail: global writes require transaction\n  @KILL x\n  Unit\n}\n"
 ---
 ERROR: global writes require a transaction
