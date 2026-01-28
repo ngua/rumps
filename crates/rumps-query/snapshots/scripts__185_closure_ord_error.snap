@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: Closures are not Ord\n; Comparing closures should produce a type error since they don't implement Ord.\n\nFUN main() {\n  LET f = (x: Int) -> Int => x + 1\n  LET g = (x: Int) -> Int => x + 2\n\n  ; Closures are not comparable\n  WRITE f < g\n}\n"
+---
+ERROR: type `(Int) -> Int` does not satisfy `Ord` class

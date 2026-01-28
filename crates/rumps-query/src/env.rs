@@ -315,19 +315,19 @@ impl BinOp {
             },
             Self::Lt => BinOpDef {
                 name: "<",
-                ty: scheme!(forall T. (T, T) -> Bool),
+                ty: scheme!(forall T: Ord. (T, T) -> Bool),
             },
             Self::Gt => BinOpDef {
                 name: ">",
-                ty: scheme!(forall T. (T, T) -> Bool),
+                ty: scheme!(forall T: Ord. (T, T) -> Bool),
             },
             Self::Le => BinOpDef {
                 name: "<=",
-                ty: scheme!(forall T. (T, T) -> Bool),
+                ty: scheme!(forall T: Ord. (T, T) -> Bool),
             },
             Self::Ge => BinOpDef {
                 name: ">=",
-                ty: scheme!(forall T. (T, T) -> Bool),
+                ty: scheme!(forall T: Ord. (T, T) -> Bool),
             },
 
             // Logical: (Bool, Bool) -> Bool

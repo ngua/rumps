@@ -1021,7 +1021,7 @@ impl<'a> InferCtx<'a> {
                 }
             },
 
-            // `Ord`: `Bool`, `Int`, `Word`, `Float`, `Char`, `String`, `Time`, `Ordering`
+            // `Ord`: primitives + containers (if elements are `Ord`)
             Class::Ord => match ty {
                 Ty::Bool
                 | Ty::Int
@@ -1032,6 +1032,30 @@ impl<'a> InferCtx<'a> {
                 | Ty::Time
                 | Ty::Ordering => {}
                 Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+                // `Array[T]` is `Ord` if `T: Ord` (lexicographic)
+                Ty::Array(elem) => {
+                    self.satisfies_class(class, elem, span, subst);
+                }
+                // Tuples are `Ord` if all elements are `Ord` (lexicographic)
+                Ty::Tuple(elems) => {
+                    elems.iter().for_each(|e| {
+                        self.satisfies_class(class, e, span, subst);
+                    });
+                }
+                // `Option[T]` is `Ord` if `T: Ord` (`None < Some`)
+                Ty::Option(inner) => {
+                    self.satisfies_class(class, inner, span, subst);
+                }
+                // `Result[T, E]` is `Ord` if `T: Ord` and `E: Ord` (`Err < Ok`)
+                Ty::Result(ok, err) => {
+                    self.satisfies_class(class, ok, span, subst);
+                    self.satisfies_class(class, err, span, subst);
+                }
+                // `Map[K, V]` is `Ord` if `K: Ord` and `V: Ord` (sorted by key)
+                Ty::Map(k, v) => {
+                    self.satisfies_class(class, k, span, subst);
+                    self.satisfies_class(class, v, span, subst);
+                }
                 Ty::Union(members) => {
                     members.iter().for_each(|m| {
                         self.satisfies_class(class, m, span, subst)

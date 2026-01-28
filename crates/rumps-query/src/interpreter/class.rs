@@ -718,7 +718,22 @@ impl Ord {
         r: &Value,
     ) -> Result<Value> {
         use std::cmp::Ordering;
-        let ord = match (l, r) {
+        let ord = Self::cmp_values(ctx, l, r);
+        Ok(Value::Int(match ord {
+            Ordering::Less => -1,
+            Ordering::Equal => 0,
+            Ordering::Greater => 1,
+        }))
+    }
+
+    /// Recursive comparison helper returning `std::cmp::Ordering`.
+    fn cmp_values(
+        ctx: &mut ClassCtx<'_>,
+        l: &Value,
+        r: &Value,
+    ) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        match (l, r) {
             (Value::Int(a), Value::Int(b)) => a.cmp(b),
             (Value::Word(a), Value::Word(b)) => a.cmp(b),
             (Value::Float(a), Value::Float(b)) => a.cmp(b),
@@ -729,13 +744,90 @@ impl Ord {
             }
             (Value::Char(a), Value::Char(b)) => a.cmp(b),
             (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
+            (Value::Time(a), Value::Time(b)) => a.cmp(b),
+            // Arrays: lexicographic comparison
+            (Value::Array(_, a), Value::Array(_, b)) => {
+                Self::cmp_seqs(ctx, a.as_slice(), b.as_slice())
+            }
+            // Tuples: lexicographic comparison
+            (Value::Tuple(_, a), Value::Tuple(_, b)) => {
+                Self::cmp_seqs(ctx, a.as_slice(), b.as_slice())
+            }
+            // Maps: lexicographic comparison by (key, value) pairs sorted by key
+            (Value::Map(_, _, a), Value::Map(_, _, b)) => {
+                Self::cmp_maps(ctx, a, b)
+            }
+            // Tagged (Option, Result, user types): compare variant index, then payload
+            // Note: Result has Ok=0, Err=1, but we want Err < Ok, so reverse for Result
+            (Value::Tagged(ty, i1, p1), Value::Tagged(_, i2, p2)) => {
+                let is_result = ctx
+                    .type_exprs
+                    .base_type(*ty)
+                    .is_some_and(|t| t == TypeId::RESULT);
+                let idx_ord = if is_result { i2.cmp(i1) } else { i1.cmp(i2) };
+                match idx_ord {
+                    Ordering::Equal => {
+                        Self::cmp_seqs(ctx, p1.as_slice(), p2.as_slice())
+                    }
+                    ord => ord,
+                }
+            }
             _ => typechecked!("compare", "same Ord type"),
-        };
-        Ok(Value::Int(match ord {
-            Ordering::Less => -1,
-            Ordering::Equal => 0,
-            Ordering::Greater => 1,
-        }))
+        }
+    }
+
+    /// Lexicographic comparison of sequences of `ValueId`s.
+    fn cmp_seqs(
+        ctx: &mut ClassCtx<'_>,
+        a: &[ValueId],
+        b: &[ValueId],
+    ) -> std::cmp::Ordering {
+        a.iter()
+            .zip(b.iter())
+            .map(|(ai, bi)| {
+                let av = ctx.arena.get(*ai).cloned();
+                let bv = ctx.arena.get(*bi).cloned();
+                match (av, bv) {
+                    (Some(av), Some(bv)) => Self::cmp_values(ctx, &av, &bv),
+                    _ => std::cmp::Ordering::Equal,
+                }
+            })
+            .find(|o| *o != std::cmp::Ordering::Equal)
+            .unwrap_or_else(|| a.len().cmp(&b.len()))
+    }
+
+    /// Compare two maps by sorting entries by key, then comparing lexicographically.
+    fn cmp_maps(
+        ctx: &mut ClassCtx<'_>,
+        a: &IndexMap<crate::value::MapKey, ValueId>,
+        b: &IndexMap<crate::value::MapKey, ValueId>,
+    ) -> std::cmp::Ordering {
+        // Collect and sort entries by key (convert MapKey to Value for comparison)
+        let mut a_entries: Vec<_> =
+            a.iter().map(|(k, v)| (k.to_value(), *v)).collect();
+        let mut b_entries: Vec<_> =
+            b.iter().map(|(k, v)| (k.to_value(), *v)).collect();
+        a_entries.sort_by(|(k1, _), (k2, _)| Self::cmp_values(ctx, k1, k2));
+        b_entries.sort_by(|(k1, _), (k2, _)| Self::cmp_values(ctx, k1, k2));
+        // Compare lexicographically by (key, value) pairs
+        a_entries
+            .iter()
+            .zip(b_entries.iter())
+            .map(|((k1, v1), (k2, v2))| {
+                let key_ord = Self::cmp_values(ctx, k1, k2);
+                if key_ord != std::cmp::Ordering::Equal {
+                    key_ord
+                } else {
+                    let v1 = ctx.arena.get(*v1).cloned();
+                    let v2 = ctx.arena.get(*v2).cloned();
+                    match (v1, v2) {
+                        (Some(v1), Some(v2)) => Self::cmp_values(ctx, &v1, &v2),
+                        _ => std::cmp::Ordering::Equal,
+                    }
+                }
+            })
+            .find(|o| *o != std::cmp::Ordering::Equal)
+            .unwrap_or_else(|| a.len().cmp(&b.len()))
     }
 }
 
