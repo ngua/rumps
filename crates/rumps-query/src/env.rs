@@ -307,11 +307,11 @@ impl BinOp {
             // Comparison: forall T. (T, T) -> Bool
             Self::Eq => BinOpDef {
                 name: "==",
-                ty: scheme!(forall T. (T, T) -> Bool),
+                ty: scheme!(forall T: Eq. (T, T) -> Bool),
             },
             Self::Ne => BinOpDef {
                 name: "!=",
-                ty: scheme!(forall T. (T, T) -> Bool),
+                ty: scheme!(forall T: Eq. (T, T) -> Bool),
             },
             Self::Lt => BinOpDef {
                 name: "<",

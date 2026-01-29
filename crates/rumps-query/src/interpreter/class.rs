@@ -12,6 +12,7 @@
 //! - `BitLike`: `bit-and`, `bit-or`, `shl`, `shr`
 //! - `Monoid`: `identity`, `concat`
 //! - `Ord`: `compare`
+//! - `Eq`: `eq`
 //! - `Fallible`: `unwrap`, `wrap`, `flat-map`
 //! - `Indexable`: `index`, `get`
 //! - `Mappable`: `map`
@@ -33,6 +34,7 @@ use smallvec::{smallvec, SmallVec};
 use super::hof::{
     Continuation, FlatMapWrapper, HofMethodFn, HofState, IterKind, MethodResult,
 };
+use crate::intern::StringId;
 use crate::typecheck::{ClassKind, Ty};
 use crate::value::{
     TypeExprArena, TypeExprId, TypeId, TypeRegistry, Value, ValueArena, ValueId,
@@ -283,6 +285,8 @@ impl ClassMethods {
             "compare",
             MethodFn::Binary(Ord::compare),
         );
+
+        self.register(ClassKind::Eq, "eq", MethodFn::Binary(Eq::eq));
 
         self.register(
             ClassKind::Monoid,
@@ -828,6 +832,147 @@ impl Ord {
             })
             .find(|o| *o != std::cmp::Ordering::Equal)
             .unwrap_or_else(|| a.len().cmp(&b.len()))
+    }
+}
+
+/// Equality comparison.
+pub(crate) struct Eq;
+
+impl Class for Eq {}
+
+impl Eq {
+    pub(crate) fn eq(
+        ctx: &mut ClassCtx<'_>,
+        l: &Value,
+        r: &Value,
+    ) -> Result<Value> {
+        Ok(Value::Bool(Self::values_equal(ctx, l, r)))
+    }
+
+    /// Recursive equality helper.
+    fn values_equal(ctx: &mut ClassCtx<'_>, l: &Value, r: &Value) -> bool {
+        match (l, r) {
+            (Value::Unit, Value::Unit) => true,
+            (Value::Bool(a), Value::Bool(b)) => a == b,
+            (Value::Int(a), Value::Int(b)) => a == b,
+            (Value::Word(a), Value::Word(b)) => a == b,
+            (Value::Float(a), Value::Float(b)) => a == b,
+            (Value::Char(a), Value::Char(b)) => a == b,
+            (Value::String(a), Value::String(b)) => {
+                let sa = ctx.arena.get_str(*a).unwrap_or("");
+                let sb = ctx.arena.get_str(*b).unwrap_or("");
+                sa == sb
+            }
+            (Value::Time(a), Value::Time(b)) => a == b,
+            (Value::FilePath(a), Value::FilePath(b)) => {
+                let sa = ctx.arena.get_str(*a).unwrap_or("");
+                let sb = ctx.arena.get_str(*b).unwrap_or("");
+                sa == sb
+            }
+            (Value::Json(a), Value::Json(b)) => a == b,
+            (Value::Array(_, a), Value::Array(_, b)) => {
+                a.len() == b.len()
+                    && Self::seqs_equal(ctx, a.as_slice(), b.as_slice())
+            }
+            (Value::Tuple(_, a), Value::Tuple(_, b)) => {
+                a.len() == b.len()
+                    && Self::seqs_equal(ctx, a.as_slice(), b.as_slice())
+            }
+            (Value::Object(a), Value::Object(b)) => {
+                a.len() == b.len() && Self::objects_equal(ctx, a, b)
+            }
+            (Value::Map(_, _, a), Value::Map(_, _, b)) => {
+                a.len() == b.len() && Self::maps_equal(ctx, a, b)
+            }
+            (Value::Tagged(ty1, idx1, p1), Value::Tagged(ty2, idx2, p2)) => {
+                let types_eq = ctx.type_exprs.eq(*ty1, *ty2);
+                types_eq
+                    && idx1 == idx2
+                    && p1.len() == p2.len()
+                    && Self::seqs_equal(ctx, p1.as_slice(), p2.as_slice())
+            }
+            (Value::Ref(g1, name1, subs1), Value::Ref(g2, name2, subs2)) => {
+                g1 == g2
+                    && name1 == name2
+                    && subs1.len() == subs2.len()
+                    && Self::seqs_equal(ctx, subs1.as_slice(), subs2.as_slice())
+            }
+            // FIXME: This is a hack. Union types should be represented as
+            // `Value::Union(TypeId, Box<Value>)` at runtime, not as raw values.
+            // Currently, union members are just their underlying values, so we
+            // can't distinguish "type checker allowed this union comparison" from
+            // "type checker bug". We return `false` for mismatched types, which
+            // works for unions but masks potential type checker bugs.
+            //
+            // Once `Value::Union` exists, this should be:
+            // `(Value::Union(_, a), Value::Union(_, b)) => Self::values_equal(ctx, a, b)`
+            // and the `_` case should be `typechecked!("==", "same Eq type")`.
+            _ => false,
+        }
+    }
+
+    /// Element-wise equality for sequences (arrays, tuples, payloads).
+    fn seqs_equal(
+        ctx: &mut ClassCtx<'_>,
+        a: &[ValueId],
+        b: &[ValueId],
+    ) -> bool {
+        a.iter().zip(b.iter()).all(|(ai, bi)| {
+            let av = ctx.arena.get(*ai).cloned();
+            let bv = ctx.arena.get(*bi).cloned();
+            match (av, bv) {
+                (Some(av), Some(bv)) => Self::values_equal(ctx, &av, &bv),
+                _ => false,
+            }
+        })
+    }
+
+    /// Field-wise equality for objects.
+    fn objects_equal(
+        ctx: &mut ClassCtx<'_>,
+        a: &IndexMap<StringId, ValueId>,
+        b: &IndexMap<StringId, ValueId>,
+    ) -> bool {
+        a.iter().all(|(k, av)| {
+            b.get(k)
+                .and_then(|bv| {
+                    let av_clone = ctx.arena.get(*av).cloned();
+                    let bv_clone = ctx.arena.get(*bv).cloned();
+                    match (av_clone, bv_clone) {
+                        (Some(av), Some(bv)) => {
+                            Some(Self::values_equal(ctx, &av, &bv))
+                        }
+                        _ => None,
+                    }
+                })
+                .unwrap_or(false)
+        })
+    }
+
+    /// Equality for maps (order-independent, compare entries).
+    fn maps_equal(
+        ctx: &mut ClassCtx<'_>,
+        a: &IndexMap<crate::value::MapKey, ValueId>,
+        b: &IndexMap<crate::value::MapKey, ValueId>,
+    ) -> bool {
+        if !a.keys().all(|k| b.contains_key(k)) {
+            false
+        } else {
+            a.iter().all(|(k, av)| {
+                b.get(k)
+                    .and_then(|bv| {
+                        let av_clone = ctx.arena.get(*av).cloned();
+                        let bv_clone = ctx.arena.get(*bv).cloned();
+                        match (av_clone, bv_clone) {
+                            (Some(av), Some(bv)) => {
+                                Some(Self::values_equal(ctx, &av, &bv))
+                            }
+                            _ => None,
+                        }
+                    })
+                    .unwrap_or(false)
+            })
+        }
     }
 }
 

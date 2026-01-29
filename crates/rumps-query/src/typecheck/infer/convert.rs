@@ -75,7 +75,7 @@ impl InferCtx<'_> {
     ///
     /// Used to convert union member types from the `TypeExprArena` (runtime
     /// representation) to `Ty` (static type representation).
-    pub(super) fn type_expr_to_ty(&self, id: crate::value::TypeExprId) -> Ty {
+    pub(crate) fn type_expr_to_ty(&self, id: crate::value::TypeExprId) -> Ty {
         self.type_exprs.base_type(id).map_or(Ty::Unknown, |base| {
             let args: Vec<Ty> = self
                 .type_exprs

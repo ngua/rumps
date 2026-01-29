@@ -912,13 +912,34 @@ impl InferCtx<'_> {
         let rhs_ty = self.expr(rhs_id);
 
         match op {
-            // Equality allows comparing refs of different types
+            // FIXME: Special case for Ref comparison. This allows comparing
+            // `Local` and `Global` refs (e.g., `data{1} == ^info{"key"}`).
+            // Once union types are properly represented in the interpreter
+            // (as `Value::Union` wrapping the underlying value), this special
+            // case can be removed. The type checker will naturally allow
+            // `Ref = Local | Global` comparisons via the union support in
+            // `satisfies_class`, and the interpreter will unwrap the union
+            // wrappers to compare the underlying ref values.
             BinOp::Eq | BinOp::Ne => {
                 let both_refs = lhs_ty.is_ref() && rhs_ty.is_ref();
-                if !both_refs {
-                    self.unify(lhs_ty, rhs_ty, span);
+                if both_refs {
+                    // Both are refs (Local/Global), but don't unify them.
+                    // Just require both satisfy Eq and return Bool.
+                    self.constrain(Constraint::Class {
+                        ty: lhs_ty,
+                        class: Class::Eq,
+                        span,
+                    });
+                    self.constrain(Constraint::Class {
+                        ty: rhs_ty,
+                        class: Class::Eq,
+                        span,
+                    });
+                    Ty::Bool
+                } else {
+                    // Not refs, use normal type scheme (which unifies types)
+                    self.apply_op_scheme(&op.def().ty, &[lhs_ty, rhs_ty], span)
                 }
-                Ty::Bool
             }
 
             // Pipe needs Callable constraint for polymorphic callables

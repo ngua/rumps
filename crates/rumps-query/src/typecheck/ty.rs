@@ -35,6 +35,7 @@ pub(crate) enum ClassKind {
     Foldable = 11,
     Filterable = 12,
     Display = 13,
+    Eq = 14,
 }
 
 /// Definition of a class, including metadata about its associated types.
@@ -81,7 +82,7 @@ impl MethodSpec {
 
 impl ClassKind {
     /// Number of class kinds (for array sizing).
-    pub(crate) const COUNT: usize = 14;
+    pub(crate) const COUNT: usize = 15;
 
     /// Parse a class name string into a `ClassKind`.
     ///
@@ -104,6 +105,7 @@ impl ClassKind {
             "Foldable" => Some(Self::Foldable),
             "Filterable" => Some(Self::Filterable),
             "Display" => Some(Self::Display),
+            "Eq" => Some(Self::Eq),
             _ => None,
         }
     }
@@ -137,6 +139,7 @@ impl ClassKind {
             | Self::BitLike
             | Self::Negatable
             | Self::Ord
+            | Self::Eq
             | Self::Display => ClassDef {
                 kind: self,
                 assoc_types: &[],
@@ -179,6 +182,10 @@ impl ClassKind {
             (Self::Ord, "compare") => Ok(MethodSpec::Standard(
                 scheme!(forall T: Ord. (T, T) -> Ordering),
             )),
+
+            (Self::Eq, "eq") => {
+                Ok(MethodSpec::Standard(scheme!(forall T: Eq. (T, T) -> Bool)))
+            }
 
             // `Monoid:identity` needs `mempty_types` tracking
             (Self::Monoid, "identity") => Ok(MethodSpec::Tracked {
@@ -270,6 +277,7 @@ impl ClassKind {
             Self::TryInto => "TryInto",
             Self::Indexable => "Indexable",
             Self::Ord => "Ord",
+            Self::Eq => "Eq",
             Self::Mappable => "Mappable",
             Self::Foldable => "Foldable",
             Self::Filterable => "Filterable",
@@ -287,6 +295,7 @@ impl ClassKind {
             Self::Negatable => &["neg"],
             Self::BitLike => &["bit-and", "bit-or", "shl", "shr"],
             Self::Ord => &["compare"],
+            Self::Eq => &["eq"],
             Self::Monoid => &["identity", "concat"],
             Self::Fallible => &["unwrap", "wrap", "flat-map"],
             Self::Iterable => &["length", "contains", "reverse", "foreach"],
@@ -344,6 +353,8 @@ pub(crate) enum Class {
     Indexable(Ty),
     /// Type supports ordering comparisons (`<`, `>`, `<=`, `>=`).
     Ord,
+    /// Type supports equality comparisons (`==`, `!=`).
+    Eq,
     /// Type is a functor; supports structure-preserving `map`.
     Mappable(Ty),
     /// Type supports `fold`/`reduce` operations.
@@ -368,6 +379,7 @@ impl Class {
             Self::TryInto(t) => Self::TryInto(t.apply(subst)),
             Self::Indexable(e) => Self::Indexable(e.apply(subst)),
             Self::Ord => Self::Ord,
+            Self::Eq => Self::Eq,
             Self::Mappable(t) => Self::Mappable(t.apply(subst)),
             Self::Foldable(t) => Self::Foldable(t.apply(subst)),
             Self::Filterable(t) => Self::Filterable(t.apply(subst)),
@@ -388,6 +400,7 @@ impl Class {
             Self::TryInto(_) => "TryInto",
             Self::Indexable(_) => "Indexable",
             Self::Ord => "Ord",
+            Self::Eq => "Eq",
             Self::Mappable(_) => "Mappable",
             Self::Foldable(_) => "Foldable",
             Self::Filterable(_) => "Filterable",
@@ -418,6 +431,9 @@ impl Class {
             Self::Ord => {
                 Some("orderable types are `Bool`, `Int`, `Word`, `Float`, `Char`, and `String`")
             }
+            Self::Eq => {
+                Some("equality types are primitives, containers (if elements are `Eq`), and user types with `CLASS Eq`")
+            }
             Self::Mappable(_) => {
                 Some("mappable types are `Option`, `Result`, and `Array`")
             }
@@ -447,6 +463,7 @@ impl Class {
             | Self::BitLike
             | Self::Negatable
             | Self::Ord
+            | Self::Eq
             | Self::Display => HashSet::new(),
         }
     }
@@ -464,6 +481,7 @@ impl Class {
             Self::TryInto(_) => ClassKind::TryInto,
             Self::Indexable(_) => ClassKind::Indexable,
             Self::Ord => ClassKind::Ord,
+            Self::Eq => ClassKind::Eq,
             Self::Mappable(_) => ClassKind::Mappable,
             Self::Foldable(_) => ClassKind::Foldable,
             Self::Filterable(_) => ClassKind::Filterable,

@@ -35,6 +35,7 @@ use syn::{Ident, Result, Token};
 /// - `T: Storable` ; `T` must be storable in the database
 /// - `T: Subscriptable` ; `T` must be usable as a subscript key
 /// - `T: Ord` ; `T` must support ordering (`Bool`, `Int`, `Word`, `Float`, `Char`, `String`)
+/// - `T: Eq` ; `T` must support equality (`==`, `!=`)
 /// - `T: Display` ; `T` can be displayed as RUMPS syntax
 ///
 /// Parameterized classes (require a type argument in brackets):
@@ -94,6 +95,7 @@ const SIMPLE_CLASSES: &[&str] = &[
     "Storable",
     "Subscriptable",
     "Ord",
+    "Eq",
     "Display",
 ];
 

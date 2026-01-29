@@ -1,16 +1,13 @@
 //! Binary and unary operator implementations.
 
-use indexmap::IndexMap;
 use ordered_float::OrderedFloat;
-use smallvec::SmallVec;
 
 use super::class::ClassCtx;
 use super::Interpreter;
 use crate::ast::{BinOp, ExprId, UnOp};
-use crate::intern::StringId;
 use crate::io::IoContext;
 use crate::typecheck::ClassKind;
-use crate::value::{Value, ValueId};
+use crate::value::Value;
 use crate::{Error, Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
@@ -92,9 +89,23 @@ impl<I: IoContext> Interpreter<'_, I> {
                 span,
             ),
 
-            // Equality (not yet class-based; keep ad-hoc)
-            BinOp::Eq => Ok(Value::Bool(self.values_equal(left, right))),
-            BinOp::Ne => Ok(Value::Bool(!self.values_equal(left, right))),
+            // Equality via Eq class
+            BinOp::Eq => {
+                self.dispatch_binary(ClassKind::Eq, "eq", left, right, span)
+            }
+            BinOp::Ne => {
+                let eq = self.dispatch_binary(
+                    ClassKind::Eq,
+                    "eq",
+                    left,
+                    right,
+                    span,
+                )?;
+                match eq {
+                    Value::Bool(b) => Ok(Value::Bool(!b)),
+                    _ => typechecked!("==", "Bool"),
+                }
+            }
 
             // Ord class methods with Int fast-path
             BinOp::Lt => match (left, right) {
@@ -304,87 +315,6 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             _ => typechecked!("/", "Float"),
         }
-    }
-
-    /// Check equality of two values.
-    ///
-    /// Type checker guarantees both operands have the same type.
-    fn values_equal(&self, left: &Value, right: &Value) -> bool {
-        match (left, right) {
-            (Value::Unit, Value::Unit) => true,
-            (Value::Bool(a), Value::Bool(b)) => a == b,
-            (Value::Int(a), Value::Int(b)) => a == b,
-            (Value::Word(a), Value::Word(b)) => a == b,
-            (Value::Float(a), Value::Float(b)) => a == b,
-            (Value::String(a), Value::String(b)) => a == b,
-            (Value::Array(_, a), Value::Array(_, b)) => {
-                a.len() == b.len() && self.arrays_equal(a, b)
-            }
-            (Value::Object(a), Value::Object(b)) => {
-                a.len() == b.len() && self.objects_equal(a, b)
-            }
-            (Value::Tagged(ty1, idx1, p1), Value::Tagged(ty2, idx2, p2)) => {
-                // Use structural type equality, not TypeExprId identity
-                let types_eq = self.type_exprs.eq(*ty1, *ty2);
-                types_eq
-                    && idx1 == idx2
-                    && p1.len() == p2.len()
-                    && self.payloads_equal(p1, p2)
-            }
-            (Value::Ref(g1, name1, subs1), Value::Ref(g2, name2, subs2)) => {
-                g1 == g2
-                    && name1 == name2
-                    && subs1.len() == subs2.len()
-                    && self.payloads_equal(subs1, subs2)
-            }
-            _ => typechecked!("==/!=", "same Eq type"),
-        }
-    }
-
-    /// Check equality of two arrays element-wise.
-    fn arrays_equal(
-        &self,
-        a: &SmallVec<[ValueId; 4]>,
-        b: &SmallVec<[ValueId; 4]>,
-    ) -> bool {
-        a.iter().zip(b.iter()).all(|(av, bv)| {
-            self.arena
-                .get(*av)
-                .zip(self.arena.get(*bv))
-                .is_some_and(|(va, vb)| self.values_equal(va, vb))
-        })
-    }
-
-    /// Check equality of two objects field-wise.
-    fn objects_equal(
-        &self,
-        a: &IndexMap<StringId, ValueId>,
-        b: &IndexMap<StringId, ValueId>,
-    ) -> bool {
-        a.iter().all(|(k, av)| {
-            b.get(k)
-                .and_then(|bv| {
-                    self.arena
-                        .get(*av)
-                        .zip(self.arena.get(*bv))
-                        .map(|(va, vb)| self.values_equal(va, vb))
-                })
-                .unwrap_or(false)
-        })
-    }
-
-    /// Check equality of tagged value payloads.
-    fn payloads_equal(
-        &self,
-        p1: &SmallVec<[ValueId; 4]>,
-        p2: &SmallVec<[ValueId; 4]>,
-    ) -> bool {
-        p1.iter().zip(p2.iter()).all(|(av, bv)| {
-            self.arena
-                .get(*av)
-                .zip(self.arena.get(*bv))
-                .is_some_and(|(va, vb)| self.values_equal(va, vb))
-        })
     }
 
     /// Evaluate a `MATCHES` expression.

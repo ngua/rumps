@@ -745,6 +745,7 @@ impl<'a> InferCtx<'a> {
                 | Class::BitLike
                 | Class::Negatable
                 | Class::Ord
+                | Class::Eq
                 | Class::Display
                 | Class::Fallible(_)
                 | Class::Into(_)
@@ -779,6 +780,7 @@ impl<'a> InferCtx<'a> {
                     | Class::BitLike
                     | Class::Negatable
                     | Class::Ord
+                    | Class::Eq
                     | Class::Display => {
                         let ty = ty.apply(&subst);
                         self.satisfies_class(class, &ty, *span, &mut subst);
@@ -822,6 +824,7 @@ impl<'a> InferCtx<'a> {
                     | Class::BitLike
                     | Class::Negatable
                     | Class::Ord
+                    | Class::Eq
                     | Class::Display => {}
                 }
             }
@@ -1062,28 +1065,160 @@ impl<'a> InferCtx<'a> {
                     });
                 }
                 Ty::Named(id, args) => {
-                    match self
-                        .instance_registry
-                        .lookup(ClassKind::Ord, *id)
-                        .cloned()
-                    {
-                        Some(inst) => {
-                            self.check_instance_constraints(
-                                &inst, args, span, subst,
-                            );
+                    // FIXME: Special case for union types. This is necessary because
+                    // unions are represented as `Ty::Named(union_id, ...)` rather than
+                    // `Ty::Union([members...])`. Once unions are properly represented
+                    // at the type level, this special case can be removed.
+                    if let Some(def) = self.registry.get_def(*id) {
+                        if let crate::value::TypeDef::Union {
+                            members, ..
+                        } = def
+                        {
+                            // Union is Ord if all members are Ord
+                            members.iter().for_each(|member_id| {
+                                let member_ty =
+                                    self.type_expr_to_ty(*member_id);
+                                self.satisfies_class(
+                                    class, &member_ty, span, subst,
+                                );
+                            });
+                        } else {
+                            // Not a union, check instance registry
+                            match self
+                                .instance_registry
+                                .lookup(ClassKind::Ord, *id)
+                                .cloned()
+                            {
+                                Some(inst) => {
+                                    self.check_instance_constraints(
+                                        &inst, args, span, subst,
+                                    );
+                                }
+                                None => {
+                                    self.error(TypeError::UnsatisfiedClass(
+                                        Class::Ord,
+                                        ty.clone(),
+                                        span,
+                                    ));
+                                }
+                            }
                         }
-                        None => {
-                            self.error(TypeError::UnsatisfiedClass(
-                                Class::Ord,
-                                ty.clone(),
-                                span,
-                            ));
-                        }
+                    } else {
+                        self.error(TypeError::UnsatisfiedClass(
+                            Class::Ord,
+                            ty.clone(),
+                            span,
+                        ));
                     }
                 }
                 _ => {
                     self.error(TypeError::UnsatisfiedClass(
                         Class::Ord,
+                        ty.clone(),
+                        span,
+                    ));
+                }
+            },
+
+            // `Eq`: primitives + containers (if elements are `Eq`)
+            Class::Eq => match ty {
+                Ty::Unit
+                | Ty::Bool
+                | Ty::Int
+                | Ty::Word
+                | Ty::Float
+                | Ty::Char
+                | Ty::String
+                | Ty::Time
+                | Ty::FilePath
+                | Ty::Json => {}
+                Ty::Local | Ty::Global => {}
+                Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+                // `Array[T]` is `Eq` if `T: Eq`
+                Ty::Array(elem) => {
+                    self.satisfies_class(class, elem, span, subst);
+                }
+                // `Tuple[T1, T2, ...]` is `Eq` if all elements are `Eq`
+                Ty::Tuple(elems) => {
+                    elems.iter().for_each(|e| {
+                        self.satisfies_class(class, e, span, subst);
+                    });
+                }
+                // `Map[K, V]` is `Eq` if `K: Eq` and `V: Eq`
+                Ty::Map(k, v) => {
+                    self.satisfies_class(class, k, span, subst);
+                    self.satisfies_class(class, v, span, subst);
+                }
+                // `Option[T]` is `Eq` if `T: Eq`
+                Ty::Option(inner) => {
+                    self.satisfies_class(class, inner, span, subst);
+                }
+                // `Result[T, E]` is `Eq` if `T: Eq` and `E: Eq`
+                Ty::Result(ok, err) => {
+                    self.satisfies_class(class, ok, span, subst);
+                    self.satisfies_class(class, err, span, subst);
+                }
+                // `Object` is `Eq` if all field types are `Eq`
+                Ty::Object(fields) => {
+                    fields.values().for_each(|ty| {
+                        self.satisfies_class(class, ty, span, subst);
+                    });
+                }
+                Ty::Union(members) => {
+                    members.iter().for_each(|m| {
+                        self.satisfies_class(class, m, span, subst)
+                    });
+                }
+                Ty::Named(id, args) => {
+                    // FIXME: Special case for union types. This is necessary because
+                    // unions are represented as `Ty::Named(union_id, ...)` rather than
+                    // `Ty::Union([members...])`. Once unions are properly represented
+                    // at the type level, this special case can be removed.
+                    if let Some(def) = self.registry.get_def(*id) {
+                        if let crate::value::TypeDef::Union {
+                            members, ..
+                        } = def
+                        {
+                            // Union is Eq if all members are Eq
+                            members.iter().for_each(|member_id| {
+                                let member_ty =
+                                    self.type_expr_to_ty(*member_id);
+                                self.satisfies_class(
+                                    class, &member_ty, span, subst,
+                                );
+                            });
+                        } else {
+                            // Not a union, check instance registry
+                            match self
+                                .instance_registry
+                                .lookup(ClassKind::Eq, *id)
+                                .cloned()
+                            {
+                                Some(inst) => {
+                                    self.check_instance_constraints(
+                                        &inst, args, span, subst,
+                                    );
+                                }
+                                None => {
+                                    self.error(TypeError::UnsatisfiedClass(
+                                        Class::Eq,
+                                        ty.clone(),
+                                        span,
+                                    ));
+                                }
+                            }
+                        }
+                    } else {
+                        self.error(TypeError::UnsatisfiedClass(
+                            Class::Eq,
+                            ty.clone(),
+                            span,
+                        ));
+                    }
+                }
+                _ => {
+                    self.error(TypeError::UnsatisfiedClass(
+                        Class::Eq,
                         ty.clone(),
                         span,
                     ));
@@ -2335,6 +2470,7 @@ impl<'a> InferCtx<'a> {
             ClassKind::TryInto => Class::TryInto(Ty::Unknown),
             ClassKind::Indexable => Class::Indexable(Ty::Unknown),
             ClassKind::Ord => Class::Ord,
+            ClassKind::Eq => Class::Eq,
             ClassKind::Mappable => Class::Mappable(Ty::Unknown),
             ClassKind::Foldable => Class::Foldable(Ty::Unknown),
             ClassKind::Filterable => Class::Filterable(Ty::Unknown),
