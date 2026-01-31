@@ -63,6 +63,10 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             Value::Time(t) => rumps_types::Value::String(t.to_rfc3339()),
             Value::Ref(..) => typechecked!("store", "Storable (not Ref)"),
+            // TODO(Phase 3): unwrap and store inner value
+            Value::Union(_, _) | Value::Newtype(_, _) => {
+                todo!("Phase 3: store Union/Newtype")
+            }
         }
     }
 
@@ -363,6 +367,10 @@ impl<I: IoContext> Interpreter<'_, I> {
             | Value::Ref(..)
             | Value::ClassMethodFn { .. } => {
                 typechecked!("subscript", "Subscriptable")
+            }
+            // TODO(Phase 3): unwrap and convert inner value to subscript
+            Value::Union(_, _) | Value::Newtype(_, _) => {
+                todo!("Phase 3: subscript Union/Newtype")
             }
         }
     }

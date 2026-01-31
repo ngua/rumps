@@ -484,6 +484,25 @@ pub(crate) enum Value {
     /// - `SmallVec`: the payload values (most variants have 0-4)
     Tagged(TypeExprId, u8, SmallVec<[ValueId; 4]>),
 
+    /// A value in a union type context.
+    ///
+    /// - `TypeExprId`: identifies the union type (e.g., `Storable`, `Int | String`)
+    /// - `ValueId`: the underlying value
+    ///
+    /// Used for both named unions (`TypeDef::Union`) and inline unions (`TypeExpr::Union`).
+    /// Class methods dispatch to the inner value's type implementation unless
+    /// a user-defined instance exists for the union type itself.
+    Union(TypeExprId, ValueId),
+
+    /// A value in a newtype context.
+    ///
+    /// - `TypeExprId`: identifies the newtype (e.g., `UserId` if `NEWTYPE UserId = Int`)
+    /// - `ValueId`: the underlying value
+    ///
+    /// Class methods auto-derive by delegating to the wrapped type unless
+    /// a user-defined instance exists for the newtype.
+    Newtype(TypeExprId, ValueId),
+
     /// A closure (anonymous function) with captured environment.
     ///
     /// Closures capture their lexical scope at creation time by value.
@@ -632,6 +651,8 @@ impl Value {
                     })
                     .unwrap_or("Unknown"),
             ),
+            Self::Union(..) => Cow::Borrowed("Union"),
+            Self::Newtype(..) => Cow::Borrowed("Newtype"),
             Self::Closure { .. } => Cow::Borrowed("Closure"),
             Self::Function { .. } => Cow::Borrowed("Function"),
             Self::ModuleFn { .. } => Cow::Borrowed("ModuleFn"),
@@ -741,7 +762,9 @@ impl Value {
             Self::Json(_) => TypeId::JSON,
             Self::FilePath(_) => TypeId::FILEPATH,
             Self::Regex(_) => TypeId::REGEX,
-            Self::Tagged(ty_expr, _, _) => {
+            Self::Tagged(ty_expr, _, _)
+            | Self::Union(ty_expr, _)
+            | Self::Newtype(ty_expr, _) => {
                 type_exprs.base_type(*ty_expr).unwrap_or(TypeId::UNKNOWN)
             }
             Self::Closure { .. }

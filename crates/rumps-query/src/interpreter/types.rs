@@ -55,7 +55,9 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             Value::Time(_) => self.type_exprs.named(TypeId::TIME),
             Value::Json(_) => self.type_exprs.named(TypeId::JSON),
-            Value::Tagged(ty_expr, _, _) => *ty_expr,
+            Value::Tagged(ty_expr, _, _)
+            | Value::Union(ty_expr, _)
+            | Value::Newtype(ty_expr, _) => *ty_expr,
             Value::Closure { params, ret, .. }
             | Value::Function { params, ret, .. } => {
                 // Build function type from params and return type
@@ -642,6 +644,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                 } else {
                     type_id == TypeId::LOCAL
                 }
+            }
+            // TODO(Phase 5): check if wrapper type or inner value matches
+            Value::Union(_, _) | Value::Newtype(_, _) => {
+                todo!("Phase 5: value_matches_type_direct Union/Newtype")
             }
         }
     }

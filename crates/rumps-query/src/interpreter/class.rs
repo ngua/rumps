@@ -1328,6 +1328,10 @@ impl Into {
             Value::Ref(is_global, _, _) => {
                 if *is_global { "Global" } else { "Local" }.to_owned()
             }
+            // TODO(Phase 3): unwrap and get inner value's type name
+            Value::Union(_, _) | Value::Newtype(_, _) => {
+                todo!("Phase 3: value_type_name Union/Newtype")
+            }
         }
     }
 
@@ -1557,6 +1561,10 @@ impl Into {
                     "ref": format!("{prefix}{name}"),
                     "subscripts": subs
                 })
+            }
+            // TODO(Phase 3): unwrap and jsonify inner value
+            Value::Union(_, _) | Value::Newtype(_, _) => {
+                todo!("Phase 3: jsonify Union/Newtype")
             }
         }
     }
@@ -1989,6 +1997,10 @@ impl Display {
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("{prefix}{name}{{{subs}}}")
+            }
+            // TODO(Phase 3): unwrap and format inner value
+            Value::Union(_, _) | Value::Newtype(_, _) => {
+                todo!("Phase 3: format Union/Newtype")
             }
         }
     }
