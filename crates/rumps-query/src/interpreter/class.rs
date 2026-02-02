@@ -982,38 +982,105 @@ pub(crate) struct Fallible;
 impl Class for Fallible {}
 
 impl Fallible {
+    /// Unwrap an `Option.Some` or `Result.Ok` value.
+    ///
+    /// Wraps the inner value if the type parameter is a union/newtype.
     pub(crate) fn unwrap(ctx: &mut ClassCtx<'_>, v: &Value) -> Result<Value> {
-        let is_opt = |ty| {
+        let is_opt = |ty: TypeExprId| {
             ctx.type_exprs
                 .base_type(ty)
                 .is_some_and(|t| t == TypeId::OPTION)
         };
-        let is_res = |ty| {
+        let is_res = |ty: TypeExprId| {
             ctx.type_exprs
                 .base_type(ty)
                 .is_some_and(|t| t == TypeId::RESULT)
         };
 
         match v {
-            Value::Tagged(ty, 1, p) if is_opt(*ty) => Ok(p
-                .first()
-                .and_then(|id| ctx.arena.get(*id).cloned())
-                .unwrap_or_else(|| {
-                    typechecked!("unwrap", "Option.Some payload")
-                })),
+            Value::Tagged(ty, 1, p) if is_opt(*ty) => {
+                // Get inner type from Option[T]
+                let inner_ty = ctx
+                    .type_exprs
+                    .type_args(*ty)
+                    .and_then(|args| args.first().copied());
+                let val = p
+                    .first()
+                    .and_then(|id| ctx.arena.get(*id).cloned())
+                    .unwrap_or_else(|| {
+                        typechecked!("unwrap", "Option.Some payload")
+                    });
+                Ok(match inner_ty {
+                    Some(ity) => Self::wrap_for_type(ctx, val, ity),
+                    None => val,
+                })
+            }
             Value::Tagged(ty, 0, _) if is_opt(*ty) => {
                 Err(Error::runtime(ctx.span, "cannot unwrap Option.None"))
             }
-            Value::Tagged(ty, 0, p) if is_res(*ty) => Ok(p
-                .first()
-                .and_then(|id| ctx.arena.get(*id).cloned())
-                .unwrap_or_else(|| {
-                    typechecked!("unwrap", "Result.Ok payload")
-                })),
+            Value::Tagged(ty, 0, p) if is_res(*ty) => {
+                // Get ok type from Result[Ok, Err]
+                let ok_ty = ctx
+                    .type_exprs
+                    .type_args(*ty)
+                    .and_then(|args| args.first().copied());
+                let val = p
+                    .first()
+                    .and_then(|id| ctx.arena.get(*id).cloned())
+                    .unwrap_or_else(|| {
+                        typechecked!("unwrap", "Result.Ok payload")
+                    });
+                Ok(match ok_ty {
+                    Some(oty) => Self::wrap_for_type(ctx, val, oty),
+                    None => val,
+                })
+            }
             Value::Tagged(ty, 1, _) if is_res(*ty) => {
                 Err(Error::runtime(ctx.span, "cannot unwrap Result.Err"))
             }
             _ => typechecked!("unwrap", "Fallible"),
+        }
+    }
+
+    /// Wrap a value in `Value::Union` or `Value::Newtype` if the type requires it.
+    fn wrap_for_type(
+        ctx: &mut ClassCtx<'_>,
+        val: Value,
+        ty: TypeExprId,
+    ) -> Value {
+        let already_wrapped = match &val {
+            Value::Union(t, _) => ctx.type_exprs.eq(*t, ty),
+            Value::Newtype(t, _) => ctx.type_exprs.eq(*t, ty),
+            _ => false,
+        };
+
+        if already_wrapped {
+            val
+        } else {
+            ctx.type_exprs
+                .base_type(ty)
+                .and_then(|type_id| {
+                    ctx.registry.get_def(type_id).and_then(|def| match def {
+                        crate::value::TypeDef::Union { .. } => {
+                            let inner_id = ctx.arena.add(val.clone(), ctx.span);
+                            Some(Value::Union(ty, inner_id))
+                        }
+                        crate::value::TypeDef::Alias { .. } => {
+                            let inner_id = ctx.arena.add(val.clone(), ctx.span);
+                            Some(Value::Newtype(ty, inner_id))
+                        }
+                        _ => None,
+                    })
+                })
+                .or_else(|| {
+                    if ctx.type_exprs.is_union(ty) {
+                        let inner_id = ctx.arena.add(val.clone(), ctx.span);
+                        Some(Value::Union(ty, inner_id))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(val)
         }
     }
 

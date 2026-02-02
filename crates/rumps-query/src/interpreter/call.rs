@@ -95,7 +95,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         self.env.scopes.restore(saved);
 
         // Validate return type if annotated
-        result.and_then(|val| self.check_return_type(val, ret))
+        result.and_then(|val| self.check_return_type(val, ret, span))
     }
 
     /// Invoke a named function with pre-evaluated arguments.
@@ -124,7 +124,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         self.env.scopes.pop();
 
         // Validate return type if annotated
-        result.and_then(|val| self.check_return_type(val, ret))
+        result.and_then(|val| self.check_return_type(val, ret, span))
     }
 
     /// Call a function with an expression-based callee.
@@ -367,7 +367,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         self.env.scopes.pop();
 
         // Validate return type if annotated
-        result.and_then(|val| self.check_return_type(val, fn_def.ret))
+        result.and_then(|val| self.check_return_type(val, fn_def.ret, span))
     }
 
     /// Evaluate a class method expression.
@@ -835,19 +835,26 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Check that a return value matches the declared return type.
+    ///
+    /// Also wraps the return value in `Value::Union` or `Value::Newtype` when
+    /// the return type is a union or newtype.
     fn check_return_type(
         &mut self,
         val: Value,
         ret: Option<TypeExprId>,
+        span: Span,
     ) -> Result<Value> {
-        if let Some(expected_ty) = ret {
-            if self.value_matches_type_expr(&val, expected_ty) {
-                Ok(val)
-            } else {
-                typechecked!("return type", "matches declaration")
+        match ret {
+            None => Ok(val),
+            Some(expected_ty) => {
+                if self.value_matches_type_expr(&val, expected_ty) {
+                    Ok(self
+                        .maybe_wrap_value(&val, expected_ty, span)
+                        .unwrap_or(val))
+                } else {
+                    typechecked!("return type", "matches declaration")
+                }
             }
-        } else {
-            Ok(val)
         }
     }
 
@@ -881,7 +888,9 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Bind parameters to argument values in the current scope.
     ///
-    /// Validates each argument against its declared type (if any).
+    /// Validates each argument against its declared type (if any), and wraps
+    /// values in `Value::Union` or `Value::Newtype` when the parameter type
+    /// requires it.
     pub(super) fn bind_params(
         &mut self,
         params: &[(StringId, Option<TypeExprId>)],
@@ -898,7 +907,13 @@ impl<I: IoContext> Interpreter<'_, I> {
                         self.validate_param(&val, expected_ty, *name, span)
                     })
                 })?;
-                self.env.scopes.bind(*name, *val_id);
+
+                // Wrap if parameter type is union/newtype (named or inline)
+                let bound_id = ty.map_or(*val_id, |expected_ty| {
+                    self.maybe_wrap_value_id(*val_id, expected_ty, span)
+                });
+
+                self.env.scopes.bind(*name, bound_id);
                 Ok(())
             })
     }

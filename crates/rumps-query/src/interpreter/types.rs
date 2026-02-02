@@ -11,6 +11,14 @@ use crate::typecheck::{ClassKind, Ty};
 use crate::value::{TypeExprId, TypeId, Value, ValueId};
 use crate::{Error, Result, Span};
 
+/// Helper enum for `coerce()` to avoid borrow checker issues.
+#[derive(Copy, Clone)]
+enum DefKind {
+    Union,
+    Alias,
+    Other,
+}
+
 impl<I: IoContext> Interpreter<'_, I> {
     /// Get the type expression for a runtime value.
     pub(super) fn value_type_expr(&mut self, v: &Value) -> TypeExprId {
@@ -212,14 +220,38 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Perform type coercion for `AS` casts via `Into[T]` dispatch.
+    ///
+    /// When the target is a named union or newtype, wraps the value appropriately.
+    /// EXCEPTION: `Storable AS T` must remain a runtime error (handled by `TryInto`).
     pub(super) fn coerce(
         &mut self,
         val: &Value,
         target: TypeId,
         span: Span,
     ) -> Result<Value> {
-        let ty = Self::type_id_to_ty(target);
-        self.dispatch_convert(ClassKind::Into, "into", val, &ty, span)
+        // Check if target is a union or alias type; copy the kind to avoid borrow issues
+        let def_kind = self.registry.get_def(target).map(|def| match def {
+            crate::value::TypeDef::Union { .. } => DefKind::Union,
+            crate::value::TypeDef::Alias { .. } => DefKind::Alias,
+            _ => DefKind::Other,
+        });
+
+        match def_kind {
+            Some(DefKind::Union) => {
+                let inner_id = self.arena.add(val.clone(), span);
+                let ty_expr = self.type_exprs.named(target);
+                Ok(Value::Union(ty_expr, inner_id))
+            }
+            Some(DefKind::Alias) => {
+                let inner_id = self.arena.add(val.clone(), span);
+                let ty_expr = self.type_exprs.named(target);
+                Ok(Value::Newtype(ty_expr, inner_id))
+            }
+            _ => {
+                let ty = Self::type_id_to_ty(target);
+                self.dispatch_convert(ClassKind::Into, "into", val, &ty, span)
+            }
+        }
     }
 
     /// Convert a `TypeId` to the corresponding `Ty`.

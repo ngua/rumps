@@ -127,7 +127,7 @@ use crate::io::IoContext;
 use crate::resolve::ResolveCtx;
 use crate::value::{
     CapturedEnv, FunctionDef, TypeExprArena, TypeExprId, TypeId, TypeRegistry,
-    Value, ValueArena,
+    Value, ValueArena, ValueId,
 };
 use crate::{Result, Span};
 
@@ -467,7 +467,9 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::Array(elems) => self.array(&elems, span).await,
             Expr::Tuple(elems) => self.tuple(&elems, span).await,
             Expr::MapLit(entries) => self.map_lit(&entries, span).await,
-            Expr::TupleIndex(base, idx) => self.tuple_index(base, idx).await,
+            Expr::TupleIndex(base, idx) => {
+                self.tuple_index(base, idx, span).await
+            }
             Expr::Index(base, idx) => self.index(base, idx, span).await,
             Expr::OptionalIndex(base, idx) => {
                 self.optional_index(base, idx, span).await
@@ -1644,7 +1646,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         } else {
             let val = self.eval(expr).await?;
             self.validate_type(&val, expected_ty, span)?;
-            Ok(self.refine_type(val, expected_ty))
+            Ok(self.refine_type(val, expected_ty, span))
         }
     }
 
@@ -1694,7 +1696,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 } else {
                     let val = self.eval(expr_id).await?;
                     self.validate_type(&val, expected_ty, span)?;
-                    self.refine_type(val, expected_ty)
+                    self.refine_type(val, expected_ty, span)
                 }
             }
             None => self.eval(expr_id).await?,
@@ -1705,52 +1707,224 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Refine a value's internal type to match an annotation.
     ///
-    /// For parameterized types like `Array` and `Map`, if the value has `UNKNOWN`
-    /// type parameters (e.g., empty array), replaces them with concrete types
-    /// from the annotation.
-    fn refine_type(&self, val: Value, expected: TypeExprId) -> Value {
-        let args = self.type_exprs.type_args(expected).map(SmallVec::as_slice);
-        match (&val, self.type_exprs.base_type(expected), args) {
-            // Int -> Word coercion (type checker validates non-negative)
-            (Value::Int(n), Some(TypeId::WORD), _) => Value::Word(*n as usize),
-            (
-                Value::Array(elem_ty, elems),
-                Some(TypeId::ARRAY),
-                Some(&[ann_elem]),
-            ) => {
-                if self.type_exprs.base_type(*elem_ty) == Some(TypeId::UNKNOWN)
-                {
-                    Value::Array(ann_elem, elems.clone())
-                } else {
-                    val
+    /// Called when a value flows through a typing context (LET binding, function
+    /// parameter, return value) where the expected type provides additional
+    /// information not present in the value itself.
+    ///
+    /// Handles several cases:
+    ///
+    /// **Union/Newtype Wrapping:**
+    /// - If `expected` is a union or newtype, wraps the entire value
+    /// - Example: `LET x: MyUnion = 5` wraps `Int(5)` as `Union(MyUnion, ...)`
+    ///
+    /// **Object Field Wrapping:**
+    /// - For objects with union/newtype fields, recursively wraps field values
+    /// - Example: `LET obj: { a: T } = { a: 5 }` where `T` is a newtype
+    ///   - Wraps field `a`'s value as `Newtype(T, Int(5))`
+    ///   - Ensures `obj.a` returns the wrapped value
+    /// - Critical: Objects don't carry field type info at runtime, so wrapping
+    ///   must happen when the object flows through a typed context
+    ///
+    /// **Collection Type Parameters:**
+    /// - Arrays/Maps with `UNKNOWN` type params get concrete types from annotation
+    /// - Example: `LET xs: Array[Int] = []` refines `Array(UNKNOWN, [])` to `Array(Int, [])`
+    ///
+    /// **Numeric Coercion:**
+    /// - `Int -> Word` when annotation expects `Word` (type checker validates non-negative)
+    fn refine_type(
+        &mut self,
+        val: Value,
+        expected: TypeExprId,
+        span: Span,
+    ) -> Value {
+        // Try union/newtype wrapping first
+        match self.maybe_wrap_value(&val, expected, span) {
+            Some(wrapped) => wrapped,
+            None => {
+                // Existing refinement logic for Array, Map, Int->Word
+                let args =
+                    self.type_exprs.type_args(expected).map(SmallVec::as_slice);
+                match (&val, self.type_exprs.base_type(expected), args) {
+                    // Int -> Word coercion (type checker validates non-negative)
+                    (Value::Int(n), Some(TypeId::WORD), _) => {
+                        Value::Word(*n as usize)
+                    }
+                    (
+                        Value::Array(elem_ty, elems),
+                        Some(TypeId::ARRAY),
+                        Some(&[ann_elem]),
+                    ) => {
+                        if self.type_exprs.base_type(*elem_ty)
+                            == Some(TypeId::UNKNOWN)
+                        {
+                            Value::Array(ann_elem, elems.clone())
+                        } else {
+                            val
+                        }
+                    }
+                    (
+                        Value::Map(k_ty, v_ty, entries),
+                        Some(TypeId::MAP),
+                        Some(&[ann_k, ann_v]),
+                    ) => {
+                        let k = if self.type_exprs.base_type(*k_ty)
+                            == Some(TypeId::UNKNOWN)
+                        {
+                            ann_k
+                        } else {
+                            *k_ty
+                        };
+                        let v = if self.type_exprs.base_type(*v_ty)
+                            == Some(TypeId::UNKNOWN)
+                        {
+                            ann_v
+                        } else {
+                            *v_ty
+                        };
+                        if k != *k_ty || v != *v_ty {
+                            Value::Map(k, v, entries.clone())
+                        } else {
+                            val
+                        }
+                    }
+                    (Value::Object(_), _, _) => {
+                        self.refine_object(val, expected, span)
+                    }
+                    _ => val,
                 }
             }
-            (
-                Value::Map(k_ty, v_ty, entries),
-                Some(TypeId::MAP),
-                Some(&[ann_k, ann_v]),
-            ) => {
-                let k = if self.type_exprs.base_type(*k_ty)
-                    == Some(TypeId::UNKNOWN)
-                {
-                    ann_k
-                } else {
-                    *k_ty
-                };
-                let v = if self.type_exprs.base_type(*v_ty)
-                    == Some(TypeId::UNKNOWN)
-                {
-                    ann_v
-                } else {
-                    *v_ty
-                };
-                if k != *k_ty || v != *v_ty {
-                    Value::Map(k, v, entries.clone())
-                } else {
-                    val
-                }
+        }
+    }
+
+    /// Refine object fields by wrapping them in unions/newtypes if needed.
+    ///
+    /// Objects (`Value::Object`) store only field values without type annotations.
+    /// When an object flows through a typed context (e.g., `LET x: { a: T } = obj`),
+    /// we need to wrap fields whose types are unions or newtypes.
+    ///
+    /// Without this, field access would return unwrapped primitives:
+    /// ```rumps
+    /// NEWTYPE UserId = Int
+    /// LET user: { id: UserId } = { id: 42 }
+    /// user.id  ; Would incorrectly return `Int(42)` instead of `Newtype(UserId, Int(42))`
+    /// ```
+    ///
+    /// This function iterates through object fields and wraps any whose expected
+    /// type (from the structural type annotation) is a union or newtype. Only
+    /// creates a new object if at least one field was wrapped.
+    fn refine_object(
+        &mut self,
+        val: Value,
+        expected: TypeExprId,
+        span: Span,
+    ) -> Value {
+        let Value::Object(fields) = &val else {
+            typechecked!("refine_object", "Object")
+        };
+
+        if let Some(field_tys) =
+            self.type_exprs.object_fields(expected).cloned()
+        {
+            let mut changed = false;
+            let refined = fields
+                .iter()
+                .map(|(field_id, val_id)| {
+                    field_tys
+                        .get(field_id)
+                        .and_then(|field_ty| {
+                            self.arena.get(*val_id).cloned().map(|field_val| {
+                                match self.maybe_wrap_value(
+                                    &field_val, *field_ty, span,
+                                ) {
+                                    Some(wrapped) => {
+                                        changed = true;
+                                        (
+                                            *field_id,
+                                            self.arena.add(wrapped, span),
+                                        )
+                                    }
+                                    None => (*field_id, *val_id),
+                                }
+                            })
+                        })
+                        .unwrap_or((*field_id, *val_id))
+                })
+                .collect();
+
+            if changed {
+                Value::Object(refined)
+            } else {
+                val
             }
-            _ => val,
+        } else {
+            val
+        }
+    }
+
+    /// Wrap a value in `Value::Union` or `Value::Newtype` if the target type requires it.
+    ///
+    /// Handles both named unions (`TypeDef::Union`) and inline unions (`TypeExpr::Union`),
+    /// as well as newtypes (`TypeDef::Alias`). Prevents double-wrapping by checking if
+    /// already wrapped with the same type. Returns `Some(wrapped)` if wrapping occurred,
+    /// `None` if no wrapping needed.
+    pub(super) fn maybe_wrap_value(
+        &mut self,
+        val: &Value,
+        expected_ty: TypeExprId,
+        span: Span,
+    ) -> Option<Value> {
+        // Check if already wrapped with the same type (prevent double-wrapping)
+        let already_wrapped = match val {
+            Value::Union(ty, _) => self.type_exprs.eq(*ty, expected_ty),
+            Value::Newtype(ty, _) => self.type_exprs.eq(*ty, expected_ty),
+            _ => false,
+        };
+
+        if already_wrapped {
+            None
+        } else {
+            // Check for named union/newtype via base_type + registry
+            self.type_exprs
+                .base_type(expected_ty)
+                .and_then(|type_id| {
+                    self.registry.get_def(type_id).and_then(|def| match def {
+                        crate::value::TypeDef::Union { .. } => {
+                            let inner_id = self.arena.add(val.clone(), span);
+                            Some(Value::Union(expected_ty, inner_id))
+                        }
+                        crate::value::TypeDef::Alias { .. } => {
+                            let inner_id = self.arena.add(val.clone(), span);
+                            Some(Value::Newtype(expected_ty, inner_id))
+                        }
+                        _ => None,
+                    })
+                })
+                .or_else(|| {
+                    // Check for inline union
+                    if self.type_exprs.is_union(expected_ty) {
+                        let inner_id = self.arena.add(val.clone(), span);
+                        Some(Value::Union(expected_ty, inner_id))
+                    } else {
+                        None
+                    }
+                })
+        }
+    }
+
+    /// `ValueId` version of `maybe_wrap_value` for `bind_params`.
+    pub(super) fn maybe_wrap_value_id(
+        &mut self,
+        val_id: ValueId,
+        expected_ty: TypeExprId,
+        span: Span,
+    ) -> ValueId {
+        let v = self.arena.get(val_id).cloned();
+        if let Some(val) = v {
+            self.maybe_wrap_value(&val, expected_ty, span)
+                .map(|wrapped| self.arena.add(wrapped, span))
+                .unwrap_or(val_id)
+        } else {
+            val_id
         }
     }
 

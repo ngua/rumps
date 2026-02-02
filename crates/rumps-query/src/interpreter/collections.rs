@@ -443,19 +443,37 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Evaluate tuple index access: `tuple.0`, `tuple.1`, etc.
     ///
     /// Type checker guarantees base is a tuple and index is in bounds.
+    /// Wraps the element if its type is a union/newtype.
     #[async_recursion]
     pub(super) async fn tuple_index(
         &mut self,
         base: ExprId,
         idx: u32,
+        span: Span,
     ) -> Result<Value> {
         let base_val = self.eval(base).await?;
 
         match &base_val {
-            Value::Tuple(_, elems) => Ok(elems
-                .get(idx as usize)
-                .and_then(|id| self.arena.get(*id).cloned())
-                .unwrap_or_else(|| typechecked!(".N", "valid tuple index"))),
+            Value::Tuple(ty, elems) => {
+                // Get element type from tuple type
+                let elem_ty = self
+                    .type_exprs
+                    .tuple_elems(*ty)
+                    .and_then(|tys| tys.get(idx as usize).copied());
+
+                let val = elems
+                    .get(idx as usize)
+                    .and_then(|id| self.arena.get(*id).cloned())
+                    .unwrap_or_else(|| typechecked!(".N", "valid tuple index"));
+
+                // Wrap if element type is union/newtype
+                Ok(match elem_ty {
+                    Some(ety) => {
+                        self.maybe_wrap_value(&val, ety, span).unwrap_or(val)
+                    }
+                    None => val,
+                })
+            }
             _ => typechecked!(".N", "Tuple"),
         }
     }
@@ -475,7 +493,8 @@ impl<I: IoContext> Interpreter<'_, I> {
         let idx_val = self.eval(idx).await?;
 
         match (&base_val, &idx_val) {
-            (Value::Array(_, elems), Value::Int(i)) => {
+            (Value::Array(elem_ty, elems), Value::Int(i)) => {
+                let elem_ty = *elem_ty;
                 let index = if *i < 0 {
                     // Negative indexing from end
                     elems.len().checked_sub((-*i) as usize)
@@ -485,6 +504,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                 index
                     .and_then(|idx| elems.get(idx))
                     .and_then(|id| self.arena.get(*id).cloned())
+                    .map(|val| {
+                        self.maybe_wrap_value(&val, elem_ty, span)
+                            .unwrap_or(val)
+                    })
                     .ok_or_else(|| {
                         Error::runtime(
                             span,
@@ -492,11 +515,15 @@ impl<I: IoContext> Interpreter<'_, I> {
                         )
                     })
             }
-            (Value::Map(_, _, entries), key) => {
+            (Value::Map(_, v_ty, entries), key) => {
+                let v_ty = *v_ty;
                 let map_key = self.value_to_map_key(key);
                 entries
                     .get(&map_key)
                     .and_then(|id| self.arena.get(*id).cloned())
+                    .map(|val| {
+                        self.maybe_wrap_value(&val, v_ty, span).unwrap_or(val)
+                    })
                     .ok_or_else(|| {
                         Error::runtime(
                             span,
@@ -550,26 +577,38 @@ impl<I: IoContext> Interpreter<'_, I> {
 
         match (&base_val, &idx_val) {
             (Value::Array(elem_ty, elems), Value::Int(i)) => {
+                let elem_ty = *elem_ty;
                 let index = if *i < 0 {
                     elems.len().checked_sub((-*i) as usize)
                 } else {
                     Some(*i as usize)
                 };
                 let opt_ty =
-                    self.type_exprs.app(TypeId::OPTION, smallvec![*elem_ty]);
+                    self.type_exprs.app(TypeId::OPTION, smallvec![elem_ty]);
                 Ok(index
                     .and_then(|idx| elems.get(idx))
-                    .map(|id| Value::some(opt_ty, *id))
+                    .map(|id| {
+                        // Wrap element if elem_ty is union/newtype
+                        let wrapped_id =
+                            self.maybe_wrap_value_id(*id, elem_ty, span);
+                        Value::some(opt_ty, wrapped_id)
+                    })
                     .unwrap_or_else(|| Value::none(opt_ty)))
             }
             (Value::Map(_, v_ty, entries), key) => {
+                let v_ty = *v_ty;
                 // Map indexing already returns Option, so ?[] is the same
                 let map_key = self.value_to_map_key(key);
                 let opt_ty =
-                    self.type_exprs.app(TypeId::OPTION, smallvec![*v_ty]);
+                    self.type_exprs.app(TypeId::OPTION, smallvec![v_ty]);
                 Ok(entries
                     .get(&map_key)
-                    .map(|id| Value::some(opt_ty, *id))
+                    .map(|id| {
+                        // Wrap value if v_ty is union/newtype
+                        let wrapped_id =
+                            self.maybe_wrap_value_id(*id, v_ty, span);
+                        Value::some(opt_ty, wrapped_id)
+                    })
                     .unwrap_or_else(|| Value::none(opt_ty)))
             }
             (Value::String(sid), Value::Int(i)) => {
