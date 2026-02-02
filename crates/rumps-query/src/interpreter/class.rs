@@ -1328,9 +1328,55 @@ impl Into {
             Value::Ref(is_global, _, _) => {
                 if *is_global { "Global" } else { "Local" }.to_owned()
             }
-            // TODO(Phase 3): unwrap and get inner value's type name
-            Value::Union(_, _) | Value::Newtype(_, _) => {
-                todo!("Phase 3: value_type_name Union/Newtype")
+            Value::Newtype(ty_expr, _) => {
+                let ty = ctx
+                    .type_exprs
+                    .base_type(*ty_expr)
+                    .unwrap_or_else(|| invariant!("newtype has base type"));
+                ctx.registry
+                    .type_name(ty, ctx.arena)
+                    .unwrap_or_else(|| invariant!("newtype has type name"))
+                    .to_owned()
+            }
+            Value::Union(ty_expr, _) => {
+                // Unions can be either named (`UNION Result = Ok | Err`) or
+                // anonymous (`String | Int`). Named unions have a type name
+                // in the registry; anonymous unions need to be formatted as
+                // their type expression (e.g., `"String | Int"`).
+                ctx.type_exprs
+                    .base_type(*ty_expr)
+                    .and_then(|ty| {
+                        ctx.registry
+                            .type_name(ty, ctx.arena)
+                            .map(|s| s.to_owned())
+                    })
+                    .unwrap_or_else(|| {
+                        let arena = &*ctx.arena;
+                        let registry = ctx.registry;
+                        ctx.type_exprs
+                            .format(
+                                *ty_expr,
+                                |ty| {
+                                    registry
+                                        .type_name(ty, arena)
+                                        .unwrap_or_else(|| {
+                                            invariant!("type in registry")
+                                        })
+                                        .to_owned()
+                                },
+                                |s| {
+                                    arena
+                                        .get_str(s)
+                                        .unwrap_or_else(|| {
+                                            invariant!("string in arena")
+                                        })
+                                        .to_owned()
+                                },
+                            )
+                            .unwrap_or_else(|| {
+                                invariant!("union type expr in arena")
+                            })
+                    })
             }
         }
     }
@@ -1562,9 +1608,12 @@ impl Into {
                     "subscripts": subs
                 })
             }
-            // TODO(Phase 3): unwrap and jsonify inner value
-            Value::Union(_, _) | Value::Newtype(_, _) => {
-                todo!("Phase 3: jsonify Union/Newtype")
+            Value::Union(_, inner_id) | Value::Newtype(_, inner_id) => {
+                let inner = ctx
+                    .arena
+                    .get(*inner_id)
+                    .unwrap_or_else(|| invariant!("inner value in arena"));
+                Self::jsonify(ctx, inner)
             }
         }
     }
@@ -1998,9 +2047,12 @@ impl Display {
                     .join(", ");
                 format!("{prefix}{name}{{{subs}}}")
             }
-            // TODO(Phase 3): unwrap and format inner value
-            Value::Union(_, _) | Value::Newtype(_, _) => {
-                todo!("Phase 3: format Union/Newtype")
+            Value::Union(_, inner_id) | Value::Newtype(_, inner_id) => {
+                let inner = ctx
+                    .arena
+                    .get(*inner_id)
+                    .unwrap_or_else(|| invariant!("inner value in arena"));
+                Self::format(ctx, inner)
             }
         }
     }
