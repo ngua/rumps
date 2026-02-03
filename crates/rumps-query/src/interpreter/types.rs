@@ -861,85 +861,124 @@ impl<I: IoContext> Interpreter<'_, I> {
         val: &Value,
         ty: TypeExprId,
     ) -> bool {
-        // Check for union type expression first
-        if let Some(members) = self.type_exprs.union_members(ty).cloned() {
-            members
-                .iter()
-                .any(|&m| self.value_matches_type_expr(val, m))
-        } else if let Some(expected_elems) =
-            self.type_exprs.tuple_elems(ty).cloned()
-        {
-            // Tuple type: check element-wise matching
-            match val {
-                Value::Tuple(_, actual_elems) => {
-                    let actual_elems = actual_elems.clone();
-                    expected_elems.len() == actual_elems.len()
-                        && expected_elems.iter().zip(actual_elems.iter()).all(
-                            |(&exp_ty, &val_id)| {
-                                self.arena.get(val_id).cloned().is_some_and(
-                                    |v| {
-                                        self.value_matches_type_expr(&v, exp_ty)
-                                    },
-                                )
-                            },
-                        )
-                }
-                _ => false,
-            }
-        } else if let Some(fields) = self.type_exprs.object_fields(ty).cloned()
-        {
-            // Structural object type: check field presence and types (extensible)
-            match val {
-                Value::Object(obj) => {
-                    let obj = obj.clone();
-                    fields.iter().all(|(field_name, field_ty)| {
-                        obj.get(field_name).is_some_and(|&val_id| {
-                            self.arena.get(val_id).cloned().is_some_and(|v| {
-                                self.value_matches_type_expr(&v, *field_ty)
-                            })
-                        })
+        // First check if the value is wrapped in Union/Newtype
+        match val {
+            Value::Union(val_ty, inner_id) => {
+                self.type_exprs.eq(*val_ty, ty)
+                    || self.arena.get(*inner_id).cloned().is_some_and(|inner| {
+                        self.value_matches_type_expr(&inner, ty)
                     })
-                }
-                _ => false,
             }
-        } else if let Some(resolved_fields) =
-            self.resolve_object_alias_fields(ty)
-        {
-            // Named object alias type: check field presence and types
-            match val {
-                Value::Object(obj) => {
-                    self.object_matches_resolved_fields(obj, &resolved_fields)
-                }
-                _ => false,
+            Value::Newtype(val_ty, inner_id) => {
+                self.type_exprs.eq(*val_ty, ty)
+                    || self.type_exprs.base_type(*val_ty).is_some_and(|base| {
+                        self.type_exprs.base_type(ty) == Some(base)
+                    })
+                    || self.arena.get(*inner_id).cloned().is_some_and(|inner| {
+                        self.value_matches_type_expr(&inner, ty)
+                    })
             }
-        } else if let Some((params, ret)) = self.type_exprs.fn_parts(ty) {
-            // Function type: check if value is a function/closure
-            let params = params.clone();
-            self.fn_value_matches(val, &params, ret)
-        } else if let Some(type_id) = self.type_exprs.base_type(ty) {
-            // Parameterized types: compare stored type args with expected
-            let type_args = self.type_exprs.type_args(ty).cloned();
-            match (type_id, type_args.as_ref().map(SmallVec::as_slice)) {
-                (TypeId::ARRAY, Some(&[expected_elem])) => match val {
-                    Value::Array(actual_elem, _) => {
-                        self.type_exprs.eq(*actual_elem, expected_elem)
+            _ => {
+                // Check for union type expression first
+                if let Some(members) =
+                    self.type_exprs.union_members(ty).cloned()
+                {
+                    members
+                        .iter()
+                        .any(|&m| self.value_matches_type_expr(val, m))
+                } else if let Some(expected_elems) =
+                    self.type_exprs.tuple_elems(ty).cloned()
+                {
+                    // Tuple type: check element-wise matching
+                    match val {
+                        Value::Tuple(_, actual_elems) => {
+                            let actual_elems = actual_elems.clone();
+                            expected_elems.len() == actual_elems.len()
+                                && expected_elems
+                                    .iter()
+                                    .zip(actual_elems.iter())
+                                    .all(|(&exp_ty, &val_id)| {
+                                        self.arena
+                                            .get(val_id)
+                                            .cloned()
+                                            .is_some_and(|v| {
+                                                self.value_matches_type_expr(
+                                                    &v, exp_ty,
+                                                )
+                                            })
+                                    })
+                        }
+                        _ => false,
                     }
-                    _ => false,
-                },
-                (TypeId::MAP, Some(&[expected_k, expected_v])) => match val {
-                    Value::Map(actual_k, actual_v, _) => {
-                        self.type_exprs.eq(*actual_k, expected_k)
-                            && self.type_exprs.eq(*actual_v, expected_v)
+                } else if let Some(fields) =
+                    self.type_exprs.object_fields(ty).cloned()
+                {
+                    // Structural object type: check field presence and types (extensible)
+                    match val {
+                        Value::Object(obj) => {
+                            let obj = obj.clone();
+                            fields.iter().all(|(field_name, field_ty)| {
+                                obj.get(field_name).is_some_and(|&val_id| {
+                                    self.arena.get(val_id).cloned().is_some_and(
+                                        |v| {
+                                            self.value_matches_type_expr(
+                                                &v, *field_ty,
+                                            )
+                                        },
+                                    )
+                                })
+                            })
+                        }
+                        _ => false,
                     }
-                    _ => false,
-                },
-                _ => {
-                    // Check if this is an alias; if so, expand with type args
-                    self.expand_alias_and_match(val, type_id, type_args)
+                } else if let Some(resolved_fields) =
+                    self.resolve_object_alias_fields(ty)
+                {
+                    // Named object alias type: check field presence and types
+                    match val {
+                        Value::Object(obj) => self
+                            .object_matches_resolved_fields(
+                                obj,
+                                &resolved_fields,
+                            ),
+                        _ => false,
+                    }
+                } else if let Some((params, ret)) = self.type_exprs.fn_parts(ty)
+                {
+                    // Function type: check if value is a function/closure
+                    let params = params.clone();
+                    self.fn_value_matches(val, &params, ret)
+                } else if let Some(type_id) = self.type_exprs.base_type(ty) {
+                    // Parameterized types: compare stored type args with expected
+                    let type_args = self.type_exprs.type_args(ty).cloned();
+                    match (type_id, type_args.as_ref().map(SmallVec::as_slice))
+                    {
+                        (TypeId::ARRAY, Some(&[expected_elem])) => match val {
+                            Value::Array(actual_elem, _) => {
+                                self.type_exprs.eq(*actual_elem, expected_elem)
+                            }
+                            _ => false,
+                        },
+                        (TypeId::MAP, Some(&[expected_k, expected_v])) => {
+                            match val {
+                                Value::Map(actual_k, actual_v, _) => {
+                                    self.type_exprs.eq(*actual_k, expected_k)
+                                        && self
+                                            .type_exprs
+                                            .eq(*actual_v, expected_v)
+                                }
+                                _ => false,
+                            }
+                        }
+                        _ => {
+                            // Check if this is an alias; if so, expand with type args
+                            self.expand_alias_and_match(val, type_id, type_args)
+                        }
+                    }
+                } else {
+                    false
                 }
             }
-        } else {
-            false
         }
     }
 
