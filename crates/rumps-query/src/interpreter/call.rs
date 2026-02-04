@@ -434,13 +434,13 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Dispatch a class method call.
     ///
     /// Unified entry point for all class methods. Checks for user-defined instances
-    /// first; falls back to builtin dispatch if none found.
+    /// first; falls back to auto-derivation for Union/Newtype, then builtin dispatch.
     ///
     /// User instance lookup:
     /// 1. Check `instance_calls` map (for NEWTYPE/UNION where type isn't in value)
-    /// 2. Check first arg if `Value::Tagged` (for TYPE/sum types)
+    /// 2. Check first arg if `Value::Tagged`, `Value::Union`, or `Value::Newtype`
     /// 3. Look up user instance by (class, type_id)
-    /// 4. If found, dispatch to generated function; else use builtin
+    /// 4. If found, dispatch to generated function; else auto-derive for Union/Newtype
     ///
     /// The `expr_id` parameter is used by nullary methods (like `Monoid:identity`)
     /// to look up the inferred type from `mempty_types`, and for user instance
@@ -455,14 +455,16 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<Value> {
         // Check for user-defined instance dispatch.
-        // Priority: instance_calls map (for NEWTYPE/UNION) > Value::Tagged (for TYPE)
+        // Priority: instance_calls map > Value::Tagged/Union/Newtype
         let user_type_id = expr_id
             .and_then(|id| self.instance_calls.get(&id).copied())
             .or_else(|| {
                 args.first()
                     .and_then(|id| self.arena.get(*id))
                     .and_then(|v| match v {
-                        Value::Tagged(ty_expr, _, _) => {
+                        Value::Tagged(ty_expr, _, _)
+                        | Value::Union(ty_expr, _)
+                        | Value::Newtype(ty_expr, _) => {
                             self.type_exprs.base_type(*ty_expr)
                         }
                         _ => None,
@@ -487,20 +489,59 @@ impl<I: IoContext> Interpreter<'_, I> {
                     )
                     .await
                 } else {
-                    // User instance registered but function not found; should be
-                    // unreachable if Phase 5 is implemented correctly
+                    // User instance registered but function not found
                     typechecked!("user instance method", "registered function")
                 }
             } else {
-                // No user instance for this type; use builtin
-                self.dispatch_builtin_or_hof(expr_id, class, method, args, span)
-                    .await
+                // No user instance for this type; auto-derive for Union/Newtype
+                self.dispatch_with_auto_derive(
+                    expr_id, class, method, args, span,
+                )
+                .await
             }
         } else {
             // No user type; use builtin
             self.dispatch_builtin_or_hof(expr_id, class, method, args, span)
                 .await
         }
+    }
+
+    /// Dispatch with auto-derivation for Union/Newtype.
+    ///
+    /// Unwraps ALL Union/Newtype args (recursively) and dispatches to builtin methods.
+    /// This allows Union/Newtype values to use the inner type's class implementations.
+    #[async_recursion]
+    async fn dispatch_with_auto_derive(
+        &mut self,
+        expr_id: Option<ExprId>,
+        class: crate::typecheck::ClassKind,
+        method: &str,
+        args: &[ValueId],
+        span: Span,
+    ) -> Result<Value> {
+        let unwrapped_args: SmallVec<[ValueId; 4]> =
+            args.iter().map(|&id| self.unwrap_to_inner(id)).collect();
+
+        self.dispatch_builtin_or_hof(
+            expr_id,
+            class,
+            method,
+            &unwrapped_args,
+            span,
+        )
+        .await
+    }
+
+    /// Recursively unwrap Union/Newtype wrappers until we reach a non-wrapper value.
+    ///
+    /// This handles nested wrappers correctly, e.g. `Union(_, Newtype(_, inner))`.
+    fn unwrap_to_inner(&self, val_id: ValueId) -> ValueId {
+        self.arena.get(val_id).map_or(val_id, |v| match v {
+            Value::Union(_, inner_id) | Value::Newtype(_, inner_id) => {
+                self.unwrap_to_inner(*inner_id)
+            }
+            _ => val_id,
+        })
     }
 
     /// Dispatch to builtin class method or async HOF.

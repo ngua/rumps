@@ -776,6 +776,42 @@ impl Ord {
                     ord => ord,
                 }
             }
+            // Union: types must match, then compare inner values if same type
+            (Value::Union(ty1, id1), Value::Union(ty2, id2)) => {
+                if !ctx.type_exprs.eq(*ty1, *ty2) {
+                    typechecked!("compare", "same Ord type")
+                }
+                ctx.arena
+                    .get(*id1)
+                    .cloned()
+                    .zip(ctx.arena.get(*id2).cloned())
+                    .map(|(a, b)| {
+                        if std::mem::discriminant(&a)
+                            == std::mem::discriminant(&b)
+                        {
+                            Self::cmp_values(ctx, &a, &b)
+                        } else {
+                            std::cmp::Ordering::Equal
+                        }
+                    })
+                    .unwrap_or_else(|| {
+                        invariant!("Union inner value missing from arena")
+                    })
+            }
+            // Newtype: types must match, then compare inner values
+            (Value::Newtype(ty1, id1), Value::Newtype(ty2, id2)) => {
+                if !ctx.type_exprs.eq(*ty1, *ty2) {
+                    typechecked!("compare", "same Ord type")
+                }
+                ctx.arena
+                    .get(*id1)
+                    .cloned()
+                    .zip(ctx.arena.get(*id2).cloned())
+                    .map(|(a, b)| Self::cmp_values(ctx, &a, &b))
+                    .unwrap_or_else(|| {
+                        invariant!("Newtype inner value missing from arena")
+                    })
+            }
             _ => typechecked!("compare", "same Ord type"),
         }
     }
@@ -897,17 +933,31 @@ impl Eq {
                     && subs1.len() == subs2.len()
                     && Self::seqs_equal(ctx, subs1.as_slice(), subs2.as_slice())
             }
-            // FIXME: This is a hack. Union types should be represented as
-            // `Value::Union(TypeId, Box<Value>)` at runtime, not as raw values.
-            // Currently, union members are just their underlying values, so we
-            // can't distinguish "type checker allowed this union comparison" from
-            // "type checker bug". We return `false` for mismatched types, which
-            // works for unions but masks potential type checker bugs.
-            //
-            // Once `Value::Union` exists, this should be:
-            // `(Value::Union(_, a), Value::Union(_, b)) => Self::values_equal(ctx, a, b)`
-            // and the `_` case should be `typechecked!("==", "same Eq type")`.
-            _ => false,
+            // Union: types must match, inner types must match, then values must match
+            (Value::Union(ty1, id1), Value::Union(ty2, id2)) => {
+                ctx.type_exprs.eq(*ty1, *ty2)
+                    && ctx
+                        .arena
+                        .get(*id1)
+                        .cloned()
+                        .zip(ctx.arena.get(*id2).cloned())
+                        .is_some_and(|(a, b)| {
+                            std::mem::discriminant(&a)
+                                == std::mem::discriminant(&b)
+                                && Self::values_equal(ctx, &a, &b)
+                        })
+            }
+            // Newtype: types must match, then compare inner values
+            (Value::Newtype(ty1, id1), Value::Newtype(ty2, id2)) => {
+                ctx.type_exprs.eq(*ty1, *ty2)
+                    && ctx
+                        .arena
+                        .get(*id1)
+                        .cloned()
+                        .zip(ctx.arena.get(*id2).cloned())
+                        .is_some_and(|(a, b)| Self::values_equal(ctx, &a, &b))
+            }
+            _ => typechecked!("==", "same Eq type"),
         }
     }
 
