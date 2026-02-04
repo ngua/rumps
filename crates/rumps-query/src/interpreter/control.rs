@@ -291,7 +291,11 @@ impl<I: IoContext> Interpreter<'_, I> {
         body: ExprId,
         span: Span,
     ) -> Result<Value> {
-        let payloads = match val {
+        // Unwrap Union/Newtype to find Tagged
+        let unwrapped = self.unwrap_value_recursive(val);
+        let v = unwrapped.as_ref().unwrap_or(val);
+
+        let payloads = match v {
             Value::Tagged(_, _, p) => p.clone(),
             _ => SmallVec::new(),
         };
