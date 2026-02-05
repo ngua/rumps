@@ -8,12 +8,8 @@ use std::collections::HashMap;
 
 use smallvec::SmallVec;
 
-use super::InferCtx;
-use crate::ast::{
-    self, AstTypeExprId, BindingPattern, Import, InstanceMethodDef, Stmt,
-    StmtId, TypeParam,
-};
-use crate::intern::StringId;
+use super::{ClassInstanceInput, InferCtx};
+use crate::ast::{AstTypeExprId, BindingPattern, Stmt, StmtId, TypeParam};
 use crate::typecheck::error::TypeError;
 use crate::typecheck::instance::Instance;
 use crate::typecheck::ty::{Class, ClassKind, Scheme, Ty, TyVar};
@@ -81,16 +77,17 @@ impl InferCtx<'_> {
                 constraints,
                 assoc_types: _,
                 methods,
-            }) => self.hoist_class_instance(
-                &class_name,
-                &class_args,
-                &type_params,
+            }) => self.hoist_class_instance(ClassInstanceInput {
+                class_name: &class_name,
+                class_args: &class_args,
+                type_params: &type_params,
                 for_type,
-                &constraints,
-                &methods,
-                None, // Top-level instance
+                constraints: &constraints,
+                methods: &methods,
+                assoc_types: (),
+                module: None,
                 span,
-            ),
+            }),
 
             // Modules already hoisted in Phase 1; imports processed in Phase 2;
             // other statements don't need hoisting
@@ -117,14 +114,14 @@ impl InferCtx<'_> {
             .iter()
             .map(|tp| {
                 let tv = self.fresh_var();
-                (tp.name.as_str(), tv)
+                (tp, tv)
             })
             .collect();
 
         let type_param_subst: HashMap<_, _> = type_param_vars
             .iter()
-            .map(|(name, tv)| {
-                let id = self.env.intern(name);
+            .map(|(tp, tv)| {
+                let id = self.env.intern(&tp.name);
                 (id, Ty::Var(*tv))
             })
             .collect();
@@ -132,13 +129,7 @@ impl InferCtx<'_> {
         // Process type parameter constraints
         let mut scheme_constraints: SmallVec<[(TyVar, Class); 2]> =
             SmallVec::new();
-
-        type_param_vars.iter().for_each(|(tp_name, tv)| {
-            let tp = type_params
-                .iter()
-                .find(|p| p.name.as_str() == *tp_name)
-                .expect("type param exists");
-
+        type_param_vars.iter().for_each(|(tp, tv)| {
             tp.constraints.iter().for_each(|c| {
                 let class = self.ast_class_to_ty_class(c, &type_param_subst);
                 scheme_constraints.push((*tv, class));
@@ -322,16 +313,17 @@ impl InferCtx<'_> {
                     ..
                 }) => {
                     let mod_id = self.env.intern(mod_path);
-                    self.hoist_class_instance(
+                    self.hoist_class_instance(ClassInstanceInput {
                         class_name,
                         class_args,
                         type_params,
                         for_type,
                         constraints,
                         methods,
-                        Some(mod_id),
-                        item_span,
-                    );
+                        assoc_types: (),
+                        module: Some(mod_id),
+                        span: item_span,
+                    });
                 }
 
                 // Modules, types, and imports already processed in earlier phases
@@ -349,20 +341,21 @@ impl InferCtx<'_> {
     /// calls can find user instances even when the CLASS statement appears
     /// after the call site (forward reference).
     ///
-    /// The `module` parameter is `Some(path_id)` when the CLASS is inside a
+    /// The `module` field is `Some(path_id)` when the CLASS is inside a
     /// module, `None` for top-level instances.
-    #[allow(clippy::too_many_arguments)]
-    fn hoist_class_instance(
-        &mut self,
-        class_name: &str,
-        class_args: &SmallVec<[AstTypeExprId; 2]>,
-        type_params: &SmallVec<[TypeParam; 2]>,
-        for_type: AstTypeExprId,
-        constraints: &SmallVec<[(String, SmallVec<[ast::Class; 2]>); 2]>,
-        methods: &SmallVec<[InstanceMethodDef; 4]>,
-        module: Option<StringId>,
-        span: Span,
-    ) {
+    fn hoist_class_instance(&mut self, input: ClassInstanceInput<'_>) {
+        let ClassInstanceInput {
+            class_name,
+            class_args,
+            type_params,
+            for_type,
+            constraints,
+            methods,
+            assoc_types: _,
+            module,
+            span,
+        } = input;
+
         // Parse class name; silently skip if invalid (error in Pass 2)
         if let Some(class) = ClassKind::from_str(class_name) {
             // Build type parameter substitution from WHERE constraints

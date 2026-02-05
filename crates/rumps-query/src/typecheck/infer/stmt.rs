@@ -7,7 +7,9 @@ use std::collections::{HashMap, HashSet};
 
 use smallvec::SmallVec;
 
-use super::{ClassContext, Constraint, InferCtx};
+use super::{
+    ClassContext, ClassInstanceInput, Constraint, InferCtx, InstanceMethodInput,
+};
 use crate::ast::{
     self, ArrayElem, AssocTypeDef, AstTypeExpr, AstTypeExprId, BindingPattern,
     DbRef, Expr, ExprId, Import, ImportItem, InstanceMethodDef, Literal,
@@ -107,17 +109,17 @@ impl InferCtx<'_> {
                 methods,
             }) => {
                 self.env.mark_non_import();
-                self.class_instance(
-                    &class_name,
-                    &class_args,
-                    &type_params,
+                self.class_instance(ClassInstanceInput {
+                    class_name: &class_name,
+                    class_args: &class_args,
+                    type_params: &type_params,
                     for_type,
-                    &constraints,
-                    &assoc_types,
-                    &methods,
-                    None, // Top-level instance
+                    constraints: &constraints,
+                    methods: &methods,
+                    assoc_types: &assoc_types,
+                    module: None,
                     span,
-                );
+                });
             }
 
             None => {}
@@ -244,17 +246,17 @@ impl InferCtx<'_> {
                     ref methods,
                 }) => {
                     let mod_id = self.env.intern(mod_path);
-                    self.class_instance(
+                    self.class_instance(ClassInstanceInput {
                         class_name,
                         class_args,
                         type_params,
                         for_type,
                         constraints,
-                        assoc_types,
                         methods,
-                        Some(mod_id),
-                        item_span,
-                    );
+                        assoc_types,
+                        module: Some(mod_id),
+                        span: item_span,
+                    });
                 }
                 None => {}
             }
@@ -802,19 +804,22 @@ impl InferCtx<'_> {
     /// 5. Method bodies typecheck correctly
     ///
     /// Registers the instance in `InstanceRegistry` on success.
-    #[allow(clippy::too_many_arguments)]
     fn class_instance(
         &mut self,
-        class_name: &str,
-        class_args: &SmallVec<[AstTypeExprId; 2]>,
-        type_params: &SmallVec<[TypeParam; 2]>,
-        for_type: AstTypeExprId,
-        constraints: &SmallVec<[(String, SmallVec<[ast::Class; 2]>); 2]>,
-        assoc_types: &SmallVec<[AssocTypeDef; 2]>,
-        methods: &SmallVec<[InstanceMethodDef; 4]>,
-        module: Option<StringId>,
-        span: Span,
+        input: ClassInstanceInput<'_, &SmallVec<[AssocTypeDef; 2]>>,
     ) {
+        let ClassInstanceInput {
+            class_name,
+            class_args,
+            type_params,
+            for_type,
+            constraints,
+            methods,
+            assoc_types,
+            module,
+            span,
+        } = input;
+
         // 1. Resolve class name to ClassKind
         let class = ClassKind::from_str(class_name).unwrap_or_else(|| {
             self.error(TypeError::UnknownClass(class_name.to_string(), span));
@@ -949,14 +954,14 @@ impl InferCtx<'_> {
 
         // 9. Typecheck each method
         methods.iter().for_each(|m| {
-            self.instance_method(
+            self.instance_method(InstanceMethodInput {
                 class,
-                &for_ty,
-                &class_arg_tys,
-                &type_param_subst,
-                m,
-                span,
-            );
+                for_ty: &for_ty,
+                class_arg_tys: &class_arg_tys,
+                type_param_subst: &type_param_subst,
+                method: m,
+                inst_span: span,
+            });
         });
 
         // 9.5. Clear class context after method processing
@@ -1043,16 +1048,16 @@ impl InferCtx<'_> {
     ///
     /// Validates that the method signature matches the class definition and
     /// typechecks the method body.
-    #[allow(clippy::too_many_arguments)]
-    fn instance_method(
-        &mut self,
-        class: ClassKind,
-        for_ty: &Ty,
-        class_arg_tys: &SmallVec<[Ty; 2]>,
-        type_param_subst: &HashMap<crate::intern::StringId, Ty>,
-        method: &InstanceMethodDef,
-        inst_span: Span,
-    ) {
+    fn instance_method(&mut self, input: InstanceMethodInput<'_>) {
+        let InstanceMethodInput {
+            class,
+            for_ty,
+            class_arg_tys,
+            type_param_subst,
+            method,
+            inst_span,
+        } = input;
+
         let m_span = method.span;
 
         // Get expected method signature from class

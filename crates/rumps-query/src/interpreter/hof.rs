@@ -325,10 +325,10 @@ pub(crate) fn resume(
         } => {
             let next_idx = idx + 1;
             // Helper to unwrap Union/Newtype to get inner value
-            fn unwrap_array<'a>(
-                arena: &'a ValueArena,
+            fn unwrap_array(
+                arena: &ValueArena,
                 id: ValueId,
-            ) -> Option<&'a SmallVec<[ValueId; 4]>> {
+            ) -> Option<&SmallVec<[ValueId; 4]>> {
                 arena.get(id).and_then(|v| match v {
                     Value::Array(_, elems) => Some(elems),
                     Value::Union(_, inner) | Value::Newtype(_, inner) => {

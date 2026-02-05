@@ -37,12 +37,42 @@ use super::error::{TyPrinter, TypeError};
 use super::instance::InstanceRegistry;
 use super::ty::{Class, ClassKind, Scheme, Subst, Ty, TyVar};
 use super::TypecheckOutput;
-use crate::ast::{ExprId, Stmt, StmtId, TxnId};
+use crate::ast::{
+    self, AssocTypeDef, AstTypeExprId, ExprId, InstanceMethodDef, Stmt, StmtId,
+    TxnId, TypeParam,
+};
 use crate::env::Environment;
 use crate::error::Result;
 use crate::intern::{StringId, StringInterner};
 use crate::value::{TypeExprArena, TypeId, TypeRegistry};
 use crate::Span;
+
+/// Input for `hoist_class_instance` and `class_instance`.
+///
+/// The type parameter `A` distinguishes hoisting (where associated types are
+/// not yet processed) from full type checking (where they are).
+pub(super) struct ClassInstanceInput<'a, A = ()> {
+    pub(super) class_name: &'a str,
+    pub(super) class_args: &'a SmallVec<[AstTypeExprId; 2]>,
+    pub(super) type_params: &'a SmallVec<[TypeParam; 2]>,
+    pub(super) for_type: AstTypeExprId,
+    pub(super) constraints:
+        &'a SmallVec<[(String, SmallVec<[ast::Class; 2]>); 2]>,
+    pub(super) methods: &'a SmallVec<[InstanceMethodDef; 4]>,
+    pub(super) assoc_types: A,
+    pub(super) module: Option<StringId>,
+    pub(super) span: Span,
+}
+
+/// Input for `instance_method`.
+pub(super) struct InstanceMethodInput<'a> {
+    pub(super) class: ClassKind,
+    pub(super) for_ty: &'a Ty,
+    pub(super) class_arg_tys: &'a SmallVec<[Ty; 2]>,
+    pub(super) type_param_subst: &'a HashMap<StringId, Ty>,
+    pub(super) method: &'a InstanceMethodDef,
+    pub(super) inst_span: Span,
+}
 
 /// A type constraint generated during inference.
 ///

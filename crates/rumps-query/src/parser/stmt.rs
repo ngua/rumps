@@ -302,7 +302,6 @@ impl Parser {
     ///
     /// User-defined class instance declaration. Implements a builtin class
     /// (e.g., `Display`, `Into`, `Ord`) for a user type.
-
     fn class_stmt(
         stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
             + Clone
@@ -488,7 +487,6 @@ impl Parser {
     ///
     /// Two forms are supported:
     /// - Inline: `MODULE Name { ... }`
-
     fn module_stmt(
         stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
             + Clone
