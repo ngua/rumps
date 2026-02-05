@@ -43,7 +43,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .is_some_and(|t| t == TypeId::RESULT)
         };
 
-        match &val {
+        // Unwrap Union/Newtype wrappers to find the inner Option/Result
+        let unwrapped = self.unwrap_value_recursive(&val);
+        let v = unwrapped.as_ref().unwrap_or(&val);
+
+        match v {
             // Option.Some(v) -> v
             Value::Tagged(ty_expr, 1, payload) if is_option(*ty_expr) => {
                 Ok(payload
@@ -110,7 +114,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .is_some_and(|t| t == TypeId::RESULT)
         };
 
-        match &left {
+        // Unwrap Union/Newtype wrappers to find the inner Option/Result
+        let unwrapped = self.unwrap_value_recursive(&left);
+        let v = unwrapped.as_ref().unwrap_or(&left);
+
+        match v {
             // Option.Some(v) -> unwrap to v
             Value::Tagged(ty_expr, 1, payload) if is_option(*ty_expr) => {
                 Ok(payload

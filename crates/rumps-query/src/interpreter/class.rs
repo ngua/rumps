@@ -1539,6 +1539,11 @@ impl Into {
     /// Stringify a value to produce raw string content (not quoted).
     fn coerce_to_str(ctx: &ClassCtx<'_>, v: &Value) -> String {
         match v {
+            Value::Union(_, inner_id) | Value::Newtype(_, inner_id) => ctx
+                .arena
+                .get(*inner_id)
+                .map(|inner| Self::coerce_to_str(ctx, inner))
+                .unwrap_or_else(|| Display::format(ctx, v)),
             Value::String(id) | Value::FilePath(id) => {
                 ctx.arena.get_str(*id).unwrap_or("").to_owned()
             }
@@ -2460,7 +2465,16 @@ impl Foldable {
             Range(i64, i64),
             Other,
         }
-        let kind = match ctx.arena.get(src) {
+        // Helper to unwrap Union/Newtype to get inner value
+        fn unwrap_src(arena: &ValueArena, id: ValueId) -> Option<&Value> {
+            arena.get(id).and_then(|v| match v {
+                Value::Union(_, inner) | Value::Newtype(_, inner) => {
+                    unwrap_src(arena, *inner)
+                }
+                other => Some(other),
+            })
+        }
+        let kind = match unwrap_src(ctx.arena, src) {
             Some(Value::Array(_, elems)) if elems.is_empty() => {
                 Kind::EmptyArray
             }
@@ -2538,7 +2552,16 @@ impl Iterable {
             Range(i64, i64),
             Other,
         }
-        let kind = match ctx.arena.get(src) {
+        // Helper to unwrap Union/Newtype to get inner value
+        fn unwrap_src(arena: &ValueArena, id: ValueId) -> Option<&Value> {
+            arena.get(id).and_then(|v| match v {
+                Value::Union(_, inner) | Value::Newtype(_, inner) => {
+                    unwrap_src(arena, *inner)
+                }
+                other => Some(other),
+            })
+        }
+        let kind = match unwrap_src(ctx.arena, src) {
             Some(Value::Array(_, elems)) if elems.is_empty() => {
                 Kind::EmptyArray
             }

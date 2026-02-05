@@ -26,7 +26,7 @@
 use smallvec::{smallvec, SmallVec};
 
 use super::class::{ClassCtx, Mappable};
-use crate::value::{TypeExprId, TypeId, Value, ValueId};
+use crate::value::{TypeExprId, TypeId, Value, ValueArena, ValueId};
 use crate::Result;
 
 /// Result from a HoF method that may need closure invocation.
@@ -324,8 +324,21 @@ pub(crate) fn resume(
             acc: _,
         } => {
             let next_idx = idx + 1;
-            match ctx.arena.get(source) {
-                Some(Value::Array(_, elems)) if next_idx >= elems.len() => {
+            // Helper to unwrap Union/Newtype to get inner value
+            fn unwrap_array<'a>(
+                arena: &'a ValueArena,
+                id: ValueId,
+            ) -> Option<&'a SmallVec<[ValueId; 4]>> {
+                arena.get(id).and_then(|v| match v {
+                    Value::Array(_, elems) => Some(elems),
+                    Value::Union(_, inner) | Value::Newtype(_, inner) => {
+                        unwrap_array(arena, *inner)
+                    }
+                    _ => None,
+                })
+            }
+            match unwrap_array(ctx.arena, source) {
+                Some(elems) if next_idx >= elems.len() => {
                     let v = ctx
                         .arena
                         .get(result)
@@ -333,18 +346,16 @@ pub(crate) fn resume(
                         .unwrap_or_else(|| invariant!("result in arena"));
                     Ok(MethodResult::Done(v))
                 }
-                Some(Value::Array(_, elems)) => {
-                    Ok(MethodResult::Invoke(Continuation {
-                        callee: cont.callee,
-                        args: smallvec![result, elems[next_idx]],
-                        state: HofState::ReduceArray {
-                            source,
-                            idx: next_idx,
-                            acc: result,
-                        },
-                    }))
-                }
-                _ => invariant!("ReduceArray source must be Array"),
+                Some(elems) => Ok(MethodResult::Invoke(Continuation {
+                    callee: cont.callee,
+                    args: smallvec![result, elems[next_idx]],
+                    state: HofState::ReduceArray {
+                        source,
+                        idx: next_idx,
+                        acc: result,
+                    },
+                })),
+                None => invariant!("ReduceArray source must be Array"),
             }
         }
         HofState::ReduceRange { current, end, acc } => {

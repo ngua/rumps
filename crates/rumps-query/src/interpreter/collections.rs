@@ -47,13 +47,18 @@ impl<I: IoContext> Interpreter<'_, I> {
                     }
                     ObjectEntry::Spread(expr_id) => {
                         let val = self.eval(*expr_id).await?;
+                        // Unwrap Union/Newtype to find the inner Object
+                        let unwrapped = self.unwrap_value_recursive(&val);
+                        let v = unwrapped.as_ref().unwrap_or(&val);
                         // Type checker guarantees this is an Object
-                        match val {
+                        match v {
                             Value::Object(fields) => {
                                 // Merge fields from spread object
-                                fields.into_iter().for_each(|(k, v)| {
-                                    acc.insert(k, v);
-                                });
+                                fields.clone().into_iter().for_each(
+                                    |(k, v)| {
+                                        acc.insert(k, v);
+                                    },
+                                );
                             }
                             _ => typechecked!("...spread", "Object"),
                         }
@@ -544,8 +549,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                     },
                 )
             }
-            // User-defined Indexable instance
-            (Value::Tagged(_, _, _), _) => {
+            // User-defined Indexable instance (Tagged, Union, or Newtype)
+            (Value::Tagged(_, _, _), _)
+            | (Value::Union(_, _), _)
+            | (Value::Newtype(_, _), _) => {
                 let base_id = self.arena.add(base_val, span);
                 let idx_id = self.arena.add(idx_val, span);
                 self.dispatch_class_method(
@@ -626,8 +633,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                     })
                     .unwrap_or_else(|| Value::none(opt_ty)))
             }
-            // User-defined Indexable instance (safe indexing via `get`)
-            (Value::Tagged(_, _, _), _) => {
+            // User-defined Indexable instance (Tagged, Union, or Newtype)
+            (Value::Tagged(_, _, _), _)
+            | (Value::Union(_, _), _)
+            | (Value::Newtype(_, _), _) => {
                 let base_id = self.arena.add(base_val, span);
                 let idx_id = self.arena.add(idx_val, span);
                 self.dispatch_class_method(
@@ -679,8 +688,11 @@ impl<I: IoContext> Interpreter<'_, I> {
             self.path(&[ty_name, var_name], span)
         } else {
             let base_val = self.eval(base).await?;
+            // Unwrap Union/Newtype to find the inner Object/Json
+            let unwrapped = self.unwrap_value_recursive(&base_val);
+            let v = unwrapped.as_ref().unwrap_or(&base_val);
 
-            match &base_val {
+            match v {
                 Value::Object(obj) => {
                     let field_id = self.arena.intern(field);
                     Ok(obj

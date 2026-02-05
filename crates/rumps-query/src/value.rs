@@ -302,9 +302,13 @@ impl ValueArena {
     /// Get string ID from a value, returning the interned `StringId`.
     ///
     /// Returns `None` if the value doesn't exist or isn't a string.
+    /// Unwraps Union/Newtype wrappers to find the inner String.
     pub(crate) fn get_string_id(&self, id: ValueId) -> Option<StringId> {
         match self.get(id)? {
             Value::String(sid) => Some(*sid),
+            Value::Union(_, inner) | Value::Newtype(_, inner) => {
+                self.get_string_id(*inner)
+            }
             _ => None,
         }
     }

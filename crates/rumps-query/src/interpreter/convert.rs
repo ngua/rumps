@@ -242,6 +242,12 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Unlike `stringify`, this does not quote strings.
     pub(crate) fn coerce_to_str(&mut self, v: &Value) -> String {
         match v {
+            Value::Union(_, inner_id) | Value::Newtype(_, inner_id) => self
+                .arena
+                .get(*inner_id)
+                .cloned()
+                .map(|inner_val| self.coerce_to_str(&inner_val))
+                .unwrap_or_else(|| self.stringify(v)),
             Value::String(id) | Value::FilePath(id) => {
                 self.arena.get_str(*id).unwrap_or("").to_owned()
             }

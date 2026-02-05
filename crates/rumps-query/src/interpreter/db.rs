@@ -119,7 +119,10 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             RefTarget::Expr(e) => {
                 let val = self.eval(*e).await?;
-                match &val {
+                // Unwrap Union/Newtype to find the inner Ref
+                let unwrapped = self.unwrap_value_recursive(&val);
+                let v = unwrapped.as_ref().unwrap_or(&val);
+                match v {
                     Value::Ref(is_global, name_id, sub_ids) => {
                         let name_str = self
                             .arena

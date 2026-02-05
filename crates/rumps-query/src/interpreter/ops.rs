@@ -172,6 +172,9 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Dispatch a binary class method.
+    ///
+    /// Unwraps Union/Newtype values before dispatching to allow auto-derivation
+    /// of class methods for user-defined types.
     fn dispatch_binary(
         &mut self,
         kind: ClassKind,
@@ -180,6 +183,12 @@ impl<I: IoContext> Interpreter<'_, I> {
         right: &Value,
         span: Span,
     ) -> Result<Value> {
+        // Unwrap Union/Newtype to auto-derive class methods
+        let unwrapped_l = self.unwrap_value_recursive(left);
+        let l = unwrapped_l.as_ref().unwrap_or(left);
+        let unwrapped_r = self.unwrap_value_recursive(right);
+        let r = unwrapped_r.as_ref().unwrap_or(right);
+
         let mut ctx = ClassCtx {
             arena: &mut self.arena,
             type_exprs: &mut self.type_exprs,
@@ -188,7 +197,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             span,
         };
         self.class_methods
-            .dispatch_binary(kind, method, &mut ctx, left, right)
+            .dispatch_binary(kind, method, &mut ctx, l, r)
     }
 
     /// Unary operation application.
@@ -236,6 +245,8 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Dispatch a unary class method.
+    ///
+    /// Unwraps Union/Newtype values before dispatching.
     pub(super) fn dispatch_unary(
         &mut self,
         kind: ClassKind,
@@ -243,25 +254,10 @@ impl<I: IoContext> Interpreter<'_, I> {
         v: &Value,
         span: Span,
     ) -> Result<Value> {
-        let mut ctx = ClassCtx {
-            arena: &mut self.arena,
-            type_exprs: &mut self.type_exprs,
-            registry: &self.registry,
-            regex_cache: &self.regex_cache,
-            span,
-        };
-        self.class_methods.dispatch_unary(kind, method, &mut ctx, v)
-    }
+        // Unwrap Union/Newtype to auto-derive class methods
+        let unwrapped = self.unwrap_value_recursive(v);
+        let val = unwrapped.as_ref().unwrap_or(v);
 
-    /// Dispatch a conversion class method (`Into:into`, `TryInto:try-into`).
-    pub(super) fn dispatch_convert(
-        &mut self,
-        kind: ClassKind,
-        method: &str,
-        v: &Value,
-        target: &crate::typecheck::Ty,
-        span: Span,
-    ) -> Result<Value> {
         let mut ctx = ClassCtx {
             arena: &mut self.arena,
             type_exprs: &mut self.type_exprs,
@@ -270,7 +266,33 @@ impl<I: IoContext> Interpreter<'_, I> {
             span,
         };
         self.class_methods
-            .dispatch_convert(kind, method, &mut ctx, v, target)
+            .dispatch_unary(kind, method, &mut ctx, val)
+    }
+
+    /// Dispatch a conversion class method (`Into:into`, `TryInto:try-into`).
+    ///
+    /// Unwraps Union/Newtype values before dispatching.
+    pub(super) fn dispatch_convert(
+        &mut self,
+        kind: ClassKind,
+        method: &str,
+        v: &Value,
+        target: &crate::typecheck::Ty,
+        span: Span,
+    ) -> Result<Value> {
+        // Unwrap Union/Newtype to auto-derive conversions
+        let unwrapped = self.unwrap_value_recursive(v);
+        let val = unwrapped.as_ref().unwrap_or(v);
+
+        let mut ctx = ClassCtx {
+            arena: &mut self.arena,
+            type_exprs: &mut self.type_exprs,
+            registry: &self.registry,
+            regex_cache: &self.regex_cache,
+            span,
+        };
+        self.class_methods
+            .dispatch_convert(kind, method, &mut ctx, val, target)
     }
 
     /// Dispatch `Ord:compare` and apply a predicate to the result.
@@ -305,7 +327,13 @@ impl<I: IoContext> Interpreter<'_, I> {
         right: &Value,
         span: Span,
     ) -> Result<Value> {
-        match (left, right) {
+        // Unwrap Union/Newtype to auto-derive
+        let unwrapped_l = self.unwrap_value_recursive(left);
+        let l = unwrapped_l.as_ref().unwrap_or(left);
+        let unwrapped_r = self.unwrap_value_recursive(right);
+        let r = unwrapped_r.as_ref().unwrap_or(right);
+
+        match (l, r) {
             (Value::Float(a), Value::Float(b)) => {
                 if b.0 == 0.0 {
                     Err(Error::runtime(span, "division by zero"))

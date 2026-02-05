@@ -677,9 +677,16 @@ impl<I: IoContext> Interpreter<'_, I> {
                     type_id == TypeId::LOCAL
                 }
             }
-            // TODO(Phase 5): check if wrapper type or inner value matches
-            Value::Union(_, _) | Value::Newtype(_, _) => {
-                todo!("Phase 5: value_matches_type_direct Union/Newtype")
+            // Check if wrapper type matches, or recursively check inner value
+            Value::Union(ty_expr, inner_id)
+            | Value::Newtype(ty_expr, inner_id) => {
+                // First check if the wrapper type itself matches
+                self.type_exprs
+                    .base_type(*ty_expr)
+                    .is_some_and(|t| t == type_id)
+                    || self.arena.get(*inner_id).cloned().is_some_and(|inner| {
+                        self.value_matches_type_direct(&inner, type_id)
+                    })
             }
         }
     }

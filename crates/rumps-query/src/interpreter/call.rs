@@ -455,16 +455,19 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<Value> {
         // Check for user-defined instance dispatch.
-        // Priority: instance_calls map > Value::Tagged/Union/Newtype
+        // Priority: `instance_calls` map > `Value::Tagged` (NOT `Union`/`Newtype`)
+        //
+        // IMPORTANT: Only `Value::Tagged` is used to infer user instances from
+        // the value itself. `Union`/`Newtype` values should ONLY use user instances
+        // when the typechecker explicitly marked the call site in `instance_calls`.
+        // This prevents infinite recursion inside user class implementations.
         let user_type_id = expr_id
             .and_then(|id| self.instance_calls.get(&id).copied())
             .or_else(|| {
                 args.first()
                     .and_then(|id| self.arena.get(*id))
                     .and_then(|v| match v {
-                        Value::Tagged(ty_expr, _, _)
-                        | Value::Union(ty_expr, _)
-                        | Value::Newtype(ty_expr, _) => {
+                        Value::Tagged(ty_expr, _, _) => {
                             self.type_exprs.base_type(*ty_expr)
                         }
                         _ => None,
@@ -500,9 +503,22 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .await
             }
         } else {
-            // No user type; use builtin
-            self.dispatch_builtin_or_hof(expr_id, class, method, args, span)
+            // No user type from instance_calls or Tagged.
+            // For Union/Newtype, auto-derive (unwrap and dispatch to builtin).
+            let is_wrapped =
+                args.first().and_then(|id| self.arena.get(*id)).is_some_and(
+                    |v| matches!(v, Value::Union(..) | Value::Newtype(..)),
+                );
+
+            if is_wrapped {
+                self.dispatch_with_auto_derive(
+                    expr_id, class, method, args, span,
+                )
                 .await
+            } else {
+                self.dispatch_builtin_or_hof(expr_id, class, method, args, span)
+                    .await
+            }
         }
     }
 
@@ -975,8 +991,11 @@ impl<I: IoContext> Interpreter<'_, I> {
         let resolved_fields = self.resolve_object_alias_fields(expected_ty);
 
         if let Some(fields) = resolved_fields {
+            // Unwrap Union/Newtype to find the inner Object
+            let unwrapped = self.unwrap_value_recursive(val);
+            let v = unwrapped.as_ref().unwrap_or(val);
             // Object alias type: validate with detailed errors
-            match val {
+            match v {
                 Value::Object(obj) => self.validate_object_fields(
                     obj,
                     &fields,

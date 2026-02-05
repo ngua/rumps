@@ -253,7 +253,10 @@ impl<I: IoContext> Interpreter<'_, I> {
         let ty_expr = self.resolve_type_expr(ast_ty_id, span)?;
         if self.value_matches_type_expr(val, ty_expr) {
             let name_id = self.arena.intern(name);
-            let val_id = self.arena.add(val.clone(), span);
+            // Unwrap Union/Newtype wrappers to bind the inner value
+            let unwrapped = self.unwrap_value_recursive(val);
+            let bound_val = unwrapped.as_ref().unwrap_or(val);
+            let val_id = self.arena.add(bound_val.clone(), span);
             Ok(Some(vec![(name_id, val_id)]))
         } else {
             Ok(None)
