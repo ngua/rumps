@@ -1757,6 +1757,11 @@ impl InferCtx<'_> {
         self.env.push_scope();
         self.bind_params(params, &param_tys);
 
+        // Register type param vars as polymorphic parameters (cannot be refined)
+        name_to_tv.values().for_each(|&tv| {
+            self.poly_param_vars.insert(tv);
+        });
+
         let body_ty = self.expr(body);
         self.env.pop_scope();
 
@@ -1913,6 +1918,18 @@ impl InferCtx<'_> {
             )) => {
                 // IS with variant bindings: bindings only visible in then branch
                 let scrutinee_ty = self.expr(scrutinee_id);
+
+                // Check scrutinee is compatible with variant pattern
+                if !self
+                    .scrutinee_compatible_with_variant(&scrutinee_ty, &ty_name)
+                {
+                    self.error(TypeError::IncompatibleVariantPattern {
+                        pattern_ty: ty_name.clone(),
+                        scrutinee_ty: scrutinee_ty.clone(),
+                        span,
+                    });
+                }
+
                 let payload_tys = self.variant_payload_types(
                     &ty_name,
                     &var_name,
@@ -2350,6 +2367,49 @@ impl InferCtx<'_> {
         self.apply_op_scheme(&op.def().ty, &[inner_ty], span)
     }
 
+    /// Check if scrutinee type is compatible with a variant pattern.
+    ///
+    /// Returns `true` if pattern matching is valid. For type variables,
+    /// always returns `false` since polymorphic types cannot be refined
+    /// by variant patterns (the concrete type is unknown at compile time).
+    ///
+    /// This enforces parametricity: a function with `F: Fallible[T]` cannot
+    /// inspect whether `F` is `Option` or `Result` at runtime.
+    pub(super) fn scrutinee_compatible_with_variant(
+        &self,
+        scrutinee_ty: &Ty,
+        ty_name: &str,
+    ) -> bool {
+        match scrutinee_ty {
+            // Concrete Option/Result: check type name matches
+            Ty::Option(_) => ty_name == "Option",
+            Ty::Result(_, _) => ty_name == "Result",
+            Ty::Ordering => ty_name == "Ordering",
+            Ty::DataStatus => ty_name == "DataStatus",
+            Ty::RuntimeError => ty_name == "Error",
+
+            // Named types: resolve pattern type name and compare TypeIds
+            Ty::Named(scrutinee_id, _) => self
+                .resolve_type_name(ty_name)
+                .is_some_and(|(pattern_id, _)| pattern_id == *scrutinee_id),
+
+            // Union: at least one member must be compatible
+            Ty::Union(members) => members
+                .iter()
+                .any(|m| self.scrutinee_compatible_with_variant(m, ty_name)),
+
+            // Type variable: reject only polymorphic parameters (universally quantified);
+            // inference variables (from calls) are allowed since they resolve to concrete types
+            Ty::Var(v) => !self.poly_param_vars.contains(v),
+
+            // Error/Unknown: allow to avoid cascading errors
+            Ty::Error | Ty::Unknown => true,
+
+            // Other types: incompatible with variant patterns
+            _ => false,
+        }
+    }
+
     /// Infer type of `IS` expression.
     ///
     /// Always returns `Bool`. Pattern bindings are extracted by `Expr::If`
@@ -2393,7 +2453,18 @@ impl InferCtx<'_> {
             }
             TypePattern::Variant(ty_name, var_name)
             | TypePattern::VariantWildcard(ty_name, var_name) => {
-                // Just validate that the variant exists
+                // Check scrutinee is compatible with variant pattern
+                if !self
+                    .scrutinee_compatible_with_variant(&scrutinee_ty, ty_name)
+                {
+                    self.error(TypeError::IncompatibleVariantPattern {
+                        pattern_ty: ty_name.clone(),
+                        scrutinee_ty: scrutinee_ty.clone(),
+                        span,
+                    });
+                }
+
+                // Validate that the variant exists
                 let var_name_id = self.env.intern(var_name);
                 let exists = self
                     .env
@@ -2411,6 +2482,17 @@ impl InferCtx<'_> {
                 }
             }
             TypePattern::VariantBind(ty_name, var_name, names) => {
+                // Check scrutinee is compatible with variant pattern
+                if !self
+                    .scrutinee_compatible_with_variant(&scrutinee_ty, ty_name)
+                {
+                    self.error(TypeError::IncompatibleVariantPattern {
+                        pattern_ty: ty_name.clone(),
+                        scrutinee_ty: scrutinee_ty.clone(),
+                        span,
+                    });
+                }
+
                 // Validate variant and arity; bindings are handled by IF
                 let var_name_id = self.env.intern(var_name);
                 let lookup = self

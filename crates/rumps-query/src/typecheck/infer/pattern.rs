@@ -123,6 +123,18 @@ impl InferCtx<'_> {
                 }
 
                 MatchPattern::Variant(ty_name, var_name, sub_pats) => {
+                    // Check scrutinee is compatible with variant pattern
+                    if !self.scrutinee_compatible_with_variant(
+                        scrutinee_ty,
+                        ty_name,
+                    ) {
+                        self.error(TypeError::IncompatibleVariantPattern {
+                            pattern_ty: ty_name.clone(),
+                            scrutinee_ty: scrutinee_ty.clone(),
+                            span,
+                        });
+                    }
+
                     // Resolve type name using module-aware lookup; extract owned
                     // string only if it differs (avoids allocation in common case)
                     let qname = self

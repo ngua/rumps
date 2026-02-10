@@ -27,7 +27,7 @@ mod hoist;
 mod pattern;
 mod stmt;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use nonempty::NonEmpty;
 use smallvec::SmallVec;
@@ -273,6 +273,15 @@ pub(crate) struct InferCtx<'a> {
     /// executed sequentially. In normal mode, a `main` function is required
     /// and top-level expressions are rejected.
     interactive: bool,
+    /// Type variables representing polymorphic parameters.
+    ///
+    /// When entering a function body with type parameters (e.g., `[T, F: Fallible[T]]`),
+    /// the fresh type variables created for those parameters are added here. These
+    /// represent universally quantified types that cannot be refined by pattern matching.
+    ///
+    /// Contrast with inference variables (from method calls, etc.) which are NOT
+    /// in this set and CAN be pattern-matched since they will unify to concrete types.
+    pub(super) poly_param_vars: HashSet<TyVar>,
 }
 
 impl<'a> InferCtx<'a> {
@@ -318,6 +327,7 @@ impl<'a> InferCtx<'a> {
             class_context: None,
             current_module: None,
             interactive,
+            poly_param_vars: HashSet::new(),
         }
     }
 

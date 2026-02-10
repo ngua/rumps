@@ -1,0 +1,21 @@
+; Test: Polymorphic type variable pattern matching errors
+; Pattern matching on variant types is unsound when the scrutinee is a polymorphic
+; type variable, since the concrete type is unknown at compile time.
+
+FUN main() {
+  WRITE "should not reach"
+}
+
+; UNSOUND: F could be Option or Result, but we pattern match on Option.Some
+; This violates parametricity; if F = Result, the Option.Some branch never matches
+FUN map-fallible[T, U, F: Fallible[T]](f: (T) -> U, x: F) -> Option[U] {
+  IF x IS Option.Some(v) {
+    Option.Some(f(v))
+  } ELSE {
+    IF x IS Result.Ok(v) {
+      Option.Some(f(v))
+    } ELSE {
+      Option.None
+    }
+  }
+}

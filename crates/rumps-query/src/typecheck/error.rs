@@ -320,6 +320,20 @@ pub(crate) enum TypeError {
         span: Span,
     },
 
+    /// Variant pattern incompatible with scrutinee type.
+    ///
+    /// Example: `IF x IS Option.Some(v)` where `x: F` and `F: Fallible[T]`.
+    /// Type variables cannot be refined by variant patterns since the concrete
+    /// type is unknown at compile time.
+    #[error(
+        "cannot match `{pattern_ty}` pattern against type `{scrutinee_ty}`"
+    )]
+    IncompatibleVariantPattern {
+        pattern_ty: String,
+        scrutinee_ty: Ty,
+        span: Span,
+    },
+
     /// Invalid type cast.
     ///
     /// The source type cannot be cast to the target type. Suggests alternatives
@@ -547,6 +561,7 @@ impl TypeError {
             | Self::EmptyUnion(span)
             | Self::NegativeWord(span)
             | Self::NotAUnionMember { span, .. }
+            | Self::IncompatibleVariantPattern { span, .. }
             | Self::InvalidCast { span, .. }
             | Self::InvalidRead { span, .. }
             | Self::Custom { span, .. }
@@ -715,6 +730,29 @@ impl TypeError {
                 ),
                 None,
             ),
+            Self::IncompatibleVariantPattern {
+                pattern_ty,
+                scrutinee_ty,
+                ..
+            } => {
+                let scrutinee_str = p.format(scrutinee_ty);
+                let help = if matches!(scrutinee_ty, Ty::Var(_)) {
+                    Some(format!(
+                        "type variables cannot be refined by variant patterns; \
+                         `{scrutinee_str}` could be any type satisfying its constraints"
+                    ))
+                } else {
+                    Some(format!(
+                        "expected `{pattern_ty}` type, found `{scrutinee_str}`"
+                    ))
+                };
+                (
+                    format!(
+                        "cannot match `{pattern_ty}` pattern against type `{scrutinee_str}`"
+                    ),
+                    help,
+                )
+            }
             Self::InvalidCast { from, to, .. } => (
                 format!(
                     "cannot cast `{}` to `{}`",

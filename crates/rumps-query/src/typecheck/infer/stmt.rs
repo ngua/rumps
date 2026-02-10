@@ -496,6 +496,11 @@ impl InferCtx<'_> {
         self.env.push_scope();
         self.bind_params(params, &param_tys);
 
+        // Register type param vars as polymorphic parameters (cannot be refined)
+        name_to_tv.values().for_each(|&tv| {
+            self.poly_param_vars.insert(tv);
+        });
+
         // Infer body type
         let body_ty = self.expr(body);
 
