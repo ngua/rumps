@@ -48,35 +48,31 @@ fn lower_visibility(vis: cst::Visibility) -> Visibility {
 /// Convert a CST class to an AST class.
 fn lower_class(ast: &mut Ast, c: cst::Class) -> Result<ast::Class> {
     Ok(match c {
-        cst::Class::Numeric => ast::Class::Numeric,
-        cst::Class::Iterable(elem) => {
-            ast::Class::Iterable(lower_type_expr(ast, elem)?)
+        cst::Class::Iterable(opt) => ast::Class::Iterable(
+            opt.map(|t| lower_type_expr(ast, t)).transpose()?,
+        ),
+        cst::Class::Fallible(opt) => ast::Class::Fallible(
+            opt.map(|t| lower_type_expr(ast, t)).transpose()?,
+        ),
+        cst::Class::Mappable(opt) => ast::Class::Mappable(
+            opt.map(|t| lower_type_expr(ast, t)).transpose()?,
+        ),
+        cst::Class::Foldable(opt) => ast::Class::Foldable(
+            opt.map(|t| lower_type_expr(ast, t)).transpose()?,
+        ),
+        cst::Class::Filterable(opt) => ast::Class::Filterable(
+            opt.map(|t| lower_type_expr(ast, t)).transpose()?,
+        ),
+        cst::Class::Into(t) => ast::Class::Into(lower_type_expr(ast, t)?),
+        cst::Class::TryInto(t) => ast::Class::TryInto(lower_type_expr(ast, t)?),
+        cst::Class::Indexable(t) => {
+            ast::Class::Indexable(lower_type_expr(ast, t)?)
         }
+        cst::Class::Numeric => ast::Class::Numeric,
         cst::Class::Monoid => ast::Class::Monoid,
         cst::Class::BitLike => ast::Class::BitLike,
         cst::Class::Negatable => ast::Class::Negatable,
-        cst::Class::Fallible(inner) => {
-            ast::Class::Fallible(lower_type_expr(ast, inner)?)
-        }
-        cst::Class::Into(target) => {
-            ast::Class::Into(lower_type_expr(ast, target)?)
-        }
-        cst::Class::TryInto(target) => {
-            ast::Class::TryInto(lower_type_expr(ast, target)?)
-        }
-        cst::Class::Indexable(elem) => {
-            ast::Class::Indexable(lower_type_expr(ast, elem)?)
-        }
         cst::Class::Ord => ast::Class::Ord,
-        cst::Class::Mappable(elem) => {
-            ast::Class::Mappable(lower_type_expr(ast, elem)?)
-        }
-        cst::Class::Foldable(elem) => {
-            ast::Class::Foldable(lower_type_expr(ast, elem)?)
-        }
-        cst::Class::Filterable(elem) => {
-            ast::Class::Filterable(lower_type_expr(ast, elem)?)
-        }
         cst::Class::Display => ast::Class::Display,
     })
 }

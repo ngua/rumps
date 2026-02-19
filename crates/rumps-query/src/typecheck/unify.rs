@@ -362,6 +362,15 @@ impl<'a> InferCtx<'a> {
                 )
             }
 
+            // HKT type application: `F[T]` where `F` is a type variable.
+            //
+            // Decompose the other type into constructor + element,
+            // bind the type variable to the constructor shape, and
+            // unify args with the element types.
+            (Ty::Apply(tv, args), other) | (other, Ty::Apply(tv, args)) => {
+                self.unify_apply(*tv, args, other, span)
+            }
+
             // Associated type projection: resolve and unify
             (Ty::AssocType(tv, class, name), other)
             | (other, Ty::AssocType(tv, class, name)) => {
@@ -399,6 +408,139 @@ impl<'a> InferCtx<'a> {
             UnifyResult::Err(TypeError::InfiniteType(v, t.clone(), span))
         } else {
             UnifyResult::Ok(Subst::singleton(v, t.clone()))
+        }
+    }
+
+    /// Unify a higher-kinded type application `Apply(tv, args)` with another type.
+    ///
+    /// Decomposes `other` into constructor + element types, binds `tv` to the
+    /// constructor shape, and unifies `args` with the element types.
+    fn unify_apply(
+        &mut self,
+        tv: TyVar,
+        args: &[Ty],
+        other: &Ty,
+        span: Span,
+    ) -> UnifyResult {
+        match other {
+            // Parameterized builtins: decompose into constructor + element
+            Ty::Option(inner) => {
+                let ctor = Ty::Option(Box::new(Ty::Error));
+                self.unify_apply_inner(tv, args, &ctor, inner, span)
+            }
+            Ty::Result(ok, err) => {
+                let ctor = Ty::Result(Box::new(Ty::Error), err.clone());
+                self.unify_apply_inner(tv, args, &ctor, ok, span)
+            }
+            Ty::Array(inner) => {
+                let ctor = Ty::Array(Box::new(Ty::Error));
+                self.unify_apply_inner(tv, args, &ctor, inner, span)
+            }
+            Ty::Map(k, v) => {
+                let ctor = Ty::Map(Box::new(Ty::Error), v.clone());
+                self.unify_apply_inner(tv, args, &ctor, k, span)
+            }
+
+            // Non-parameterized types with known element types
+            Ty::Range => {
+                let s1 = self.unify_var(tv, &Ty::Range, span);
+                self.unify_apply_first_arg(s1, args, &Ty::Int, span)
+            }
+
+            // User-defined named types: decompose into constructor + type args
+            Ty::Named(id, type_args) => {
+                if let Some(first_arg) = type_args.first() {
+                    let placeholder: Vec<_> =
+                        type_args.iter().map(|_| Ty::Error).collect();
+                    let ctor = Ty::Named(*id, placeholder);
+                    self.unify_apply_inner(tv, args, &ctor, first_arg, span)
+                } else {
+                    // Named type with no params; just bind tv
+                    self.unify_var(tv, other, span)
+                }
+            }
+
+            // Two `Apply` nodes: unify constructors and args pairwise
+            Ty::Apply(tv2, args2) => {
+                if args.len() != args2.len() {
+                    UnifyResult::Err(TypeError::Mismatch {
+                        expected: Ty::Apply(*tv2, args2.clone()),
+                        got: Ty::Apply(tv, args.to_vec()),
+                        span,
+                    })
+                } else {
+                    match self.unify_var(tv, &Ty::Var(*tv2), span) {
+                        UnifyResult::Ok(s1) => {
+                            let a1: Vec<_> =
+                                args.iter().map(|a| a.apply(&s1)).collect();
+                            let a2: Vec<_> =
+                                args2.iter().map(|a| a.apply(&s1)).collect();
+                            match self.unify_sequence(
+                                a1.iter(),
+                                a2.iter(),
+                                span,
+                            ) {
+                                UnifyResult::Ok(s2) => {
+                                    UnifyResult::Ok(s1.compose(&s2))
+                                }
+                                err => err,
+                            }
+                        }
+                        err => err,
+                    }
+                }
+            }
+
+            _ => UnifyResult::Err(TypeError::Mismatch {
+                expected: other.clone(),
+                got: Ty::Apply(tv, args.to_vec()),
+                span,
+            }),
+        }
+    }
+
+    /// Bind `tv` to a constructor shape and unify the first `Apply` arg with
+    /// the element type.
+    fn unify_apply_inner(
+        &mut self,
+        tv: TyVar,
+        args: &[Ty],
+        ctor: &Ty,
+        elem: &Ty,
+        span: Span,
+    ) -> UnifyResult {
+        let s1 = self.unify_var(tv, ctor, span);
+        self.unify_apply_first_arg(s1, args, elem, span)
+    }
+
+    /// Given a constructor binding result, unify the first `Apply` arg with
+    /// an element type.
+    fn unify_apply_first_arg(
+        &mut self,
+        ctor_result: UnifyResult,
+        args: &[Ty],
+        elem: &Ty,
+        span: Span,
+    ) -> UnifyResult {
+        match ctor_result {
+            UnifyResult::Ok(s1) => args.first().map_or_else(
+                || {
+                    UnifyResult::Err(TypeError::Mismatch {
+                        expected: elem.clone(),
+                        got: Ty::Unit,
+                        span,
+                    })
+                },
+                |arg| {
+                    let arg = arg.apply(&s1);
+                    let elem = elem.apply(&s1);
+                    match self.unify_inner(&arg, &elem, span) {
+                        UnifyResult::Ok(s2) => UnifyResult::Ok(s1.compose(&s2)),
+                        err => err,
+                    }
+                },
+            ),
+            err => err,
         }
     }
 
@@ -733,12 +875,18 @@ impl<'a> InferCtx<'a> {
                 );
             }
             Constraint::Class { ty, class, span } => match class {
-                // Iterable and Indexable: process in first pass for unification
-                Class::Iterable(_) | Class::Indexable(_) => {
+                // Iterable (with element type) and Indexable: first pass
+                Class::Iterable(Some(_)) | Class::Indexable(_) => {
                     let ty = ty.apply(&subst);
                     let class = class.apply(&subst);
                     self.satisfies_class(&class, &ty, *span, &mut subst);
                 }
+                // HKT constraints with `None` are deferred
+                Class::Iterable(None)
+                | Class::Fallible(_)
+                | Class::Mappable(_)
+                | Class::Foldable(_)
+                | Class::Filterable(_) => {}
                 // Other class constraints: processed in second/third pass
                 Class::Numeric
                 | Class::Monoid
@@ -747,12 +895,8 @@ impl<'a> InferCtx<'a> {
                 | Class::Ord
                 | Class::Eq
                 | Class::Display
-                | Class::Fallible(_)
                 | Class::Into(_)
-                | Class::TryInto(_)
-                | Class::Mappable(_)
-                | Class::Foldable(_)
-                | Class::Filterable(_) => {}
+                | Class::TryInto(_) => {}
             },
         });
 
@@ -798,9 +942,9 @@ impl<'a> InferCtx<'a> {
             }
         });
 
-        // Third pass: final check for Fallible, Iterable, Indexable, and Into
-        // constraints now that numeric type variables have been defaulted and
-        // Callable has resolved all type variables through argument unification.
+        // Third pass: final check for Fallible, Iterable, Indexable, Into,
+        // and HKT constraints now that numeric type variables have been defaulted
+        // and Callable has resolved all type variables through argument unification.
         // This ensures constraint violations are caught even when the constrained
         // type parameter is unified with a concrete type via function call.
         constraints.iter().for_each(|c| {
@@ -1717,22 +1861,32 @@ impl<'a> InferCtx<'a> {
                 _ => {}
             },
 
-            // `Fallible(inner)`: `Option[T]`, `Result[T, E]`
-            Class::Fallible(inner) => {
+            // `Fallible(opt_inner)`: `Option[T]`, `Result[T, E]`
+            // `None` = polymorphic (just check the type is fallible)
+            // `Some(inner)` = check and unify element type
+            Class::Fallible(opt_inner) => {
                 let expanded = self.expand_alias_fully(ty);
                 let ty = expanded.as_ref().unwrap_or(ty);
 
                 match ty {
-                    Ty::Option(opt_inner) => {
-                        match self.unify_types(inner, opt_inner, span) {
-                            UnifyResult::Ok(s) => *subst = subst.compose(&s),
-                            UnifyResult::Err(e) => self.error(e),
+                    Ty::Option(opt_elem) => {
+                        if let Some(inner) = opt_inner {
+                            match self.unify_types(inner, opt_elem, span) {
+                                UnifyResult::Ok(s) => {
+                                    *subst = subst.compose(&s)
+                                }
+                                UnifyResult::Err(e) => self.error(e),
+                            }
                         }
                     }
                     Ty::Result(ok, _) => {
-                        match self.unify_types(inner, ok, span) {
-                            UnifyResult::Ok(s) => *subst = subst.compose(&s),
-                            UnifyResult::Err(e) => self.error(e),
+                        if let Some(inner) = opt_inner {
+                            match self.unify_types(inner, ok, span) {
+                                UnifyResult::Ok(s) => {
+                                    *subst = subst.compose(&s)
+                                }
+                                UnifyResult::Err(e) => self.error(e),
+                            }
                         }
                     }
                     Ty::Union(members) => {
@@ -1741,8 +1895,14 @@ impl<'a> InferCtx<'a> {
                         });
                     }
                     Ty::Var(v) => {
-                        let opt = Ty::Option(Box::new(inner.clone()));
-                        subst.extend(*v, opt);
+                        // Default unresolved to `Option`
+                        let elem = opt_inner
+                            .clone()
+                            .unwrap_or_else(|| Ty::Var(self.fresh_var()));
+                        subst.extend(*v, Ty::Option(Box::new(elem)));
+                    }
+                    Ty::Apply(_, _) => {
+                        // HKT variable application; defer
                     }
                     Ty::Error | Ty::Unknown => {}
                     Ty::Named(id, type_args) => {
@@ -1752,25 +1912,29 @@ impl<'a> InferCtx<'a> {
                             .cloned()
                         {
                             Some(inst) => {
-                                if let Some(inst_inner) =
-                                    inst.class_args.first()
-                                {
-                                    let param_subst = Subst(
-                                        inst.type_params
-                                            .iter()
-                                            .zip(type_args.iter())
-                                            .map(|(p, a)| (*p, a.clone()))
-                                            .collect(),
-                                    );
-                                    let resolved =
-                                        inst_inner.apply(&param_subst);
-                                    match self
-                                        .unify_types(inner, &resolved, span)
+                                if let Some(inner) = opt_inner {
+                                    if let Some(inst_inner) =
+                                        inst.class_args.first()
                                     {
-                                        UnifyResult::Ok(s) => {
-                                            *subst = subst.compose(&s)
+                                        let param_subst = Subst(
+                                            inst.type_params
+                                                .iter()
+                                                .zip(type_args.iter())
+                                                .map(|(p, a)| (*p, a.clone()))
+                                                .collect(),
+                                        );
+                                        let resolved =
+                                            inst_inner.apply(&param_subst);
+                                        match self
+                                            .unify_types(inner, &resolved, span)
+                                        {
+                                            UnifyResult::Ok(s) => {
+                                                *subst = subst.compose(&s)
+                                            }
+                                            UnifyResult::Err(e) => {
+                                                self.error(e)
+                                            }
                                         }
-                                        UnifyResult::Err(e) => self.error(e),
                                     }
                                 }
                                 self.check_instance_constraints(
@@ -1796,22 +1960,32 @@ impl<'a> InferCtx<'a> {
                 }
             }
 
-            // `Iterable(elem)`: `Array[T]`, `Range`
-            Class::Iterable(elem) => match ty {
-                Ty::Array(inner) => match self.unify_types(elem, inner, span) {
-                    UnifyResult::Ok(s) => *subst = subst.compose(&s),
-                    UnifyResult::Err(e) => self.error(e),
-                },
-                Ty::Range => match self.unify_types(elem, &Ty::Int, span) {
-                    UnifyResult::Ok(s) => *subst = subst.compose(&s),
-                    UnifyResult::Err(e) => self.error(e),
-                },
+            // `Iterable(opt_elem)`: `Array[T]`, `Range`
+            // `None` = polymorphic (just check the type is iterable)
+            // `Some(elem)` = check and unify element type
+            Class::Iterable(opt_elem) => match ty {
+                Ty::Array(inner) => {
+                    if let Some(elem) = opt_elem {
+                        match self.unify_types(elem, inner, span) {
+                            UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                            UnifyResult::Err(e) => self.error(e),
+                        }
+                    }
+                }
+                Ty::Range => {
+                    if let Some(elem) = opt_elem {
+                        match self.unify_types(elem, &Ty::Int, span) {
+                            UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                            UnifyResult::Err(e) => self.error(e),
+                        }
+                    }
+                }
                 Ty::Union(members) => {
                     members.iter().for_each(|m| {
                         self.satisfies_class(class, m, span, subst)
                     });
                 }
-                Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+                Ty::Var(_) | Ty::Apply(_, _) | Ty::Error | Ty::Unknown => {}
                 Ty::Named(id, type_args) => {
                     match self
                         .instance_registry
@@ -1819,20 +1993,26 @@ impl<'a> InferCtx<'a> {
                         .cloned()
                     {
                         Some(inst) => {
-                            if let Some(inst_elem) = inst.class_args.first() {
-                                let param_subst = Subst(
-                                    inst.type_params
-                                        .iter()
-                                        .zip(type_args.iter())
-                                        .map(|(p, a)| (*p, a.clone()))
-                                        .collect(),
-                                );
-                                let resolved = inst_elem.apply(&param_subst);
-                                match self.unify_types(elem, &resolved, span) {
-                                    UnifyResult::Ok(s) => {
-                                        *subst = subst.compose(&s)
+                            if let Some(elem) = opt_elem {
+                                if let Some(inst_elem) = inst.class_args.first()
+                                {
+                                    let param_subst = Subst(
+                                        inst.type_params
+                                            .iter()
+                                            .zip(type_args.iter())
+                                            .map(|(p, a)| (*p, a.clone()))
+                                            .collect(),
+                                    );
+                                    let resolved =
+                                        inst_elem.apply(&param_subst);
+                                    match self
+                                        .unify_types(elem, &resolved, span)
+                                    {
+                                        UnifyResult::Ok(s) => {
+                                            *subst = subst.compose(&s)
+                                        }
+                                        UnifyResult::Err(e) => self.error(e),
                                     }
-                                    UnifyResult::Err(e) => self.error(e),
                                 }
                             }
                             self.check_instance_constraints(
@@ -1840,8 +2020,11 @@ impl<'a> InferCtx<'a> {
                             );
                         }
                         None => {
+                            let err_ty = opt_elem
+                                .as_ref()
+                                .map_or_else(|| Ty::Unknown, |e| e.clone());
                             self.error(TypeError::Mismatch {
-                                expected: Ty::Array(Box::new(elem.clone())),
+                                expected: Ty::Array(Box::new(err_ty)),
                                 got: ty.clone(),
                                 span,
                             });
@@ -1849,8 +2032,11 @@ impl<'a> InferCtx<'a> {
                     }
                 }
                 _ => {
+                    let err_ty = opt_elem
+                        .as_ref()
+                        .map_or_else(|| Ty::Unknown, |e| e.clone());
                     self.error(TypeError::Mismatch {
-                        expected: Ty::Array(Box::new(elem.clone())),
+                        expected: Ty::Array(Box::new(err_ty)),
                         got: ty.clone(),
                         span,
                     });
@@ -1936,32 +2122,46 @@ impl<'a> InferCtx<'a> {
                 }
             },
 
-            // `Mappable(elem)`: `Array[T]`, `Range`, `Option[T]`, `Result[T, E]`
-            Class::Mappable(elem) => match ty {
-                Ty::Array(inner) => match self.unify_types(elem, inner, span) {
-                    UnifyResult::Ok(s) => *subst = subst.compose(&s),
-                    UnifyResult::Err(e) => self.error(e),
-                },
-                Ty::Range => match self.unify_types(elem, &Ty::Int, span) {
-                    UnifyResult::Ok(s) => *subst = subst.compose(&s),
-                    UnifyResult::Err(e) => self.error(e),
-                },
-                Ty::Option(inner) => {
-                    match self.unify_types(elem, inner, span) {
-                        UnifyResult::Ok(s) => *subst = subst.compose(&s),
-                        UnifyResult::Err(e) => self.error(e),
+            // `Mappable(opt_elem)`: `Array[T]`, `Range`, `Option[T]`, `Result[T, E]`
+            Class::Mappable(opt_elem) => match ty {
+                Ty::Array(inner) => {
+                    if let Some(elem) = opt_elem {
+                        match self.unify_types(elem, inner, span) {
+                            UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                            UnifyResult::Err(e) => self.error(e),
+                        }
                     }
                 }
-                Ty::Result(ok, _) => match self.unify_types(elem, ok, span) {
-                    UnifyResult::Ok(s) => *subst = subst.compose(&s),
-                    UnifyResult::Err(e) => self.error(e),
-                },
+                Ty::Range => {
+                    if let Some(elem) = opt_elem {
+                        match self.unify_types(elem, &Ty::Int, span) {
+                            UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                            UnifyResult::Err(e) => self.error(e),
+                        }
+                    }
+                }
+                Ty::Option(inner) => {
+                    if let Some(elem) = opt_elem {
+                        match self.unify_types(elem, inner, span) {
+                            UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                            UnifyResult::Err(e) => self.error(e),
+                        }
+                    }
+                }
+                Ty::Result(ok, _) => {
+                    if let Some(elem) = opt_elem {
+                        match self.unify_types(elem, ok, span) {
+                            UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                            UnifyResult::Err(e) => self.error(e),
+                        }
+                    }
+                }
                 Ty::Union(members) => {
                     members.iter().for_each(|m| {
                         self.satisfies_class(class, m, span, subst)
                     });
                 }
-                Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+                Ty::Var(_) | Ty::Apply(_, _) | Ty::Error | Ty::Unknown => {}
                 Ty::Named(id, type_args) => {
                     match self
                         .instance_registry
@@ -1969,20 +2169,26 @@ impl<'a> InferCtx<'a> {
                         .cloned()
                     {
                         Some(inst) => {
-                            if let Some(inst_elem) = inst.class_args.first() {
-                                let param_subst = Subst(
-                                    inst.type_params
-                                        .iter()
-                                        .zip(type_args.iter())
-                                        .map(|(p, a)| (*p, a.clone()))
-                                        .collect(),
-                                );
-                                let resolved = inst_elem.apply(&param_subst);
-                                match self.unify_types(elem, &resolved, span) {
-                                    UnifyResult::Ok(s) => {
-                                        *subst = subst.compose(&s)
+                            if let Some(elem) = opt_elem {
+                                if let Some(inst_elem) = inst.class_args.first()
+                                {
+                                    let param_subst = Subst(
+                                        inst.type_params
+                                            .iter()
+                                            .zip(type_args.iter())
+                                            .map(|(p, a)| (*p, a.clone()))
+                                            .collect(),
+                                    );
+                                    let resolved =
+                                        inst_elem.apply(&param_subst);
+                                    match self
+                                        .unify_types(elem, &resolved, span)
+                                    {
+                                        UnifyResult::Ok(s) => {
+                                            *subst = subst.compose(&s)
+                                        }
+                                        UnifyResult::Err(e) => self.error(e),
                                     }
-                                    UnifyResult::Err(e) => self.error(e),
                                 }
                             }
                             self.check_instance_constraints(
@@ -2007,22 +2213,30 @@ impl<'a> InferCtx<'a> {
                 }
             },
 
-            // `Filterable(elem)`: `Array[T]`, `Range`
-            Class::Filterable(elem) => match ty {
-                Ty::Array(inner) => match self.unify_types(elem, inner, span) {
-                    UnifyResult::Ok(s) => *subst = subst.compose(&s),
-                    UnifyResult::Err(e) => self.error(e),
-                },
-                Ty::Range => match self.unify_types(elem, &Ty::Int, span) {
-                    UnifyResult::Ok(s) => *subst = subst.compose(&s),
-                    UnifyResult::Err(e) => self.error(e),
-                },
+            // `Filterable(opt_elem)`: `Array[T]`, `Range`
+            Class::Filterable(opt_elem) => match ty {
+                Ty::Array(inner) => {
+                    if let Some(elem) = opt_elem {
+                        match self.unify_types(elem, inner, span) {
+                            UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                            UnifyResult::Err(e) => self.error(e),
+                        }
+                    }
+                }
+                Ty::Range => {
+                    if let Some(elem) = opt_elem {
+                        match self.unify_types(elem, &Ty::Int, span) {
+                            UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                            UnifyResult::Err(e) => self.error(e),
+                        }
+                    }
+                }
                 Ty::Union(members) => {
                     members.iter().for_each(|m| {
                         self.satisfies_class(class, m, span, subst)
                     });
                 }
-                Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+                Ty::Var(_) | Ty::Apply(_, _) | Ty::Error | Ty::Unknown => {}
                 Ty::Named(id, type_args) => {
                     match self
                         .instance_registry
@@ -2030,20 +2244,26 @@ impl<'a> InferCtx<'a> {
                         .cloned()
                     {
                         Some(inst) => {
-                            if let Some(inst_elem) = inst.class_args.first() {
-                                let param_subst = Subst(
-                                    inst.type_params
-                                        .iter()
-                                        .zip(type_args.iter())
-                                        .map(|(p, a)| (*p, a.clone()))
-                                        .collect(),
-                                );
-                                let resolved = inst_elem.apply(&param_subst);
-                                match self.unify_types(elem, &resolved, span) {
-                                    UnifyResult::Ok(s) => {
-                                        *subst = subst.compose(&s)
+                            if let Some(elem) = opt_elem {
+                                if let Some(inst_elem) = inst.class_args.first()
+                                {
+                                    let param_subst = Subst(
+                                        inst.type_params
+                                            .iter()
+                                            .zip(type_args.iter())
+                                            .map(|(p, a)| (*p, a.clone()))
+                                            .collect(),
+                                    );
+                                    let resolved =
+                                        inst_elem.apply(&param_subst);
+                                    match self
+                                        .unify_types(elem, &resolved, span)
+                                    {
+                                        UnifyResult::Ok(s) => {
+                                            *subst = subst.compose(&s)
+                                        }
+                                        UnifyResult::Err(e) => self.error(e),
                                     }
-                                    UnifyResult::Err(e) => self.error(e),
                                 }
                             }
                             self.check_instance_constraints(
@@ -2068,22 +2288,30 @@ impl<'a> InferCtx<'a> {
                 }
             },
 
-            // `Foldable(elem)`: `Array[T]`, `Range`
-            Class::Foldable(elem) => match ty {
-                Ty::Array(inner) => match self.unify_types(elem, inner, span) {
-                    UnifyResult::Ok(s) => *subst = subst.compose(&s),
-                    UnifyResult::Err(e) => self.error(e),
-                },
-                Ty::Range => match self.unify_types(elem, &Ty::Int, span) {
-                    UnifyResult::Ok(s) => *subst = subst.compose(&s),
-                    UnifyResult::Err(e) => self.error(e),
-                },
+            // `Foldable(opt_elem)`: `Array[T]`, `Range`
+            Class::Foldable(opt_elem) => match ty {
+                Ty::Array(inner) => {
+                    if let Some(elem) = opt_elem {
+                        match self.unify_types(elem, inner, span) {
+                            UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                            UnifyResult::Err(e) => self.error(e),
+                        }
+                    }
+                }
+                Ty::Range => {
+                    if let Some(elem) = opt_elem {
+                        match self.unify_types(elem, &Ty::Int, span) {
+                            UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                            UnifyResult::Err(e) => self.error(e),
+                        }
+                    }
+                }
                 Ty::Union(members) => {
                     members.iter().for_each(|m| {
                         self.satisfies_class(class, m, span, subst)
                     });
                 }
-                Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+                Ty::Var(_) | Ty::Apply(_, _) | Ty::Error | Ty::Unknown => {}
                 Ty::Named(id, type_args) => {
                     match self
                         .instance_registry
@@ -2091,20 +2319,26 @@ impl<'a> InferCtx<'a> {
                         .cloned()
                     {
                         Some(inst) => {
-                            if let Some(inst_elem) = inst.class_args.first() {
-                                let param_subst = Subst(
-                                    inst.type_params
-                                        .iter()
-                                        .zip(type_args.iter())
-                                        .map(|(p, a)| (*p, a.clone()))
-                                        .collect(),
-                                );
-                                let resolved = inst_elem.apply(&param_subst);
-                                match self.unify_types(elem, &resolved, span) {
-                                    UnifyResult::Ok(s) => {
-                                        *subst = subst.compose(&s)
+                            if let Some(elem) = opt_elem {
+                                if let Some(inst_elem) = inst.class_args.first()
+                                {
+                                    let param_subst = Subst(
+                                        inst.type_params
+                                            .iter()
+                                            .zip(type_args.iter())
+                                            .map(|(p, a)| (*p, a.clone()))
+                                            .collect(),
+                                    );
+                                    let resolved =
+                                        inst_elem.apply(&param_subst);
+                                    match self
+                                        .unify_types(elem, &resolved, span)
+                                    {
+                                        UnifyResult::Ok(s) => {
+                                            *subst = subst.compose(&s)
+                                        }
+                                        UnifyResult::Err(e) => self.error(e),
                                     }
-                                    UnifyResult::Err(e) => self.error(e),
                                 }
                             }
                             self.check_instance_constraints(
@@ -2461,19 +2695,19 @@ impl<'a> InferCtx<'a> {
     fn class_kind_to_class(&self, kind: ClassKind) -> Class {
         match kind {
             ClassKind::Numeric => Class::Numeric,
-            ClassKind::Iterable => Class::Iterable(Ty::Unknown),
+            ClassKind::Iterable => Class::Iterable(None),
             ClassKind::Monoid => Class::Monoid,
             ClassKind::BitLike => Class::BitLike,
             ClassKind::Negatable => Class::Negatable,
-            ClassKind::Fallible => Class::Fallible(Ty::Unknown),
+            ClassKind::Fallible => Class::Fallible(None),
             ClassKind::Into => Class::Into(Ty::Unknown),
             ClassKind::TryInto => Class::TryInto(Ty::Unknown),
             ClassKind::Indexable => Class::Indexable(Ty::Unknown),
             ClassKind::Ord => Class::Ord,
             ClassKind::Eq => Class::Eq,
-            ClassKind::Mappable => Class::Mappable(Ty::Unknown),
-            ClassKind::Foldable => Class::Foldable(Ty::Unknown),
-            ClassKind::Filterable => Class::Filterable(Ty::Unknown),
+            ClassKind::Mappable => Class::Mappable(None),
+            ClassKind::Foldable => Class::Foldable(None),
+            ClassKind::Filterable => Class::Filterable(None),
             ClassKind::Display => Class::Display,
         }
     }
@@ -2632,7 +2866,7 @@ mod tests {
     #[test]
     fn constraint_substitution() {
         let t = TyVar::new(0);
-        let constraint = Class::Iterable(Ty::Var(t));
+        let constraint = Class::Iterable(Some(Ty::Var(t)));
 
         // Create substitution: T -> Int
         let subst = Subst::singleton(t, Ty::Int);
@@ -2640,10 +2874,10 @@ mod tests {
         // Apply substitution to constraint
         let resolved = constraint.apply(&subst);
 
-        // Should now be Iterable(Int)
+        // Should now be `Iterable(Some(Int))`
         assert!(
-            matches!(resolved, Class::Iterable(Ty::Int)),
-            "constraint should be Iterable(Int) after substitution"
+            matches!(resolved, Class::Iterable(Some(Ty::Int))),
+            "constraint should be Iterable(Some(Int)) after substitution"
         );
     }
 }

@@ -610,35 +610,35 @@ impl InferCtx<'_> {
         subst: &HashMap<StringId, Ty>,
     ) -> Class {
         match c {
-            ast::Class::Numeric => Class::Numeric,
-            ast::Class::Iterable(ty_id) => {
-                Class::Iterable(self.ast_type_to_ty(*ty_id, subst))
+            ast::Class::Iterable(opt) => {
+                Class::Iterable(opt.map(|id| self.ast_type_to_ty(id, subst)))
             }
+            ast::Class::Fallible(opt) => {
+                Class::Fallible(opt.map(|id| self.ast_type_to_ty(id, subst)))
+            }
+            ast::Class::Mappable(opt) => {
+                Class::Mappable(opt.map(|id| self.ast_type_to_ty(id, subst)))
+            }
+            ast::Class::Foldable(opt) => {
+                Class::Foldable(opt.map(|id| self.ast_type_to_ty(id, subst)))
+            }
+            ast::Class::Filterable(opt) => {
+                Class::Filterable(opt.map(|id| self.ast_type_to_ty(id, subst)))
+            }
+            ast::Class::Into(id) => {
+                Class::Into(self.ast_type_to_ty(*id, subst))
+            }
+            ast::Class::TryInto(id) => {
+                Class::TryInto(self.ast_type_to_ty(*id, subst))
+            }
+            ast::Class::Indexable(id) => {
+                Class::Indexable(self.ast_type_to_ty(*id, subst))
+            }
+            ast::Class::Numeric => Class::Numeric,
             ast::Class::Monoid => Class::Monoid,
             ast::Class::BitLike => Class::BitLike,
             ast::Class::Negatable => Class::Negatable,
-            ast::Class::Fallible(ty_id) => {
-                Class::Fallible(self.ast_type_to_ty(*ty_id, subst))
-            }
-            ast::Class::Into(ty_id) => {
-                Class::Into(self.ast_type_to_ty(*ty_id, subst))
-            }
-            ast::Class::TryInto(ty_id) => {
-                Class::TryInto(self.ast_type_to_ty(*ty_id, subst))
-            }
-            ast::Class::Indexable(elem_id) => {
-                Class::Indexable(self.ast_type_to_ty(*elem_id, subst))
-            }
             ast::Class::Ord => Class::Ord,
-            ast::Class::Mappable(ty_id) => {
-                Class::Mappable(self.ast_type_to_ty(*ty_id, subst))
-            }
-            ast::Class::Foldable(ty_id) => {
-                Class::Foldable(self.ast_type_to_ty(*ty_id, subst))
-            }
-            ast::Class::Filterable(ty_id) => {
-                Class::Filterable(self.ast_type_to_ty(*ty_id, subst))
-            }
             ast::Class::Display => Class::Display,
         }
     }

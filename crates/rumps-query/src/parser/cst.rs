@@ -50,38 +50,37 @@ use crate::Span;
 
 /// Type class constraint for type parameters (Haskell-style).
 ///
-/// Mirrors `ClassKind` in the typechecker; all classes should be representable.
+/// HKT classes (kind `* -> *`) use `Option<TypeExpr>` because the element type
+/// is specified at usage sites (`F[T]`), not in the constraint (`F: Fallible`).
+/// Multi-param classes require a type arg (e.g., `Into[Target]`).
 #[derive(Clone, Debug)]
 pub(crate) enum Class {
-    /// Type is `Int` or `Float`.
-    Numeric,
     /// Type is iterable (`Array[T]` or `Range`).
-    Iterable(TypeExpr),
-    /// Type supports monoidal concatenation (`++`).
-    Monoid,
-    /// Type supports bitwise operations (`&`, `|`, `<<`, `>>`).
-    BitLike,
-    /// Type can be negated with unary `-`.
-    Negatable,
+    Iterable(Option<TypeExpr>),
     /// Type is fallible (`Option[T]` or `Result[T, E]`).
-    Fallible(TypeExpr),
+    Fallible(Option<TypeExpr>),
+    /// Type supports `map`.
+    Mappable(Option<TypeExpr>),
+    /// Type supports `fold`.
+    Foldable(Option<TypeExpr>),
+    /// Type supports `filter`.
+    Filterable(Option<TypeExpr>),
     /// Type can be converted to another type: `Into[Target]`.
     Into(TypeExpr),
     /// Type can be fallibly converted to another type: `TryInto[Target]`.
     TryInto(TypeExpr),
     /// Type supports indexing: `Indexable[Elem]`.
-    ///
-    /// The element type is the return type of indexing. The index type is
-    /// determined by the associated type `Index` (e.g., `Int` for `Array`).
     Indexable(TypeExpr),
+    /// Type is `Int` or `Float`.
+    Numeric,
+    /// Type supports monoidal concatenation (`++`).
+    Monoid,
+    /// Type supports bitwise operations.
+    BitLike,
+    /// Type can be negated with unary `-`.
+    Negatable,
     /// Type supports ordering comparisons.
     Ord,
-    /// Type supports `map`: `Mappable[Element]`.
-    Mappable(TypeExpr),
-    /// Type supports `fold`: `Foldable[Element]`.
-    Foldable(TypeExpr),
-    /// Type supports `filter`: `Filterable[Element]`.
-    Filterable(TypeExpr),
     /// Type can be converted to a display string.
     Display,
 }

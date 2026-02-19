@@ -25,28 +25,28 @@ use syn::{Ident, Result, Token};
 ///
 /// ## Class syntax
 ///
-/// Type variables can have simple or parameterized class constraints:
+/// Type variables can have simple, HKT, or multi-param class constraints:
 ///
-/// Simple classes (no type argument):
+/// Simple classes (kind `*`, no type argument):
 /// - `T: Numeric` ; `T` must be `Int`, `Float`, or `Word`
 /// - `T: Negatable` ; `T` must be `Int` or `Float`
 /// - `T: BitLike` ; `T` must be `Bool`, `Int`, or `Word`
 /// - `T: Monoid` ; `T` must be `String`, `Array[_]`, `Map[_, _]`, or `Option[_]`
-/// - `T: Storable` ; `T` must be storable in the database
-/// - `T: Subscriptable` ; `T` must be usable as a subscript key
 /// - `T: Ord` ; `T` must support ordering (`Bool`, `Int`, `Word`, `Float`, `Char`, `String`)
 /// - `T: Eq` ; `T` must support equality (`==`, `!=`)
 /// - `T: Display` ; `T` can be displayed as RUMPS syntax
 ///
-/// Parameterized classes (require a type argument in brackets):
-/// - `I: Iterable[T]` ; `I` must be iterable with element type `T`
-/// - `F: Fallible[T]` ; `F` must be a fallible type (`Option[T]` or `Result[T, _]`)
+/// HKT classes (kind `* -> *`, no type argument in constraint; element at usage):
+/// - `F: Fallible` ; `F` is a fallible type constructor; use `F[T]` in type position
+/// - `I: Iterable` ; `I` is an iterable type constructor; use `I[T]` in type position
+/// - `M: Mappable` ; `M` is a functor; use `M[T]` in type position
+/// - `F: Foldable` ; `F` supports fold/reduce; use `F[T]` in type position
+/// - `F: Filterable` ; `F` supports filter; use `F[T]` in type position
+///
+/// Multi-param classes (require a type argument in brackets):
 /// - `T: Into[U]` ; type `T` is convertible to type `U`
 /// - `T: TryInto[U]` ; type `T` is fallibly convertible to type `U`
 /// - `B: Indexable[E]` ; `B` supports indexing with element type `E`
-/// - `F: Mappable[T]` ; `F` is a functor with element type `T`
-/// - `F: Foldable[T]` ; `F` supports fold/reduce with element type `T`
-/// - `F: Filterable[T]` ; `F` supports filter with element type `T`
 ///
 /// ## Type syntax
 ///
@@ -99,24 +99,23 @@ const SIMPLE_CLASSES: &[&str] = &[
     "Display",
 ];
 
-/// Parameterized class names (require `[T, ...]` arguments).
-const PARAMETERIZED_CLASSES: &[&str] = &[
-    "Iterable",
-    "Fallible",
-    "Into",
-    "TryInto",
-    "Indexable",
-    "Mappable",
-    "Foldable",
-    "Filterable",
-];
+/// HKT classes (kind `* -> *`): constraint does NOT take `[T]`.
+///
+/// These are higher-kinded; the element type is specified at usage sites
+/// (`F[T]` in type position), not in the constraint (`F: Fallible`).
+const HKT_CLASSES: &[&str] =
+    &["Fallible", "Iterable", "Mappable", "Foldable", "Filterable"];
+
+/// Multi-param classes: constraint REQUIRES `[T]` arguments.
+const MULTI_PARAM_CLASSES: &[&str] = &["Into", "TryInto", "Indexable"];
 
 /// Parse a single type variable with optional class bound.
 ///
 /// Syntax:
 /// - `T` (no class)
 /// - `T: Numeric` (simple class)
-/// - `I: Iterable[T]` (parameterized class)
+/// - `F: Fallible` (HKT class; element type at usage via `F[T]`)
+/// - `T: Into[U]` (multi-param class)
 fn parse_type_var(input: ParseStream) -> Result<(Ident, Option<VarClass>)> {
     let name: Ident = input.parse()?;
 
@@ -128,8 +127,11 @@ fn parse_type_var(input: ParseStream) -> Result<(Ident, Option<VarClass>)> {
 
         if SIMPLE_CLASSES.contains(&cname.as_str()) {
             Some(VarClass::Simple(cname))
-        } else if PARAMETERIZED_CLASSES.contains(&cname.as_str()) {
-            // Parameterized class: parse bracketed, comma-separated type args
+        } else if HKT_CLASSES.contains(&cname.as_str()) {
+            // HKT class: NO type args in constraint
+            Some(VarClass::Simple(cname))
+        } else if MULTI_PARAM_CLASSES.contains(&cname.as_str()) {
+            // Multi-param class: parse bracketed, comma-separated type args
             let content;
             syn::bracketed!(content in input);
             let args: syn::punctuated::Punctuated<Ident, Token![,]> =
@@ -139,8 +141,8 @@ fn parse_type_var(input: ParseStream) -> Result<(Ident, Option<VarClass>)> {
             Some(VarClass::Parameterized(cname, args))
         } else {
             panic!(
-                "unknown class: `{cname}`; use one of {:?} or {:?}",
-                SIMPLE_CLASSES, PARAMETERIZED_CLASSES
+                "unknown class: `{cname}`; use one of {:?}, {:?}, or {:?}",
+                SIMPLE_CLASSES, HKT_CLASSES, MULTI_PARAM_CLASSES
             )
         }
     } else {
@@ -198,23 +200,12 @@ impl Parse for SchemeInput {
     }
 }
 
-/// Generate tokens for a parameterized class.
+/// Generate tokens for a multi-param class.
 ///
-/// For parameterized classes (`Iterable[T]`, `Indexable[I, E]`, etc.),
-/// we generate a `ty::Class::Variant(...)` with the type argument(s).
-fn parameterized_class_tokens(
-    name: &str,
-    args: &[TokenStream2],
-) -> TokenStream2 {
+/// For multi-param classes (`Into[U]`, `TryInto[U]`, `Indexable[E]`),
+/// we generate a `ty::Class::Variant(...)` with the type argument.
+fn multi_param_class_tokens(name: &str, args: &[TokenStream2]) -> TokenStream2 {
     match name {
-        "Iterable" => {
-            let inner = &args[0];
-            quote! { crate::typecheck::Class::Iterable(#inner) }
-        }
-        "Fallible" => {
-            let inner = &args[0];
-            quote! { crate::typecheck::Class::Fallible(#inner) }
-        }
         "Into" => {
             let inner = &args[0];
             quote! { crate::typecheck::Class::Into(#inner) }
@@ -227,19 +218,7 @@ fn parameterized_class_tokens(
             let elem = &args[0];
             quote! { crate::typecheck::Class::Indexable(#elem) }
         }
-        "Mappable" => {
-            let inner = &args[0];
-            quote! { crate::typecheck::Class::Mappable(#inner) }
-        }
-        "Foldable" => {
-            let inner = &args[0];
-            quote! { crate::typecheck::Class::Foldable(#inner) }
-        }
-        "Filterable" => {
-            let inner = &args[0];
-            quote! { crate::typecheck::Class::Filterable(#inner) }
-        }
-        _ => panic!("unknown parameterized class: `{name}`"),
+        _ => panic!("unknown multi-param class: `{name}`"),
     }
 }
 
@@ -274,10 +253,21 @@ impl SchemeInput {
                             VarClass::Simple(name) => {
                                 let ident =
                                     Ident::new(name, proc_macro2::Span::call_site());
+                                // HKT classes use `Option<Ty>` and need `(None)`
+                                let class_tokens =
+                                    if HKT_CLASSES.contains(&name.as_str()) {
+                                        quote! {
+                                            crate::typecheck::Class::#ident(None)
+                                        }
+                                    } else {
+                                        quote! {
+                                            crate::typecheck::Class::#ident
+                                        }
+                                    };
                                 quote! {
                                     (
                                         crate::typecheck::TyVar::new(#var_idx),
-                                        crate::typecheck::Class::#ident
+                                        #class_tokens
                                     )
                                 }
                             }
@@ -301,7 +291,7 @@ impl SchemeInput {
                                     })
                                     .collect();
                                 let class_tokens =
-                                    parameterized_class_tokens(name, &arg_tokens);
+                                    multi_param_class_tokens(name, &arg_tokens);
                                 quote! {
                                     (
                                         crate::typecheck::TyVar::new(#var_idx),
@@ -653,7 +643,9 @@ fn parse_bracketed_args(input: ParseStream) -> Result<Vec<TyExpr>> {
 
 /// Check if an identifier is a known class name (for associated type parsing).
 fn is_class_name(s: &str) -> bool {
-    SIMPLE_CLASSES.contains(&s) || PARAMETERIZED_CLASSES.contains(&s)
+    SIMPLE_CLASSES.contains(&s)
+        || HKT_CLASSES.contains(&s)
+        || MULTI_PARAM_CLASSES.contains(&s)
 }
 
 /// Parse an identifier-based type: primitive, named, type var, parameterized, or assoc type.

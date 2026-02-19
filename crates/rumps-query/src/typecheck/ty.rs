@@ -115,14 +115,18 @@ impl ClassKind {
     /// Returns information about associated types and parameter count.
     pub(crate) fn def(self) -> ClassDef {
         match self {
-            // Parameterized classes with 1 type arg
+            // HKT classes (kind `* -> *`): no user-facing type arg in constraint
             Self::Iterable
             | Self::Fallible
-            | Self::Into
-            | Self::TryInto
             | Self::Mappable
             | Self::Foldable
             | Self::Filterable => ClassDef {
+                kind: self,
+                assoc_types: &[],
+                params: 0,
+            },
+            // Multi-param classes with 1 type arg
+            Self::Into | Self::TryInto => ClassDef {
                 kind: self,
                 assoc_types: &[],
                 params: 1,
@@ -197,40 +201,40 @@ impl ClassKind {
             }
 
             (Self::Fallible, "unwrap") => Ok(MethodSpec::Standard(
-                scheme!(forall T, F: Fallible[T]. (F) -> T),
+                scheme!(forall T, F: Fallible. (F[T]) -> T),
             )),
             // `Fallible:wrap` needs `convert_targets` tracking
             (Self::Fallible, "wrap") => Ok(MethodSpec::Tracked {
-                scheme: scheme!(forall T, F: Fallible[T]. (T) -> F),
+                scheme: scheme!(forall T, F: Fallible. (T) -> F[T]),
                 track: TrackKind::Convert,
             }),
             (Self::Fallible, "flat-map") => Ok(MethodSpec::Standard(
-                scheme!(forall T U, F: Fallible[T]. (F, (T) -> F[U]) -> F[U]),
+                scheme!(forall T, U, F: Fallible. (F[T], (T) -> F[U]) -> F[U]),
             )),
 
             (Self::Iterable, "length") => Ok(MethodSpec::Standard(
-                scheme!(forall T, I: Iterable[T]. (I) -> Int),
+                scheme!(forall T, I: Iterable. (I[T]) -> Int),
             )),
             (Self::Iterable, "contains") => Ok(MethodSpec::Standard(
-                scheme!(forall T, I: Iterable[T]. (I, T) -> Bool),
+                scheme!(forall T, I: Iterable. (I[T], T) -> Bool),
             )),
             (Self::Iterable, "reverse") => Ok(MethodSpec::Standard(
-                scheme!(forall T, I: Iterable[T]. (I) -> Array[T]),
+                scheme!(forall T, I: Iterable. (I[T]) -> Array[T]),
             )),
             (Self::Iterable, "foreach") => Ok(MethodSpec::Standard(
-                scheme!(forall T, I: Iterable[T]. ((T) -> Unit, I) -> Unit),
+                scheme!(forall T, I: Iterable. ((T) -> Unit, I[T]) -> Unit),
             )),
 
             (Self::Mappable, "map") => Ok(MethodSpec::Standard(
-                scheme!(forall T, U, M: Mappable[T]. ((T) -> U, M) -> Array[U]),
+                scheme!(forall T, U, M: Mappable. ((T) -> U, M[T]) -> Array[U]),
             )),
 
             (Self::Filterable, "filter") => Ok(MethodSpec::Standard(
-                scheme!(forall T, F: Filterable[T]. ((T) -> Bool, F) -> Array[T]),
+                scheme!(forall T, F: Filterable. ((T) -> Bool, F[T]) -> Array[T]),
             )),
 
             (Self::Foldable, "reduce") => Ok(MethodSpec::Standard(
-                scheme!(forall T, U, F: Foldable[T]. ((U, T) -> U, U, F) -> U),
+                scheme!(forall T, U, F: Foldable. ((U, T) -> U, U, F[T]) -> U),
             )),
 
             // `Into:into` needs convert_targets tracking
@@ -328,20 +332,22 @@ impl fmt::Display for ClassKind {
 /// Unlike `ast::Class` which carries `AstTypeExprId` for parameterized
 /// variants, this carries resolved `Ty` types. Used in `Scheme` storage
 /// and during constraint solving.
+///
+/// HKT classes (kind `* -> *`) use `Option<Ty>` because the element type
+/// is specified at usage sites (`F[T]`), not in the constraint (`F: Fallible`).
+/// `None` means polymorphic over element type; `Some(ty)` means specific.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Class {
-    /// Type is `Int`, `Word`, or `Float`.
-    Numeric,
     /// Type is iterable (`Array[T]` or `Range`).
-    Iterable(Ty),
-    /// Type supports monoidal concatenation (`++`).
-    Monoid,
-    /// Type supports bitwise operations (`&`, `|`, `<<`, `>>`).
-    BitLike,
-    /// Type can be negated with unary `-`.
-    Negatable,
+    Iterable(Option<Ty>),
     /// Type is fallible (`Option[T]` or `Result[T, E]`).
-    Fallible(Ty),
+    Fallible(Option<Ty>),
+    /// Type is a functor; supports structure-preserving `map`.
+    Mappable(Option<Ty>),
+    /// Type supports `fold`/`reduce` operations.
+    Foldable(Option<Ty>),
+    /// Type supports `filter` operations.
+    Filterable(Option<Ty>),
     /// Type can be converted to another type.
     Into(Ty),
     /// Type can be fallibly converted to another type.
@@ -351,16 +357,18 @@ pub(crate) enum Class {
     /// The `Ty` is the element type. The index type is accessed via the
     /// associated type `Index` (e.g., `Array.Index = Int`, `Map[K,V].Index = K`).
     Indexable(Ty),
+    /// Type is `Int`, `Word`, or `Float`.
+    Numeric,
+    /// Type supports monoidal concatenation (`++`).
+    Monoid,
+    /// Type supports bitwise operations (`&`, `|`, `<<`, `>>`).
+    BitLike,
+    /// Type can be negated with unary `-`.
+    Negatable,
     /// Type supports ordering comparisons (`<`, `>`, `<=`, `>=`).
     Ord,
     /// Type supports equality comparisons (`==`, `!=`).
     Eq,
-    /// Type is a functor; supports structure-preserving `map`.
-    Mappable(Ty),
-    /// Type supports `fold`/`reduce` operations.
-    Foldable(Ty),
-    /// Type supports `filter` operations.
-    Filterable(Ty),
     /// Type can be displayed as RUMPS syntax (for `WRITE`).
     Display,
 }
@@ -369,43 +377,37 @@ impl Class {
     /// Apply a substitution to any inner types.
     pub(crate) fn apply(&self, subst: &Subst) -> Self {
         match self {
-            Self::Numeric => Self::Numeric,
-            Self::Iterable(t) => Self::Iterable(t.apply(subst)),
-            Self::Monoid => Self::Monoid,
-            Self::BitLike => Self::BitLike,
-            Self::Negatable => Self::Negatable,
-            Self::Fallible(t) => Self::Fallible(t.apply(subst)),
+            Self::Iterable(opt) => {
+                Self::Iterable(opt.as_ref().map(|t| t.apply(subst)))
+            }
+            Self::Fallible(opt) => {
+                Self::Fallible(opt.as_ref().map(|t| t.apply(subst)))
+            }
+            Self::Mappable(opt) => {
+                Self::Mappable(opt.as_ref().map(|t| t.apply(subst)))
+            }
+            Self::Foldable(opt) => {
+                Self::Foldable(opt.as_ref().map(|t| t.apply(subst)))
+            }
+            Self::Filterable(opt) => {
+                Self::Filterable(opt.as_ref().map(|t| t.apply(subst)))
+            }
             Self::Into(t) => Self::Into(t.apply(subst)),
             Self::TryInto(t) => Self::TryInto(t.apply(subst)),
             Self::Indexable(e) => Self::Indexable(e.apply(subst)),
-            Self::Ord => Self::Ord,
-            Self::Eq => Self::Eq,
-            Self::Mappable(t) => Self::Mappable(t.apply(subst)),
-            Self::Foldable(t) => Self::Foldable(t.apply(subst)),
-            Self::Filterable(t) => Self::Filterable(t.apply(subst)),
-            Self::Display => Self::Display,
+            Self::Numeric
+            | Self::Monoid
+            | Self::BitLike
+            | Self::Negatable
+            | Self::Ord
+            | Self::Eq
+            | Self::Display => self.clone(),
         }
     }
 
     /// Returns the name of this class for error messages.
     pub(crate) fn name(&self) -> &'static str {
-        match self {
-            Self::Numeric => "Numeric",
-            Self::Iterable(_) => "Iterable",
-            Self::Monoid => "Monoid",
-            Self::BitLike => "BitLike",
-            Self::Negatable => "Negatable",
-            Self::Fallible(_) => "Fallible",
-            Self::Into(_) => "Into",
-            Self::TryInto(_) => "TryInto",
-            Self::Indexable(_) => "Indexable",
-            Self::Ord => "Ord",
-            Self::Eq => "Eq",
-            Self::Mappable(_) => "Mappable",
-            Self::Foldable(_) => "Foldable",
-            Self::Filterable(_) => "Filterable",
-            Self::Display => "Display",
-        }
+        self.kind().name()
     }
 
     /// Returns a help message describing what types satisfy this class.
@@ -435,7 +437,7 @@ impl Class {
                 Some("equality types are primitives, containers (if elements are `Eq`), and user types with `CLASS Eq`")
             }
             Self::Mappable(_) => {
-                Some("mappable types are `Option`, `Result`, and `Array`")
+                Some("mappable types are `Option`, `Result`, `Array`, and `Range`")
             }
             Self::Foldable(_) => {
                 Some("foldable types are `Option`, `Result`, `Array`, and `Range`")
@@ -450,14 +452,16 @@ impl Class {
     /// Collect free type variables from any inner types.
     pub(crate) fn free_vars(&self) -> HashSet<TyVar> {
         match self {
-            Self::Iterable(t)
-            | Self::Fallible(t)
-            | Self::Into(t)
-            | Self::TryInto(t)
-            | Self::Indexable(t)
-            | Self::Mappable(t)
-            | Self::Foldable(t)
-            | Self::Filterable(t) => t.free_vars(),
+            Self::Iterable(opt)
+            | Self::Fallible(opt)
+            | Self::Mappable(opt)
+            | Self::Foldable(opt)
+            | Self::Filterable(opt) => {
+                opt.as_ref().map_or_else(HashSet::new, Ty::free_vars)
+            }
+            Self::Into(t) | Self::TryInto(t) | Self::Indexable(t) => {
+                t.free_vars()
+            }
             Self::Numeric
             | Self::Monoid
             | Self::BitLike
@@ -471,20 +475,20 @@ impl Class {
     /// Get the `ClassKind` for dispatch table lookup.
     pub(crate) const fn kind(&self) -> ClassKind {
         match self {
-            Self::Numeric => ClassKind::Numeric,
             Self::Iterable(_) => ClassKind::Iterable,
-            Self::Monoid => ClassKind::Monoid,
-            Self::BitLike => ClassKind::BitLike,
-            Self::Negatable => ClassKind::Negatable,
             Self::Fallible(_) => ClassKind::Fallible,
-            Self::Into(_) => ClassKind::Into,
-            Self::TryInto(_) => ClassKind::TryInto,
-            Self::Indexable(_) => ClassKind::Indexable,
-            Self::Ord => ClassKind::Ord,
-            Self::Eq => ClassKind::Eq,
             Self::Mappable(_) => ClassKind::Mappable,
             Self::Foldable(_) => ClassKind::Foldable,
             Self::Filterable(_) => ClassKind::Filterable,
+            Self::Into(_) => ClassKind::Into,
+            Self::TryInto(_) => ClassKind::TryInto,
+            Self::Indexable(_) => ClassKind::Indexable,
+            Self::Numeric => ClassKind::Numeric,
+            Self::Monoid => ClassKind::Monoid,
+            Self::BitLike => ClassKind::BitLike,
+            Self::Negatable => ClassKind::Negatable,
+            Self::Ord => ClassKind::Ord,
+            Self::Eq => ClassKind::Eq,
             Self::Display => ClassKind::Display,
         }
     }
@@ -865,9 +869,22 @@ impl Ty {
                                     Self::Map(Box::new(a.clone()), mv.clone())
                                 })
                             }
+                            // User-defined named types: replace first N
+                            // type args with `Apply` args, preserve the rest
+                            Self::Named(id, orig_args) => {
+                                let new_args: Vec<_> = args
+                                    .iter()
+                                    .chain(orig_args.iter().skip(args.len()))
+                                    .cloned()
+                                    .collect();
+                                Self::Named(*id, new_args)
+                            }
                             // If bound to a type variable, keep Apply with that var
                             Self::Var(w) => Self::Apply(*w, args),
-                            // Anything else: can't apply arguments
+                            // Non-parameterized types (e.g. `Range`): just use
+                            // the bound type directly (args are handled by
+                            // constraint validation, not constructor application)
+                            other if args.is_empty() => other.clone(),
                             _ => Self::Error,
                         }
                     }

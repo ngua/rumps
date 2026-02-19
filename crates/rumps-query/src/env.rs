@@ -364,10 +364,10 @@ impl BinOp {
                 ty: scheme!(forall T: Monoid. (T, T) -> T),
             },
 
-            // Coalesce: forall T, F: Fallible[T]. (F, T) -> T
+            // Coalesce: `forall T, F: Fallible. (F[T], T) -> T`
             Self::Coalesce => BinOpDef {
                 name: "??",
-                ty: scheme!(forall T, F: Fallible[T]. (F, T) -> T),
+                ty: scheme!(forall T, F: Fallible. (F[T], T) -> T),
             },
 
             // Pipe: forall T, U. (T, (T) -> U) -> U
@@ -399,7 +399,7 @@ impl UnOp {
             },
             Self::Wrap => UnOpDef {
                 name: "?",
-                ty: scheme!(forall T, F: Fallible[T]. (T) -> F),
+                ty: scheme!(forall T, F: Fallible. (T) -> F[T]),
             },
         }
     }
@@ -417,7 +417,7 @@ impl PostfixOp {
         match self {
             Self::Unwrap => PostfixOpDef {
                 name: "!",
-                ty: scheme!(forall T, F: Fallible[T]. (F) -> T),
+                ty: scheme!(forall T, F: Fallible. (F[T]) -> T),
             },
         }
     }

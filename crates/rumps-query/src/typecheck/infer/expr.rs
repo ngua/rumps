@@ -476,9 +476,9 @@ impl InferCtx<'_> {
                                     (ClassKind::Fallible, "wrap") => {
                                         self.constrain(Constraint::Class {
                                             ty: target_ty.clone(),
-                                            class: Class::Fallible(
+                                            class: Class::Fallible(Some(
                                                 input_ty.clone(),
-                                            ),
+                                            )),
                                             span,
                                         });
                                         Ty::Fn(
@@ -2401,6 +2401,10 @@ impl InferCtx<'_> {
             // Type variable: reject only polymorphic parameters (universally quantified);
             // inference variables (from calls) are allowed since they resolve to concrete types
             Ty::Var(v) => !self.poly_param_vars.contains(v),
+
+            // HKT type variable application: `F[T]` where `F` is a type var;
+            // if `F` is a polymorphic parameter, pattern matching is unsound
+            Ty::Apply(tv, _) => !self.poly_param_vars.contains(tv),
 
             // Error/Unknown: allow to avoid cascading errors
             Ty::Error | Ty::Unknown => true,

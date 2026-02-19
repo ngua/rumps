@@ -346,11 +346,11 @@ impl Parser {
 
     /// Parse a user-facing constraint name.
     ///
-    /// Recognizes: `Numeric`, `Subscriptable`, `Storable`, `Iterable[T]`,
-    /// `Monoid`, `BitLike`, `Fallible[T]`, `Into[T]`, `TryInto[T]`.
+    /// HKT classes (`Iterable`, `Fallible`, etc.) reject type arguments;
+    /// the element type is specified at usage sites (`F[T]`).
+    /// Multi-param classes (`Into[T]`, `TryInto[T]`, `Indexable[E]`) require them.
     pub(super) fn constraint(
     ) -> impl chumsky::Parser<Token, cst::Class, Error = ParseErr> + Clone {
-        // Type args inside brackets: `[T]`, `[T, U]`, etc.
         let type_args = just(Token::LBracket)
             .ignore_then(
                 Self::type_expr_atom()
@@ -362,93 +362,81 @@ impl Parser {
         select! { Token::Ident(s) => s }
             .then(type_args.or_not())
             .try_map(|(name, args), span| {
-                let args = args.unwrap_or_default();
+                let has_args = args.is_some();
+                let mut args = args.unwrap_or_default().into_iter();
+
                 match name.as_str() {
+                    "Iterable" if has_args => Err(chumsky::error::Simple::custom(
+                        span,
+                        "`Iterable` is higher-kinded; use `C: Iterable` \
+                         and `C[T]` in type position, not `C: Iterable[T]`",
+                    )),
+                    "Iterable" => Ok(cst::Class::Iterable(None)),
+
+                    "Fallible" if has_args => Err(chumsky::error::Simple::custom(
+                        span,
+                        "`Fallible` is higher-kinded; use `F: Fallible` \
+                         and `F[T]` in type position, not `F: Fallible[T]`",
+                    )),
+                    "Fallible" => Ok(cst::Class::Fallible(None)),
+
+                    "Mappable" if has_args => Err(chumsky::error::Simple::custom(
+                        span,
+                        "`Mappable` is higher-kinded; use `M: Mappable` \
+                         and `M[T]` in type position, not `M: Mappable[T]`",
+                    )),
+                    "Mappable" => Ok(cst::Class::Mappable(None)),
+
+                    "Foldable" if has_args => Err(chumsky::error::Simple::custom(
+                        span,
+                        "`Foldable` is higher-kinded; use `F: Foldable` \
+                         and `F[T]` in type position, not `F: Foldable[T]`",
+                    )),
+                    "Foldable" => Ok(cst::Class::Foldable(None)),
+
+                    "Filterable" if has_args => Err(chumsky::error::Simple::custom(
+                        span,
+                        "`Filterable` is higher-kinded; use `F: Filterable` \
+                         and `F[T]` in type position, not `F: Filterable[T]`",
+                    )),
+                    "Filterable" => Ok(cst::Class::Filterable(None)),
+
+                    "Into" => args.next().map_or_else(
+                        || Err(chumsky::error::Simple::custom(
+                            span,
+                            "`Into` requires a target type: `Into[T]`",
+                        )),
+                        |ty| Ok(cst::Class::Into(ty)),
+                    ),
+                    "TryInto" => args.next().map_or_else(
+                        || Err(chumsky::error::Simple::custom(
+                            span,
+                            "`TryInto` requires a target type: `TryInto[T]`",
+                        )),
+                        |ty| Ok(cst::Class::TryInto(ty)),
+                    ),
+                    "Indexable" => args.next().map_or_else(
+                        || Err(chumsky::error::Simple::custom(
+                            span,
+                            "`Indexable` requires an element type: `Indexable[E]`",
+                        )),
+                        |ty| Ok(cst::Class::Indexable(ty)),
+                    ),
+
                     "Numeric" => Ok(cst::Class::Numeric),
                     "Monoid" => Ok(cst::Class::Monoid),
                     "BitLike" => Ok(cst::Class::BitLike),
                     "Negatable" => Ok(cst::Class::Negatable),
-                    "Iterable" => args.into_iter().next().map_or_else(
-                        || {
-                            Err(chumsky::error::Simple::custom(
-                                span,
-                                "`Iterable` requires a type argument; use `Iterable[T]`",
-                            ))
-                        },
-                        |ty| Ok(cst::Class::Iterable(ty)),
-                    ),
-                    "Fallible" => args.into_iter().next().map_or_else(
-                        || {
-                            Err(chumsky::error::Simple::custom(
-                                span,
-                                "`Fallible` requires a type argument; use `Fallible[T]`",
-                            ))
-                        },
-                        |ty| Ok(cst::Class::Fallible(ty)),
-                    ),
-                    "Into" => args.into_iter().next().map_or_else(
-                        || {
-                            Err(chumsky::error::Simple::custom(
-                                span,
-                                "`Into` requires a type argument; use `Into[T]`",
-                            ))
-                        },
-                        |ty| Ok(cst::Class::Into(ty)),
-                    ),
-                    "TryInto" => args.into_iter().next().map_or_else(
-                        || {
-                            Err(chumsky::error::Simple::custom(
-                                span,
-                                "`TryInto` requires a type argument; use `TryInto[T]`",
-                            ))
-                        },
-                        |ty| Ok(cst::Class::TryInto(ty)),
-                    ),
-                    "Indexable" => args.into_iter().next().map_or_else(
-                        || {
-                            Err(chumsky::error::Simple::custom(
-                                span,
-                                "`Indexable` requires a type argument; use `Indexable[E]`",
-                            ))
-                        },
-                        |ty| Ok(cst::Class::Indexable(ty)),
-                    ),
                     "Ord" => Ok(cst::Class::Ord),
-                    "Mappable" => args.into_iter().next().map_or_else(
-                        || {
-                            Err(chumsky::error::Simple::custom(
-                                span,
-                                "`Mappable` requires a type argument; use `Mappable[T]`",
-                            ))
-                        },
-                        |ty| Ok(cst::Class::Mappable(ty)),
-                    ),
-                    "Foldable" => args.into_iter().next().map_or_else(
-                        || {
-                            Err(chumsky::error::Simple::custom(
-                                span,
-                                "`Foldable` requires a type argument; use `Foldable[T]`",
-                            ))
-                        },
-                        |ty| Ok(cst::Class::Foldable(ty)),
-                    ),
-                    "Filterable" => args.into_iter().next().map_or_else(
-                        || {
-                            Err(chumsky::error::Simple::custom(
-                                span,
-                                "`Filterable` requires a type argument; use `Filterable[T]`",
-                            ))
-                        },
-                        |ty| Ok(cst::Class::Filterable(ty)),
-                    ),
                     "Display" => Ok(cst::Class::Display),
+
                     _ => Err(chumsky::error::Simple::custom(
                         span,
                         format!(
                             "unknown class `{name}`; valid classes are: \
-                             Numeric, Negatable, Iterable[T], Monoid, BitLike, \
-                             Fallible[T], Into[T], TryInto[T], Indexable[E], \
-                             Ord, Mappable[T], Foldable[T], Filterable[T], Display"
+                             Numeric, Negatable, Iterable, Monoid, BitLike, \
+                             Fallible, Into[T], TryInto[T], Indexable[E], \
+                             Ord, Mappable, Foldable, Filterable, Display"
                         ),
                     )),
                 }
