@@ -1,10 +1,10 @@
-; Iterable[String] constraint rejects Range (Range is Iterable[Int] only)
+; Iterable constraint rejects Range for String (Range is Iterable over Int only)
 
 FUN main() {
-  ; This should fail: Range is Iterable[Int], not Iterable[String]
+  ; This should fail: Range is Iterable over Int, not String
   WRITE process-strings(1 .. 10)
 }
 
-FUN process-strings[I: Iterable[String]](i: I) -> Int {
+FUN process-strings[I: Iterable](i: I[String]) -> Int {
   Iterable:length(i)
 }

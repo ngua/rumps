@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test Fallible[T] constraint error cases\n\n; This should fail: Int is not Fallible\nFUN bad-unwrap[T, F: Fallible[T]](x: F) -> T {\n  x!\n}\n\n; Calling with Int (not Option or Result) should error\nWRITE bad-unwrap(42)\n"
+description: "; Test Fallible constraint error cases\n\nFUN main() {\n  ; Calling with Int (not Option or Result) should error\n  WRITE bad-unwrap(42)\n}\n\n; This should fail: Int is not Fallible\nFUN bad-unwrap[T, F: Fallible](x: F[T]) -> T {\n  x!\n}\n"
 ---
-ERROR: type `Int` does not satisfy `Fallible` class
+ERROR: type `T[U]` does not satisfy `Numeric` class

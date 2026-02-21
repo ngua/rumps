@@ -842,52 +842,42 @@ impl Ty {
             Self::Apply(v, args) => {
                 let args: Vec<_> =
                     args.iter().map(|t| t.apply(subst)).collect();
-                match subst.0.get(v) {
-                    None => Self::Apply(*v, args),
-                    Some(bound) => {
-                        // Type var is bound; apply the constructor to new args
-                        // For Fallible: Option[_] -> Option[arg], Result[_, E] -> Result[arg, E]
-                        match bound {
-                            Self::Option(_) => {
-                                args.first().map_or(Self::Error, |a| {
-                                    Self::Option(Box::new(a.clone()))
-                                })
-                            }
-                            Self::Result(_, e) => {
-                                args.first().map_or(Self::Error, |a| {
-                                    Self::Result(Box::new(a.clone()), e.clone())
-                                })
-                            }
-                            // For other type constructors, replace first param
-                            Self::Array(_) => {
-                                args.first().map_or(Self::Error, |a| {
-                                    Self::Array(Box::new(a.clone()))
-                                })
-                            }
-                            Self::Map(_, mv) => {
-                                args.first().map_or(Self::Error, |a| {
-                                    Self::Map(Box::new(a.clone()), mv.clone())
-                                })
-                            }
-                            // User-defined named types: replace first N
-                            // type args with `Apply` args, preserve the rest
-                            Self::Named(id, orig_args) => {
-                                let new_args: Vec<_> = args
-                                    .iter()
-                                    .chain(orig_args.iter().skip(args.len()))
-                                    .cloned()
-                                    .collect();
-                                Self::Named(*id, new_args)
-                            }
-                            // If bound to a type variable, keep Apply with that var
-                            Self::Var(w) => Self::Apply(*w, args),
-                            // Non-parameterized types (e.g. `Range`): just use
-                            // the bound type directly (args are handled by
-                            // constraint validation, not constructor application)
-                            other if args.is_empty() => other.clone(),
-                            _ => Self::Error,
-                        }
+                // Resolve the type variable fully through the substitution
+                // chain (e.g. `F1 -> Var(F2) -> Option(...)`)
+                let ctor = Self::Var(*v).apply(subst);
+                match &ctor {
+                    // Still unresolved; keep as `Apply`
+                    Self::Var(w) => Self::Apply(*w, args),
+                    // Parameterized builtins: apply constructor to args
+                    Self::Option(_) => args.first().map_or(Self::Error, |a| {
+                        Self::Option(Box::new(a.clone()))
+                    }),
+                    Self::Result(_, e) => {
+                        args.first().map_or(Self::Error, |a| {
+                            Self::Result(Box::new(a.clone()), e.clone())
+                        })
                     }
+                    Self::Array(_) => args.first().map_or(Self::Error, |a| {
+                        Self::Array(Box::new(a.clone()))
+                    }),
+                    Self::Map(_, mv) => args.first().map_or(Self::Error, |a| {
+                        Self::Map(Box::new(a.clone()), mv.clone())
+                    }),
+                    // User-defined named types: replace first N
+                    // type args with `Apply` args, preserve the rest
+                    Self::Named(id, orig_args) => {
+                        let new_args: Vec<_> = args
+                            .iter()
+                            .chain(orig_args.iter().skip(args.len()))
+                            .cloned()
+                            .collect();
+                        Self::Named(*id, new_args)
+                    }
+                    // Non-parameterized types (e.g. `Range`): just use
+                    // the resolved type directly (args are handled by
+                    // constraint validation, not constructor application)
+                    other if args.is_empty() => other.clone(),
+                    _ => Self::Error,
                 }
             }
             Self::AssocType(v, class, name) => {

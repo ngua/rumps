@@ -1,4 +1,4 @@
-; Test Fallible[T] constraint for Option/Result polymorphism
+; Test Fallible constraint for Option/Result polymorphism
 
 FUN main() {
   ; ============================================================================
@@ -26,7 +26,7 @@ FUN main() {
   ; Closure with Fallible constraint
   ; ============================================================================
 
-  LET safe-get = [T, F: Fallible[T]](x: F, default: T) -> T => x ?? default
+  LET safe-get = [T, F: Fallible](x: F[T], default: T) -> T => x ?? default
 
   WRITE safe-get(Option.Some(100), 0)
   WRITE safe-get(Option.None, 42)
@@ -53,21 +53,21 @@ FUN main() {
 }
 
 ; Generic unwrap function that works on any Option[T] or Result[T, E]
-FUN unwrap[T, F: Fallible[T]](x: F) -> T {
+FUN unwrap[T, F: Fallible](x: F[T]) -> T {
   x!
 }
 
 ; Generic or-else function
-FUN or-else[T, F: Fallible[T]](x: F, default: T) -> T {
+FUN or-else[T, F: Fallible](x: F[T], default: T) -> T {
   x ?? default
 }
 
 ; Fallible + Numeric inner type
-FUN unwrap-numeric[T: Numeric, F: Fallible[T]](x: F) -> T {
+FUN unwrap-numeric[T: Numeric, F: Fallible](x: F[T]) -> T {
   x ?? 0
 }
 
-; Union of fallible types should satisfy Fallible[T] constraint
+; Union of fallible types should satisfy Fallible constraint
 FUN fallible-unwrap(x: Option[Int] | Result[Int, String]) -> Int {
   x!
 }

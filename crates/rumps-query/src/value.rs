@@ -2245,6 +2245,12 @@ fn resolve_type_expr(
                 .collect();
             type_exprs.object(field_ids)
         }
+        // `VarApp` shouldn't appear in union member registration; it means
+        // an HKT type param is used as a constructor, which is unresolvable
+        // at registration time.
+        AstTypeExpr::VarApp(..) => {
+            invariant!("`VarApp` in union member registration")
+        }
         // Associated types should be resolved by typechecker before runtime
         AstTypeExpr::AssocType { .. } => {
             typechecked!("type resolution", "associated types resolved")

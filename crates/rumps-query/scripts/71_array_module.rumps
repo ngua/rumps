@@ -230,7 +230,7 @@ FUN main() {
 
   ; === Union types with Iterable constraint ===
 
-  ; Union of iterable types should satisfy Iterable[T] constraint
+  ; Union of iterable types should satisfy Iterable constraint
   WRITE iter-len(1 ..= 20)
   WRITE iter-len([1, 2, 3, 4, 5])
 

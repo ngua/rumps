@@ -1,4 +1,4 @@
-; Iter module: works on any Iterable[T] (Array[T] or Range)
+; Iter module: works on any Iterable (Array[T] or Range)
 
 FUN main() {
   ; Iterable:length on Array
@@ -45,10 +45,10 @@ FUN main() {
 }
 
 ; Generic functions with Iterable constraint
-FUN sum-iter[I: Iterable[Int]](i: I) -> Int {
+FUN sum-iter[I: Iterable](i: I[Int]) -> Int {
   Foldable:reduce((a, x) => a + x, 0, i)
 }
 
-FUN count-iter[I: Iterable[Int]](i: I) -> Int {
+FUN count-iter[I: Iterable](i: I[Int]) -> Int {
   Iterable:length(i)
 }

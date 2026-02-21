@@ -211,6 +211,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .collect::<Result<Option<IndexMap<_, _>>>>()?;
                 Ok(resolved.map(|r| self.type_exprs.object(r)))
             }
+            // VarApp is a type variable application (`F[T]`); unresolvable
+            // at runtime (type params are erased). Return `None`.
+            AstTypeExpr::VarApp(..) => Ok(None),
             // Associated types (`:Index`, `Indexable:Index`) cannot be resolved
             // at runtime because the AST doesn't store their resolved types.
             // The typechecker has already verified correctness; return `None`
@@ -849,6 +852,25 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .collect();
                 Ok(self.type_exprs.object(resolved?))
             }
+            // VarApp (`F[T]`) contains a type variable; check substitution
+            AstTypeExpr::VarApp(name, params) => {
+                let name_id = self.arena.intern(&name);
+                if let Some(&ty) = subst.get(&name_id) {
+                    // Substituted to concrete base; resolve args and apply
+                    let base = self.type_exprs.base_type(ty);
+                    let resolved: Result<SmallVec<[TypeExprId; 2]>> = params
+                        .iter()
+                        .map(|&p| self.resolve_ast_type_with_subst(p, subst))
+                        .collect();
+                    base.map_or_else(
+                        || Ok(ty),
+                        |b| Ok(self.type_exprs.app(b, resolved?)),
+                    )
+                } else {
+                    // Unresolved type param; typechecker already validated
+                    typechecked!("VarApp substitution", "type param in subst")
+                }
+            }
             // Associated types should be resolved by typechecker before runtime
             AstTypeExpr::AssocType { .. } => {
                 typechecked!("type resolution", "associated types resolved")
@@ -1070,6 +1092,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             AstTypeExpr::Named(_) => {
                 invariant!("named type should resolve without wildcards")
             }
+            // VarApp with wildcards: type param application; can't match at runtime
+            AstTypeExpr::VarApp(..) => Ok(false),
             // Other cases shouldn't have unresolvable wildcards
             _ => invariant!("unexpected AST type with wildcards"),
         }

@@ -8,7 +8,7 @@ FUN main() {
 
 ; UNSOUND: F could be Option or Result, but we pattern match on Option.Some
 ; This violates parametricity; if F = Result, the Option.Some branch never matches
-FUN map-fallible[T, U, F: Fallible[T]](f: (T) -> U, x: F) -> Option[U] {
+FUN map-fallible[T, U, F: Fallible](f: (T) -> U, x: F[T]) -> Option[U] {
   IF x IS Option.Some(v) {
     Option.Some(f(v))
   } ELSE {

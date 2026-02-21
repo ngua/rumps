@@ -105,7 +105,7 @@ FUN identity-storable[V: Into[Storable]](v: V) -> V {
   v
 }
 
-; Iterable[T]: type must be Array or Range, yielding elements of type T
-FUN sum-all[T: Numeric, C: Iterable[T]](coll: C) -> T {
+; Iterable: type must be Array or Range (HKT constraint)
+FUN sum-all[T: Numeric, C: Iterable](coll: C[T]) -> T {
   Foldable:reduce((acc, x) => acc + x, 0, coll)
 }

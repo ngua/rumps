@@ -1225,9 +1225,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                     typechecked!("type param", "declared")
                 }
             }
-            AstTypeExpr::App(_, args) => args.iter().try_for_each(|a| {
-                self.validate_type_params(*a, declared, span)
-            }),
+            AstTypeExpr::App(_, args) | AstTypeExpr::VarApp(_, args) => {
+                args.iter().try_for_each(|a| {
+                    self.validate_type_params(*a, declared, span)
+                })
+            }
             AstTypeExpr::Fn(params, ret) => {
                 params.iter().try_for_each(|p| {
                     self.validate_type_params(*p, declared, span)

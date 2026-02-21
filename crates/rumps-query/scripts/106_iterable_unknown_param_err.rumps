@@ -1,4 +1,4 @@
-; Error: unknown type parameter in Iterable[X] constraint
+; Error: HKT class Iterable does not accept type args in constraint position
 
 FUN main() {
   ; Closure case

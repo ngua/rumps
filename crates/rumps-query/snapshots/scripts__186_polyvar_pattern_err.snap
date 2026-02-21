@@ -1,6 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: Polymorphic type variable pattern matching errors\n; Pattern matching on variant types is unsound when the scrutinee is a polymorphic\n; type variable, since the concrete type is unknown at compile time.\n\nFUN main() {\n  WRITE \"should not reach\"\n}\n\n; UNSOUND: F could be Option or Result, but we pattern match on Option.Some\n; This violates parametricity; if F = Result, the Option.Some branch never matches\nFUN map-fallible[T, U, F: Fallible[T]](f: (T) -> U, x: F) -> Option[U] {\n  IF x IS Option.Some(v) {\n    Option.Some(f(v))\n  } ELSE {\n    IF x IS Result.Ok(v) {\n      Option.Some(f(v))\n    } ELSE {\n      Option.None\n    }\n  }\n}\n"
+description: "; Test: Polymorphic type variable pattern matching errors\n; Pattern matching on variant types is unsound when the scrutinee is a polymorphic\n; type variable, since the concrete type is unknown at compile time.\n\nFUN main() {\n  WRITE \"should not reach\"\n}\n\n; UNSOUND: F could be Option or Result, but we pattern match on Option.Some\n; This violates parametricity; if F = Result, the Option.Some branch never matches\nFUN map-fallible[T, U, F: Fallible](f: (T) -> U, x: F[T]) -> Option[U] {\n  IF x IS Option.Some(v) {\n    Option.Some(f(v))\n  } ELSE {\n    IF x IS Result.Ok(v) {\n      Option.Some(f(v))\n    } ELSE {\n      Option.None\n    }\n  }\n}\n"
 ---
-ERROR: cannot match `Option` pattern against type `T`
-cannot match `Result` pattern against type `T`
+ERROR: cannot match `Option` pattern against type `T[U]`
+cannot match `Result` pattern against type `T[U]`

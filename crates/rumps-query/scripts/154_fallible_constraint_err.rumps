@@ -1,4 +1,4 @@
-; Test Fallible[T] constraint error cases
+; Test Fallible constraint error cases
 
 FUN main() {
   ; Calling with Int (not Option or Result) should error
@@ -6,6 +6,6 @@ FUN main() {
 }
 
 ; This should fail: Int is not Fallible
-FUN bad-unwrap[T, F: Fallible[T]](x: F) -> T {
+FUN bad-unwrap[T, F: Fallible](x: F[T]) -> T {
   x!
 }

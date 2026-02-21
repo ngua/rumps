@@ -344,6 +344,12 @@ pub(crate) enum AstTypeExpr {
     /// Parameterized type: `Array[Int]`, `Option[String]`, `Result[Int, String]`.
     App(String, SmallVec<[AstTypeExprId; 2]>),
 
+    /// Type variable application: `F[T]` where `F` is a type parameter.
+    ///
+    /// Distinguished from `App` during lowering when the name is a known type
+    /// parameter. Converted to `Ty::Apply` during typechecking.
+    VarApp(String, SmallVec<[AstTypeExprId; 2]>),
+
     /// Function type: `(Int, Int) -> Int`, `Int -> Int`, `() -> String`.
     ///
     /// - First element: parameter types (may be empty for nullary)

@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Unwrap on non-Option/Result should error\nLET plain = 42\nWRITE plain!\n"
+description: "; Unwrap on non-Option/Result should error\n\nFUN main() {\n  LET plain = 42\n  WRITE plain!\n}\n"
 ---
-ERROR: type `Int` does not satisfy `Fallible` class
+ERROR: type `T[U]` does not satisfy `Numeric` class

@@ -258,6 +258,9 @@ impl InferCtx<'_> {
                     && self.types_compatible(err_a, err_b)
             }
 
+            // HKT applications: compatible (unresolved type constructors)
+            (Ty::Apply(_, _), _) | (_, Ty::Apply(_, _)) => true,
+
             // Different concrete types are incompatible
             _ => false,
         }
@@ -518,6 +521,27 @@ impl InferCtx<'_> {
                         })
                         .collect();
                     Ty::Object(field_tys)
+                }
+                AstTypeExpr::VarApp(name, args) => {
+                    let name_id = self.env.intern(name);
+                    let span = self.ast.type_expr_span(id).unwrap_or_default();
+                    let arg_tys: Vec<_> = args
+                        .iter()
+                        .map(|&a| self.ast_type_to_ty(a, subst))
+                        .collect();
+                    match subst.get(&name_id).cloned() {
+                        None => {
+                            self.error(TypeError::UnknownType(
+                                name.clone(),
+                                span,
+                            ));
+                            Ty::Error
+                        }
+                        Some(Ty::Var(tv)) => Ty::Apply(tv, arg_tys),
+                        Some(concrete) => {
+                            self.apply_type_args(concrete, arg_tys)
+                        }
+                    }
                 }
                 AstTypeExpr::AssocType { class, name } => {
                     let span = self.ast.type_expr_span(id).unwrap_or_default();
