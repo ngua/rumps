@@ -4,7 +4,7 @@
 //! It creates a database with default settings, closes it, then re-opens
 //! with `SyncMode::Relaxed` for faster bulk inserts.
 //!
-//! Run with: `cargo run --example financial --features examples`
+//! Run with: `cargo run --example financial`
 
 use std::path::Path;
 

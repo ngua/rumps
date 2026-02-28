@@ -3,7 +3,7 @@
 //! This example demonstrates populating a RUMPS database from CSV data.
 //! The CSV format is `global,path,value` where `path` can be comma-separated.
 //!
-//! Run with: `cargo run --example medical --features examples`
+//! Run with: `cargo run --example medical`
 
 use std::path::Path;
 
