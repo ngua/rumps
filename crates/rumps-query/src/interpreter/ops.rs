@@ -6,7 +6,7 @@ use super::class::ClassCtx;
 use super::Interpreter;
 use crate::ast::{BinOp, ExprId, UnOp};
 use crate::io::IoContext;
-use crate::typecheck::ClassKind;
+use crate::typecheck::BuiltinClassTag;
 use crate::value::Value;
 use crate::{Error, Result, Span};
 
@@ -35,7 +35,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     Ok(Value::Int(a.wrapping_add(*b)))
                 }
                 _ => self.dispatch_binary(
-                    ClassKind::Numeric,
+                    BuiltinClassTag::Numeric,
                     "add",
                     left,
                     right,
@@ -47,7 +47,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     Ok(Value::Int(a.wrapping_sub(*b)))
                 }
                 _ => self.dispatch_binary(
-                    ClassKind::Numeric,
+                    BuiltinClassTag::Numeric,
                     "sub",
                     left,
                     right,
@@ -59,7 +59,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     Ok(Value::Int(a.wrapping_mul(*b)))
                 }
                 _ => self.dispatch_binary(
-                    ClassKind::Numeric,
+                    BuiltinClassTag::Numeric,
                     "mul",
                     left,
                     right,
@@ -68,21 +68,21 @@ impl<I: IoContext> Interpreter<'_, I> {
             },
             BinOp::Div => self.binop_div(left, right, span),
             BinOp::FloorDiv => self.dispatch_binary(
-                ClassKind::Numeric,
+                BuiltinClassTag::Numeric,
                 "floor-div",
                 left,
                 right,
                 span,
             ),
             BinOp::Mod => self.dispatch_binary(
-                ClassKind::Numeric,
+                BuiltinClassTag::Numeric,
                 "mod",
                 left,
                 right,
                 span,
             ),
             BinOp::Pow => self.dispatch_binary(
-                ClassKind::Numeric,
+                BuiltinClassTag::Numeric,
                 "pow",
                 left,
                 right,
@@ -90,12 +90,16 @@ impl<I: IoContext> Interpreter<'_, I> {
             ),
 
             // Equality via Eq class
-            BinOp::Eq => {
-                self.dispatch_binary(ClassKind::Eq, "eq", left, right, span)
-            }
+            BinOp::Eq => self.dispatch_binary(
+                BuiltinClassTag::Eq,
+                "eq",
+                left,
+                right,
+                span,
+            ),
             BinOp::Ne => {
                 let eq = self.dispatch_binary(
-                    ClassKind::Eq,
+                    BuiltinClassTag::Eq,
                     "eq",
                     left,
                     right,
@@ -132,7 +136,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
             // Monoid class method
             BinOp::Concat => self.dispatch_binary(
-                ClassKind::Monoid,
+                BuiltinClassTag::Monoid,
                 "concat",
                 left,
                 right,
@@ -141,28 +145,28 @@ impl<I: IoContext> Interpreter<'_, I> {
 
             // BitLike class methods
             BinOp::BitAnd => self.dispatch_binary(
-                ClassKind::BitLike,
+                BuiltinClassTag::BitLike,
                 "bit-and",
                 left,
                 right,
                 span,
             ),
             BinOp::BitOr => self.dispatch_binary(
-                ClassKind::BitLike,
+                BuiltinClassTag::BitLike,
                 "bit-or",
                 left,
                 right,
                 span,
             ),
             BinOp::Shl => self.dispatch_binary(
-                ClassKind::BitLike,
+                BuiltinClassTag::BitLike,
                 "shl",
                 left,
                 right,
                 span,
             ),
             BinOp::Shr => self.dispatch_binary(
-                ClassKind::BitLike,
+                BuiltinClassTag::BitLike,
                 "shr",
                 left,
                 right,
@@ -177,7 +181,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// of class methods for user-defined types.
     fn dispatch_binary(
         &mut self,
-        kind: ClassKind,
+        kind: BuiltinClassTag,
         method: &str,
         left: &Value,
         right: &Value,
@@ -221,7 +225,12 @@ impl<I: IoContext> Interpreter<'_, I> {
             UnOp::Neg => match &v {
                 // Fast-path: Int negation (most common)
                 Value::Int(n) => Ok(Value::Int(-n)),
-                _ => self.dispatch_unary(ClassKind::Negatable, "neg", &v, span),
+                _ => self.dispatch_unary(
+                    BuiltinClassTag::Negatable,
+                    "neg",
+                    &v,
+                    span,
+                ),
             },
             UnOp::Not => Ok(match &v {
                 Value::Bool(b) => Value::Bool(!b),
@@ -234,7 +243,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                         typechecked!("?", "resolved wrap type")
                     });
                 self.dispatch_convert(
-                    ClassKind::Fallible,
+                    BuiltinClassTag::Fallible,
                     "wrap",
                     &v,
                     &ty,
@@ -249,7 +258,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Unwraps Union/Newtype values before dispatching.
     pub(super) fn dispatch_unary(
         &mut self,
-        kind: ClassKind,
+        kind: BuiltinClassTag,
         method: &str,
         v: &Value,
         span: Span,
@@ -274,7 +283,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Unwraps Union/Newtype values before dispatching.
     pub(super) fn dispatch_convert(
         &mut self,
-        kind: ClassKind,
+        kind: BuiltinClassTag,
         method: &str,
         v: &Value,
         target: &crate::typecheck::Ty,
@@ -309,8 +318,13 @@ impl<I: IoContext> Interpreter<'_, I> {
     where
         F: FnOnce(i64) -> bool,
     {
-        let ord =
-            self.dispatch_binary(ClassKind::Ord, "compare", left, right, span)?;
+        let ord = self.dispatch_binary(
+            BuiltinClassTag::Ord,
+            "compare",
+            left,
+            right,
+            span,
+        )?;
         match ord {
             Value::Int(n) => Ok(Value::Bool(pred(n))),
             _ => typechecked!("compare result", "Int"),

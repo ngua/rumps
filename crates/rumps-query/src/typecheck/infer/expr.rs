@@ -20,7 +20,7 @@ use crate::env::TxnReq;
 use crate::intern::StringId;
 use crate::typecheck::error::TypeError;
 use crate::typecheck::ty::{
-    Class, ClassKind, MethodSpec, Scheme, Subst, TrackKind, Ty, TyVar,
+    BuiltinClassTag, Class, MethodSpec, Scheme, Subst, TrackKind, Ty, TyVar,
 };
 use crate::value::{TypeDef, TypeId};
 use crate::Span;
@@ -358,7 +358,7 @@ impl InferCtx<'_> {
         args: &SmallVec<[ExprId; 4]>,
         span: Span,
     ) -> Ty {
-        match ClassKind::from_str(class) {
+        match BuiltinClassTag::from_str(class) {
             Some(k) => {
                 self.call_class_method_generic(id, k, method, args, span)
             }
@@ -383,182 +383,195 @@ impl InferCtx<'_> {
     ) -> Ty {
         let empty_subst = HashMap::new();
 
-        match ClassKind::from_str(class) {
-            Some(k) => match k.method(method, span, |s| self.env.intern(s)) {
-                Err(e) => {
-                    self.error(e);
-                    Ty::Error
-                }
-                Ok(spec) => {
-                    // Check if convert method requires type args
-                    let needs_type_arg = matches!(
-                        spec,
-                        MethodSpec::Tracked {
-                            track: TrackKind::Convert
-                                | TrackKind::ConvertResultInner,
-                            ..
-                        }
-                    );
-                    if needs_type_arg && type_args.is_empty() {
-                        self.error(TypeError::ConvertMethodNeedsType {
-                            class: class.to_string(),
-                            method: method.to_string(),
-                            span,
-                        });
+        match BuiltinClassTag::from_str(class) {
+            Some(k) => {
+                match self.env.class_def(k).method(method, span).cloned() {
+                    Err(e) => {
+                        self.error(e);
                         Ty::Error
-                    } else {
-                        match spec {
-                            MethodSpec::Standard(scheme) => {
-                                // For standard method refs, instantiate the scheme.
-                                // If type args provided, substitute them.
-                                let (ty, vars) =
-                                    scheme.instantiate(&mut self.next_var);
-                                match (type_args.first(), vars.first()) {
-                                    (Some(&arg_id), Some((Ty::Var(v), _))) => {
-                                        let arg_ty = self.ast_type_to_ty(
-                                            arg_id,
-                                            &empty_subst,
-                                        );
-                                        let subst = Subst(
-                                            std::iter::once((*v, arg_ty))
-                                                .collect(),
-                                        );
-                                        ty.apply(&subst)
+                    }
+                    Ok(spec) => {
+                        // Check if convert method requires type args
+                        let needs_type_arg = matches!(
+                            spec,
+                            MethodSpec::Tracked {
+                                track: TrackKind::Convert
+                                    | TrackKind::ConvertResultInner,
+                                ..
+                            }
+                        );
+                        if needs_type_arg && type_args.is_empty() {
+                            self.error(TypeError::ConvertMethodNeedsType {
+                                class: class.to_string(),
+                                method: method.to_string(),
+                                span,
+                            });
+                            Ty::Error
+                        } else {
+                            match spec {
+                                MethodSpec::Standard(scheme) => {
+                                    // For standard method refs, instantiate the scheme.
+                                    // If type args provided, substitute them.
+                                    let (ty, vars) =
+                                        scheme.instantiate(&mut self.next_var);
+                                    match (type_args.first(), vars.first()) {
+                                        (
+                                            Some(&arg_id),
+                                            Some((Ty::Var(v), _)),
+                                        ) => {
+                                            let arg_ty = self.ast_type_to_ty(
+                                                arg_id,
+                                                &empty_subst,
+                                            );
+                                            let subst = Subst(
+                                                std::iter::once((*v, arg_ty))
+                                                    .collect(),
+                                            );
+                                            ty.apply(&subst)
+                                        }
+                                        (Some(_), Some(_)) => {
+                                            self.error(TypeError::Custom {
+                                                msg:
+                                                    "scheme var is not Ty::Var"
+                                                        .into(),
+                                                span,
+                                            });
+                                            Ty::Error
+                                        }
+                                        _ => ty,
                                     }
-                                    (Some(_), Some(_)) => {
-                                        self.error(TypeError::Custom {
-                                            msg: "scheme var is not Ty::Var"
-                                                .into(),
-                                            span,
-                                        });
-                                        Ty::Error
-                                    }
-                                    _ => ty,
                                 }
-                            }
 
-                            MethodSpec::Tracked {
-                                track: TrackKind::Mempty,
-                                ..
-                            } => {
-                                // Monoid:identity needs mempty_types tracking.
-                                let tv = if let Some(&ty_id) = type_args.first()
-                                {
-                                    self.ast_type_to_ty(ty_id, &empty_subst)
-                                } else {
-                                    self.fresh()
-                                };
-                                self.constrain(Constraint::Class {
-                                    ty: tv.clone(),
-                                    class: Class::Monoid,
-                                    span,
-                                });
-                                self.mempty_types.insert(id, tv.clone());
-                                Ty::Fn(vec![], Box::new(tv))
-                            }
+                                MethodSpec::Tracked {
+                                    track: TrackKind::Mempty,
+                                    ..
+                                } => {
+                                    // Monoid:identity needs mempty_types tracking.
+                                    let tv = if let Some(&ty_id) =
+                                        type_args.first()
+                                    {
+                                        self.ast_type_to_ty(ty_id, &empty_subst)
+                                    } else {
+                                        self.fresh()
+                                    };
+                                    self.constrain(Constraint::Class {
+                                        ty: tv.clone(),
+                                        class: Class::Monoid,
+                                        span,
+                                    });
+                                    self.mempty_types.insert(id, tv.clone());
+                                    Ty::Fn(vec![], Box::new(tv))
+                                }
 
-                            MethodSpec::Tracked {
-                                track: TrackKind::Convert,
-                                ..
-                            } => {
-                                // Convert methods need convert_targets.
-                                // Type arg is required (checked above).
-                                let target_ty_id = type_args[0];
-                                let target_ty = self
-                                    .ast_type_to_ty(target_ty_id, &empty_subst);
-                                self.convert_targets
-                                    .insert(id, target_ty.clone());
+                                MethodSpec::Tracked {
+                                    track: TrackKind::Convert,
+                                    ..
+                                } => {
+                                    // Convert methods need convert_targets.
+                                    // Type arg is required (checked above).
+                                    let target_ty_id = type_args[0];
+                                    let target_ty = self.ast_type_to_ty(
+                                        target_ty_id,
+                                        &empty_subst,
+                                    );
+                                    self.convert_targets
+                                        .insert(id, target_ty.clone());
 
-                                let input_var = self.fresh_var();
-                                let input_ty = Ty::Var(input_var);
+                                    let input_var = self.fresh_var();
+                                    let input_ty = Ty::Var(input_var);
 
-                                match (k, method) {
-                                    (ClassKind::Fallible, "wrap") => {
-                                        self.constrain(Constraint::Class {
-                                            ty: target_ty.clone(),
-                                            class: Class::Fallible(Some(
-                                                input_ty.clone(),
-                                            )),
-                                            span,
-                                        });
-                                        Ty::Fn(
-                                            vec![input_ty],
-                                            Box::new(target_ty),
-                                        )
-                                    }
-                                    (ClassKind::Into, "into") => {
-                                        let class =
-                                            Class::Into(target_ty.clone());
-                                        self.constrain(Constraint::Class {
-                                            ty: input_ty.clone(),
-                                            class: class.clone(),
-                                            span,
-                                        });
-                                        let fn_ty = Ty::Fn(
-                                            vec![input_ty],
-                                            Box::new(target_ty),
-                                        );
-                                        let scheme = Scheme {
-                                            vars: vec![input_var],
-                                            ty: fn_ty.clone(),
-                                            constraints: smallvec::smallvec![(
-                                                input_var, class
-                                            )],
-                                        };
-                                        self.closure_schemes.insert(id, scheme);
-                                        fn_ty
-                                    }
-                                    _ => {
-                                        self.error(TypeError::Custom {
+                                    match (k, method) {
+                                        (BuiltinClassTag::Fallible, "wrap") => {
+                                            self.constrain(Constraint::Class {
+                                                ty: target_ty.clone(),
+                                                class: Class::Fallible(Some(
+                                                    input_ty.clone(),
+                                                )),
+                                                span,
+                                            });
+                                            Ty::Fn(
+                                                vec![input_ty],
+                                                Box::new(target_ty),
+                                            )
+                                        }
+                                        (BuiltinClassTag::Into, "into") => {
+                                            let class =
+                                                Class::Into(target_ty.clone());
+                                            self.constrain(Constraint::Class {
+                                                ty: input_ty.clone(),
+                                                class: class.clone(),
+                                                span,
+                                            });
+                                            let fn_ty = Ty::Fn(
+                                                vec![input_ty],
+                                                Box::new(target_ty),
+                                            );
+                                            let scheme = Scheme {
+                                                vars: vec![input_var],
+                                                ty: fn_ty.clone(),
+                                                constraints: smallvec::smallvec![
+                                                    (input_var, class)
+                                                ],
+                                            };
+                                            self.closure_schemes
+                                                .insert(id, scheme);
+                                            fn_ty
+                                        }
+                                        _ => {
+                                            self.error(TypeError::Custom {
                                             msg: "Convert track for unknown method"
                                                 .into(),
                                             span,
                                         });
-                                        Ty::Error
+                                            Ty::Error
+                                        }
                                     }
                                 }
-                            }
 
-                            MethodSpec::Tracked {
-                                track: TrackKind::ConvertResultInner,
-                                ..
-                            } => {
-                                // TryInto:try-into needs convert_targets.
-                                let target_ty_id = type_args[0];
-                                let target_ty = self
-                                    .ast_type_to_ty(target_ty_id, &empty_subst);
-                                self.convert_targets
-                                    .insert(id, target_ty.clone());
+                                MethodSpec::Tracked {
+                                    track: TrackKind::ConvertResultInner,
+                                    ..
+                                } => {
+                                    // TryInto:try-into needs convert_targets.
+                                    let target_ty_id = type_args[0];
+                                    let target_ty = self.ast_type_to_ty(
+                                        target_ty_id,
+                                        &empty_subst,
+                                    );
+                                    self.convert_targets
+                                        .insert(id, target_ty.clone());
 
-                                let input_var = self.fresh_var();
-                                let input_ty = Ty::Var(input_var);
-                                let class = Class::TryInto(target_ty.clone());
-                                self.constrain(Constraint::Class {
-                                    ty: input_ty.clone(),
-                                    class: class.clone(),
-                                    span,
-                                });
-                                let fn_ty = Ty::Fn(
-                                    vec![input_ty],
-                                    Box::new(Ty::Result(
-                                        Box::new(target_ty),
-                                        Box::new(Ty::String),
-                                    )),
-                                );
-                                let scheme = Scheme {
-                                    vars: vec![input_var],
-                                    ty: fn_ty.clone(),
-                                    constraints: smallvec::smallvec![(
-                                        input_var, class
-                                    )],
-                                };
-                                self.closure_schemes.insert(id, scheme);
-                                fn_ty
+                                    let input_var = self.fresh_var();
+                                    let input_ty = Ty::Var(input_var);
+                                    let class =
+                                        Class::TryInto(target_ty.clone());
+                                    self.constrain(Constraint::Class {
+                                        ty: input_ty.clone(),
+                                        class: class.clone(),
+                                        span,
+                                    });
+                                    let fn_ty = Ty::Fn(
+                                        vec![input_ty],
+                                        Box::new(Ty::Result(
+                                            Box::new(target_ty),
+                                            Box::new(Ty::String),
+                                        )),
+                                    );
+                                    let scheme = Scheme {
+                                        vars: vec![input_var],
+                                        ty: fn_ty.clone(),
+                                        constraints: smallvec::smallvec![(
+                                            input_var, class
+                                        )],
+                                    };
+                                    self.closure_schemes.insert(id, scheme);
+                                    fn_ty
+                                }
                             }
                         }
                     }
                 }
-            },
+            }
             None => {
                 self.error(TypeError::UnknownClass(class.to_string(), span));
                 Ty::Error
@@ -581,7 +594,7 @@ impl InferCtx<'_> {
     /// instance exists but its module is not imported, emits an error.
     fn check_instance_available(
         &mut self,
-        class: ClassKind,
+        class: BuiltinClassTag,
         type_id: TypeId,
         span: Span,
     ) -> Option<super::super::instance::Instance> {
@@ -607,7 +620,7 @@ impl InferCtx<'_> {
 
     /// Generic class method call type checking.
     ///
-    /// Uses the centralized spec from `ClassKind::method` to:
+    /// Uses the centralized spec from `BuiltinClassTag::method` to:
     /// 1. Check arity
     /// 2. Instantiate the scheme with fresh type variables
     /// 3. Unify argument types with parameter types
@@ -617,12 +630,12 @@ impl InferCtx<'_> {
     fn call_class_method_generic(
         &mut self,
         id: ExprId,
-        kind: ClassKind,
+        kind: BuiltinClassTag,
         method: &str,
         args: &SmallVec<[ExprId; 4]>,
         span: Span,
     ) -> Ty {
-        match kind.method(method, span, |s| self.env.intern(s)) {
+        match self.env.class_def(kind).method(method, span).cloned() {
             Err(e) => {
                 self.error(e);
                 Ty::Error
@@ -1402,8 +1415,11 @@ impl InferCtx<'_> {
                     Ty::Var(v) => *v,
                     _ => self.fresh_var(),
                 };
-                let expected_idx =
-                    Ty::AssocType(base_var, ClassKind::Indexable, idx_name);
+                let expected_idx = Ty::AssocType(
+                    base_var,
+                    BuiltinClassTag::Indexable,
+                    idx_name,
+                );
                 self.unify(idx_ty, expected_idx, span);
                 self.constrain(Constraint::Class {
                     ty: base_ty,
@@ -1424,7 +1440,7 @@ impl InferCtx<'_> {
             Ty::Named(id, type_args) => {
                 // Check for user-defined Indexable instance
                 match self.check_instance_available(
-                    ClassKind::Indexable,
+                    BuiltinClassTag::Indexable,
                     *id,
                     span,
                 ) {
@@ -1457,7 +1473,7 @@ impl InferCtx<'_> {
                         // (if it exists but isn't imported, error was already emitted)
                         if self
                             .instance_registry
-                            .lookup(ClassKind::Indexable, *id)
+                            .lookup(BuiltinClassTag::Indexable, *id)
                             .is_none()
                         {
                             self.error(TypeError::UnsatisfiedClass(
@@ -1518,8 +1534,11 @@ impl InferCtx<'_> {
                     Ty::Var(v) => *v,
                     _ => self.fresh_var(),
                 };
-                let expected_idx =
-                    Ty::AssocType(base_var, ClassKind::Indexable, idx_name);
+                let expected_idx = Ty::AssocType(
+                    base_var,
+                    BuiltinClassTag::Indexable,
+                    idx_name,
+                );
                 self.unify(idx_ty, expected_idx, span);
                 self.constrain(Constraint::Class {
                     ty: base_ty,
@@ -1539,7 +1558,7 @@ impl InferCtx<'_> {
             Ty::Named(id, type_args) => {
                 // Check for user-defined Indexable instance
                 match self.check_instance_available(
-                    ClassKind::Indexable,
+                    BuiltinClassTag::Indexable,
                     *id,
                     span,
                 ) {
@@ -1574,7 +1593,7 @@ impl InferCtx<'_> {
                         // (if it exists but isn't imported, error was already emitted)
                         if self
                             .instance_registry
-                            .lookup(ClassKind::Indexable, *id)
+                            .lookup(BuiltinClassTag::Indexable, *id)
                             .is_none()
                         {
                             self.error(TypeError::UnsatisfiedClass(

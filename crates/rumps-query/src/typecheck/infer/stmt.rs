@@ -19,7 +19,7 @@ use crate::ast::{
 use crate::intern::StringId;
 use crate::typecheck::error::TypeError;
 use crate::typecheck::instance::{self, Instance};
-use crate::typecheck::ty::{Class, ClassKind, Scheme, Ty, TyVar};
+use crate::typecheck::ty::{BuiltinClassTag, Class, Scheme, Ty, TyVar};
 use crate::value::{TypeDef, TypeId};
 use crate::Span;
 
@@ -802,7 +802,7 @@ impl InferCtx<'_> {
     /// Infer types for a `CLASS ... FOR ...` instance declaration.
     ///
     /// Validates:
-    /// 1. The class name is a valid `ClassKind`
+    /// 1. The class name is a valid `BuiltinClassTag`
     /// 2. The `for_type` is NOT a builtin type
     /// 3. All required methods are present
     /// 4. Method signatures match the class definition (arity)
@@ -825,11 +825,15 @@ impl InferCtx<'_> {
             span,
         } = input;
 
-        // 1. Resolve class name to ClassKind
-        let class = ClassKind::from_str(class_name).unwrap_or_else(|| {
-            self.error(TypeError::UnknownClass(class_name.to_string(), span));
-            ClassKind::Display // Default to `Display` to avoid cascading errors
-        });
+        // 1. Resolve class name to BuiltinClassTag
+        let class =
+            BuiltinClassTag::from_str(class_name).unwrap_or_else(|| {
+                self.error(TypeError::UnknownClass(
+                    class_name.to_string(),
+                    span,
+                ));
+                BuiltinClassTag::Display // Default to `Display` to avoid cascading errors
+            });
 
         // 2. Build type parameter substitution map (BEFORE resolving for_type)
         //    If `type_params` is empty, extract type param names from the
@@ -925,7 +929,8 @@ impl InferCtx<'_> {
             .collect();
 
         // 6.6. Validate all required associated types are provided
-        class.def().assoc_types.iter().for_each(|req| {
+        let req_assocs = self.env.class_def(class).info().assoc_types;
+        req_assocs.iter().for_each(|req| {
             let req_id = self.env.intern(req);
             if !assoc_type_map.contains_key(&req_id) {
                 self.error(TypeError::MissingAssocType {
@@ -947,11 +952,15 @@ impl InferCtx<'_> {
             methods.iter().map(|m| m.name.as_str()).collect();
 
         // 8. Check all required methods are present
-        class.required_methods().iter().for_each(|req| {
+        let required: Vec<&str> =
+            self.env.class_def(class).method_names().collect();
+        let required_hint = required.join(", ");
+        required.iter().for_each(|req| {
             if !provided_methods.contains(req) {
                 self.error(TypeError::MissingInstanceMethod {
                     class,
                     method: req.to_string(),
+                    required_hint: required_hint.clone(),
                     span,
                 });
             }
@@ -1066,8 +1075,11 @@ impl InferCtx<'_> {
         let m_span = method.span;
 
         // Get expected method signature from class
-        let expected =
-            class.method(&method.name, m_span, |s| self.env.intern(s));
+        let expected = self
+            .env
+            .class_def(class)
+            .method(&method.name, m_span)
+            .cloned();
 
         // Handle unknown method error
         let (expected_param_tys, expected_ret_ty) = expected

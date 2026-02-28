@@ -10,7 +10,7 @@ use super::{Constraint, InferCtx};
 use crate::ast::{self, AstTypeExpr, AstTypeExprId, Visibility};
 use crate::intern::StringId;
 use crate::typecheck::error::TypeError;
-use crate::typecheck::ty::{Class, ClassKind, Scheme, Ty};
+use crate::typecheck::ty::{BuiltinClassTag, Class, Scheme, Ty};
 use crate::value::{TypeDef, TypeId};
 use crate::Span;
 
@@ -565,18 +565,20 @@ impl InferCtx<'_> {
 
                         // Qualified `Indexable:Index`: create AssocType
                         // Validation happens during resolution in unify.rs
-                        Some(class_name) => ClassKind::from_str(class_name)
-                            .map(|kind| {
-                                let tv = self.fresh_var();
-                                Ty::AssocType(tv, kind, name_id)
-                            })
-                            .unwrap_or_else(|| {
-                                self.error(TypeError::UnknownClass(
-                                    class_name.clone(),
-                                    span,
-                                ));
-                                Ty::Error
-                            }),
+                        Some(class_name) => {
+                            BuiltinClassTag::from_str(class_name)
+                                .map(|kind| {
+                                    let tv = self.fresh_var();
+                                    Ty::AssocType(tv, kind, name_id)
+                                })
+                                .unwrap_or_else(|| {
+                                    self.error(TypeError::UnknownClass(
+                                        class_name.clone(),
+                                        span,
+                                    ));
+                                    Ty::Error
+                                })
+                        }
                     }
                 }
             },

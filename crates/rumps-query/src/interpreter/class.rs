@@ -2,7 +2,7 @@
 //!
 //! Provides a registry for class methods (like `Numeric:add`, `Fallible:unwrap`)
 //! and dispatch functions to invoke them. The dispatch table is indexed by
-//! `ClassKind` for O(1) lookup.
+//! `BuiltinClassTag` for O(1) lookup.
 //!
 //! # Organization
 //!
@@ -35,7 +35,7 @@ use super::hof::{
     Continuation, FlatMapWrapper, HofMethodFn, HofState, IterKind, MethodResult,
 };
 use crate::intern::StringId;
-use crate::typecheck::{ClassKind, Ty};
+use crate::typecheck::{BuiltinClassTag, Ty};
 use crate::value::{
     TypeExprArena, TypeExprId, TypeId, TypeRegistry, Value, ValueArena, ValueId,
 };
@@ -105,9 +105,9 @@ impl Default for MethodTable {
     }
 }
 
-/// Registry of all class methods, indexed by `ClassKind`.
+/// Registry of all class methods, indexed by `BuiltinClassTag`.
 pub(crate) struct ClassMethods {
-    tables: [MethodTable; ClassKind::COUNT],
+    tables: [MethodTable; BuiltinClassTag::COUNT],
 }
 
 impl ClassMethods {
@@ -119,7 +119,7 @@ impl ClassMethods {
 
     pub(crate) fn register(
         &mut self,
-        kind: ClassKind,
+        kind: BuiltinClassTag,
         name: &'static str,
         f: MethodFn,
     ) {
@@ -128,7 +128,7 @@ impl ClassMethods {
 
     pub(crate) fn lookup(
         &self,
-        kind: ClassKind,
+        kind: BuiltinClassTag,
         name: &str,
     ) -> Option<MethodFn> {
         self.tables[kind as usize].lookup(name)
@@ -136,7 +136,7 @@ impl ClassMethods {
 
     pub(crate) fn dispatch_binary(
         &self,
-        kind: ClassKind,
+        kind: BuiltinClassTag,
         method: &str,
         ctx: &mut ClassCtx<'_>,
         recv: &Value,
@@ -158,7 +158,7 @@ impl ClassMethods {
 
     pub(crate) fn dispatch_unary(
         &self,
-        kind: ClassKind,
+        kind: BuiltinClassTag,
         method: &str,
         ctx: &mut ClassCtx<'_>,
         recv: &Value,
@@ -179,7 +179,7 @@ impl ClassMethods {
 
     pub(crate) fn dispatch_nullary(
         &self,
-        kind: ClassKind,
+        kind: BuiltinClassTag,
         method: &str,
         ctx: &mut ClassCtx<'_>,
         ty: &Ty,
@@ -200,7 +200,7 @@ impl ClassMethods {
 
     pub(crate) fn dispatch_convert(
         &self,
-        kind: ClassKind,
+        kind: BuiltinClassTag,
         method: &str,
         ctx: &mut ClassCtx<'_>,
         val: &Value,
@@ -223,152 +223,160 @@ impl ClassMethods {
     /// Register all class methods.
     pub(crate) fn register_all(&mut self) {
         self.register(
-            ClassKind::Numeric,
+            BuiltinClassTag::Numeric,
             "add",
             MethodFn::Binary(Numeric::add),
         );
         self.register(
-            ClassKind::Numeric,
+            BuiltinClassTag::Numeric,
             "sub",
             MethodFn::Binary(Numeric::sub),
         );
         self.register(
-            ClassKind::Numeric,
+            BuiltinClassTag::Numeric,
             "mul",
             MethodFn::Binary(Numeric::mul),
         );
         self.register(
-            ClassKind::Numeric,
+            BuiltinClassTag::Numeric,
             "floor-div",
             MethodFn::Binary(Numeric::floor_div),
         );
         self.register(
-            ClassKind::Numeric,
+            BuiltinClassTag::Numeric,
             "mod",
             MethodFn::Binary(Numeric::modulo),
         );
         self.register(
-            ClassKind::Numeric,
+            BuiltinClassTag::Numeric,
             "pow",
             MethodFn::Binary(Numeric::pow),
         );
 
         self.register(
-            ClassKind::Negatable,
+            BuiltinClassTag::Negatable,
             "neg",
             MethodFn::Unary(Negatable::neg),
         );
 
         self.register(
-            ClassKind::BitLike,
+            BuiltinClassTag::BitLike,
             "bit-and",
             MethodFn::Binary(BitLike::and),
         );
         self.register(
-            ClassKind::BitLike,
+            BuiltinClassTag::BitLike,
             "bit-or",
             MethodFn::Binary(BitLike::or),
         );
         self.register(
-            ClassKind::BitLike,
+            BuiltinClassTag::BitLike,
             "shl",
             MethodFn::Binary(BitLike::shl),
         );
         self.register(
-            ClassKind::BitLike,
+            BuiltinClassTag::BitLike,
             "shr",
             MethodFn::Binary(BitLike::shr),
         );
 
         self.register(
-            ClassKind::Ord,
+            BuiltinClassTag::Ord,
             "compare",
             MethodFn::Binary(Ord::compare),
         );
 
-        self.register(ClassKind::Eq, "eq", MethodFn::Binary(Eq::eq));
+        self.register(BuiltinClassTag::Eq, "eq", MethodFn::Binary(Eq::eq));
 
         self.register(
-            ClassKind::Monoid,
+            BuiltinClassTag::Monoid,
             "concat",
             MethodFn::Binary(Monoid::concat),
         );
         self.register(
-            ClassKind::Monoid,
+            BuiltinClassTag::Monoid,
             "identity",
             MethodFn::Nullary(Monoid::identity),
         );
 
         self.register(
-            ClassKind::Fallible,
+            BuiltinClassTag::Fallible,
             "unwrap",
             MethodFn::Unary(Fallible::unwrap),
         );
         self.register(
-            ClassKind::Fallible,
+            BuiltinClassTag::Fallible,
             "wrap",
             MethodFn::Convert(Fallible::wrap),
         );
 
         self.register(
-            ClassKind::Indexable,
+            BuiltinClassTag::Indexable,
             "index",
             MethodFn::Binary(Indexable::index),
         );
         self.register(
-            ClassKind::Indexable,
+            BuiltinClassTag::Indexable,
             "get",
             MethodFn::Binary(Indexable::get),
         );
 
-        self.register(ClassKind::Into, "into", MethodFn::Convert(Into::into));
+        self.register(
+            BuiltinClassTag::Into,
+            "into",
+            MethodFn::Convert(Into::into),
+        );
 
         self.register(
-            ClassKind::TryInto,
+            BuiltinClassTag::TryInto,
             "try-into",
             MethodFn::Convert(TryInto::try_into),
         );
 
         self.register(
-            ClassKind::Display,
+            BuiltinClassTag::Display,
             "display",
             MethodFn::Unary(Display::display),
         );
 
         // HoF methods (handled via trampoline in `call.rs`).
-        self.register(ClassKind::Mappable, "map", MethodFn::Hof(Mappable::map));
         self.register(
-            ClassKind::Filterable,
+            BuiltinClassTag::Mappable,
+            "map",
+            MethodFn::Hof(Mappable::map),
+        );
+        self.register(
+            BuiltinClassTag::Filterable,
             "filter",
             MethodFn::Hof(Filterable::filter),
         );
         self.register(
-            ClassKind::Foldable,
+            BuiltinClassTag::Foldable,
             "reduce",
             MethodFn::Hof(Foldable::reduce),
         );
         self.register(
-            ClassKind::Iterable,
+            BuiltinClassTag::Iterable,
             "foreach",
             MethodFn::Hof(Iterable::foreach),
         );
         self.register(
-            ClassKind::Iterable,
+            BuiltinClassTag::Iterable,
             "length",
             MethodFn::Unary(Iterable::length),
         );
         self.register(
-            ClassKind::Iterable,
+            BuiltinClassTag::Iterable,
             "contains",
             MethodFn::Binary(Iterable::contains),
         );
         self.register(
-            ClassKind::Iterable,
+            BuiltinClassTag::Iterable,
             "reverse",
             MethodFn::Unary(Iterable::reverse),
         );
         self.register(
-            ClassKind::Fallible,
+            BuiltinClassTag::Fallible,
             "flat-map",
             MethodFn::Hof(Fallible::flat_map),
         );

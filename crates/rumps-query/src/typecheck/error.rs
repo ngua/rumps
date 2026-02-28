@@ -7,7 +7,7 @@ use std::fmt;
 
 use thiserror::Error;
 
-use super::ty::{Class, ClassKind, Ty, TyVar};
+use super::ty::{BuiltinClassTag, Class, Ty, TyVar};
 use crate::intern::StringInterner;
 use crate::value::{TypeRegistry, ValueArena};
 use crate::{Span, StringId, TypeId};
@@ -404,7 +404,7 @@ pub(crate) enum TypeError {
     /// A type can only have one instance of each class.
     #[error("duplicate `{class}` instance for type `{type_id:?}`")]
     DuplicateInstance {
-        class: ClassKind,
+        class: BuiltinClassTag,
         type_id: TypeId,
         span: Span,
     },
@@ -414,7 +414,7 @@ pub(crate) enum TypeError {
     /// Users can only implement classes for their own types (TYPE, NEWTYPE, UNION).
     #[error("cannot implement `{class}` for builtin type `{type_id:?}`")]
     BuiltinInstanceForbidden {
-        class: ClassKind,
+        class: BuiltinClassTag,
         type_id: TypeId,
         span: Span,
     },
@@ -424,8 +424,9 @@ pub(crate) enum TypeError {
     /// All methods defined by a class must be implemented.
     #[error("missing required method `{method}` for class `{class}`")]
     MissingInstanceMethod {
-        class: ClassKind,
+        class: BuiltinClassTag,
         method: String,
+        required_hint: String,
         span: Span,
     },
 
@@ -434,7 +435,7 @@ pub(crate) enum TypeError {
     /// The user-provided method signature does not match the class definition.
     #[error("method `{method}` of class `{class}` has wrong arity: expected {expected} parameter(s), got {got}")]
     MethodSignatureMismatch {
-        class: ClassKind,
+        class: BuiltinClassTag,
         method: String,
         expected: usize,
         got: usize,
@@ -446,7 +447,7 @@ pub(crate) enum TypeError {
     /// Classes like `Indexable` require associated type definitions (e.g., `NEWTYPE Index = Int`).
     #[error("missing required associated type for class `{class}`")]
     MissingAssocType {
-        class: ClassKind,
+        class: BuiltinClassTag,
         assoc: StringId,
         span: Span,
     },
@@ -456,7 +457,7 @@ pub(crate) enum TypeError {
     /// The instance defines an associated type that doesn't exist in the class.
     #[error("class `{class}` has no associated type `{assoc}`")]
     UnknownAssocTypeForClass {
-        class: ClassKind,
+        class: BuiltinClassTag,
         assoc: String,
         span: Span,
     },
@@ -494,7 +495,7 @@ pub(crate) enum TypeError {
     /// The referenced associated type doesn't exist in the class.
     #[error("class `{class}` has no associated type `#{}`", name.idx())]
     NoSuchAssocType {
-        class: ClassKind,
+        class: BuiltinClassTag,
         name: StringId,
         span: Span,
     },
@@ -505,7 +506,7 @@ pub(crate) enum TypeError {
     /// defined in a module, but that module has not been imported.
     #[error("no `{class}` instance for `{type_id:?}` in scope")]
     InstanceNotImported {
-        class: ClassKind,
+        class: BuiltinClassTag,
         type_id: TypeId,
         module: String,
         span: Span,
@@ -810,16 +811,18 @@ impl TypeError {
                 ),
                 Some("class instances can only be defined for user types (TYPE, NEWTYPE, UNION)".to_owned()),
             ),
-            Self::MissingInstanceMethod { class, method, .. } => (
+            Self::MissingInstanceMethod {
+                class,
+                method,
+                required_hint,
+                ..
+            } => (
                 format!(
                     "missing required method `{}` for class `{}`",
                     method,
                     class.name()
                 ),
-                Some(format!(
-                    "required methods: {}",
-                    class.required_methods().join(", ")
-                )),
+                Some(format!("required methods: {}", required_hint)),
             ),
             Self::MethodSignatureMismatch {
                 class,

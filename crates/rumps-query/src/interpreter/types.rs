@@ -7,7 +7,7 @@ use super::Interpreter;
 use crate::ast::{AstTypeExpr, AstTypeExprId};
 use crate::intern::StringId;
 use crate::io::IoContext;
-use crate::typecheck::{ClassKind, Ty};
+use crate::typecheck::{BuiltinClassTag, Ty};
 use crate::value::{TypeExprId, TypeId, Value, ValueId};
 use crate::{Error, Result, Span};
 
@@ -252,7 +252,13 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             _ => {
                 let ty = Self::type_id_to_ty(target);
-                self.dispatch_convert(ClassKind::Into, "into", val, &ty, span)
+                self.dispatch_convert(
+                    BuiltinClassTag::Into,
+                    "into",
+                    val,
+                    &ty,
+                    span,
+                )
             }
         }
     }
@@ -292,7 +298,13 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<Value> {
         let ty = Self::type_id_to_ty(target);
-        self.dispatch_convert(ClassKind::TryInto, "try-into", val, &ty, span)
+        self.dispatch_convert(
+            BuiltinClassTag::TryInto,
+            "try-into",
+            val,
+            &ty,
+            span,
+        )
     }
 
     /// Perform typed conversion for `READ` with full type expression support.

@@ -557,7 +557,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let idx_id = self.arena.add(idx_val, span);
                 self.dispatch_class_method(
                     Some(base),
-                    crate::typecheck::ClassKind::Indexable,
+                    crate::typecheck::BuiltinClassTag::Indexable,
                     "index",
                     &[base_id, idx_id],
                     span,
@@ -641,7 +641,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let idx_id = self.arena.add(idx_val, span);
                 self.dispatch_class_method(
                     Some(base),
-                    crate::typecheck::ClassKind::Indexable,
+                    crate::typecheck::BuiltinClassTag::Indexable,
                     "get",
                     &[base_id, idx_id],
                     span,

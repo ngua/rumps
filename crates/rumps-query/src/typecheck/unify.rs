@@ -23,7 +23,7 @@ use smallvec::SmallVec;
 
 use super::error::TypeError;
 use super::infer::{Constraint, InferCtx};
-use super::ty::{Class, ClassKind, Subst, Ty, TyVar};
+use super::ty::{BuiltinClassTag, Class, Subst, Ty, TyVar};
 use crate::ast::AstTypeExpr;
 use crate::intern::StringId;
 use crate::value::TypeDef;
@@ -1037,7 +1037,7 @@ impl<'a> InferCtx<'a> {
                 Ty::Named(id, type_args) => {
                     match self
                         .instance_registry
-                        .lookup(ClassKind::Numeric, *id)
+                        .lookup(BuiltinClassTag::Numeric, *id)
                         .cloned()
                     {
                         Some(inst) => {
@@ -1094,7 +1094,7 @@ impl<'a> InferCtx<'a> {
                 Ty::Named(id, type_args) => {
                     match self
                         .instance_registry
-                        .lookup(ClassKind::BitLike, *id)
+                        .lookup(BuiltinClassTag::BitLike, *id)
                         .cloned()
                     {
                         Some(inst) => {
@@ -1142,7 +1142,7 @@ impl<'a> InferCtx<'a> {
                 Ty::Named(id, type_args) => {
                     match self
                         .instance_registry
-                        .lookup(ClassKind::Negatable, *id)
+                        .lookup(BuiltinClassTag::Negatable, *id)
                         .cloned()
                     {
                         Some(inst) => {
@@ -1230,7 +1230,7 @@ impl<'a> InferCtx<'a> {
                             // Not a union, check instance registry
                             match self
                                 .instance_registry
-                                .lookup(ClassKind::Ord, *id)
+                                .lookup(BuiltinClassTag::Ord, *id)
                                 .cloned()
                             {
                                 Some(inst) => {
@@ -1335,7 +1335,7 @@ impl<'a> InferCtx<'a> {
                             // Not a union, check instance registry
                             match self
                                 .instance_registry
-                                .lookup(ClassKind::Eq, *id)
+                                .lookup(BuiltinClassTag::Eq, *id)
                                 .cloned()
                             {
                                 Some(inst) => {
@@ -1411,7 +1411,7 @@ impl<'a> InferCtx<'a> {
                 Ty::Named(id, args) => {
                     match self
                         .instance_registry
-                        .lookup(ClassKind::Display, *id)
+                        .lookup(BuiltinClassTag::Display, *id)
                         .cloned()
                     {
                         Some(inst) => {
@@ -1443,7 +1443,7 @@ impl<'a> InferCtx<'a> {
                 Ty::Named(id, type_args) => {
                     match self
                         .instance_registry
-                        .lookup(ClassKind::Monoid, *id)
+                        .lookup(BuiltinClassTag::Monoid, *id)
                         .cloned()
                     {
                         Some(inst) => {
@@ -1655,7 +1655,7 @@ impl<'a> InferCtx<'a> {
                 (Ty::Named(id, type_args), target) => {
                     match self
                         .instance_registry
-                        .lookup(ClassKind::Into, *id)
+                        .lookup(BuiltinClassTag::Into, *id)
                         .cloned()
                     {
                         Some(inst) => {
@@ -1691,7 +1691,7 @@ impl<'a> InferCtx<'a> {
                     let type_id = self.primitive_type_id(from);
                     match type_id.and_then(|id| {
                         self.instance_registry
-                            .lookup(ClassKind::Into, id)
+                            .lookup(BuiltinClassTag::Into, id)
                             .cloned()
                     }) {
                         Some(inst) => {
@@ -1845,7 +1845,7 @@ impl<'a> InferCtx<'a> {
                 (Ty::Named(id, type_args), target) => {
                     if let Some(inst) = self
                         .instance_registry
-                        .lookup(ClassKind::TryInto, *id)
+                        .lookup(BuiltinClassTag::TryInto, *id)
                         .cloned()
                     {
                         let inst_target = inst.class_args.first();
@@ -1908,7 +1908,7 @@ impl<'a> InferCtx<'a> {
                     Ty::Named(id, type_args) => {
                         match self
                             .instance_registry
-                            .lookup(ClassKind::Fallible, *id)
+                            .lookup(BuiltinClassTag::Fallible, *id)
                             .cloned()
                         {
                             Some(inst) => {
@@ -1989,7 +1989,7 @@ impl<'a> InferCtx<'a> {
                 Ty::Named(id, type_args) => {
                     match self
                         .instance_registry
-                        .lookup(ClassKind::Iterable, *id)
+                        .lookup(BuiltinClassTag::Iterable, *id)
                         .cloned()
                     {
                         Some(inst) => {
@@ -2079,7 +2079,7 @@ impl<'a> InferCtx<'a> {
                 Ty::Named(id, type_args) => {
                     match self
                         .instance_registry
-                        .lookup(ClassKind::Indexable, *id)
+                        .lookup(BuiltinClassTag::Indexable, *id)
                         .cloned()
                     {
                         Some(inst) => {
@@ -2165,7 +2165,7 @@ impl<'a> InferCtx<'a> {
                 Ty::Named(id, type_args) => {
                     match self
                         .instance_registry
-                        .lookup(ClassKind::Mappable, *id)
+                        .lookup(BuiltinClassTag::Mappable, *id)
                         .cloned()
                     {
                         Some(inst) => {
@@ -2240,7 +2240,7 @@ impl<'a> InferCtx<'a> {
                 Ty::Named(id, type_args) => {
                     match self
                         .instance_registry
-                        .lookup(ClassKind::Filterable, *id)
+                        .lookup(BuiltinClassTag::Filterable, *id)
                         .cloned()
                     {
                         Some(inst) => {
@@ -2315,7 +2315,7 @@ impl<'a> InferCtx<'a> {
                 Ty::Named(id, type_args) => {
                     match self
                         .instance_registry
-                        .lookup(ClassKind::Foldable, *id)
+                        .lookup(BuiltinClassTag::Foldable, *id)
                         .cloned()
                     {
                         Some(inst) => {
@@ -2611,14 +2611,14 @@ impl<'a> InferCtx<'a> {
     pub(crate) fn resolve_assoc_type(
         &self,
         base: &Ty,
-        class: ClassKind,
+        class: BuiltinClassTag,
         assoc_name: StringId,
         span: Span,
     ) -> Result<Ty, TypeError> {
         // Validate that assoc_name is a valid associated type for this class
         let assoc_str = self.env().get_str(assoc_name);
-        let def = class.def();
-        if !assoc_str.is_some_and(|s| def.assoc_types.contains(&s)) {
+        let assoc_types = self.env.class_def(class).info().assoc_types;
+        if !assoc_str.is_some_and(|s| assoc_types.contains(&s)) {
             Err(TypeError::NoSuchAssocType {
                 class,
                 name: assoc_name,
@@ -2627,15 +2627,19 @@ impl<'a> InferCtx<'a> {
         } else {
             match base {
                 // Builtin: Array[T] with Indexable:Index = Int
-                Ty::Array(_) if class == ClassKind::Indexable => Ok(Ty::Int),
+                Ty::Array(_) if class == BuiltinClassTag::Indexable => {
+                    Ok(Ty::Int)
+                }
 
                 // Builtin: Map[K, V] with Indexable:Index = K
-                Ty::Map(k, _) if class == ClassKind::Indexable => {
+                Ty::Map(k, _) if class == BuiltinClassTag::Indexable => {
                     Ok(k.as_ref().clone())
                 }
 
                 // Builtin: String with Indexable:Index = Int
-                Ty::String if class == ClassKind::Indexable => Ok(Ty::Int),
+                Ty::String if class == BuiltinClassTag::Indexable => {
+                    Ok(Ty::Int)
+                }
 
                 // User type: look up instance in registry
                 Ty::Named(type_id, type_args) => {
@@ -2662,7 +2666,7 @@ impl<'a> InferCtx<'a> {
                             }
                         }
                         None => Err(TypeError::UnsatisfiedClass(
-                            self.class_kind_to_class(class),
+                            Class::placeholder(class),
                             base.clone(),
                             span,
                         )),
@@ -2681,34 +2685,11 @@ impl<'a> InferCtx<'a> {
 
                 // Other types: no instance for this class
                 _ => Err(TypeError::UnsatisfiedClass(
-                    self.class_kind_to_class(class),
+                    Class::placeholder(class),
                     base.clone(),
                     span,
                 )),
             }
-        }
-    }
-
-    /// Convert a `ClassKind` to a `Class` for error messages.
-    ///
-    /// Uses placeholder types for parameterized classes.
-    fn class_kind_to_class(&self, kind: ClassKind) -> Class {
-        match kind {
-            ClassKind::Numeric => Class::Numeric,
-            ClassKind::Iterable => Class::Iterable(None),
-            ClassKind::Monoid => Class::Monoid,
-            ClassKind::BitLike => Class::BitLike,
-            ClassKind::Negatable => Class::Negatable,
-            ClassKind::Fallible => Class::Fallible(None),
-            ClassKind::Into => Class::Into(Ty::Unknown),
-            ClassKind::TryInto => Class::TryInto(Ty::Unknown),
-            ClassKind::Indexable => Class::Indexable(Ty::Unknown),
-            ClassKind::Ord => Class::Ord,
-            ClassKind::Eq => Class::Eq,
-            ClassKind::Mappable => Class::Mappable(None),
-            ClassKind::Foldable => Class::Foldable(None),
-            ClassKind::Filterable => Class::Filterable(None),
-            ClassKind::Display => Class::Display,
         }
     }
 }
@@ -2810,7 +2791,7 @@ mod tests {
 
         // Create an Ord instance for the user type
         let ord_inst = Instance {
-            class: ClassKind::Ord,
+            class: BuiltinClassTag::Ord,
             class_args: SmallVec::new(),
             type_params: SmallVec::new(),
             constraints: SmallVec::new(),
@@ -2823,16 +2804,16 @@ mod tests {
         let _ = registry.register(user_type_id, ord_inst.clone());
 
         // Lookup should find the instance
-        let found = registry.lookup(ClassKind::Ord, user_type_id);
+        let found = registry.lookup(BuiltinClassTag::Ord, user_type_id);
         assert!(found.is_some(), "should find Ord instance");
 
         // Lookup for different class should not find anything
-        let not_found = registry.lookup(ClassKind::Display, user_type_id);
+        let not_found = registry.lookup(BuiltinClassTag::Display, user_type_id);
         assert!(not_found.is_none(), "should not find Display instance");
 
         // Lookup for different type should not find anything
         let other_type_id = TypeId::SCALAR;
-        let not_found2 = registry.lookup(ClassKind::Ord, other_type_id);
+        let not_found2 = registry.lookup(BuiltinClassTag::Ord, other_type_id);
         assert!(
             not_found2.is_none(),
             "should not find instance for other type"
@@ -2846,7 +2827,7 @@ mod tests {
         let constraint = (t, Class::Display);
 
         let inst = Instance {
-            class: ClassKind::Ord,
+            class: BuiltinClassTag::Ord,
             class_args: SmallVec::new(),
             type_params: smallvec::smallvec![t],
             constraints: smallvec::smallvec![constraint],

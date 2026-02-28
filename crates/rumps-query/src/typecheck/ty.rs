@@ -14,13 +14,13 @@ use super::error::TypeError;
 use crate::intern::StringId;
 use crate::{Span, TypeId};
 
-/// Runtime class identifier for dispatch table indexing.
+/// Flat discriminant for builtin type classes.
 ///
-/// This is the discriminant of `Class` without type parameters.
-/// Use `Class::kind()` to extract from a full `Class`.
+/// Exists only for dispatch table indexing and efficient keying.
+/// Class metadata (methods, assoc types, help) lives in `BuiltinClassDef`.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum ClassKind {
+pub(crate) enum BuiltinClassTag {
     Numeric = 0,
     Iterable = 1,
     Monoid = 2,
@@ -38,18 +38,17 @@ pub(crate) enum ClassKind {
     Eq = 14,
 }
 
-/// Definition of a class, including metadata about its associated types.
+/// The "shape" of a builtin class constraint.
 ///
-/// Used to determine what associated types a class declares and how many
-/// type parameters it takes.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct ClassDef {
-    /// Which class this definition is for.
-    pub(crate) kind: ClassKind,
-    /// Associated type names declared by this class (e.g., `["Index"]` for `Indexable`).
-    pub(crate) assoc_types: &'static [&'static str],
-    /// Number of type parameters the class takes (e.g., `1` for `Indexable[E]`).
-    pub(crate) params: u8,
+/// Determines how many and what kind of type parameters the class carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ClassShape {
+    /// Kind `*`; no type params in constraint.
+    Simple,
+    /// Kind `* -> *` (or higher); element type comes from usage sites (`F[T]`).
+    Hkt { kind_arity: u8 },
+    /// Kind `*`; has explicit type params in constraint (e.g., `Into[T]`).
+    Parameterized { params: u8 },
 }
 
 /// What kind of type tracking a method requires for runtime dispatch.
@@ -63,7 +62,7 @@ pub(crate) enum TrackKind {
     ConvertResultInner,
 }
 
-/// Method specification returned by `ClassKind::method`.
+/// Method specification returned by `BuiltinClassTag::method`.
 #[derive(Clone, Debug)]
 pub(crate) enum MethodSpec {
     /// Standard method; just instantiate scheme and unify.
@@ -80,15 +79,11 @@ impl MethodSpec {
     }
 }
 
-impl ClassKind {
-    /// Number of class kinds (for array sizing).
+impl BuiltinClassTag {
+    /// Number of builtin class tags (for array sizing).
     pub(crate) const COUNT: usize = 15;
 
-    /// Parse a class name string into a `ClassKind`.
-    ///
-    /// **IMPORTANT**: When adding a new `ClassKind` variant, you MUST add a
-    /// corresponding case here. Forgetting to do so will cause the class to be
-    /// unrecognized at parse time.
+    /// Parse a class name string into a `BuiltinClassTag`.
     pub(crate) fn from_str(s: &str) -> Option<Self> {
         match s {
             "Numeric" => Some(Self::Numeric),
@@ -110,165 +105,7 @@ impl ClassKind {
         }
     }
 
-    /// Get the definition metadata for this class.
-    ///
-    /// Returns information about associated types and parameter count.
-    pub(crate) fn def(self) -> ClassDef {
-        match self {
-            // HKT classes (kind `* -> *`): no user-facing type arg in constraint
-            Self::Iterable
-            | Self::Fallible
-            | Self::Mappable
-            | Self::Foldable
-            | Self::Filterable => ClassDef {
-                kind: self,
-                assoc_types: &[],
-                params: 0,
-            },
-            // Multi-param classes with 1 type arg
-            Self::Into | Self::TryInto => ClassDef {
-                kind: self,
-                assoc_types: &[],
-                params: 1,
-            },
-            // Indexable: 1 param (elem type) + associated type `Index` (index type)
-            Self::Indexable => ClassDef {
-                kind: self,
-                assoc_types: &["Index"],
-                params: 1,
-            },
-            // Simple classes with no type args
-            Self::Numeric
-            | Self::Monoid
-            | Self::BitLike
-            | Self::Negatable
-            | Self::Ord
-            | Self::Eq
-            | Self::Display => ClassDef {
-                kind: self,
-                assoc_types: &[],
-                params: 0,
-            },
-        }
-    }
-
-    /// Look up a method's type specification by name.
-    ///
-    /// This is the **single source of truth** for all type class method schemes.
-    /// Every class method must have its type scheme defined here.
-    ///
-    /// The `intern` function is used to intern associated type names (e.g., `"Index"`
-    /// for `Indexable`). This is needed because `Ty::AssocType` stores a `StringId`.
-    ///
-    /// Returns `Err(TypeError::UnknownMethod)` if the method doesn't exist.
-    pub(crate) fn method(
-        self,
-        name: &str,
-        span: Span,
-        intern: impl FnOnce(&str) -> StringId,
-    ) -> Result<MethodSpec, TypeError> {
-        match (self, name) {
-            (
-                Self::Numeric,
-                "add" | "sub" | "mul" | "floor-div" | "mod" | "pow",
-            ) => Ok(MethodSpec::Standard(
-                scheme!(forall T: Numeric. (T, T) -> T),
-            )),
-
-            (Self::Negatable, "neg") => {
-                Ok(MethodSpec::Standard(scheme!(forall T: Negatable. (T) -> T)))
-            }
-
-            (Self::BitLike, "bit-and" | "bit-or" | "shl" | "shr") => Ok(
-                MethodSpec::Standard(scheme!(forall T: BitLike. (T, T) -> T)),
-            ),
-
-            (Self::Ord, "compare") => Ok(MethodSpec::Standard(
-                scheme!(forall T: Ord. (T, T) -> Ordering),
-            )),
-
-            (Self::Eq, "eq") => {
-                Ok(MethodSpec::Standard(scheme!(forall T: Eq. (T, T) -> Bool)))
-            }
-
-            // `Monoid:identity` needs `mempty_types` tracking
-            (Self::Monoid, "identity") => Ok(MethodSpec::Tracked {
-                scheme: scheme!(forall T: Monoid. () -> T),
-                track: TrackKind::Mempty,
-            }),
-            (Self::Monoid, "concat") => {
-                Ok(MethodSpec::Standard(scheme!(forall T: Monoid. (T, T) -> T)))
-            }
-
-            (Self::Fallible, "unwrap") => Ok(MethodSpec::Standard(
-                scheme!(forall T, F: Fallible. (F[T]) -> T),
-            )),
-            // `Fallible:wrap` needs `convert_targets` tracking
-            (Self::Fallible, "wrap") => Ok(MethodSpec::Tracked {
-                scheme: scheme!(forall T, F: Fallible. (T) -> F[T]),
-                track: TrackKind::Convert,
-            }),
-            (Self::Fallible, "flat-map") => Ok(MethodSpec::Standard(
-                scheme!(forall T, U, F: Fallible. (F[T], (T) -> F[U]) -> F[U]),
-            )),
-
-            (Self::Iterable, "length") => Ok(MethodSpec::Standard(
-                scheme!(forall T, I: Iterable. (I[T]) -> Int),
-            )),
-            (Self::Iterable, "contains") => Ok(MethodSpec::Standard(
-                scheme!(forall T, I: Iterable. (I[T], T) -> Bool),
-            )),
-            (Self::Iterable, "reverse") => Ok(MethodSpec::Standard(
-                scheme!(forall T, I: Iterable. (I[T]) -> Array[T]),
-            )),
-            (Self::Iterable, "foreach") => Ok(MethodSpec::Standard(
-                scheme!(forall T, I: Iterable. ((T) -> Unit, I[T]) -> Unit),
-            )),
-
-            (Self::Mappable, "map") => Ok(MethodSpec::Standard(
-                scheme!(forall T, U, M: Mappable. ((T) -> U, M[T]) -> Array[U]),
-            )),
-
-            (Self::Filterable, "filter") => Ok(MethodSpec::Standard(
-                scheme!(forall T, F: Filterable. ((T) -> Bool, F[T]) -> Array[T]),
-            )),
-
-            (Self::Foldable, "reduce") => Ok(MethodSpec::Standard(
-                scheme!(forall T, U, F: Foldable. ((U, T) -> U, U, F[T]) -> U),
-            )),
-
-            // `Into:into` needs convert_targets tracking
-            (Self::Into, "into") => Ok(MethodSpec::Tracked {
-                scheme: scheme!(forall T: Into[U], U. (T) -> U),
-                track: TrackKind::Convert,
-            }),
-
-            // `TryInto:try-into` needs convert_targets tracking (inner type)
-            (Self::TryInto, "try-into") => Ok(MethodSpec::Tracked {
-                scheme: scheme!(forall T: TryInto[U], U. (T) -> Result[U, String]),
-                track: TrackKind::ConvertResultInner,
-            }),
-
-            (Self::Indexable, "index") => Ok(MethodSpec::Standard(
-                scheme!(forall B: Indexable[E], E. (B, B:Indexable:Index) -> E),
-            )),
-            (Self::Indexable, "get") => Ok(MethodSpec::Standard(
-                scheme!(forall B: Indexable[E], E. (B, B:Indexable:Index) -> Option[E]),
-            )),
-
-            (Self::Display, "display") => Ok(MethodSpec::Standard(
-                scheme!(forall T: Display. (T) -> String),
-            )),
-
-            _ => Err(TypeError::UnknownMethod {
-                class: self.name().to_string(),
-                method: name.to_string(),
-                span,
-            }),
-        }
-    }
-
-    /// Returns the name of this class kind.
+    /// Returns the name of this class tag.
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::Numeric => "Numeric",
@@ -289,41 +126,316 @@ impl ClassKind {
         }
     }
 
-    /// Returns the list of methods that must be implemented for this class.
-    ///
-    /// Used during `CLASS ... FOR ...` validation to ensure all required
-    /// methods are provided by the user.
-    pub(crate) const fn required_methods(self) -> &'static [&'static str] {
+    /// Returns the shape of this class constraint.
+    pub(crate) const fn shape(self) -> ClassShape {
         match self {
-            Self::Numeric => &["add", "sub", "mul", "floor-div", "mod", "pow"],
-            Self::Negatable => &["neg"],
-            Self::BitLike => &["bit-and", "bit-or", "shl", "shr"],
-            Self::Ord => &["compare"],
-            Self::Eq => &["eq"],
-            Self::Monoid => &["identity", "concat"],
-            Self::Fallible => &["unwrap", "wrap", "flat-map"],
-            Self::Iterable => &["length", "contains", "reverse", "foreach"],
-            Self::Mappable => &["map"],
-            Self::Filterable => &["filter"],
-            Self::Foldable => &["reduce"],
-            Self::Into => &["into"],
-            Self::TryInto => &["try-into"],
-            Self::Indexable => &["index", "get"],
-            Self::Display => &["display"],
-        }
-    }
+            Self::Numeric
+            | Self::Monoid
+            | Self::BitLike
+            | Self::Negatable
+            | Self::Ord
+            | Self::Eq
+            | Self::Display => ClassShape::Simple,
 
-    /// Check if this class defines the given associated type.
-    ///
-    /// Used during type conversion to validate `Class:AssocName` references.
-    pub(crate) fn has_assoc_type(self, name: &str) -> bool {
-        self.def().assoc_types.contains(&name)
+            Self::Iterable
+            | Self::Fallible
+            | Self::Mappable
+            | Self::Foldable
+            | Self::Filterable => ClassShape::Hkt { kind_arity: 1 },
+
+            Self::Into | Self::TryInto | Self::Indexable => {
+                ClassShape::Parameterized { params: 1 }
+            }
+        }
     }
 }
 
-impl fmt::Display for ClassKind {
+impl fmt::Display for BuiltinClassTag {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.name())
+    }
+}
+
+/// Shared metadata for a builtin class definition.
+pub(crate) struct BuiltinClassInfo {
+    pub(crate) tag: BuiltinClassTag,
+    pub(crate) name: &'static str,
+    pub(crate) assoc_types: &'static [&'static str],
+    /// Method specs; all methods are required.
+    pub(crate) methods: Vec<(&'static str, MethodSpec)>,
+    pub(crate) help: Option<&'static str>,
+}
+
+/// Full definition of a builtin class; shape is the enum variant, identity
+/// is data inside `BuiltinClassInfo`.
+pub(crate) enum BuiltinClassDef {
+    /// Kind `*` class; no type parameters.
+    Simple(BuiltinClassInfo),
+    /// Kind `* -> *` (or higher) class.
+    Hkt {
+        info: BuiltinClassInfo,
+        kind_arity: u8,
+    },
+    /// Parameterized class with explicit type args.
+    Parameterized { info: BuiltinClassInfo, params: u8 },
+}
+
+/// Array of all builtin class definitions, indexed by `BuiltinClassTag as usize`.
+pub(crate) type BuiltinClassDefs = [BuiltinClassDef; BuiltinClassTag::COUNT];
+
+impl BuiltinClassDef {
+    /// Shared info regardless of shape.
+    pub(crate) fn info(&self) -> &BuiltinClassInfo {
+        match self {
+            Self::Simple(i)
+            | Self::Hkt { info: i, .. }
+            | Self::Parameterized { info: i, .. } => i,
+        }
+    }
+
+    pub(crate) fn tag(&self) -> BuiltinClassTag {
+        self.info().tag
+    }
+
+    pub(crate) fn name(&self) -> &'static str {
+        self.info().name
+    }
+
+    /// Look up a method by name.
+    pub(crate) fn method(
+        &self,
+        name: &str,
+        span: Span,
+    ) -> Result<&MethodSpec, TypeError> {
+        self.info()
+            .methods
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, spec)| spec)
+            .ok_or_else(|| TypeError::UnknownMethod {
+                class: self.name().to_string(),
+                method: name.to_string(),
+                span,
+            })
+    }
+
+    /// All method names (all methods are required).
+    pub(crate) fn method_names(
+        &self,
+    ) -> impl Iterator<Item = &'static str> + '_ {
+        self.info().methods.iter().map(|(n, _)| *n)
+    }
+
+    /// Build all `15` builtin class definitions.
+    ///
+    /// The `intern` closure is used for associated type names in method
+    /// schemes (currently only `Indexable`'s `"Index"`).
+    pub(crate) fn build_all(
+        intern: &mut impl FnMut(&str) -> StringId,
+    ) -> BuiltinClassDefs {
+        [
+            // Simple classes
+            Self::Simple(BuiltinClassInfo {
+                tag: BuiltinClassTag::Numeric,
+                name: "Numeric",
+                assoc_types: &[],
+                methods: vec![
+                    ("add", MethodSpec::Standard(scheme!(forall T: Numeric. (T, T) -> T))),
+                    ("sub", MethodSpec::Standard(scheme!(forall T: Numeric. (T, T) -> T))),
+                    ("mul", MethodSpec::Standard(scheme!(forall T: Numeric. (T, T) -> T))),
+                    ("floor-div", MethodSpec::Standard(scheme!(forall T: Numeric. (T, T) -> T))),
+                    ("mod", MethodSpec::Standard(scheme!(forall T: Numeric. (T, T) -> T))),
+                    ("pow", MethodSpec::Standard(scheme!(forall T: Numeric. (T, T) -> T))),
+                ],
+                help: Some("numeric types are `Int`, `Word`, and `Float`"),
+            }),
+            // Iterable (HKT)
+            Self::Hkt {
+                info: BuiltinClassInfo {
+                    tag: BuiltinClassTag::Iterable,
+                    name: "Iterable",
+                    assoc_types: &[],
+                    methods: vec![
+                        ("length", MethodSpec::Standard(scheme!(forall T, I: Iterable. (I[T]) -> Int))),
+                        ("contains", MethodSpec::Standard(scheme!(forall T, I: Iterable. (I[T], T) -> Bool))),
+                        ("reverse", MethodSpec::Standard(scheme!(forall T, I: Iterable. (I[T]) -> Array[T]))),
+                        ("foreach", MethodSpec::Standard(scheme!(forall T, I: Iterable. ((T) -> Unit, I[T]) -> Unit))),
+                    ],
+                    help: Some("iterable types are `Array` and `Range`"),
+                },
+                kind_arity: 1,
+            },
+            // Monoid (Simple)
+            Self::Simple(BuiltinClassInfo {
+                tag: BuiltinClassTag::Monoid,
+                name: "Monoid",
+                assoc_types: &[],
+                methods: vec![
+                    ("identity", MethodSpec::Tracked {
+                        scheme: scheme!(forall T: Monoid. () -> T),
+                        track: TrackKind::Mempty,
+                    }),
+                    ("concat", MethodSpec::Standard(scheme!(forall T: Monoid. (T, T) -> T))),
+                ],
+                help: Some("`++` works on `String`, `Array`, `Map`, and `Option`"),
+            }),
+            // BitLike (Simple)
+            Self::Simple(BuiltinClassInfo {
+                tag: BuiltinClassTag::BitLike,
+                name: "BitLike",
+                assoc_types: &[],
+                methods: vec![
+                    ("bit-and", MethodSpec::Standard(scheme!(forall T: BitLike. (T, T) -> T))),
+                    ("bit-or", MethodSpec::Standard(scheme!(forall T: BitLike. (T, T) -> T))),
+                    ("shl", MethodSpec::Standard(scheme!(forall T: BitLike. (T, T) -> T))),
+                    ("shr", MethodSpec::Standard(scheme!(forall T: BitLike. (T, T) -> T))),
+                ],
+                help: Some("bitwise types are `Bool`, `Int`, and `Word`"),
+            }),
+            // Negatable (Simple)
+            Self::Simple(BuiltinClassInfo {
+                tag: BuiltinClassTag::Negatable,
+                name: "Negatable",
+                assoc_types: &[],
+                methods: vec![
+                    ("neg", MethodSpec::Standard(scheme!(forall T: Negatable. (T) -> T))),
+                ],
+                help: Some("negatable types are `Int` and `Float`"),
+            }),
+            // Fallible (HKT)
+            Self::Hkt {
+                info: BuiltinClassInfo {
+                    tag: BuiltinClassTag::Fallible,
+                    name: "Fallible",
+                    assoc_types: &[],
+                    methods: vec![
+                        ("unwrap", MethodSpec::Standard(scheme!(forall T, F: Fallible. (F[T]) -> T))),
+                        ("wrap", MethodSpec::Tracked {
+                            scheme: scheme!(forall T, F: Fallible. (T) -> F[T]),
+                            track: TrackKind::Convert,
+                        }),
+                        ("flat-map", MethodSpec::Standard(scheme!(forall T, U, F: Fallible. (F[T], (T) -> F[U]) -> F[U]))),
+                    ],
+                    help: Some("fallible types are `Option` and `Result`"),
+                },
+                kind_arity: 1,
+            },
+            // Into (Parameterized)
+            Self::Parameterized {
+                info: BuiltinClassInfo {
+                    tag: BuiltinClassTag::Into,
+                    name: "Into",
+                    assoc_types: &[],
+                    methods: vec![
+                        ("into", MethodSpec::Tracked {
+                            scheme: scheme!(forall T: Into[U], U. (T) -> U),
+                            track: TrackKind::Convert,
+                        }),
+                    ],
+                    help: None,
+                },
+                params: 1,
+            },
+            // TryInto (Parameterized)
+            Self::Parameterized {
+                info: BuiltinClassInfo {
+                    tag: BuiltinClassTag::TryInto,
+                    name: "TryInto",
+                    assoc_types: &[],
+                    methods: vec![
+                        ("try-into", MethodSpec::Tracked {
+                            scheme: scheme!(forall T: TryInto[U], U. (T) -> Result[U, String]),
+                            track: TrackKind::ConvertResultInner,
+                        }),
+                    ],
+                    help: None,
+                },
+                params: 1,
+            },
+            // Indexable (Parameterized, with assoc type `Index`)
+            Self::Parameterized {
+                info: BuiltinClassInfo {
+                    tag: BuiltinClassTag::Indexable,
+                    name: "Indexable",
+                    assoc_types: &["Index"],
+                    methods: vec![
+                        ("index", MethodSpec::Standard(scheme!(forall B: Indexable[E], E. (B, B:Indexable:Index) -> E))),
+                        ("get", MethodSpec::Standard(scheme!(forall B: Indexable[E], E. (B, B:Indexable:Index) -> Option[E]))),
+                    ],
+                    help: Some("indexable types are `Array`, `Map`, and `String`"),
+                },
+                params: 1,
+            },
+            // Ord (Simple)
+            Self::Simple(BuiltinClassInfo {
+                tag: BuiltinClassTag::Ord,
+                name: "Ord",
+                assoc_types: &[],
+                methods: vec![
+                    ("compare", MethodSpec::Standard(scheme!(forall T: Ord. (T, T) -> Ordering))),
+                ],
+                help: Some("orderable types are `Bool`, `Int`, `Word`, `Float`, `Char`, and `String`"),
+            }),
+            // Mappable (HKT)
+            Self::Hkt {
+                info: BuiltinClassInfo {
+                    tag: BuiltinClassTag::Mappable,
+                    name: "Mappable",
+                    assoc_types: &[],
+                    methods: vec![
+                        ("map", MethodSpec::Standard(scheme!(forall T, U, M: Mappable. ((T) -> U, M[T]) -> Array[U]))),
+                    ],
+                    help: Some("mappable types are `Option`, `Result`, `Array`, and `Range`"),
+                },
+                kind_arity: 1,
+            },
+            // Foldable (HKT)
+            Self::Hkt {
+                info: BuiltinClassInfo {
+                    tag: BuiltinClassTag::Foldable,
+                    name: "Foldable",
+                    assoc_types: &[],
+                    methods: vec![
+                        ("reduce", MethodSpec::Standard(scheme!(forall T, U, F: Foldable. ((U, T) -> U, U, F[T]) -> U))),
+                    ],
+                    help: Some("foldable types are `Option`, `Result`, `Array`, and `Range`"),
+                },
+                kind_arity: 1,
+            },
+            // Filterable (HKT)
+            Self::Hkt {
+                info: BuiltinClassInfo {
+                    tag: BuiltinClassTag::Filterable,
+                    name: "Filterable",
+                    assoc_types: &[],
+                    methods: vec![
+                        ("filter", MethodSpec::Standard(scheme!(forall T, F: Filterable. ((T) -> Bool, F[T]) -> Array[T]))),
+                    ],
+                    help: Some("filterable types are `Option`, `Result`, and `Array`"),
+                },
+                kind_arity: 1,
+            },
+            // Display (Simple)
+            Self::Simple(BuiltinClassInfo {
+                tag: BuiltinClassTag::Display,
+                name: "Display",
+                assoc_types: &[],
+                methods: vec![
+                    ("display", MethodSpec::Standard(scheme!(forall T: Display. (T) -> String))),
+                ],
+                help: None,
+            }),
+            // Eq (Simple)
+            Self::Simple(BuiltinClassInfo {
+                tag: BuiltinClassTag::Eq,
+                name: "Eq",
+                assoc_types: &[],
+                methods: vec![
+                    ("eq", MethodSpec::Standard(scheme!(forall T: Eq. (T, T) -> Bool))),
+                ],
+                help: Some("equality types are primitives, containers (if elements are `Eq`), and user types with `CLASS Eq`"),
+            }),
+        ]
     }
 }
 
@@ -472,24 +584,54 @@ impl Class {
         }
     }
 
-    /// Get the `ClassKind` for dispatch table lookup.
-    pub(crate) const fn kind(&self) -> ClassKind {
+    /// Get the `BuiltinClassTag` for dispatch table lookup.
+    pub(crate) const fn kind(&self) -> BuiltinClassTag {
         match self {
-            Self::Iterable(_) => ClassKind::Iterable,
-            Self::Fallible(_) => ClassKind::Fallible,
-            Self::Mappable(_) => ClassKind::Mappable,
-            Self::Foldable(_) => ClassKind::Foldable,
-            Self::Filterable(_) => ClassKind::Filterable,
-            Self::Into(_) => ClassKind::Into,
-            Self::TryInto(_) => ClassKind::TryInto,
-            Self::Indexable(_) => ClassKind::Indexable,
-            Self::Numeric => ClassKind::Numeric,
-            Self::Monoid => ClassKind::Monoid,
-            Self::BitLike => ClassKind::BitLike,
-            Self::Negatable => ClassKind::Negatable,
-            Self::Ord => ClassKind::Ord,
-            Self::Eq => ClassKind::Eq,
-            Self::Display => ClassKind::Display,
+            Self::Iterable(_) => BuiltinClassTag::Iterable,
+            Self::Fallible(_) => BuiltinClassTag::Fallible,
+            Self::Mappable(_) => BuiltinClassTag::Mappable,
+            Self::Foldable(_) => BuiltinClassTag::Foldable,
+            Self::Filterable(_) => BuiltinClassTag::Filterable,
+            Self::Into(_) => BuiltinClassTag::Into,
+            Self::TryInto(_) => BuiltinClassTag::TryInto,
+            Self::Indexable(_) => BuiltinClassTag::Indexable,
+            Self::Numeric => BuiltinClassTag::Numeric,
+            Self::Monoid => BuiltinClassTag::Monoid,
+            Self::BitLike => BuiltinClassTag::BitLike,
+            Self::Negatable => BuiltinClassTag::Negatable,
+            Self::Ord => BuiltinClassTag::Ord,
+            Self::Eq => BuiltinClassTag::Eq,
+            Self::Display => BuiltinClassTag::Display,
+        }
+    }
+
+    /// Create a placeholder constraint for error messages.
+    pub(crate) fn placeholder(tag: BuiltinClassTag) -> Self {
+        match tag.shape() {
+            ClassShape::Simple => match tag {
+                BuiltinClassTag::Numeric => Self::Numeric,
+                BuiltinClassTag::Monoid => Self::Monoid,
+                BuiltinClassTag::BitLike => Self::BitLike,
+                BuiltinClassTag::Negatable => Self::Negatable,
+                BuiltinClassTag::Ord => Self::Ord,
+                BuiltinClassTag::Eq => Self::Eq,
+                BuiltinClassTag::Display => Self::Display,
+                _ => Self::Display, // unreachable for simple tags
+            },
+            ClassShape::Hkt { .. } => match tag {
+                BuiltinClassTag::Iterable => Self::Iterable(None),
+                BuiltinClassTag::Fallible => Self::Fallible(None),
+                BuiltinClassTag::Mappable => Self::Mappable(None),
+                BuiltinClassTag::Foldable => Self::Foldable(None),
+                BuiltinClassTag::Filterable => Self::Filterable(None),
+                _ => Self::Display, // unreachable for HKT tags
+            },
+            ClassShape::Parameterized { .. } => match tag {
+                BuiltinClassTag::Into => Self::Into(Ty::Unknown),
+                BuiltinClassTag::TryInto => Self::TryInto(Ty::Unknown),
+                BuiltinClassTag::Indexable => Self::Indexable(Ty::Unknown),
+                _ => Self::Display, // unreachable for parameterized tags
+            },
         }
     }
 }
@@ -605,9 +747,9 @@ pub(crate) enum Ty {
     ///
     /// Fields:
     /// - `TyVar`: the type variable with the class constraint
-    /// - `ClassKind`: which class defines the associated type
+    /// - `BuiltinClassTag`: which class defines the associated type
     /// - `StringId`: the associated type name (e.g., `"Index"`)
-    AssocType(TyVar, ClassKind, StringId),
+    AssocType(TyVar, BuiltinClassTag, StringId),
 
     /// Unresolved; database reads before inference narrows.
     Unknown,

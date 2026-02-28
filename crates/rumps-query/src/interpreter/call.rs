@@ -383,9 +383,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         args: &SmallVec<[ExprId; 4]>,
         span: Span,
     ) -> Result<Value> {
-        use crate::typecheck::ClassKind;
+        use crate::typecheck::BuiltinClassTag;
 
-        let kind = ClassKind::from_str(class).unwrap_or_else(|| {
+        let kind = BuiltinClassTag::from_str(class).unwrap_or_else(|| {
             typechecked!("class method class", "known class")
         });
 
@@ -411,7 +411,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         args: &[ValueId],
         span: Span,
     ) -> Result<Value> {
-        use crate::typecheck::ClassKind;
+        use crate::typecheck::BuiltinClassTag;
 
         let class_str = self
             .arena
@@ -423,7 +423,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             .map(str::to_owned)
             .unwrap_or_else(|| invariant!("method StringId in arena"));
 
-        let kind = ClassKind::from_str(class_str).unwrap_or_else(|| {
+        let kind = BuiltinClassTag::from_str(class_str).unwrap_or_else(|| {
             typechecked!("invoke_class_method_fn", "known class")
         });
 
@@ -449,7 +449,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     pub(super) async fn dispatch_class_method(
         &mut self,
         expr_id: Option<ExprId>,
-        class: crate::typecheck::ClassKind,
+        class: crate::typecheck::BuiltinClassTag,
         method: &str,
         args: &[ValueId],
         span: Span,
@@ -530,7 +530,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     async fn dispatch_with_auto_derive(
         &mut self,
         expr_id: Option<ExprId>,
-        class: crate::typecheck::ClassKind,
+        class: crate::typecheck::BuiltinClassTag,
         method: &str,
         args: &[ValueId],
         span: Span,
@@ -567,7 +567,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     async fn dispatch_builtin_or_hof(
         &mut self,
         expr_id: Option<ExprId>,
-        class: crate::typecheck::ClassKind,
+        class: crate::typecheck::BuiltinClassTag,
         method: &str,
         args: &[ValueId],
         span: Span,
@@ -591,7 +591,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     fn dispatch_builtin_class_method(
         &mut self,
         expr_id: Option<ExprId>,
-        class: crate::typecheck::ClassKind,
+        class: crate::typecheck::BuiltinClassTag,
         method: &str,
         args: &[ValueId],
         span: Span,

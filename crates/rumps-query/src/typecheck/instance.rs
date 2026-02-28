@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use smallvec::SmallVec;
 
-use super::ty::{Class, ClassKind, Ty, TyVar};
+use super::ty::{BuiltinClassTag, Class, Ty, TyVar};
 use super::TypeError;
 use crate::intern::StringId;
 use crate::{Span, TypeId};
@@ -39,8 +39,8 @@ pub(crate) struct AssocTypeDef {
 /// `type_params` holds `[L, R]` and `constraints` holds `[(L, Display)]`.
 #[derive(Clone, Debug)]
 pub(crate) struct Instance {
-    /// The class being implemented (e.g., `ClassKind::Display`).
-    pub(crate) class: ClassKind,
+    /// The class being implemented (e.g., `BuiltinClassTag::Display`).
+    pub(crate) class: BuiltinClassTag,
     /// Type arguments to the class (e.g., `[Ty::String]` for `Into[String]`).
     pub(crate) class_args: SmallVec<[Ty; 2]>,
     /// Type parameters on the implementing type (e.g., `[L, R]` for `Either[L, R]`).
@@ -76,11 +76,11 @@ impl Instance {
 
 /// Registry of user-defined class instances.
 ///
-/// Keyed by `(ClassKind, TypeId)` for O(1) lookup during constraint solving.
+/// Keyed by `(BuiltinClassTag, TypeId)` for O(1) lookup during constraint solving.
 /// A type can have at most one instance per class.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct InstanceRegistry {
-    instances: HashMap<(ClassKind, TypeId), Instance>,
+    instances: HashMap<(BuiltinClassTag, TypeId), Instance>,
 }
 
 impl InstanceRegistry {
@@ -92,7 +92,7 @@ impl InstanceRegistry {
     /// Look up an instance for a class and type.
     pub(crate) fn lookup(
         &self,
-        class: ClassKind,
+        class: BuiltinClassTag,
         type_id: TypeId,
     ) -> Option<&Instance> {
         self.instances.get(&(class, type_id))

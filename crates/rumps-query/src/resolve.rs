@@ -33,7 +33,7 @@ use smallvec::{smallvec, SmallVec};
 
 use crate::ast::{Ast, AstTypeExpr, Expr, ExprId, Stmt, StmtId};
 use crate::env::BUILTIN_MODULE_NAMES;
-use crate::typecheck::ClassKind;
+use crate::typecheck::BuiltinClassTag;
 use crate::value::{TypeRegistry, ValueArena};
 
 /// Resolved class instance info.
@@ -43,7 +43,7 @@ use crate::value::{TypeRegistry, ValueArena};
 #[derive(Clone, Debug)]
 pub(crate) struct ResolvedInstance {
     /// The class being implemented.
-    pub(crate) class: ClassKind,
+    pub(crate) class: BuiltinClassTag,
     /// The name of the implementing type (e.g., `"Point"`, `"MyModule.Point"`).
     pub(crate) type_name: String,
     /// Method mappings: `(method_name, generated_fn_name)`.
@@ -352,7 +352,7 @@ impl<'a> ResolveCtx<'a> {
                 methods,
                 ..
             } => {
-                let class = ClassKind::from_str(class_name)?;
+                let class = BuiltinClassTag::from_str(class_name)?;
                 let raw_name = Self::extract_type_name(self.ast, *for_type)?;
 
                 let type_name = match module {

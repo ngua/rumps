@@ -7,7 +7,7 @@ use super::class::ClassCtx;
 use super::Interpreter;
 use crate::ast::ExprId;
 use crate::io::IoContext;
-use crate::typecheck::ClassKind;
+use crate::typecheck::BuiltinClassTag;
 use crate::value::{TypeExprId, TypeId, Value, ValueId};
 use crate::{Result, Span};
 
@@ -211,7 +211,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             span,
         };
         self.class_methods.dispatch_nullary(
-            ClassKind::Monoid,
+            BuiltinClassTag::Monoid,
             "identity",
             &mut ctx,
             &ty,

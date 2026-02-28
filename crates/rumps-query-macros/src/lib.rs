@@ -453,7 +453,7 @@ impl TyExpr {
             Self::AssocType(var_name, class_name, assoc_name) => {
                 // NOTE: This generates code that calls `intern(...)` directly,
                 // so it only works when `intern: impl Fn(&str) -> StringId` is in scope.
-                // Currently this is only used in `ClassKind::method()`.
+                // Currently this is only used in `BuiltinClassDef::build_all()`.
                 let idx = vars.get(var_name).copied().unwrap_or_else(|| {
                     panic!("unbound type variable in associated type: `{var_name}`")
                 });
@@ -462,7 +462,7 @@ impl TyExpr {
                 quote! {
                     crate::typecheck::Ty::AssocType(
                         crate::typecheck::TyVar::new(#idx),
-                        crate::typecheck::ClassKind::#class_ident,
+                        crate::typecheck::BuiltinClassTag::#class_ident,
                         intern(#assoc_name)
                     )
                 }

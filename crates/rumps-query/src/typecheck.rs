@@ -26,7 +26,10 @@ pub(crate) use env::TypeEnv;
 pub(crate) use error::{FormattedTypeError, TyPrinter, TypeError};
 pub(crate) use infer::{Constraint, InferCtx};
 pub(crate) use instance::{Instance, InstanceRegistry};
-pub(crate) use ty::{Class, ClassKind, Scheme, Subst, Ty, TyVar};
+pub(crate) use ty::{
+    BuiltinClassDef, BuiltinClassDefs, BuiltinClassTag, Class, Scheme, Subst,
+    Ty, TyVar,
+};
 
 use crate::ast::ExprId;
 use crate::TypeId;

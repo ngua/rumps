@@ -12,7 +12,7 @@ use super::{ClassInstanceInput, InferCtx};
 use crate::ast::{AstTypeExprId, BindingPattern, Stmt, StmtId, TypeParam};
 use crate::typecheck::error::TypeError;
 use crate::typecheck::instance::Instance;
-use crate::typecheck::ty::{Class, ClassKind, Scheme, Ty, TyVar};
+use crate::typecheck::ty::{BuiltinClassTag, Class, Scheme, Ty, TyVar};
 use crate::Span;
 
 impl InferCtx<'_> {
@@ -357,7 +357,7 @@ impl InferCtx<'_> {
         } = input;
 
         // Parse class name; silently skip if invalid (error in Pass 2)
-        if let Some(class) = ClassKind::from_str(class_name) {
+        if let Some(class) = BuiltinClassTag::from_str(class_name) {
             // Build type parameter substitution from WHERE constraints
             let type_param_subst: HashMap<_, _> = if type_params.is_empty() {
                 constraints

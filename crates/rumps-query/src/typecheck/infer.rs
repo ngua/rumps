@@ -35,7 +35,7 @@ use smallvec::SmallVec;
 use super::env::TypeEnv;
 use super::error::{TyPrinter, TypeError};
 use super::instance::InstanceRegistry;
-use super::ty::{Class, ClassKind, Scheme, Subst, Ty, TyVar};
+use super::ty::{BuiltinClassTag, Class, Scheme, Subst, Ty, TyVar};
 use super::TypecheckOutput;
 use crate::ast::{
     self, AssocTypeDef, AstTypeExprId, ExprId, InstanceMethodDef, Stmt, StmtId,
@@ -66,7 +66,7 @@ pub(super) struct ClassInstanceInput<'a, A = ()> {
 
 /// Input for `instance_method`.
 pub(super) struct InstanceMethodInput<'a> {
-    pub(super) class: ClassKind,
+    pub(super) class: BuiltinClassTag,
     pub(super) for_ty: &'a Ty,
     pub(super) class_arg_tys: &'a SmallVec<[Ty; 2]>,
     pub(super) type_param_subst: &'a HashMap<StringId, Ty>,
@@ -151,7 +151,7 @@ impl Constraint {
 #[derive(Clone, Debug)]
 pub(crate) struct ClassContext {
     /// The class being implemented (e.g., `Indexable`).
-    pub(crate) class: ClassKind,
+    pub(crate) class: BuiltinClassTag,
     /// Associated type definitions for this instance.
     ///
     /// Maps associated type names to their concrete types. For example,
@@ -233,7 +233,7 @@ pub(crate) struct InferCtx<'a> {
     /// During inference, class method calls on types that are still type
     /// variables are recorded here. After `apply_subst`, we resolve the types
     /// and populate `instance_calls` for any user instances found.
-    deferred_instance_calls: Vec<(ExprId, Ty, ClassKind)>,
+    deferred_instance_calls: Vec<(ExprId, Ty, BuiltinClassTag)>,
     /// Type variables created for integer literals, for defaulting to `Int`.
     ///
     /// Integer literals are polymorphic (no constraint) so they can unify with

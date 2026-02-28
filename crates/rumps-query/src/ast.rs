@@ -867,7 +867,7 @@ pub(crate) enum Expr {
 
     /// Class method call: `Class:method(args)`.
     ///
-    /// Dispatches to a typeclass method. Class name is resolved to `ClassKind`
+    /// Dispatches to a typeclass method. Class name is resolved to `BuiltinClassTag`
     /// during typechecking.
     ///
     /// Examples: `Numeric:add(a, b)`, `Fallible:unwrap(opt)`, `Mappable:map(fn, arr)`

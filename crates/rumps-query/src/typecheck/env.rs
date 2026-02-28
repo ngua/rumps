@@ -4,7 +4,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::ty::{Scheme, Subst, Ty, TyVar};
+use super::ty::{
+    BuiltinClassDef, BuiltinClassDefs, BuiltinClassTag, Scheme, Subst, Ty,
+    TyVar,
+};
 use crate::ast::Visibility;
 use crate::intern::{StringId, StringInterner};
 
@@ -32,10 +35,11 @@ struct Scope {
 /// Scoped type environment mapping names to type schemes.
 ///
 /// Uses a stack of scopes for lexical scoping (blocks, functions, etc.).
-#[derive(Clone, Debug, Default)]
 pub(crate) struct TypeEnv {
     scopes: Vec<Scope>,
     pub(super) strings: StringInterner,
+    /// Builtin class definitions, indexed by `BuiltinClassTag as usize`.
+    class_defs: BuiltinClassDefs,
     /// User-defined module names registered during typechecking.
     user_modules: HashSet<String>,
     /// User module member types and visibility: `module_path -> member_name -> ModuleMember`.
@@ -56,15 +60,22 @@ impl TypeEnv {
     ///
     /// The interner should be shared with `TypeRegistry` so `StringId`
     /// lookups are consistent.
-    pub(crate) fn new(strings: StringInterner) -> Self {
+    pub(crate) fn new(mut strings: StringInterner) -> Self {
+        let class_defs = BuiltinClassDef::build_all(&mut |s| strings.intern(s));
         Self {
             scopes: vec![Scope::default()],
             strings,
+            class_defs,
             user_modules: HashSet::new(),
             user_module_members: HashMap::new(),
             user_module_type_vis: HashMap::new(),
             imported_types: HashMap::new(),
         }
+    }
+
+    /// Look up a builtin class definition by tag.
+    pub(crate) fn class_def(&self, tag: BuiltinClassTag) -> &BuiltinClassDef {
+        &self.class_defs[tag as usize]
     }
 
     /// Register a user-defined module name.
