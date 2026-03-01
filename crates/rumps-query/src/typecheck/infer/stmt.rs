@@ -19,7 +19,7 @@ use crate::ast::{
 use crate::intern::StringId;
 use crate::typecheck::error::TypeError;
 use crate::typecheck::instance::{self, Instance};
-use crate::typecheck::ty::{BuiltinClassTag, Class, Scheme, Ty, TyVar};
+use crate::typecheck::ty::{BuiltinClass, BuiltinClassTag, Scheme, Ty, TyVar};
 use crate::value::{TypeDef, TypeId};
 use crate::Span;
 
@@ -459,8 +459,8 @@ impl InferCtx<'_> {
             .collect();
 
         // Second pass: process constraints now that all type params are known
-        // Convert ast::Class to ty::Class for storage in Scheme
-        let mut scheme_constraints: SmallVec<[(TyVar, Class); 2]> =
+        // Convert `ast::Class` to `BuiltinClass<Ty>` for storage in `Scheme`
+        let mut scheme_constraints: SmallVec<[(TyVar, BuiltinClass<Ty>); 2]> =
             SmallVec::new();
 
         type_params.iter().for_each(|tp| {
@@ -773,7 +773,10 @@ impl InferCtx<'_> {
                 // Must be convertible to String
                 self.constrain(Constraint::Class {
                     ty: expr_ty,
-                    class: Class::Into(Ty::String),
+                    class: BuiltinClass::Parameterized(
+                        BuiltinClassTag::Into,
+                        Ty::String,
+                    ),
                     span,
                 });
             }
@@ -781,7 +784,10 @@ impl InferCtx<'_> {
                 // Must be convertible to Json
                 self.constrain(Constraint::Class {
                     ty: expr_ty,
-                    class: Class::Into(Ty::Json),
+                    class: BuiltinClass::Parameterized(
+                        BuiltinClassTag::Into,
+                        Ty::Json,
+                    ),
                     span,
                 });
             }
@@ -893,7 +899,7 @@ impl InferCtx<'_> {
         }
 
         // 6. Process WHERE constraints
-        let mut scheme_constraints: SmallVec<[(TyVar, Class); 2]> =
+        let mut scheme_constraints: SmallVec<[(TyVar, BuiltinClass<Ty>); 2]> =
             SmallVec::new();
         constraints
             .iter()

@@ -12,7 +12,7 @@ use super::{ClassInstanceInput, InferCtx};
 use crate::ast::{AstTypeExprId, BindingPattern, Stmt, StmtId, TypeParam};
 use crate::typecheck::error::TypeError;
 use crate::typecheck::instance::Instance;
-use crate::typecheck::ty::{BuiltinClassTag, Class, Scheme, Ty, TyVar};
+use crate::typecheck::ty::{BuiltinClass, BuiltinClassTag, Scheme, Ty, TyVar};
 use crate::Span;
 
 impl InferCtx<'_> {
@@ -127,7 +127,7 @@ impl InferCtx<'_> {
             .collect();
 
         // Process type parameter constraints
-        let mut scheme_constraints: SmallVec<[(TyVar, Class); 2]> =
+        let mut scheme_constraints: SmallVec<[(TyVar, BuiltinClass<Ty>); 2]> =
             SmallVec::new();
         type_param_vars.iter().for_each(|(tp, tv)| {
             tp.constraints.iter().for_each(|c| {
@@ -430,8 +430,9 @@ impl InferCtx<'_> {
 
                 if !is_forbidden_builtin {
                     // Process constraints
-                    let mut scheme_constraints: SmallVec<[(TyVar, Class); 2]> =
-                        SmallVec::new();
+                    let mut scheme_constraints: SmallVec<
+                        [(TyVar, BuiltinClass<Ty>); 2],
+                    > = SmallVec::new();
                     constraints.iter().for_each(
                         |(param_name, param_constraints)| {
                             let param_id = self.env.intern(param_name);

@@ -35,7 +35,7 @@ use smallvec::SmallVec;
 use super::env::TypeEnv;
 use super::error::{TyPrinter, TypeError};
 use super::instance::InstanceRegistry;
-use super::ty::{BuiltinClassTag, Class, Scheme, Subst, Ty, TyVar};
+use super::ty::{BuiltinClass, BuiltinClassTag, Scheme, Subst, Ty, TyVar};
 use super::TypecheckOutput;
 use crate::ast::{
     self, AssocTypeDef, AstTypeExprId, ExprId, InstanceMethodDef, Stmt, StmtId,
@@ -125,10 +125,14 @@ pub(crate) enum Constraint {
     /// which class it must belong to (with any associated types).
     ///
     /// Examples:
-    /// - `a + b` generates `Class { ty: typeof(a), class: Class::Numeric, span }`
-    /// - `opt!` generates `Class { ty: typeof(opt), class: Class::Fallible(?inner), span }`
-    /// - `arr[i]` generates `Class { ty: typeof(arr), class: Class::Indexable(typeof(i), ?elem), span }`
-    Class { ty: Ty, class: Class, span: Span },
+    /// - `a + b` generates `Class { ty: typeof(a), class: Simple(Numeric), span }`
+    /// - `opt!` generates `Class { ty: typeof(opt), class: Hkt(Fallible, ?inner), span }`
+    /// - `arr[i]` generates `Class { ty: typeof(arr), class: Parameterized(Indexable, ?elem), span }`
+    Class {
+        ty: Ty,
+        class: BuiltinClass<Ty>,
+        span: Span,
+    },
 }
 
 impl Constraint {
@@ -406,7 +410,7 @@ impl<'a> InferCtx<'a> {
     /// call sites, not just at function definition.
     pub(crate) fn emit_class_constraints(
         &mut self,
-        constraints: smallvec::SmallVec<[(Ty, Class); 2]>,
+        constraints: smallvec::SmallVec<[(Ty, BuiltinClass<Ty>); 2]>,
         span: Span,
     ) {
         constraints.into_iter().for_each(|(ty, class)| {

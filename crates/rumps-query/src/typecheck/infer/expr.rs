@@ -20,7 +20,8 @@ use crate::env::TxnReq;
 use crate::intern::StringId;
 use crate::typecheck::error::TypeError;
 use crate::typecheck::ty::{
-    BuiltinClassTag, Class, MethodSpec, Scheme, Subst, TrackKind, Ty, TyVar,
+    BuiltinClass, BuiltinClassTag, MethodSpec, Scheme, Subst, TrackKind, Ty,
+    TyVar,
 };
 use crate::value::{TypeDef, TypeId};
 use crate::Span;
@@ -251,7 +252,10 @@ impl InferCtx<'_> {
                 // LHS must be convertible to String
                 self.constrain(Constraint::Class {
                     ty: lhs_ty,
-                    class: Class::Into(Ty::String),
+                    class: BuiltinClass::Parameterized(
+                        BuiltinClassTag::Into,
+                        Ty::String,
+                    ),
                     span,
                 });
 
@@ -288,7 +292,10 @@ impl InferCtx<'_> {
                 // Error message must be convertible to String
                 self.constrain(Constraint::Class {
                     ty,
-                    class: Class::Into(Ty::String),
+                    class: BuiltinClass::Parameterized(
+                        BuiltinClassTag::Into,
+                        Ty::String,
+                    ),
                     span,
                 });
                 self.fresh()
@@ -314,7 +321,7 @@ impl InferCtx<'_> {
                 let tv = Ty::Var(self.fresh_var());
                 self.constrain(Constraint::Class {
                     ty: tv.clone(),
-                    class: Class::Monoid,
+                    class: BuiltinClass::Simple(BuiltinClassTag::Monoid),
                     span,
                 });
                 self.mempty_types.insert(id, tv.clone());
@@ -456,7 +463,9 @@ impl InferCtx<'_> {
                                     };
                                     self.constrain(Constraint::Class {
                                         ty: tv.clone(),
-                                        class: Class::Monoid,
+                                        class: BuiltinClass::Simple(
+                                            BuiltinClassTag::Monoid,
+                                        ),
                                         span,
                                     });
                                     self.mempty_types.insert(id, tv.clone());
@@ -484,9 +493,10 @@ impl InferCtx<'_> {
                                         (BuiltinClassTag::Fallible, "wrap") => {
                                             self.constrain(Constraint::Class {
                                                 ty: target_ty.clone(),
-                                                class: Class::Fallible(Some(
-                                                    input_ty.clone(),
-                                                )),
+                                                class: BuiltinClass::Hkt(
+                                                    BuiltinClassTag::Fallible,
+                                                    Some(input_ty.clone()),
+                                                ),
                                                 span,
                                             });
                                             Ty::Fn(
@@ -496,7 +506,10 @@ impl InferCtx<'_> {
                                         }
                                         (BuiltinClassTag::Into, "into") => {
                                             let class =
-                                                Class::Into(target_ty.clone());
+                                                BuiltinClass::Parameterized(
+                                                    BuiltinClassTag::Into,
+                                                    target_ty.clone(),
+                                                );
                                             self.constrain(Constraint::Class {
                                                 ty: input_ty.clone(),
                                                 class: class.clone(),
@@ -543,8 +556,10 @@ impl InferCtx<'_> {
 
                                     let input_var = self.fresh_var();
                                     let input_ty = Ty::Var(input_var);
-                                    let class =
-                                        Class::TryInto(target_ty.clone());
+                                    let class = BuiltinClass::Parameterized(
+                                        BuiltinClassTag::TryInto,
+                                        target_ty.clone(),
+                                    );
                                     self.constrain(Constraint::Class {
                                         ty: input_ty.clone(),
                                         class: class.clone(),
@@ -580,7 +595,12 @@ impl InferCtx<'_> {
     }
 
     /// Emit a class constraint for a type.
-    fn emit_class_constraint(&mut self, ty: Ty, class: Class, span: Span) {
+    fn emit_class_constraint(
+        &mut self,
+        ty: Ty,
+        class: BuiltinClass<Ty>,
+        span: Span,
+    ) {
         self.constrain(Constraint::Class { ty, class, span });
     }
 
@@ -796,7 +816,7 @@ impl InferCtx<'_> {
                 let ty = self.fresh_numeric();
                 self.constrain(Constraint::Class {
                     ty: ty.clone(),
-                    class: Class::Numeric,
+                    class: BuiltinClass::Simple(BuiltinClassTag::Numeric),
                     span,
                 });
                 // Record for interpreter to convert to correct runtime type
@@ -828,7 +848,7 @@ impl InferCtx<'_> {
                 let ty = self.fresh_numeric();
                 self.constrain(Constraint::Class {
                     ty: ty.clone(),
-                    class: Class::Numeric,
+                    class: BuiltinClass::Simple(BuiltinClassTag::Numeric),
                     span,
                 });
                 ty
@@ -853,7 +873,10 @@ impl InferCtx<'_> {
             if i % 2 == 1 {
                 self.constrain(Constraint::Class {
                     ty: part_ty,
-                    class: Class::Into(Ty::String),
+                    class: BuiltinClass::Parameterized(
+                        BuiltinClassTag::Into,
+                        Ty::String,
+                    ),
                     span,
                 });
             }
@@ -940,12 +963,12 @@ impl InferCtx<'_> {
                     // Just require both satisfy Eq and return Bool.
                     self.constrain(Constraint::Class {
                         ty: lhs_ty,
-                        class: Class::Eq,
+                        class: BuiltinClass::Simple(BuiltinClassTag::Eq),
                         span,
                     });
                     self.constrain(Constraint::Class {
                         ty: rhs_ty,
-                        class: Class::Eq,
+                        class: BuiltinClass::Simple(BuiltinClassTag::Eq),
                         span,
                     });
                     Ty::Bool
@@ -1423,7 +1446,10 @@ impl InferCtx<'_> {
                 self.unify(idx_ty, expected_idx, span);
                 self.constrain(Constraint::Class {
                     ty: base_ty,
-                    class: Class::Indexable(elem.clone()),
+                    class: BuiltinClass::Parameterized(
+                        BuiltinClassTag::Indexable,
+                        elem.clone(),
+                    ),
                     span,
                 });
                 elem
@@ -1477,7 +1503,10 @@ impl InferCtx<'_> {
                             .is_none()
                         {
                             self.error(TypeError::UnsatisfiedClass(
-                                Class::Indexable(Ty::Error),
+                                BuiltinClass::Parameterized(
+                                    BuiltinClassTag::Indexable,
+                                    Ty::Error,
+                                ),
                                 base_ty.clone(),
                                 span,
                             ));
@@ -1489,7 +1518,10 @@ impl InferCtx<'_> {
 
             _ => {
                 self.error(TypeError::UnsatisfiedClass(
-                    Class::Indexable(Ty::Error),
+                    BuiltinClass::Parameterized(
+                        BuiltinClassTag::Indexable,
+                        Ty::Error,
+                    ),
                     base_ty,
                     span,
                 ));
@@ -1542,7 +1574,10 @@ impl InferCtx<'_> {
                 self.unify(idx_ty, expected_idx, span);
                 self.constrain(Constraint::Class {
                     ty: base_ty,
-                    class: Class::Indexable(inner.clone()),
+                    class: BuiltinClass::Parameterized(
+                        BuiltinClassTag::Indexable,
+                        inner.clone(),
+                    ),
                     span,
                 });
                 Ty::Option(Box::new(inner))
@@ -1597,7 +1632,10 @@ impl InferCtx<'_> {
                             .is_none()
                         {
                             self.error(TypeError::UnsatisfiedClass(
-                                Class::Indexable(Ty::Error),
+                                BuiltinClass::Parameterized(
+                                    BuiltinClassTag::Indexable,
+                                    Ty::Error,
+                                ),
                                 base_ty.clone(),
                                 span,
                             ));
@@ -1609,7 +1647,10 @@ impl InferCtx<'_> {
 
             _ => {
                 self.error(TypeError::UnsatisfiedClass(
-                    Class::Indexable(Ty::Error),
+                    BuiltinClass::Parameterized(
+                        BuiltinClassTag::Indexable,
+                        Ty::Error,
+                    ),
                     base_ty,
                     span,
                 ));
@@ -1749,8 +1790,8 @@ impl InferCtx<'_> {
             .collect();
 
         // Build scheme constraints (for storing in closure_schemes)
-        // Convert ast::Class to ty::Class for storage in Scheme
-        let mut scheme_constraints: SmallVec<[(TyVar, Class); 2]> =
+        // Convert `ast::Class` to `BuiltinClass<Ty>` for storage in `Scheme`
+        let mut scheme_constraints: SmallVec<[(TyVar, BuiltinClass<Ty>); 2]> =
             SmallVec::new();
 
         // Emit constraints for each user-specified bound
@@ -2604,7 +2645,10 @@ impl InferCtx<'_> {
         // Emit Into constraint for validation
         self.constrain(Constraint::Class {
             ty: inner_ty.clone(),
-            class: Class::Into(target_ty.clone()),
+            class: BuiltinClass::Parameterized(
+                BuiltinClassTag::Into,
+                target_ty.clone(),
+            ),
             span,
         });
 
@@ -2615,7 +2659,7 @@ impl InferCtx<'_> {
         {
             self.constrain(Constraint::Class {
                 ty: inner_ty.clone(),
-                class: Class::Numeric,
+                class: BuiltinClass::Simple(BuiltinClassTag::Numeric),
                 span,
             });
         }
@@ -2647,7 +2691,10 @@ impl InferCtx<'_> {
         // Emit TryInto constraint for validation
         self.constrain(Constraint::Class {
             ty: inner_ty,
-            class: Class::TryInto(target_ty.clone()),
+            class: BuiltinClass::Parameterized(
+                BuiltinClassTag::TryInto,
+                target_ty.clone(),
+            ),
             span,
         });
 
@@ -2687,7 +2734,10 @@ impl InferCtx<'_> {
             let v_ty = self.expr(v);
             self.constrain(Constraint::Class {
                 ty: v_ty,
-                class: Class::Into(Ty::Named(TypeId::STORABLE, vec![])),
+                class: BuiltinClass::Parameterized(
+                    BuiltinClassTag::Into,
+                    Ty::Named(TypeId::STORABLE, vec![]),
+                ),
                 span,
             });
         }
@@ -2783,7 +2833,10 @@ impl InferCtx<'_> {
                 let ty = self.expr(*id);
                 self.constrain(Constraint::Class {
                     ty,
-                    class: Class::Into(Ty::Named(TypeId::SUBSCRIPT, vec![])),
+                    class: BuiltinClass::Parameterized(
+                        BuiltinClassTag::Into,
+                        Ty::Named(TypeId::SUBSCRIPT, vec![]),
+                    ),
                     span,
                 });
             }

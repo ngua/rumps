@@ -439,206 +439,159 @@ impl BuiltinClassDef {
     }
 }
 
-/// User-facing type class constraint (Haskell-style).
+/// Lightweight, cloneable class constraint reference, generic over the type
+/// representation. Replaces per-layer `Class` enums (`cst::Class`,
+/// `ast::Class`, `ty::Class`) with a single shape-based enum.
 ///
-/// Unlike `ast::Class` which carries `AstTypeExprId` for parameterized
-/// variants, this carries resolved `Ty` types. Used in `Scheme` storage
-/// and during constraint solving.
-///
-/// HKT classes (kind `* -> *`) use `Option<Ty>` because the element type
-/// is specified at usage sites (`F[T]`), not in the constraint (`F: Fallible`).
-/// `None` means polymorphic over element type; `Some(ty)` means specific.
+/// Layer instantiations:
+/// - CST: `BuiltinClass<TypeExpr>`
+/// - AST: `BuiltinClass<AstTypeExprId>`
+/// - Ty:  `BuiltinClass<Ty>`
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Class {
-    /// Type is iterable (`Array[T]` or `Range`).
-    Iterable(Option<Ty>),
-    /// Type is fallible (`Option[T]` or `Result[T, E]`).
-    Fallible(Option<Ty>),
-    /// Type is a functor; supports structure-preserving `map`.
-    Mappable(Option<Ty>),
-    /// Type supports `fold`/`reduce` operations.
-    Foldable(Option<Ty>),
-    /// Type supports `filter` operations.
-    Filterable(Option<Ty>),
-    /// Type can be converted to another type.
-    Into(Ty),
-    /// Type can be fallibly converted to another type.
-    TryInto(Ty),
-    /// Type supports indexing (`[]` access).
-    ///
-    /// The `Ty` is the element type. The index type is accessed via the
-    /// associated type `Index` (e.g., `Array.Index = Int`, `Map[K,V].Index = K`).
-    Indexable(Ty),
-    /// Type is `Int`, `Word`, or `Float`.
-    Numeric,
-    /// Type supports monoidal concatenation (`++`).
-    Monoid,
-    /// Type supports bitwise operations (`&`, `|`, `<<`, `>>`).
-    BitLike,
-    /// Type can be negated with unary `-`.
-    Negatable,
-    /// Type supports ordering comparisons (`<`, `>`, `<=`, `>=`).
-    Ord,
-    /// Type supports equality comparisons (`==`, `!=`).
-    Eq,
-    /// Type can be displayed as RUMPS syntax (for `WRITE`).
-    Display,
+pub(crate) enum BuiltinClass<T> {
+    /// Kind `*` class; no type parameters.
+    Simple(BuiltinClassTag),
+    /// Kind `* -> *` class; `None` = polymorphic, `Some` = resolved element type.
+    Hkt(BuiltinClassTag, Option<T>),
+    /// Parameterized class; always carries explicit type arg(s).
+    Parameterized(BuiltinClassTag, T),
 }
 
-impl Class {
-    /// Apply a substitution to any inner types.
-    pub(crate) fn apply(&self, subst: &Subst) -> Self {
+impl<T> BuiltinClass<T> {
+    /// Extract the tag for dispatch/lookup.
+    pub(crate) fn tag(&self) -> BuiltinClassTag {
         match self {
-            Self::Iterable(opt) => {
-                Self::Iterable(opt.as_ref().map(|t| t.apply(subst)))
+            Self::Simple(t) | Self::Hkt(t, _) | Self::Parameterized(t, _) => *t,
+        }
+    }
+
+    /// Map over inner types (for layer conversion).
+    pub(crate) fn map<U>(self, mut f: impl FnMut(T) -> U) -> BuiltinClass<U> {
+        match self {
+            Self::Simple(t) => BuiltinClass::Simple(t),
+            Self::Hkt(t, opt) => BuiltinClass::Hkt(t, opt.map(&mut f)),
+            Self::Parameterized(t, arg) => {
+                BuiltinClass::Parameterized(t, f(arg))
             }
-            Self::Fallible(opt) => {
-                Self::Fallible(opt.as_ref().map(|t| t.apply(subst)))
-            }
-            Self::Mappable(opt) => {
-                Self::Mappable(opt.as_ref().map(|t| t.apply(subst)))
-            }
-            Self::Foldable(opt) => {
-                Self::Foldable(opt.as_ref().map(|t| t.apply(subst)))
-            }
-            Self::Filterable(opt) => {
-                Self::Filterable(opt.as_ref().map(|t| t.apply(subst)))
-            }
-            Self::Into(t) => Self::Into(t.apply(subst)),
-            Self::TryInto(t) => Self::TryInto(t.apply(subst)),
-            Self::Indexable(e) => Self::Indexable(e.apply(subst)),
-            Self::Numeric
-            | Self::Monoid
-            | Self::BitLike
-            | Self::Negatable
-            | Self::Ord
-            | Self::Eq
-            | Self::Display => self.clone(),
         }
     }
 
     /// Returns the name of this class for error messages.
     pub(crate) fn name(&self) -> &'static str {
-        self.kind().name()
+        self.tag().name()
     }
+}
 
-    /// Returns a help message describing what types satisfy this class.
-    pub(crate) fn help(&self) -> Option<&'static str> {
+impl<T: Clone> BuiltinClass<T> {
+    /// Map over inner types by reference (avoids cloning the whole enum).
+    pub(crate) fn map_ref<U>(
+        &self,
+        mut f: impl FnMut(&T) -> U,
+    ) -> BuiltinClass<U> {
         match self {
-            Self::Numeric => {
-                Some("numeric types are `Int`, `Word`, and `Float`")
+            Self::Simple(t) => BuiltinClass::Simple(*t),
+            Self::Hkt(t, opt) => {
+                BuiltinClass::Hkt(*t, opt.as_ref().map(&mut f))
             }
-            Self::Monoid => {
-                Some("`++` works on `String`, `Array`, `Map`, and `Option`")
+            Self::Parameterized(t, arg) => {
+                BuiltinClass::Parameterized(*t, f(arg))
             }
-            Self::BitLike => {
-                Some("bitwise types are `Bool`, `Int`, and `Word`")
+        }
+    }
+}
+
+impl BuiltinClass<Ty> {
+    /// Apply a substitution to any inner types.
+    pub(crate) fn apply(&self, subst: &Subst) -> Self {
+        match self {
+            Self::Simple(t) => Self::Simple(*t),
+            Self::Hkt(t, opt) => {
+                Self::Hkt(*t, opt.as_ref().map(|ty| ty.apply(subst)))
             }
-            Self::Negatable => Some("negatable types are `Int` and `Float`"),
-            Self::Iterable(_) => Some("iterable types are `Array` and `Range`"),
-            Self::Fallible(_) => {
-                Some("fallible types are `Option` and `Result`")
+            Self::Parameterized(t, ty) => {
+                Self::Parameterized(*t, ty.apply(subst))
             }
-            Self::Indexable(_) => {
-                Some("indexable types are `Array`, `Map`, and `String`")
-            }
-            Self::Ord => {
-                Some("orderable types are `Bool`, `Int`, `Word`, `Float`, `Char`, and `String`")
-            }
-            Self::Eq => {
-                Some("equality types are primitives, containers (if elements are `Eq`), and user types with `CLASS Eq`")
-            }
-            Self::Mappable(_) => {
-                Some("mappable types are `Option`, `Result`, `Array`, and `Range`")
-            }
-            Self::Foldable(_) => {
-                Some("foldable types are `Option`, `Result`, `Array`, and `Range`")
-            }
-            Self::Filterable(_) => {
-                Some("filterable types are `Option`, `Result`, and `Array`")
-            }
-            Self::Into(_) | Self::TryInto(_) | Self::Display => None,
         }
     }
 
     /// Collect free type variables from any inner types.
     pub(crate) fn free_vars(&self) -> HashSet<TyVar> {
         match self {
-            Self::Iterable(opt)
-            | Self::Fallible(opt)
-            | Self::Mappable(opt)
-            | Self::Foldable(opt)
-            | Self::Filterable(opt) => {
+            Self::Simple(_) => HashSet::new(),
+            Self::Hkt(_, opt) => {
                 opt.as_ref().map_or_else(HashSet::new, Ty::free_vars)
             }
-            Self::Into(t) | Self::TryInto(t) | Self::Indexable(t) => {
-                t.free_vars()
-            }
-            Self::Numeric
-            | Self::Monoid
-            | Self::BitLike
-            | Self::Negatable
-            | Self::Ord
-            | Self::Eq
-            | Self::Display => HashSet::new(),
-        }
-    }
-
-    /// Get the `BuiltinClassTag` for dispatch table lookup.
-    pub(crate) const fn kind(&self) -> BuiltinClassTag {
-        match self {
-            Self::Iterable(_) => BuiltinClassTag::Iterable,
-            Self::Fallible(_) => BuiltinClassTag::Fallible,
-            Self::Mappable(_) => BuiltinClassTag::Mappable,
-            Self::Foldable(_) => BuiltinClassTag::Foldable,
-            Self::Filterable(_) => BuiltinClassTag::Filterable,
-            Self::Into(_) => BuiltinClassTag::Into,
-            Self::TryInto(_) => BuiltinClassTag::TryInto,
-            Self::Indexable(_) => BuiltinClassTag::Indexable,
-            Self::Numeric => BuiltinClassTag::Numeric,
-            Self::Monoid => BuiltinClassTag::Monoid,
-            Self::BitLike => BuiltinClassTag::BitLike,
-            Self::Negatable => BuiltinClassTag::Negatable,
-            Self::Ord => BuiltinClassTag::Ord,
-            Self::Eq => BuiltinClassTag::Eq,
-            Self::Display => BuiltinClassTag::Display,
+            Self::Parameterized(_, ty) => ty.free_vars(),
         }
     }
 
     /// Create a placeholder constraint for error messages.
     pub(crate) fn placeholder(tag: BuiltinClassTag) -> Self {
         match tag.shape() {
-            ClassShape::Simple => match tag {
-                BuiltinClassTag::Numeric => Self::Numeric,
-                BuiltinClassTag::Monoid => Self::Monoid,
-                BuiltinClassTag::BitLike => Self::BitLike,
-                BuiltinClassTag::Negatable => Self::Negatable,
-                BuiltinClassTag::Ord => Self::Ord,
-                BuiltinClassTag::Eq => Self::Eq,
-                BuiltinClassTag::Display => Self::Display,
-                _ => Self::Display, // unreachable for simple tags
+            ClassShape::Simple => Self::Simple(tag),
+            ClassShape::Hkt { .. } => Self::Hkt(tag, None),
+            ClassShape::Parameterized { .. } => {
+                Self::Parameterized(tag, Ty::Unknown)
+            }
+        }
+    }
+
+    /// Returns a help message describing what types satisfy this class.
+    pub(crate) fn help(&self) -> Option<&'static str> {
+        match self {
+            Self::Simple(tag) => match tag {
+                BuiltinClassTag::Numeric => {
+                    Some("numeric types are `Int`, `Word`, and `Float`")
+                }
+                BuiltinClassTag::Monoid => {
+                    Some("`++` works on `String`, `Array`, `Map`, and `Option`")
+                }
+                BuiltinClassTag::BitLike => {
+                    Some("bitwise types are `Bool`, `Int`, and `Word`")
+                }
+                BuiltinClassTag::Negatable => {
+                    Some("negatable types are `Int` and `Float`")
+                }
+                BuiltinClassTag::Ord => {
+                    Some("orderable types are `Bool`, `Int`, `Word`, `Float`, `Char`, and `String`")
+                }
+                BuiltinClassTag::Eq => {
+                    Some("equality types are primitives, containers (if elements are `Eq`), and user types with `CLASS Eq`")
+                }
+                BuiltinClassTag::Display => None,
+                _ => None,
             },
-            ClassShape::Hkt { .. } => match tag {
-                BuiltinClassTag::Iterable => Self::Iterable(None),
-                BuiltinClassTag::Fallible => Self::Fallible(None),
-                BuiltinClassTag::Mappable => Self::Mappable(None),
-                BuiltinClassTag::Foldable => Self::Foldable(None),
-                BuiltinClassTag::Filterable => Self::Filterable(None),
-                _ => Self::Display, // unreachable for HKT tags
+            Self::Hkt(tag, _) => match tag {
+                BuiltinClassTag::Iterable => {
+                    Some("iterable types are `Array` and `Range`")
+                }
+                BuiltinClassTag::Fallible => {
+                    Some("fallible types are `Option` and `Result`")
+                }
+                BuiltinClassTag::Mappable => {
+                    Some("mappable types are `Option`, `Result`, `Array`, and `Range`")
+                }
+                BuiltinClassTag::Foldable => {
+                    Some("foldable types are `Option`, `Result`, `Array`, and `Range`")
+                }
+                BuiltinClassTag::Filterable => {
+                    Some("filterable types are `Option`, `Result`, and `Array`")
+                }
+                _ => None,
             },
-            ClassShape::Parameterized { .. } => match tag {
-                BuiltinClassTag::Into => Self::Into(Ty::Unknown),
-                BuiltinClassTag::TryInto => Self::TryInto(Ty::Unknown),
-                BuiltinClassTag::Indexable => Self::Indexable(Ty::Unknown),
-                _ => Self::Display, // unreachable for parameterized tags
+            Self::Parameterized(tag, _) => match tag {
+                BuiltinClassTag::Indexable => {
+                    Some("indexable types are `Array`, `Map`, and `String`")
+                }
+                _ => None,
             },
         }
     }
 }
 
-impl fmt::Display for Class {
+impl<T> fmt::Display for BuiltinClass<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.name())
+        f.write_str(self.name())
     }
 }
 
@@ -1047,8 +1000,8 @@ pub(crate) struct Scheme {
     ///
     /// These are re-emitted when the scheme is instantiated at call sites.
     /// Each tuple is `(type_var, class)` where parameterized classes like
-    /// `Iterable(T)` carry the element type directly.
-    pub(crate) constraints: SmallVec<[(TyVar, Class); 2]>,
+    /// `Iterable` carry the element type directly.
+    pub(crate) constraints: SmallVec<[(TyVar, BuiltinClass<Ty>); 2]>,
 }
 
 impl Scheme {
@@ -1123,7 +1076,7 @@ impl Scheme {
     pub(crate) fn instantiate(
         &self,
         next: &mut u32,
-    ) -> (Ty, SmallVec<[(Ty, Class); 2]>) {
+    ) -> (Ty, SmallVec<[(Ty, BuiltinClass<Ty>); 2]>) {
         if self.vars.is_empty() {
             (self.ty.clone(), SmallVec::new())
         } else {

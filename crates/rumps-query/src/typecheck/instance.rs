@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use smallvec::SmallVec;
 
-use super::ty::{BuiltinClassTag, Class, Ty, TyVar};
+use super::ty::{BuiltinClass, BuiltinClassTag, Ty, TyVar};
 use super::TypeError;
 use crate::intern::StringId;
 use crate::{Span, TypeId};
@@ -25,7 +25,7 @@ pub(crate) struct AssocTypeDef {
     /// The concrete type this instance defines for the associated type.
     pub(crate) ty: Ty,
     /// Optional constraints on the associated type (e.g., `: Ord`).
-    pub(crate) constraints: SmallVec<[Class; 1]>,
+    pub(crate) constraints: SmallVec<[BuiltinClass<Ty>; 1]>,
     /// Source span for error messages.
     pub(crate) span: Span,
 }
@@ -46,7 +46,7 @@ pub(crate) struct Instance {
     /// Type parameters on the implementing type (e.g., `[L, R]` for `Either[L, R]`).
     pub(crate) type_params: SmallVec<[TyVar; 2]>,
     /// WHERE clause constraints (e.g., `[(L, Display), (R, Display)]`).
-    pub(crate) constraints: SmallVec<[(TyVar, Class); 2]>,
+    pub(crate) constraints: SmallVec<[(TyVar, BuiltinClass<Ty>); 2]>,
     /// Method implementations: method name -> generated function name.
     ///
     /// Populated in Phase 5 (Resolution) when `CLASS` statements are lowered.

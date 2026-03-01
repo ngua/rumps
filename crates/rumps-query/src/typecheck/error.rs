@@ -7,7 +7,7 @@ use std::fmt;
 
 use thiserror::Error;
 
-use super::ty::{BuiltinClassTag, Class, Ty, TyVar};
+use super::ty::{BuiltinClass, BuiltinClassTag, Ty, TyVar};
 use crate::intern::StringInterner;
 use crate::value::{TypeRegistry, ValueArena};
 use crate::{Span, StringId, TypeId};
@@ -228,7 +228,7 @@ pub(crate) enum TypeError {
 
     /// Type does not satisfy a class (Numeric, Into[Json], etc.).
     #[error("type `{1}` does not satisfy `{0}` class")]
-    UnsatisfiedClass(Class, Ty, Span),
+    UnsatisfiedClass(BuiltinClass<Ty>, Ty, Span),
 
     /// Struct literal missing a required field.
     #[error("missing required field `{field}` for type `{ty:?}`")]
@@ -476,7 +476,7 @@ pub(crate) enum TypeError {
     )]
     AssocTypeConstraint {
         assoc: String,
-        constraint: Class,
+        constraint: BuiltinClass<Ty>,
         actual: Ty,
         span: Span,
     },

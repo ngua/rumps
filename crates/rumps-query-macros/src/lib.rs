@@ -202,23 +202,16 @@ impl Parse for SchemeInput {
 
 /// Generate tokens for a multi-param class.
 ///
-/// For multi-param classes (`Into[U]`, `TryInto[U]`, `Indexable[E]`),
-/// we generate a `ty::Class::Variant(...)` with the type argument.
+/// All parameterized classes use the same form:
+/// `BuiltinClass::Parameterized(BuiltinClassTag::Name, arg)`.
 fn multi_param_class_tokens(name: &str, args: &[TokenStream2]) -> TokenStream2 {
-    match name {
-        "Into" => {
-            let inner = &args[0];
-            quote! { crate::typecheck::Class::Into(#inner) }
-        }
-        "TryInto" => {
-            let inner = &args[0];
-            quote! { crate::typecheck::Class::TryInto(#inner) }
-        }
-        "Indexable" => {
-            let elem = &args[0];
-            quote! { crate::typecheck::Class::Indexable(#elem) }
-        }
-        _ => panic!("unknown multi-param class: `{name}`"),
+    let inner = &args[0];
+    let ident = Ident::new(name, proc_macro2::Span::call_site());
+    quote! {
+        crate::typecheck::BuiltinClass::Parameterized(
+            crate::typecheck::BuiltinClassTag::#ident,
+            #inner
+        )
     }
 }
 
@@ -253,15 +246,19 @@ impl SchemeInput {
                             VarClass::Simple(name) => {
                                 let ident =
                                     Ident::new(name, proc_macro2::Span::call_site());
-                                // HKT classes use `Option<Ty>` and need `(None)`
                                 let class_tokens =
                                     if HKT_CLASSES.contains(&name.as_str()) {
                                         quote! {
-                                            crate::typecheck::Class::#ident(None)
+                                            crate::typecheck::BuiltinClass::Hkt(
+                                                crate::typecheck::BuiltinClassTag::#ident,
+                                                None
+                                            )
                                         }
                                     } else {
                                         quote! {
-                                            crate::typecheck::Class::#ident
+                                            crate::typecheck::BuiltinClass::Simple(
+                                                crate::typecheck::BuiltinClassTag::#ident
+                                            )
                                         }
                                     };
                                 quote! {
