@@ -27,8 +27,8 @@ pub(crate) use error::{FormattedTypeError, TyPrinter, TypeError};
 pub(crate) use infer::{Constraint, InferCtx};
 pub(crate) use instance::{Instance, InstanceRegistry};
 pub(crate) use ty::{
-    BuiltinClass, BuiltinClassDef, BuiltinClassDefs, BuiltinClassTag, Scheme,
-    Subst, Ty, TyVar,
+    BuiltinClass, BuiltinClassDef, BuiltinClassDefs, BuiltinClassTag,
+    ClassShape, Scheme, Subst, Ty, TyVar,
 };
 
 use crate::ast::ExprId;

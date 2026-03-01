@@ -6,6 +6,7 @@ use smallvec::SmallVec;
 
 use super::{ParseErr, Parser};
 use crate::parser::cst;
+use crate::typecheck::{BuiltinClass, BuiltinClassTag, ClassShape};
 use crate::{Span, Token};
 
 impl Parser {
@@ -348,9 +349,10 @@ impl Parser {
     ///
     /// HKT classes (`Iterable`, `Fallible`, etc.) reject type arguments;
     /// the element type is specified at usage sites (`F[T]`).
-    /// Multi-param classes (`Into[T]`, `TryInto[T]`, `Indexable[E]`) require them.
+    /// Parameterized classes (`Into[T]`, `TryInto[T]`, `Indexable[E]`) require them.
     pub(super) fn constraint(
-    ) -> impl chumsky::Parser<Token, cst::Class, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, BuiltinClass<cst::TypeExpr>, Error = ParseErr>
+           + Clone {
         let type_args = just(Token::LBracket)
             .ignore_then(
                 Self::type_expr_atom()
@@ -362,83 +364,71 @@ impl Parser {
         select! { Token::Ident(s) => s }
             .then(type_args.or_not())
             .try_map(|(name, args), span| {
-                let has_args = args.is_some();
-                let mut args = args.unwrap_or_default().into_iter();
-
-                match name.as_str() {
-                    "Iterable" if has_args => Err(chumsky::error::Simple::custom(
-                        span,
-                        "`Iterable` is higher-kinded; use `C: Iterable` \
-                         and `C[T]` in type position, not `C: Iterable[T]`",
-                    )),
-                    "Iterable" => Ok(cst::Class::Iterable(None)),
-
-                    "Fallible" if has_args => Err(chumsky::error::Simple::custom(
-                        span,
-                        "`Fallible` is higher-kinded; use `F: Fallible` \
-                         and `F[T]` in type position, not `F: Fallible[T]`",
-                    )),
-                    "Fallible" => Ok(cst::Class::Fallible(None)),
-
-                    "Mappable" if has_args => Err(chumsky::error::Simple::custom(
-                        span,
-                        "`Mappable` is higher-kinded; use `M: Mappable` \
-                         and `M[T]` in type position, not `M: Mappable[T]`",
-                    )),
-                    "Mappable" => Ok(cst::Class::Mappable(None)),
-
-                    "Foldable" if has_args => Err(chumsky::error::Simple::custom(
-                        span,
-                        "`Foldable` is higher-kinded; use `F: Foldable` \
-                         and `F[T]` in type position, not `F: Foldable[T]`",
-                    )),
-                    "Foldable" => Ok(cst::Class::Foldable(None)),
-
-                    "Filterable" if has_args => Err(chumsky::error::Simple::custom(
-                        span,
-                        "`Filterable` is higher-kinded; use `F: Filterable` \
-                         and `F[T]` in type position, not `F: Filterable[T]`",
-                    )),
-                    "Filterable" => Ok(cst::Class::Filterable(None)),
-
-                    "Into" => args.next().map_or_else(
-                        || Err(chumsky::error::Simple::custom(
-                            span,
-                            "`Into` requires a target type: `Into[T]`",
-                        )),
-                        |ty| Ok(cst::Class::Into(ty)),
-                    ),
-                    "TryInto" => args.next().map_or_else(
-                        || Err(chumsky::error::Simple::custom(
-                            span,
-                            "`TryInto` requires a target type: `TryInto[T]`",
-                        )),
-                        |ty| Ok(cst::Class::TryInto(ty)),
-                    ),
-                    "Indexable" => args.next().map_or_else(
-                        || Err(chumsky::error::Simple::custom(
-                            span,
-                            "`Indexable` requires an element type: `Indexable[E]`",
-                        )),
-                        |ty| Ok(cst::Class::Indexable(ty)),
-                    ),
-
-                    "Numeric" => Ok(cst::Class::Numeric),
-                    "Monoid" => Ok(cst::Class::Monoid),
-                    "BitLike" => Ok(cst::Class::BitLike),
-                    "Negatable" => Ok(cst::Class::Negatable),
-                    "Ord" => Ok(cst::Class::Ord),
-                    "Display" => Ok(cst::Class::Display),
-
-                    _ => Err(chumsky::error::Simple::custom(
+                let tag = BuiltinClassTag::from_str(&name)
+                    .ok_or_else(|| chumsky::error::Simple::custom(
                         span,
                         format!(
                             "unknown class `{name}`; valid classes are: \
                              Numeric, Negatable, Iterable, Monoid, BitLike, \
                              Fallible, Into[T], TryInto[T], Indexable[E], \
-                             Ord, Mappable, Foldable, Filterable, Display"
+                             Ord, Eq, Mappable, Foldable, Filterable, Display"
                         ),
-                    )),
+                    ))?;
+
+                let has_args = args.is_some();
+                let mut args = args.into_iter().flatten();
+
+                match tag.shape() {
+                    ClassShape::Simple => {
+                        if has_args {
+                            Err(chumsky::error::Simple::custom(
+                                span,
+                                format!(
+                                    "`{}` does not accept type arguments",
+                                    tag.name()
+                                ),
+                            ))
+                        } else {
+                            Ok(BuiltinClass::Simple(tag))
+                        }
+                    }
+                    ClassShape::Hkt { .. } => {
+                        if has_args {
+                            Err(chumsky::error::Simple::custom(
+                                span,
+                                format!(
+                                    "`{}` is higher-kinded; use `C: {}` \
+                                     and `C[T]` in type position, not `C: {}[T]`",
+                                    tag.name(), tag.name(), tag.name()
+                                ),
+                            ))
+                        } else {
+                            Ok(BuiltinClass::Hkt(tag, None))
+                        }
+                    }
+                    ClassShape::Parameterized { params } => {
+                        let ty = args.next().ok_or_else(|| {
+                            chumsky::error::Simple::custom(
+                                span,
+                                format!(
+                                    "`{}` requires a type argument: `{}[T]`",
+                                    tag.name(), tag.name()
+                                ),
+                            )
+                        })?;
+
+                        if args.next().is_some() {
+                            Err(chumsky::error::Simple::custom(
+                                span,
+                                format!(
+                                    "`{}` expects {} type argument(s), but received more",
+                                    tag.name(), params
+                                ),
+                            ))
+                        } else {
+                            Ok(BuiltinClass::Parameterized(tag, ty))
+                        }
+                    }
                 }
             })
     }

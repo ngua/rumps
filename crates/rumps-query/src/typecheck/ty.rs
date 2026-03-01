@@ -244,7 +244,7 @@ impl BuiltinClassDef {
         intern: &mut impl FnMut(&str) -> StringId,
     ) -> BuiltinClassDefs {
         [
-            BuiltinClassDef {
+            Self {
                 tag: BuiltinClassTag::Numeric,
                 name: "Numeric",
                 assoc_types: &[],
@@ -287,7 +287,7 @@ impl BuiltinClassDef {
                     ),
                 ],
             },
-            BuiltinClassDef {
+            Self {
                 tag: BuiltinClassTag::Iterable,
                 name: "Iterable",
                 assoc_types: &[],
@@ -318,7 +318,7 @@ impl BuiltinClassDef {
                     ),
                 ],
             },
-            BuiltinClassDef {
+            Self {
                 tag: BuiltinClassTag::Monoid,
                 name: "Monoid",
                 assoc_types: &[],
@@ -338,7 +338,7 @@ impl BuiltinClassDef {
                     ),
                 ],
             },
-            BuiltinClassDef {
+            Self {
                 tag: BuiltinClassTag::BitLike,
                 name: "BitLike",
                 assoc_types: &[],
@@ -369,7 +369,7 @@ impl BuiltinClassDef {
                     ),
                 ],
             },
-            BuiltinClassDef {
+            Self {
                 tag: BuiltinClassTag::Negatable,
                 name: "Negatable",
                 assoc_types: &[],
@@ -380,7 +380,7 @@ impl BuiltinClassDef {
                     ),
                 )],
             },
-            BuiltinClassDef {
+            Self {
                 tag: BuiltinClassTag::Fallible,
                 name: "Fallible",
                 assoc_types: &[],
@@ -406,7 +406,7 @@ impl BuiltinClassDef {
                     ),
                 ],
             },
-            BuiltinClassDef {
+            Self {
                 tag: BuiltinClassTag::Into,
                 name: "Into",
                 assoc_types: &[],
@@ -418,7 +418,7 @@ impl BuiltinClassDef {
                     },
                 )],
             },
-            BuiltinClassDef {
+            Self {
                 tag: BuiltinClassTag::TryInto,
                 name: "TryInto",
                 assoc_types: &[],
@@ -430,7 +430,7 @@ impl BuiltinClassDef {
                     },
                 )],
             },
-            BuiltinClassDef {
+            Self {
                 tag: BuiltinClassTag::Indexable,
                 name: "Indexable",
                 assoc_types: &["Index"],
@@ -449,7 +449,7 @@ impl BuiltinClassDef {
                     ),
                 ],
             },
-            BuiltinClassDef {
+            Self {
                 tag: BuiltinClassTag::Ord,
                 name: "Ord",
                 assoc_types: &[],
@@ -460,7 +460,7 @@ impl BuiltinClassDef {
                     ),
                 )],
             },
-            BuiltinClassDef {
+            Self {
                 tag: BuiltinClassTag::Mappable,
                 name: "Mappable",
                 assoc_types: &[],
@@ -471,7 +471,7 @@ impl BuiltinClassDef {
                     ),
                 )],
             },
-            BuiltinClassDef {
+            Self {
                 tag: BuiltinClassTag::Foldable,
                 name: "Foldable",
                 assoc_types: &[],
@@ -482,7 +482,7 @@ impl BuiltinClassDef {
                     ),
                 )],
             },
-            BuiltinClassDef {
+            Self {
                 tag: BuiltinClassTag::Filterable,
                 name: "Filterable",
                 assoc_types: &[],
@@ -493,7 +493,7 @@ impl BuiltinClassDef {
                     ),
                 )],
             },
-            BuiltinClassDef {
+            Self {
                 tag: BuiltinClassTag::Display,
                 name: "Display",
                 assoc_types: &[],
@@ -504,7 +504,7 @@ impl BuiltinClassDef {
                     ),
                 )],
             },
-            BuiltinClassDef {
+            Self {
                 tag: BuiltinClassTag::Eq,
                 name: "Eq",
                 assoc_types: &[],
@@ -554,6 +554,22 @@ impl<T> BuiltinClass<T> {
         }
     }
 
+    /// Map over inner types fallibly (for layer conversion with `Result`).
+    pub(crate) fn try_map<U, E>(
+        self,
+        mut f: impl FnMut(T) -> std::result::Result<U, E>,
+    ) -> std::result::Result<BuiltinClass<U>, E> {
+        match self {
+            Self::Simple(t) => Ok(BuiltinClass::Simple(t)),
+            Self::Hkt(t, opt) => {
+                Ok(BuiltinClass::Hkt(t, opt.map(&mut f).transpose()?))
+            }
+            Self::Parameterized(t, arg) => {
+                Ok(BuiltinClass::Parameterized(t, f(arg)?))
+            }
+        }
+    }
+
     /// Returns the name of this class for error messages.
     pub(crate) fn name(&self) -> &'static str {
         self.tag().name()
@@ -572,6 +588,39 @@ impl<T> BuiltinClass<T> {
             Self::Parameterized(t, arg) => {
                 BuiltinClass::Parameterized(*t, f(arg))
             }
+        }
+    }
+
+    /// Construct from tag + optional arg; validates shape.
+    ///
+    /// Convenience constructor for the typecheck layer. The parser uses
+    /// shape-matching directly with its own error type.
+    pub(crate) fn from_tag(
+        tag: BuiltinClassTag,
+        arg: Option<T>,
+        span: Span,
+    ) -> Result<Self, TypeError> {
+        match tag.shape() {
+            ClassShape::Simple => {
+                if arg.is_some() {
+                    Err(TypeError::ClassRejectsArg {
+                        class: tag.name(),
+                        span,
+                    })
+                } else {
+                    Ok(Self::Simple(tag))
+                }
+            }
+            ClassShape::Hkt { .. } => Ok(Self::Hkt(tag, arg)),
+            ClassShape::Parameterized { .. } => arg.map_or_else(
+                || {
+                    Err(TypeError::ClassRequiresArg {
+                        class: tag.name(),
+                        span,
+                    })
+                },
+                |a| Ok(Self::Parameterized(tag, a)),
+            ),
         }
     }
 }

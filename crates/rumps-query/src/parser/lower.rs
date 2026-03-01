@@ -18,7 +18,7 @@ use crate::ast::{
     SubscriptElem, TransactionModifiers, TypeDefAst, TypeParam, TypePattern,
     VariantAst, Visibility, WriteExpr,
 };
-use crate::typecheck::{BuiltinClass, BuiltinClassTag};
+use crate::typecheck::BuiltinClass;
 use crate::{Error, Result};
 
 /// Context for lowering; tracks base directory, files being parsed, and
@@ -59,50 +59,9 @@ fn lower_visibility(vis: cst::Visibility) -> Visibility {
 fn lower_class(
     ast: &mut Ast,
     tps: &HashSet<String>,
-    c: cst::Class,
+    c: BuiltinClass<cst::TypeExpr>,
 ) -> Result<BuiltinClass<AstTypeExprId>> {
-    Ok(match c {
-        cst::Class::Iterable(opt) => BuiltinClass::Hkt(
-            BuiltinClassTag::Iterable,
-            opt.map(|t| lower_type_expr(ast, tps, t)).transpose()?,
-        ),
-        cst::Class::Fallible(opt) => BuiltinClass::Hkt(
-            BuiltinClassTag::Fallible,
-            opt.map(|t| lower_type_expr(ast, tps, t)).transpose()?,
-        ),
-        cst::Class::Mappable(opt) => BuiltinClass::Hkt(
-            BuiltinClassTag::Mappable,
-            opt.map(|t| lower_type_expr(ast, tps, t)).transpose()?,
-        ),
-        cst::Class::Foldable(opt) => BuiltinClass::Hkt(
-            BuiltinClassTag::Foldable,
-            opt.map(|t| lower_type_expr(ast, tps, t)).transpose()?,
-        ),
-        cst::Class::Filterable(opt) => BuiltinClass::Hkt(
-            BuiltinClassTag::Filterable,
-            opt.map(|t| lower_type_expr(ast, tps, t)).transpose()?,
-        ),
-        cst::Class::Into(t) => BuiltinClass::Parameterized(
-            BuiltinClassTag::Into,
-            lower_type_expr(ast, tps, t)?,
-        ),
-        cst::Class::TryInto(t) => BuiltinClass::Parameterized(
-            BuiltinClassTag::TryInto,
-            lower_type_expr(ast, tps, t)?,
-        ),
-        cst::Class::Indexable(t) => BuiltinClass::Parameterized(
-            BuiltinClassTag::Indexable,
-            lower_type_expr(ast, tps, t)?,
-        ),
-        cst::Class::Numeric => BuiltinClass::Simple(BuiltinClassTag::Numeric),
-        cst::Class::Monoid => BuiltinClass::Simple(BuiltinClassTag::Monoid),
-        cst::Class::BitLike => BuiltinClass::Simple(BuiltinClassTag::BitLike),
-        cst::Class::Negatable => {
-            BuiltinClass::Simple(BuiltinClassTag::Negatable)
-        }
-        cst::Class::Ord => BuiltinClass::Simple(BuiltinClassTag::Ord),
-        cst::Class::Display => BuiltinClass::Simple(BuiltinClassTag::Display),
-    })
+    c.try_map(|te| lower_type_expr(ast, tps, te))
 }
 
 /// Convert a CST type parameter to an AST type parameter.

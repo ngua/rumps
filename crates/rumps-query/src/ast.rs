@@ -117,14 +117,6 @@ impl StmtId {
 }
 
 impl AstTypeExprId {
-    /// Placeholder ID for macro-generated constraints.
-    ///
-    /// Used by the `scheme!` macro when generating `BuiltinClass::Hkt`
-    /// entries. The actual element/inner type is provided via the
-    /// `Option<Ty>` in the scheme's constraints vec; this ID is never
-    /// dereferenced.
-    pub(crate) const INVALID: Self = Self(u32::MAX);
-
     /// The raw index value.
     pub(crate) const fn idx(self) -> usize {
         self.0 as usize

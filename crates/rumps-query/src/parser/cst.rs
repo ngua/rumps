@@ -46,44 +46,8 @@
 use smallvec::SmallVec;
 
 use crate::ast::{BinOp, Intrinsic, JsonAccessKind, Literal, UnOp};
+use crate::typecheck::BuiltinClass;
 use crate::Span;
-
-/// Type class constraint for type parameters (Haskell-style).
-///
-/// HKT classes (kind `* -> *`) use `Option<TypeExpr>` because the element type
-/// is specified at usage sites (`F[T]`), not in the constraint (`F: Fallible`).
-/// Multi-param classes require a type arg (e.g., `Into[Target]`).
-#[derive(Clone, Debug)]
-pub(crate) enum Class {
-    /// Type is iterable (`Array[T]` or `Range`).
-    Iterable(Option<TypeExpr>),
-    /// Type is fallible (`Option[T]` or `Result[T, E]`).
-    Fallible(Option<TypeExpr>),
-    /// Type supports `map`.
-    Mappable(Option<TypeExpr>),
-    /// Type supports `fold`.
-    Foldable(Option<TypeExpr>),
-    /// Type supports `filter`.
-    Filterable(Option<TypeExpr>),
-    /// Type can be converted to another type: `Into[Target]`.
-    Into(TypeExpr),
-    /// Type can be fallibly converted to another type: `TryInto[Target]`.
-    TryInto(TypeExpr),
-    /// Type supports indexing: `Indexable[Elem]`.
-    Indexable(TypeExpr),
-    /// Type is `Int` or `Float`.
-    Numeric,
-    /// Type supports monoidal concatenation (`++`).
-    Monoid,
-    /// Type supports bitwise operations.
-    BitLike,
-    /// Type can be negated with unary `-`.
-    Negatable,
-    /// Type supports ordering comparisons.
-    Ord,
-    /// Type can be converted to a display string.
-    Display,
-}
 
 /// A type parameter with optional class constraints.
 ///
@@ -91,7 +55,7 @@ pub(crate) enum Class {
 #[derive(Clone, Debug)]
 pub(crate) struct TypeParam {
     pub name: String,
-    pub constraints: SmallVec<[Class; 2]>,
+    pub constraints: SmallVec<[BuiltinClass<TypeExpr>; 2]>,
 }
 
 /// Type pattern for the `IS` operator (CST version).
@@ -474,7 +438,7 @@ pub(crate) struct AssocTypeCst {
     /// Associated type name (e.g., `"Index"`).
     pub(crate) name: String,
     /// Optional constraint on the associated type.
-    pub(crate) constraint: Option<Class>,
+    pub(crate) constraint: Option<BuiltinClass<TypeExpr>>,
     /// The concrete type this associated type maps to.
     pub(crate) target: TypeExpr,
     pub(crate) span: Span,
@@ -582,7 +546,7 @@ pub(crate) enum StmtKind {
         /// WHERE clause constraints (e.g., `A: Display, B: Display`).
         ///
         /// Each entry is `(type_param_name, constraints)`.
-        constraints: Vec<(String, Vec<Class>)>,
+        constraints: Vec<(String, Vec<BuiltinClass<TypeExpr>>)>,
         /// Associated type definitions (e.g., `NEWTYPE Index = Int`).
         assoc_types: Vec<AssocTypeCst>,
         /// Method implementations.

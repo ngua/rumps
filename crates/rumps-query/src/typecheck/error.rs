@@ -512,6 +512,14 @@ pub(crate) enum TypeError {
         span: Span,
     },
 
+    /// Simple or HKT class given type arguments it does not accept.
+    #[error("class `{class}` does not accept type arguments")]
+    ClassRejectsArg { class: &'static str, span: Span },
+
+    /// Parameterized class missing required type arguments.
+    #[error("class `{class}` requires type arguments")]
+    ClassRequiresArg { class: &'static str, span: Span },
+
     /// Top-level expression statement outside of `main`.
     ///
     /// Scripts must define a `main` function as the entry point. Expression
@@ -583,6 +591,8 @@ impl TypeError {
             | Self::AssocTypeOutsideClass { span, .. }
             | Self::NoSuchAssocType { span, .. }
             | Self::InstanceNotImported { span, .. }
+            | Self::ClassRejectsArg { span, .. }
+            | Self::ClassRequiresArg { span, .. }
             | Self::TopLevelExpr(span)
             | Self::MissingMain(span)
             | Self::InvalidMainSignature { span, .. } => *span,
@@ -909,6 +919,14 @@ impl TypeError {
                 Some(format!(
                     "an instance is defined in module `{module}`; try adding `IMPORT {module}.{{ }}`"
                 )),
+            ),
+            Self::ClassRejectsArg { class, .. } => (
+                format!("class `{class}` does not accept type arguments"),
+                None,
+            ),
+            Self::ClassRequiresArg { class, .. } => (
+                format!("class `{class}` requires type arguments"),
+                None,
             ),
             Self::TopLevelExpr(_) => (
                 "top-level expression statements are not allowed".to_owned(),
