@@ -834,11 +834,11 @@ impl<'a> InferCtx<'a> {
         // remains available for error formatting (displaying vars as Int).
         let numeric_vars = self.clone_numeric_vars();
 
-        // First pass: process Eq, Callable, HasField, Iterable, Indexable to
+        // First pass: process Unify, Callable, HasField, Iterable, Indexable to
         // build substitution. These constraints generate type bindings that
         // other constraints (Numeric, Into[String], etc.) depend on.
         constraints.iter().for_each(|c| match c {
-            Constraint::Eq(t1, t2, span) => {
+            Constraint::Unify(t1, t2, span) => {
                 let t1 = t1.apply(&subst);
                 let t2 = t2.apply(&subst);
                 match self.unify_types(&t1, &t2, *span) {
@@ -2712,7 +2712,7 @@ impl<'a> InferCtx<'a> {
     ) -> Result<Ty, TypeError> {
         // Validate that assoc_name is a valid associated type for this class
         let assoc_str = self.env().get_str(assoc_name);
-        let assoc_types = self.env.class_def(class).info().assoc_types;
+        let assoc_types = self.env.class_def(class).assoc_types;
         if !assoc_str.is_some_and(|s| assoc_types.contains(&s)) {
             Err(TypeError::NoSuchAssocType {
                 class,

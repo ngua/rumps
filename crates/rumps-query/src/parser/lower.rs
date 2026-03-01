@@ -11,12 +11,14 @@ use smallvec::SmallVec;
 
 use super::cst;
 use crate::ast::{
-    self, ArrayElem, Ast, AstTypeExpr, AstTypeExprId, BindingPattern, DbRef,
-    Expr, ExprId, Import, ImportItem, JsonAccessKey, MatchArm, MatchPattern,
-    MatchPatternId, ObjectEntry, OutputFormat, OutputTarget, PostfixOp,
-    RefTarget, RestPattern, Stmt, StmtId, SubscriptElem, TransactionModifiers,
-    TypeDefAst, TypePattern, VariantAst, Visibility, WriteExpr,
+    self, ArrayElem, AssocTypeDef, Ast, AstTypeExpr, AstTypeExprId,
+    BindingPattern, DbRef, Expr, ExprId, Import, ImportItem, JsonAccessKey,
+    MatchArm, MatchPattern, MatchPatternId, ObjectEntry, OutputFormat,
+    OutputTarget, PostfixOp, RefTarget, RestPattern, Stmt, StmtId,
+    SubscriptElem, TransactionModifiers, TypeDefAst, TypeParam, TypePattern,
+    VariantAst, Visibility, WriteExpr,
 };
+use crate::typecheck::{BuiltinClass, BuiltinClassTag};
 use crate::{Error, Result};
 
 /// Context for lowering; tracks base directory, files being parsed, and
@@ -53,41 +55,53 @@ fn lower_visibility(vis: cst::Visibility) -> Visibility {
     }
 }
 
-/// Convert a CST class to an AST class.
+/// Convert a CST class constraint to a `BuiltinClass<AstTypeExprId>`.
 fn lower_class(
     ast: &mut Ast,
     tps: &HashSet<String>,
     c: cst::Class,
-) -> Result<ast::Class> {
+) -> Result<BuiltinClass<AstTypeExprId>> {
     Ok(match c {
-        cst::Class::Iterable(opt) => ast::Class::Iterable(
+        cst::Class::Iterable(opt) => BuiltinClass::Hkt(
+            BuiltinClassTag::Iterable,
             opt.map(|t| lower_type_expr(ast, tps, t)).transpose()?,
         ),
-        cst::Class::Fallible(opt) => ast::Class::Fallible(
+        cst::Class::Fallible(opt) => BuiltinClass::Hkt(
+            BuiltinClassTag::Fallible,
             opt.map(|t| lower_type_expr(ast, tps, t)).transpose()?,
         ),
-        cst::Class::Mappable(opt) => ast::Class::Mappable(
+        cst::Class::Mappable(opt) => BuiltinClass::Hkt(
+            BuiltinClassTag::Mappable,
             opt.map(|t| lower_type_expr(ast, tps, t)).transpose()?,
         ),
-        cst::Class::Foldable(opt) => ast::Class::Foldable(
+        cst::Class::Foldable(opt) => BuiltinClass::Hkt(
+            BuiltinClassTag::Foldable,
             opt.map(|t| lower_type_expr(ast, tps, t)).transpose()?,
         ),
-        cst::Class::Filterable(opt) => ast::Class::Filterable(
+        cst::Class::Filterable(opt) => BuiltinClass::Hkt(
+            BuiltinClassTag::Filterable,
             opt.map(|t| lower_type_expr(ast, tps, t)).transpose()?,
         ),
-        cst::Class::Into(t) => ast::Class::Into(lower_type_expr(ast, tps, t)?),
-        cst::Class::TryInto(t) => {
-            ast::Class::TryInto(lower_type_expr(ast, tps, t)?)
+        cst::Class::Into(t) => BuiltinClass::Parameterized(
+            BuiltinClassTag::Into,
+            lower_type_expr(ast, tps, t)?,
+        ),
+        cst::Class::TryInto(t) => BuiltinClass::Parameterized(
+            BuiltinClassTag::TryInto,
+            lower_type_expr(ast, tps, t)?,
+        ),
+        cst::Class::Indexable(t) => BuiltinClass::Parameterized(
+            BuiltinClassTag::Indexable,
+            lower_type_expr(ast, tps, t)?,
+        ),
+        cst::Class::Numeric => BuiltinClass::Simple(BuiltinClassTag::Numeric),
+        cst::Class::Monoid => BuiltinClass::Simple(BuiltinClassTag::Monoid),
+        cst::Class::BitLike => BuiltinClass::Simple(BuiltinClassTag::BitLike),
+        cst::Class::Negatable => {
+            BuiltinClass::Simple(BuiltinClassTag::Negatable)
         }
-        cst::Class::Indexable(t) => {
-            ast::Class::Indexable(lower_type_expr(ast, tps, t)?)
-        }
-        cst::Class::Numeric => ast::Class::Numeric,
-        cst::Class::Monoid => ast::Class::Monoid,
-        cst::Class::BitLike => ast::Class::BitLike,
-        cst::Class::Negatable => ast::Class::Negatable,
-        cst::Class::Ord => ast::Class::Ord,
-        cst::Class::Display => ast::Class::Display,
+        cst::Class::Ord => BuiltinClass::Simple(BuiltinClassTag::Ord),
+        cst::Class::Display => BuiltinClass::Simple(BuiltinClassTag::Display),
     })
 }
 
@@ -96,13 +110,13 @@ fn lower_type_param(
     ast: &mut Ast,
     tps: &HashSet<String>,
     tp: cst::TypeParam,
-) -> Result<ast::TypeParam> {
+) -> Result<TypeParam> {
     let constraints = tp
         .constraints
         .into_iter()
         .map(|c| lower_class(ast, tps, c))
         .collect::<Result<_>>()?;
-    Ok(ast::TypeParam {
+    Ok(TypeParam {
         name: tp.name,
         constraints,
     })
@@ -113,7 +127,7 @@ fn lower_type_params(
     ast: &mut Ast,
     tps: &HashSet<String>,
     cst_tps: Vec<cst::TypeParam>,
-) -> Result<SmallVec<[ast::TypeParam; 2]>> {
+) -> Result<SmallVec<[TypeParam; 2]>> {
     cst_tps
         .into_iter()
         .map(|tp| lower_type_param(ast, tps, tp))
@@ -492,11 +506,11 @@ fn lower_assoc_type_def(
     ast: &mut Ast,
     tps: &HashSet<String>,
     a: cst::AssocTypeCst,
-) -> Result<ast::AssocTypeDef> {
+) -> Result<AssocTypeDef> {
     let constraint =
         a.constraint.map(|c| lower_class(ast, tps, c)).transpose()?;
     let target = lower_type_expr(ast, tps, a.target)?;
-    Ok(ast::AssocTypeDef {
+    Ok(AssocTypeDef {
         name: a.name,
         constraint,
         target,

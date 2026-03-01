@@ -616,7 +616,7 @@ impl TypeError {
                     p.format(ty),
                     class.name()
                 ),
-                class.help().map(str::to_owned),
+                class.tag().help().map(str::to_owned),
             ),
             Self::MissingField { ty, field, .. } => (
                 format!(

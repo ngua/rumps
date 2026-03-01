@@ -9,6 +9,7 @@
 use rumps_types::Name;
 use smallvec::SmallVec;
 
+use crate::typecheck::BuiltinClass;
 use crate::{Error, Result, Span};
 
 /// Unique identifier for a `TRANSACTION` block.
@@ -118,10 +119,10 @@ impl StmtId {
 impl AstTypeExprId {
     /// Placeholder ID for macro-generated constraints.
     ///
-    /// Used by the `scheme!` macro when generating `Class::Iterable`
-    /// or `Class::Fallible` entries. The actual element/inner type is
-    /// provided via the `Option<Ty>` in the scheme's constraints vec; this ID
-    /// is never dereferenced.
+    /// Used by the `scheme!` macro when generating `BuiltinClass::Hkt`
+    /// entries. The actual element/inner type is provided via the
+    /// `Option<Ty>` in the scheme's constraints vec; this ID is never
+    /// dereferenced.
     pub(crate) const INVALID: Self = Self(u32::MAX);
 
     /// The raw index value.
@@ -137,45 +138,9 @@ impl MatchPatternId {
     }
 }
 
-/// Type class constraint for type parameters (Haskell-style).
-///
-/// Distinguished from `ty::Class` which carries resolved `Ty` types;
-/// this carries `AstTypeExprId` for parameterized variants.
-///
-/// HKT classes (kind `* -> *`) use `Option<AstTypeExprId>` because the element
-/// type is specified at usage sites (`F[T]`), not in the constraint (`F: Fallible`).
-/// Multi-param classes require a type arg (e.g., `Into[Target]`).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Class {
-    /// Type is iterable (`Array[T]` or `Range`).
-    Iterable(Option<AstTypeExprId>),
-    /// Type is fallible (`Option[T]` or `Result[T, E]`).
-    Fallible(Option<AstTypeExprId>),
-    /// Type supports `map`.
-    Mappable(Option<AstTypeExprId>),
-    /// Type supports `fold`.
-    Foldable(Option<AstTypeExprId>),
-    /// Type supports `filter`.
-    Filterable(Option<AstTypeExprId>),
-    /// Type can be converted to another type: `Into[Target]`.
-    Into(AstTypeExprId),
-    /// Type can be fallibly converted to another type: `TryInto[Target]`.
-    TryInto(AstTypeExprId),
-    /// Type supports indexing: `Indexable[Elem]`.
-    Indexable(AstTypeExprId),
-    /// Type is `Int` or `Float`.
-    Numeric,
-    /// Type supports monoidal concatenation (`++`).
-    Monoid,
-    /// Type supports bitwise operations.
-    BitLike,
-    /// Type can be negated with unary `-`.
-    Negatable,
-    /// Type supports ordering comparisons.
-    Ord,
-    /// Type can be converted to a display string.
-    Display,
-}
+/// Class constraints on AST type parameters (e.g., `T: Numeric + Ord`).
+pub(crate) type AstClassConstraints =
+    SmallVec<[BuiltinClass<AstTypeExprId>; 2]>;
 
 /// A type parameter with optional class constraints.
 ///
@@ -183,7 +148,7 @@ pub(crate) enum Class {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TypeParam {
     pub name: String,
-    pub constraints: SmallVec<[Class; 2]>,
+    pub constraints: AstClassConstraints,
 }
 
 /// The AST arena; owns all expressions and statements.
@@ -1178,7 +1143,7 @@ pub(crate) struct AssocTypeDef {
     /// Associated type name (e.g., `"Index"`).
     pub(crate) name: String,
     /// Optional constraint on the associated type.
-    pub(crate) constraint: Option<Class>,
+    pub(crate) constraint: Option<BuiltinClass<AstTypeExprId>>,
     /// The concrete type this associated type maps to.
     pub(crate) target: AstTypeExprId,
     pub(crate) span: Span,
@@ -1324,7 +1289,7 @@ pub(crate) enum Stmt {
         /// WHERE clause constraints (e.g., `A: Display, B: Display`).
         ///
         /// Each entry is `(type_param_name, constraints)`.
-        constraints: SmallVec<[(String, SmallVec<[Class; 2]>); 2]>,
+        constraints: SmallVec<[(String, AstClassConstraints); 2]>,
         /// Associated type definitions (e.g., `NEWTYPE Index = Int`).
         assoc_types: SmallVec<[AssocTypeDef; 2]>,
         /// Method implementations.

@@ -46,7 +46,7 @@ pub(crate) enum ClassShape {
     /// Kind `*`; no type params in constraint.
     Simple,
     /// Kind `* -> *` (or higher); element type comes from usage sites (`F[T]`).
-    Hkt { kind_arity: u8 },
+    Hkt { kind: u8 },
     /// Kind `*`; has explicit type params in constraint (e.g., `Into[T]`).
     Parameterized { params: u8 },
 }
@@ -126,6 +126,47 @@ impl BuiltinClassTag {
         }
     }
 
+    /// Returns static help text for this class, if any.
+    pub(crate) const fn help(self) -> Option<&'static str> {
+        match self {
+            Self::Numeric => {
+                Some("numeric types are `Int`, `Word`, and `Float`")
+            }
+            Self::Monoid => {
+                Some("`++` works on `String`, `Array`, `Map`, and `Option`")
+            }
+            Self::BitLike => {
+                Some("bitwise types are `Bool`, `Int`, and `Word`")
+            }
+            Self::Negatable => Some("negatable types are `Int` and `Float`"),
+            Self::Iterable => {
+                Some("iterable types are `Array` and `Range`")
+            }
+            Self::Fallible => {
+                Some("fallible types are `Option` and `Result`")
+            }
+            Self::Indexable => {
+                Some("indexable types are `Array`, `Map`, and `String`")
+            }
+            Self::Ord => {
+                Some("orderable types are `Bool`, `Int`, `Word`, `Float`, `Char`, and `String`")
+            }
+            Self::Eq => {
+                Some("equality types are primitives, containers (if elements are `Eq`), and user types with `CLASS Eq`")
+            }
+            Self::Mappable => {
+                Some("mappable types are `Option`, `Result`, `Array`, and `Range`")
+            }
+            Self::Foldable => {
+                Some("foldable types are `Option`, `Result`, `Array`, and `Range`")
+            }
+            Self::Filterable => {
+                Some("filterable types are `Option`, `Result`, and `Array`")
+            }
+            Self::Into | Self::TryInto | Self::Display => None,
+        }
+    }
+
     /// Returns the shape of this class constraint.
     pub(crate) const fn shape(self) -> ClassShape {
         match self {
@@ -141,7 +182,7 @@ impl BuiltinClassTag {
             | Self::Fallible
             | Self::Mappable
             | Self::Foldable
-            | Self::Filterable => ClassShape::Hkt { kind_arity: 1 },
+            | Self::Filterable => ClassShape::Hkt { kind: 1 },
 
             Self::Into | Self::TryInto | Self::Indexable => {
                 ClassShape::Parameterized { params: 1 }
@@ -156,64 +197,33 @@ impl fmt::Display for BuiltinClassTag {
     }
 }
 
-/// Shared metadata for a builtin class definition.
-pub(crate) struct BuiltinClassInfo {
+/// Full definition of a builtin class. Shape information is derived from
+/// `self.tag.shape()` when needed; there is no need to duplicate the shape
+/// as an enum variant.
+pub(crate) struct BuiltinClassDef {
     pub(crate) tag: BuiltinClassTag,
     pub(crate) name: &'static str,
     pub(crate) assoc_types: &'static [&'static str],
     /// Method specs; all methods are required.
     pub(crate) methods: Vec<(&'static str, MethodSpec)>,
-    pub(crate) help: Option<&'static str>,
-}
-
-/// Full definition of a builtin class; shape is the enum variant, identity
-/// is data inside `BuiltinClassInfo`.
-pub(crate) enum BuiltinClassDef {
-    /// Kind `*` class; no type parameters.
-    Simple(BuiltinClassInfo),
-    /// Kind `* -> *` (or higher) class.
-    Hkt {
-        info: BuiltinClassInfo,
-        kind_arity: u8,
-    },
-    /// Parameterized class with explicit type args.
-    Parameterized { info: BuiltinClassInfo, params: u8 },
 }
 
 /// Array of all builtin class definitions, indexed by `BuiltinClassTag as usize`.
 pub(crate) type BuiltinClassDefs = [BuiltinClassDef; BuiltinClassTag::COUNT];
 
 impl BuiltinClassDef {
-    /// Shared info regardless of shape.
-    pub(crate) fn info(&self) -> &BuiltinClassInfo {
-        match self {
-            Self::Simple(i)
-            | Self::Hkt { info: i, .. }
-            | Self::Parameterized { info: i, .. } => i,
-        }
-    }
-
-    pub(crate) fn tag(&self) -> BuiltinClassTag {
-        self.info().tag
-    }
-
-    pub(crate) fn name(&self) -> &'static str {
-        self.info().name
-    }
-
     /// Look up a method by name.
     pub(crate) fn method(
         &self,
         name: &str,
         span: Span,
     ) -> Result<&MethodSpec, TypeError> {
-        self.info()
-            .methods
+        self.methods
             .iter()
             .find(|(n, _)| *n == name)
             .map(|(_, spec)| spec)
             .ok_or_else(|| TypeError::UnknownMethod {
-                class: self.name().to_string(),
+                class: self.name.to_string(),
                 method: name.to_string(),
                 span,
             })
@@ -223,10 +233,10 @@ impl BuiltinClassDef {
     pub(crate) fn method_names(
         &self,
     ) -> impl Iterator<Item = &'static str> + '_ {
-        self.info().methods.iter().map(|(n, _)| *n)
+        self.methods.iter().map(|(n, _)| *n)
     }
 
-    /// Build all `15` builtin class definitions.
+    /// Build all `BuiltinClassTag::COUNT` builtin class definitions.
     ///
     /// The `intern` closure is used for associated type names in method
     /// schemes (currently only `Indexable`'s `"Index"`).
@@ -234,214 +244,282 @@ impl BuiltinClassDef {
         intern: &mut impl FnMut(&str) -> StringId,
     ) -> BuiltinClassDefs {
         [
-            // Simple classes
-            Self::Simple(BuiltinClassInfo {
+            BuiltinClassDef {
                 tag: BuiltinClassTag::Numeric,
                 name: "Numeric",
                 assoc_types: &[],
                 methods: vec![
-                    ("add", MethodSpec::Standard(scheme!(forall T: Numeric. (T, T) -> T))),
-                    ("sub", MethodSpec::Standard(scheme!(forall T: Numeric. (T, T) -> T))),
-                    ("mul", MethodSpec::Standard(scheme!(forall T: Numeric. (T, T) -> T))),
-                    ("floor-div", MethodSpec::Standard(scheme!(forall T: Numeric. (T, T) -> T))),
-                    ("mod", MethodSpec::Standard(scheme!(forall T: Numeric. (T, T) -> T))),
-                    ("pow", MethodSpec::Standard(scheme!(forall T: Numeric. (T, T) -> T))),
+                    (
+                        "add",
+                        MethodSpec::Standard(
+                            scheme!(forall T: Numeric. (T, T) -> T),
+                        ),
+                    ),
+                    (
+                        "sub",
+                        MethodSpec::Standard(
+                            scheme!(forall T: Numeric. (T, T) -> T),
+                        ),
+                    ),
+                    (
+                        "mul",
+                        MethodSpec::Standard(
+                            scheme!(forall T: Numeric. (T, T) -> T),
+                        ),
+                    ),
+                    (
+                        "floor-div",
+                        MethodSpec::Standard(
+                            scheme!(forall T: Numeric. (T, T) -> T),
+                        ),
+                    ),
+                    (
+                        "mod",
+                        MethodSpec::Standard(
+                            scheme!(forall T: Numeric. (T, T) -> T),
+                        ),
+                    ),
+                    (
+                        "pow",
+                        MethodSpec::Standard(
+                            scheme!(forall T: Numeric. (T, T) -> T),
+                        ),
+                    ),
                 ],
-                help: Some("numeric types are `Int`, `Word`, and `Float`"),
-            }),
-            // Iterable (HKT)
-            Self::Hkt {
-                info: BuiltinClassInfo {
-                    tag: BuiltinClassTag::Iterable,
-                    name: "Iterable",
-                    assoc_types: &[],
-                    methods: vec![
-                        ("length", MethodSpec::Standard(scheme!(forall T, I: Iterable. (I[T]) -> Int))),
-                        ("contains", MethodSpec::Standard(scheme!(forall T, I: Iterable. (I[T], T) -> Bool))),
-                        ("reverse", MethodSpec::Standard(scheme!(forall T, I: Iterable. (I[T]) -> Array[T]))),
-                        ("foreach", MethodSpec::Standard(scheme!(forall T, I: Iterable. ((T) -> Unit, I[T]) -> Unit))),
-                    ],
-                    help: Some("iterable types are `Array` and `Range`"),
-                },
-                kind_arity: 1,
             },
-            // Monoid (Simple)
-            Self::Simple(BuiltinClassInfo {
+            BuiltinClassDef {
+                tag: BuiltinClassTag::Iterable,
+                name: "Iterable",
+                assoc_types: &[],
+                methods: vec![
+                    (
+                        "length",
+                        MethodSpec::Standard(
+                            scheme!(forall T, I: Iterable. (I[T]) -> Int),
+                        ),
+                    ),
+                    (
+                        "contains",
+                        MethodSpec::Standard(
+                            scheme!(forall T, I: Iterable. (I[T], T) -> Bool),
+                        ),
+                    ),
+                    (
+                        "reverse",
+                        MethodSpec::Standard(
+                            scheme!(forall T, I: Iterable. (I[T]) -> Array[T]),
+                        ),
+                    ),
+                    (
+                        "foreach",
+                        MethodSpec::Standard(
+                            scheme!(forall T, I: Iterable. ((T) -> Unit, I[T]) -> Unit),
+                        ),
+                    ),
+                ],
+            },
+            BuiltinClassDef {
                 tag: BuiltinClassTag::Monoid,
                 name: "Monoid",
                 assoc_types: &[],
                 methods: vec![
-                    ("identity", MethodSpec::Tracked {
-                        scheme: scheme!(forall T: Monoid. () -> T),
-                        track: TrackKind::Mempty,
-                    }),
-                    ("concat", MethodSpec::Standard(scheme!(forall T: Monoid. (T, T) -> T))),
+                    (
+                        "identity",
+                        MethodSpec::Tracked {
+                            scheme: scheme!(forall T: Monoid. () -> T),
+                            track: TrackKind::Mempty,
+                        },
+                    ),
+                    (
+                        "concat",
+                        MethodSpec::Standard(
+                            scheme!(forall T: Monoid. (T, T) -> T),
+                        ),
+                    ),
                 ],
-                help: Some("`++` works on `String`, `Array`, `Map`, and `Option`"),
-            }),
-            // BitLike (Simple)
-            Self::Simple(BuiltinClassInfo {
+            },
+            BuiltinClassDef {
                 tag: BuiltinClassTag::BitLike,
                 name: "BitLike",
                 assoc_types: &[],
                 methods: vec![
-                    ("bit-and", MethodSpec::Standard(scheme!(forall T: BitLike. (T, T) -> T))),
-                    ("bit-or", MethodSpec::Standard(scheme!(forall T: BitLike. (T, T) -> T))),
-                    ("shl", MethodSpec::Standard(scheme!(forall T: BitLike. (T, T) -> T))),
-                    ("shr", MethodSpec::Standard(scheme!(forall T: BitLike. (T, T) -> T))),
+                    (
+                        "bit-and",
+                        MethodSpec::Standard(
+                            scheme!(forall T: BitLike. (T, T) -> T),
+                        ),
+                    ),
+                    (
+                        "bit-or",
+                        MethodSpec::Standard(
+                            scheme!(forall T: BitLike. (T, T) -> T),
+                        ),
+                    ),
+                    (
+                        "shl",
+                        MethodSpec::Standard(
+                            scheme!(forall T: BitLike. (T, T) -> T),
+                        ),
+                    ),
+                    (
+                        "shr",
+                        MethodSpec::Standard(
+                            scheme!(forall T: BitLike. (T, T) -> T),
+                        ),
+                    ),
                 ],
-                help: Some("bitwise types are `Bool`, `Int`, and `Word`"),
-            }),
-            // Negatable (Simple)
-            Self::Simple(BuiltinClassInfo {
+            },
+            BuiltinClassDef {
                 tag: BuiltinClassTag::Negatable,
                 name: "Negatable",
                 assoc_types: &[],
+                methods: vec![(
+                    "neg",
+                    MethodSpec::Standard(
+                        scheme!(forall T: Negatable. (T) -> T),
+                    ),
+                )],
+            },
+            BuiltinClassDef {
+                tag: BuiltinClassTag::Fallible,
+                name: "Fallible",
+                assoc_types: &[],
                 methods: vec![
-                    ("neg", MethodSpec::Standard(scheme!(forall T: Negatable. (T) -> T))),
-                ],
-                help: Some("negatable types are `Int` and `Float`"),
-            }),
-            // Fallible (HKT)
-            Self::Hkt {
-                info: BuiltinClassInfo {
-                    tag: BuiltinClassTag::Fallible,
-                    name: "Fallible",
-                    assoc_types: &[],
-                    methods: vec![
-                        ("unwrap", MethodSpec::Standard(scheme!(forall T, F: Fallible. (F[T]) -> T))),
-                        ("wrap", MethodSpec::Tracked {
+                    (
+                        "unwrap",
+                        MethodSpec::Standard(
+                            scheme!(forall T, F: Fallible. (F[T]) -> T),
+                        ),
+                    ),
+                    (
+                        "wrap",
+                        MethodSpec::Tracked {
                             scheme: scheme!(forall T, F: Fallible. (T) -> F[T]),
                             track: TrackKind::Convert,
-                        }),
-                        ("flat-map", MethodSpec::Standard(scheme!(forall T, U, F: Fallible. (F[T], (T) -> F[U]) -> F[U]))),
-                    ],
-                    help: Some("fallible types are `Option` and `Result`"),
-                },
-                kind_arity: 1,
+                        },
+                    ),
+                    (
+                        "flat-map",
+                        MethodSpec::Standard(
+                            scheme!(forall T, U, F: Fallible. (F[T], (T) -> F[U]) -> F[U]),
+                        ),
+                    ),
+                ],
             },
-            // Into (Parameterized)
-            Self::Parameterized {
-                info: BuiltinClassInfo {
-                    tag: BuiltinClassTag::Into,
-                    name: "Into",
-                    assoc_types: &[],
-                    methods: vec![
-                        ("into", MethodSpec::Tracked {
-                            scheme: scheme!(forall T: Into[U], U. (T) -> U),
-                            track: TrackKind::Convert,
-                        }),
-                    ],
-                    help: None,
-                },
-                params: 1,
+            BuiltinClassDef {
+                tag: BuiltinClassTag::Into,
+                name: "Into",
+                assoc_types: &[],
+                methods: vec![(
+                    "into",
+                    MethodSpec::Tracked {
+                        scheme: scheme!(forall T: Into[U], U. (T) -> U),
+                        track: TrackKind::Convert,
+                    },
+                )],
             },
-            // TryInto (Parameterized)
-            Self::Parameterized {
-                info: BuiltinClassInfo {
-                    tag: BuiltinClassTag::TryInto,
-                    name: "TryInto",
-                    assoc_types: &[],
-                    methods: vec![
-                        ("try-into", MethodSpec::Tracked {
-                            scheme: scheme!(forall T: TryInto[U], U. (T) -> Result[U, String]),
-                            track: TrackKind::ConvertResultInner,
-                        }),
-                    ],
-                    help: None,
-                },
-                params: 1,
+            BuiltinClassDef {
+                tag: BuiltinClassTag::TryInto,
+                name: "TryInto",
+                assoc_types: &[],
+                methods: vec![(
+                    "try-into",
+                    MethodSpec::Tracked {
+                        scheme: scheme!(forall T: TryInto[U], U. (T) -> Result[U, String]),
+                        track: TrackKind::ConvertResultInner,
+                    },
+                )],
             },
-            // Indexable (Parameterized, with assoc type `Index`)
-            Self::Parameterized {
-                info: BuiltinClassInfo {
-                    tag: BuiltinClassTag::Indexable,
-                    name: "Indexable",
-                    assoc_types: &["Index"],
-                    methods: vec![
-                        ("index", MethodSpec::Standard(scheme!(forall B: Indexable[E], E. (B, B:Indexable:Index) -> E))),
-                        ("get", MethodSpec::Standard(scheme!(forall B: Indexable[E], E. (B, B:Indexable:Index) -> Option[E]))),
-                    ],
-                    help: Some("indexable types are `Array`, `Map`, and `String`"),
-                },
-                params: 1,
+            BuiltinClassDef {
+                tag: BuiltinClassTag::Indexable,
+                name: "Indexable",
+                assoc_types: &["Index"],
+                methods: vec![
+                    (
+                        "index",
+                        MethodSpec::Standard(
+                            scheme!(forall B: Indexable[E], E. (B, B:Indexable:Index) -> E),
+                        ),
+                    ),
+                    (
+                        "get",
+                        MethodSpec::Standard(
+                            scheme!(forall B: Indexable[E], E. (B, B:Indexable:Index) -> Option[E]),
+                        ),
+                    ),
+                ],
             },
-            // Ord (Simple)
-            Self::Simple(BuiltinClassInfo {
+            BuiltinClassDef {
                 tag: BuiltinClassTag::Ord,
                 name: "Ord",
                 assoc_types: &[],
-                methods: vec![
-                    ("compare", MethodSpec::Standard(scheme!(forall T: Ord. (T, T) -> Ordering))),
-                ],
-                help: Some("orderable types are `Bool`, `Int`, `Word`, `Float`, `Char`, and `String`"),
-            }),
-            // Mappable (HKT)
-            Self::Hkt {
-                info: BuiltinClassInfo {
-                    tag: BuiltinClassTag::Mappable,
-                    name: "Mappable",
-                    assoc_types: &[],
-                    methods: vec![
-                        ("map", MethodSpec::Standard(scheme!(forall T, U, M: Mappable. ((T) -> U, M[T]) -> Array[U]))),
-                    ],
-                    help: Some("mappable types are `Option`, `Result`, `Array`, and `Range`"),
-                },
-                kind_arity: 1,
+                methods: vec![(
+                    "compare",
+                    MethodSpec::Standard(
+                        scheme!(forall T: Ord. (T, T) -> Ordering),
+                    ),
+                )],
             },
-            // Foldable (HKT)
-            Self::Hkt {
-                info: BuiltinClassInfo {
-                    tag: BuiltinClassTag::Foldable,
-                    name: "Foldable",
-                    assoc_types: &[],
-                    methods: vec![
-                        ("reduce", MethodSpec::Standard(scheme!(forall T, U, F: Foldable. ((U, T) -> U, U, F[T]) -> U))),
-                    ],
-                    help: Some("foldable types are `Option`, `Result`, `Array`, and `Range`"),
-                },
-                kind_arity: 1,
+            BuiltinClassDef {
+                tag: BuiltinClassTag::Mappable,
+                name: "Mappable",
+                assoc_types: &[],
+                methods: vec![(
+                    "map",
+                    MethodSpec::Standard(
+                        scheme!(forall T, U, M: Mappable. ((T) -> U, M[T]) -> Array[U]),
+                    ),
+                )],
             },
-            // Filterable (HKT)
-            Self::Hkt {
-                info: BuiltinClassInfo {
-                    tag: BuiltinClassTag::Filterable,
-                    name: "Filterable",
-                    assoc_types: &[],
-                    methods: vec![
-                        ("filter", MethodSpec::Standard(scheme!(forall T, F: Filterable. ((T) -> Bool, F[T]) -> Array[T]))),
-                    ],
-                    help: Some("filterable types are `Option`, `Result`, and `Array`"),
-                },
-                kind_arity: 1,
+            BuiltinClassDef {
+                tag: BuiltinClassTag::Foldable,
+                name: "Foldable",
+                assoc_types: &[],
+                methods: vec![(
+                    "reduce",
+                    MethodSpec::Standard(
+                        scheme!(forall T, U, F: Foldable. ((U, T) -> U, U, F[T]) -> U),
+                    ),
+                )],
             },
-            // Display (Simple)
-            Self::Simple(BuiltinClassInfo {
+            BuiltinClassDef {
+                tag: BuiltinClassTag::Filterable,
+                name: "Filterable",
+                assoc_types: &[],
+                methods: vec![(
+                    "filter",
+                    MethodSpec::Standard(
+                        scheme!(forall T, F: Filterable. ((T) -> Bool, F[T]) -> Array[T]),
+                    ),
+                )],
+            },
+            BuiltinClassDef {
                 tag: BuiltinClassTag::Display,
                 name: "Display",
                 assoc_types: &[],
-                methods: vec![
-                    ("display", MethodSpec::Standard(scheme!(forall T: Display. (T) -> String))),
-                ],
-                help: None,
-            }),
-            // Eq (Simple)
-            Self::Simple(BuiltinClassInfo {
+                methods: vec![(
+                    "display",
+                    MethodSpec::Standard(
+                        scheme!(forall T: Display. (T) -> String),
+                    ),
+                )],
+            },
+            BuiltinClassDef {
                 tag: BuiltinClassTag::Eq,
                 name: "Eq",
                 assoc_types: &[],
-                methods: vec![
-                    ("eq", MethodSpec::Standard(scheme!(forall T: Eq. (T, T) -> Bool))),
-                ],
-                help: Some("equality types are primitives, containers (if elements are `Eq`), and user types with `CLASS Eq`"),
-            }),
+                methods: vec![(
+                    "eq",
+                    MethodSpec::Standard(scheme!(forall T: Eq. (T, T) -> Bool)),
+                )],
+            },
         ]
     }
 }
 
 /// Lightweight, cloneable class constraint reference, generic over the type
 /// representation. Replaces per-layer `Class` enums (`cst::Class`,
-/// `ast::Class`, `ty::Class`) with a single shape-based enum.
+/// `ty::Class`) with a single shape-based enum.
 ///
 /// Layer instantiations:
 /// - CST: `BuiltinClass<TypeExpr>`
@@ -480,10 +558,8 @@ impl<T> BuiltinClass<T> {
     pub(crate) fn name(&self) -> &'static str {
         self.tag().name()
     }
-}
 
-impl<T: Clone> BuiltinClass<T> {
-    /// Map over inner types by reference (avoids cloning the whole enum).
+    /// Map over inner types by reference (no `Clone` bound needed).
     pub(crate) fn map_ref<U>(
         &self,
         mut f: impl FnMut(&T) -> U,
@@ -535,63 +611,16 @@ impl BuiltinClass<Ty> {
             }
         }
     }
-
-    /// Returns a help message describing what types satisfy this class.
-    pub(crate) fn help(&self) -> Option<&'static str> {
-        match self {
-            Self::Simple(tag) => match tag {
-                BuiltinClassTag::Numeric => {
-                    Some("numeric types are `Int`, `Word`, and `Float`")
-                }
-                BuiltinClassTag::Monoid => {
-                    Some("`++` works on `String`, `Array`, `Map`, and `Option`")
-                }
-                BuiltinClassTag::BitLike => {
-                    Some("bitwise types are `Bool`, `Int`, and `Word`")
-                }
-                BuiltinClassTag::Negatable => {
-                    Some("negatable types are `Int` and `Float`")
-                }
-                BuiltinClassTag::Ord => {
-                    Some("orderable types are `Bool`, `Int`, `Word`, `Float`, `Char`, and `String`")
-                }
-                BuiltinClassTag::Eq => {
-                    Some("equality types are primitives, containers (if elements are `Eq`), and user types with `CLASS Eq`")
-                }
-                BuiltinClassTag::Display => None,
-                _ => None,
-            },
-            Self::Hkt(tag, _) => match tag {
-                BuiltinClassTag::Iterable => {
-                    Some("iterable types are `Array` and `Range`")
-                }
-                BuiltinClassTag::Fallible => {
-                    Some("fallible types are `Option` and `Result`")
-                }
-                BuiltinClassTag::Mappable => {
-                    Some("mappable types are `Option`, `Result`, `Array`, and `Range`")
-                }
-                BuiltinClassTag::Foldable => {
-                    Some("foldable types are `Option`, `Result`, `Array`, and `Range`")
-                }
-                BuiltinClassTag::Filterable => {
-                    Some("filterable types are `Option`, `Result`, and `Array`")
-                }
-                _ => None,
-            },
-            Self::Parameterized(tag, _) => match tag {
-                BuiltinClassTag::Indexable => {
-                    Some("indexable types are `Array`, `Map`, and `String`")
-                }
-                _ => None,
-            },
-        }
-    }
 }
 
-impl<T> fmt::Display for BuiltinClass<T> {
+impl<T: fmt::Display> fmt::Display for BuiltinClass<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.name())
+        match self {
+            Self::Simple(tag) => write!(f, "{tag}"),
+            Self::Hkt(tag, None) => write!(f, "{tag}"),
+            Self::Hkt(tag, Some(elem)) => write!(f, "{tag}[{elem}]"),
+            Self::Parameterized(tag, arg) => write!(f, "{tag}[{arg}]"),
+        }
     }
 }
 

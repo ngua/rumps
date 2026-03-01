@@ -7,7 +7,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 use super::{Constraint, InferCtx};
-use crate::ast::{self, AstTypeExpr, AstTypeExprId, Visibility};
+use crate::ast::{AstTypeExpr, AstTypeExprId, Visibility};
 use crate::intern::StringId;
 use crate::typecheck::error::TypeError;
 use crate::typecheck::ty::{BuiltinClass, BuiltinClassTag, Scheme, Ty};
@@ -628,61 +628,14 @@ impl InferCtx<'_> {
         Ty::Named(type_id, args)
     }
 
-    /// Convert an `ast::Class` to a `BuiltinClass<Ty>`, resolving type
-    /// parameter references via `subst`.
+    /// Convert a `BuiltinClass<AstTypeExprId>` to a `BuiltinClass<Ty>`,
+    /// resolving type parameter references via `subst`.
     pub(super) fn ast_class_to_ty_class(
         &mut self,
-        c: &ast::Class,
+        c: &BuiltinClass<AstTypeExprId>,
         subst: &HashMap<StringId, Ty>,
     ) -> BuiltinClass<Ty> {
-        match c {
-            ast::Class::Iterable(opt) => BuiltinClass::Hkt(
-                BuiltinClassTag::Iterable,
-                opt.map(|id| self.ast_type_to_ty(id, subst)),
-            ),
-            ast::Class::Fallible(opt) => BuiltinClass::Hkt(
-                BuiltinClassTag::Fallible,
-                opt.map(|id| self.ast_type_to_ty(id, subst)),
-            ),
-            ast::Class::Mappable(opt) => BuiltinClass::Hkt(
-                BuiltinClassTag::Mappable,
-                opt.map(|id| self.ast_type_to_ty(id, subst)),
-            ),
-            ast::Class::Foldable(opt) => BuiltinClass::Hkt(
-                BuiltinClassTag::Foldable,
-                opt.map(|id| self.ast_type_to_ty(id, subst)),
-            ),
-            ast::Class::Filterable(opt) => BuiltinClass::Hkt(
-                BuiltinClassTag::Filterable,
-                opt.map(|id| self.ast_type_to_ty(id, subst)),
-            ),
-            ast::Class::Into(id) => BuiltinClass::Parameterized(
-                BuiltinClassTag::Into,
-                self.ast_type_to_ty(*id, subst),
-            ),
-            ast::Class::TryInto(id) => BuiltinClass::Parameterized(
-                BuiltinClassTag::TryInto,
-                self.ast_type_to_ty(*id, subst),
-            ),
-            ast::Class::Indexable(id) => BuiltinClass::Parameterized(
-                BuiltinClassTag::Indexable,
-                self.ast_type_to_ty(*id, subst),
-            ),
-            ast::Class::Numeric => {
-                BuiltinClass::Simple(BuiltinClassTag::Numeric)
-            }
-            ast::Class::Monoid => BuiltinClass::Simple(BuiltinClassTag::Monoid),
-            ast::Class::BitLike => {
-                BuiltinClass::Simple(BuiltinClassTag::BitLike)
-            }
-            ast::Class::Negatable => {
-                BuiltinClass::Simple(BuiltinClassTag::Negatable)
-            }
-            ast::Class::Ord => BuiltinClass::Simple(BuiltinClassTag::Ord),
-            ast::Class::Display => {
-                BuiltinClass::Simple(BuiltinClassTag::Display)
-            }
-        }
+        c.map_ref(|id| self.ast_type_to_ty(*id, subst))
     }
 
     /// Convert a parameterized type to `Ty`.

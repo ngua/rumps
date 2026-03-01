@@ -11,7 +11,7 @@ use smallvec::{smallvec, SmallVec};
 
 use super::{Constraint, InferCtx};
 use crate::ast::{
-    self, ArrayElem, AstTypeExpr, AstTypeExprId, BinOp, DbRef, Expr, ExprId,
+    ArrayElem, AstTypeExpr, AstTypeExprId, BinOp, DbRef, Expr, ExprId,
     Intrinsic, JsonAccessKey, JsonAccessKind, Literal, MatchArm, NumericLit,
     ObjectEntry, PostfixOp, RefTarget, StmtId, SubscriptElem, TransactionExpr,
     TxnId, TypeParam, TypePattern, UnOp, Visibility,
@@ -1790,7 +1790,7 @@ impl InferCtx<'_> {
             .collect();
 
         // Build scheme constraints (for storing in closure_schemes)
-        // Convert `ast::Class` to `BuiltinClass<Ty>` for storage in `Scheme`
+        // Convert `BuiltinClass<AstTypeExprId>` to `BuiltinClass<Ty>` for `Scheme`
         let mut scheme_constraints: SmallVec<[(TyVar, BuiltinClass<Ty>); 2]> =
             SmallVec::new();
 

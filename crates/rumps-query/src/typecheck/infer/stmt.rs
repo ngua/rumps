@@ -11,10 +11,10 @@ use super::{
     ClassContext, ClassInstanceInput, Constraint, InferCtx, InstanceMethodInput,
 };
 use crate::ast::{
-    self, ArrayElem, AssocTypeDef, AstTypeExpr, AstTypeExprId, BindingPattern,
-    DbRef, Expr, ExprId, Import, ImportItem, InstanceMethodDef, Literal,
-    OutputFormat, OutputTarget, RefTarget, Stmt, StmtId, SubscriptElem, TxnId,
-    TypeParam, UnOp, Visibility, WriteExpr,
+    ArrayElem, AssocTypeDef, AstTypeExpr, AstTypeExprId, BindingPattern, DbRef,
+    Expr, ExprId, Import, ImportItem, InstanceMethodDef, Literal, OutputFormat,
+    OutputTarget, RefTarget, Stmt, StmtId, SubscriptElem, TxnId, TypeParam,
+    UnOp, Visibility, WriteExpr,
 };
 use crate::intern::StringId;
 use crate::typecheck::error::TypeError;
@@ -459,7 +459,7 @@ impl InferCtx<'_> {
             .collect();
 
         // Second pass: process constraints now that all type params are known
-        // Convert `ast::Class` to `BuiltinClass<Ty>` for storage in `Scheme`
+        // Convert `BuiltinClass<AstTypeExprId>` to `BuiltinClass<Ty>` for `Scheme`
         let mut scheme_constraints: SmallVec<[(TyVar, BuiltinClass<Ty>); 2]> =
             SmallVec::new();
 
@@ -935,7 +935,7 @@ impl InferCtx<'_> {
             .collect();
 
         // 6.6. Validate all required associated types are provided
-        let req_assocs = self.env.class_def(class).info().assoc_types;
+        let req_assocs = self.env.class_def(class).assoc_types;
         req_assocs.iter().for_each(|req| {
             let req_id = self.env.intern(req);
             if !assoc_type_map.contains_key(&req_id) {
