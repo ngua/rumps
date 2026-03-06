@@ -19,6 +19,7 @@ use crate::ast::{
     VariantAst, Visibility, WriteExpr,
 };
 use crate::typecheck::BuiltinClass;
+use crate::value::TypeId;
 use crate::{Error, Result};
 
 /// Context for lowering; tracks base directory, files being parsed, and
@@ -35,6 +36,11 @@ struct Ctx {
     /// applications (`F[T]` -> `VarApp`) from type constructor applications
     /// (`Array[T]` -> `App`).
     type_params: HashSet<String>,
+    /// Known concrete type names (builtins + user-declared `TYPE`/`NEWTYPE`/`UNION`).
+    ///
+    /// Used by `collect_type_vars` to distinguish type variables from concrete
+    /// type constructors in `App` head position.
+    known_types: HashSet<String>,
 }
 
 impl Ctx {
@@ -43,6 +49,10 @@ impl Ctx {
             base_dir,
             in_progress: HashSet::new(),
             type_params: HashSet::new(),
+            known_types: TypeId::ALL_BUILTINS
+                .iter()
+                .filter_map(|id| id.name().map(str::to_owned))
+                .collect(),
         }
     }
 }
@@ -202,6 +212,49 @@ fn lower_module_from_file(
     ids
 }
 
+/// Recursively collect type variable names from a CST type expression.
+///
+/// Used to bring type params from `for_type` into `ctx.type_params` before
+/// lowering class instance methods. Concrete type names like `Int` appearing
+/// as `Named` are harmless (`Named` does not check `tps`). For `App` heads,
+/// `known_types` is consulted to avoid treating concrete constructors (e.g.
+/// `Array`, `Pair`) as type variables.
+fn collect_type_vars(
+    ty: &cst::TypeExpr,
+    known: &HashSet<String>,
+    out: &mut HashSet<String>,
+) {
+    match &ty.kind {
+        cst::TypeExprKind::Named(n) => {
+            out.insert(n.clone());
+        }
+        cst::TypeExprKind::App(head, args) => {
+            // Check both the full name and the last segment (for
+            // module-qualified names like `Container.Pair`).
+            let is_known = known.contains(head)
+                || head
+                    .rsplit_once('.')
+                    .is_some_and(|(_, last)| known.contains(last));
+            if !is_known {
+                out.insert(head.clone());
+            }
+            args.iter().for_each(|a| collect_type_vars(a, known, out));
+        }
+        cst::TypeExprKind::Fn(ps, ret) => {
+            ps.iter().for_each(|p| collect_type_vars(p, known, out));
+            collect_type_vars(ret, known, out);
+        }
+        cst::TypeExprKind::Tuple(es) | cst::TypeExprKind::Union(es) => {
+            es.iter().for_each(|e| collect_type_vars(e, known, out));
+        }
+        cst::TypeExprKind::Object(fs) => {
+            fs.iter()
+                .for_each(|(_, t)| collect_type_vars(t, known, out));
+        }
+        cst::TypeExprKind::Wildcard | cst::TypeExprKind::AssocType { .. } => {}
+    }
+}
+
 /// Lower a CST statement to AST.
 fn lower_stmt(ast: &mut Ast, ctx: &mut Ctx, stmt: cst::Stmt) -> Result<StmtId> {
     let span = stmt.span;
@@ -287,6 +340,7 @@ fn lower_stmt(ast: &mut Ast, ctx: &mut Ctx, stmt: cst::Stmt) -> Result<StmtId> {
             def,
             vis,
         } => {
+            ctx.known_types.insert(name.clone());
             let saved = ctx.type_params.clone();
             ctx.type_params
                 .extend(type_params.iter().map(|tp| tp.name.clone()));
@@ -307,6 +361,7 @@ fn lower_stmt(ast: &mut Ast, ctx: &mut Ctx, stmt: cst::Stmt) -> Result<StmtId> {
             target,
             vis,
         } => {
+            ctx.known_types.insert(name.clone());
             let saved = ctx.type_params.clone();
             ctx.type_params
                 .extend(type_params.iter().map(|tp| tp.name.clone()));
@@ -327,6 +382,7 @@ fn lower_stmt(ast: &mut Ast, ctx: &mut Ctx, stmt: cst::Stmt) -> Result<StmtId> {
             members,
             vis,
         } => {
+            ctx.known_types.insert(name.clone());
             let saved = ctx.type_params.clone();
             ctx.type_params
                 .extend(type_params.iter().map(|tp| tp.name.clone()));
@@ -388,6 +444,11 @@ fn lower_stmt(ast: &mut Ast, ctx: &mut Ctx, stmt: cst::Stmt) -> Result<StmtId> {
             let saved = ctx.type_params.clone();
             ctx.type_params
                 .extend(type_params.iter().map(|tp| tp.name.clone()));
+            collect_type_vars(
+                &for_type,
+                &ctx.known_types,
+                &mut ctx.type_params,
+            );
 
             // Lower type-level items
             let tps = &ctx.type_params;

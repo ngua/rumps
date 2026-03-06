@@ -181,6 +181,74 @@ impl TypeId {
     /// Note: This is NOT a registered type; it's a marker used in type expressions.
     pub(crate) const UNKNOWN: Self = Self(u32::MAX);
 
+    /// User-accessible builtin `TypeId`s (excludes `OBJECT` and `UNKNOWN`).
+    ///
+    /// Must be kept in sync with `name()`.
+    pub(crate) const ALL_BUILTINS: &[Self] = &[
+        Self::BOOL,
+        Self::INT,
+        Self::FLOAT,
+        Self::STRING,
+        Self::ARRAY,
+        Self::OPTION,
+        Self::RESULT,
+        Self::CHAR,
+        Self::TUPLE,
+        Self::MAP,
+        Self::TIME,
+        Self::RANGE,
+        Self::UNIT,
+        Self::JSON,
+        Self::STORABLE,
+        Self::SCALAR,
+        Self::ORDERING,
+        Self::FILEPATH,
+        Self::PATH,
+        Self::REGEX,
+        Self::DATA_STATUS,
+        Self::SUBSCRIPT,
+        Self::ERROR,
+        Self::WORD,
+        Self::LOCAL,
+        Self::GLOBAL,
+        Self::REF,
+    ];
+
+    /// Returns the canonical name for builtin types, or `None` for
+    /// non-user-accessible types (`OBJECT`, `UNKNOWN`) and user-defined types.
+    pub(crate) const fn name(self) -> Option<&'static str> {
+        match self.0 {
+            0 => Some("Bool"),
+            1 => Some("Int"),
+            2 => Some("Float"),
+            3 => Some("String"),
+            4 => Some("Array"),
+            6 => Some("Option"),
+            7 => Some("Result"),
+            8 => Some("Char"),
+            9 => Some("Tuple"),
+            10 => Some("Map"),
+            11 => Some("Time"),
+            12 => Some("Range"),
+            13 => Some("Unit"),
+            14 => Some("Json"),
+            15 => Some("Storable"),
+            16 => Some("Scalar"),
+            17 => Some("Ordering"),
+            18 => Some("FilePath"),
+            19 => Some("Path"),
+            20 => Some("Regex"),
+            21 => Some("DataStatus"),
+            22 => Some("Subscript"),
+            23 => Some("Error"),
+            24 => Some("Word"),
+            25 => Some("Local"),
+            26 => Some("Global"),
+            27 => Some("Ref"),
+            _ => None,
+        }
+    }
+
     const fn idx(self) -> usize {
         self.0 as usize
     }
