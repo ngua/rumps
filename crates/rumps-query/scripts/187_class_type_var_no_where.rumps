@@ -1,0 +1,67 @@
+; CLASS instance where type variables come from `for_type` without WHERE clause
+;
+; Tests that type variables are extracted from the `for_type` expression
+; itself, not just from WHERE constraints. Previously, `CLASS Eq FOR X[T]`
+; without a WHERE clause would fail with "unknown type T".
+
+FUN main() {
+  ; === Single type var from for_type ===
+
+  LET a: X[Int] = 1
+  LET b: X[Int] = 2
+  WRITE Eq:eq(a, b)
+  WRITE Eq:eq(a, a)
+
+  ; === Concrete type arg in `for_type` (tests `is_known_type_name` filtering) ===
+
+  LET c = W.W(1, "hello")
+  LET d = W.W(2, "world")
+  WRITE Eq:eq(c, d)
+  WRITE Eq:eq(c, c)
+
+  ; === Multiple type vars from `for_type`, no WHERE ===
+
+  LET g = P.P("hello", 42)
+  LET h = P.P("world", 99)
+  WRITE Eq:eq(g, h)
+  WRITE Eq:eq(g, g)
+
+  ; === Nested type var in for_type ===
+
+  LET e: Z[Int] = [1, 2, 3]
+  LET f: Z[Int] = [1, 2, 3]
+  WRITE Eq:eq(e, f)
+}
+
+; Single type param, no WHERE
+NEWTYPE X[T] = Int
+
+CLASS Eq FOR X[T] {
+  FUN eq(a: X[T], b: X[T]) -> Bool {
+    LET x: Int = a
+    LET y: Int = b
+    x == y
+  }
+}
+
+; Two type params, one concrete in `for_type`: `Int` must be filtered
+; out by `is_known_type_name`, only `T` gets a fresh type var
+TYPE W[A, B] = W(A, B)
+
+CLASS Eq FOR W[Int, T] {
+  FUN eq(a: W[Int, T], b: W[Int, T]) -> Bool { false }
+}
+
+; Two type vars from `for_type` simultaneously, no WHERE
+TYPE P[A, B] = P(A, B)
+
+CLASS Eq FOR P[S, T] {
+  FUN eq(a: P[S, T], b: P[S, T]) -> Bool { false }
+}
+
+; Nested type var: `Array[T]` inside the newtype
+NEWTYPE Z[T] = Array[T]
+
+CLASS Eq FOR Z[T] {
+  FUN eq(a: Z[T], b: Z[T]) -> Bool { false }
+}

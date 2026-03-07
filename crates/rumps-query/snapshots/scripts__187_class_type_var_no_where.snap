@@ -1,0 +1,11 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; CLASS instance where type variables come from `for_type` without WHERE clause\n;\n; Tests that type variables are extracted from the `for_type` expression\n; itself, not just from WHERE constraints. Previously, `CLASS Eq FOR X[T]`\n; without a WHERE clause would fail with \"unknown type T\".\n\nFUN main() {\n  ; === Single type var from for_type ===\n\n  LET a: X[Int] = 1\n  LET b: X[Int] = 2\n  WRITE Eq:eq(a, b)\n  WRITE Eq:eq(a, a)\n\n  ; === Concrete type arg in `for_type` (tests `is_known_type_name` filtering) ===\n\n  LET c = W.W(1, \"hello\")\n  LET d = W.W(2, \"world\")\n  WRITE Eq:eq(c, d)\n  WRITE Eq:eq(c, c)\n\n  ; === Multiple type vars from `for_type`, no WHERE ===\n\n  LET g = P.P(\"hello\", 42)\n  LET h = P.P(\"world\", 99)\n  WRITE Eq:eq(g, h)\n  WRITE Eq:eq(g, g)\n\n  ; === Nested type var in for_type ===\n\n  LET e: Z[Int] = [1, 2, 3]\n  LET f: Z[Int] = [1, 2, 3]\n  WRITE Eq:eq(e, f)\n}\n\n; Single type param, no WHERE\nNEWTYPE X[T] = Int\n\nCLASS Eq FOR X[T] {\n  FUN eq(a: X[T], b: X[T]) -> Bool {\n    LET x: Int = a\n    LET y: Int = b\n    x == y\n  }\n}\n\n; Two type params, one concrete in `for_type`: `Int` must be filtered\n; out by `is_known_type_name`, only `T` gets a fresh type var\nTYPE W[A, B] = W(A, B)\n\nCLASS Eq FOR W[Int, T] {\n  FUN eq(a: W[Int, T], b: W[Int, T]) -> Bool { false }\n}\n\n; Two type vars from `for_type` simultaneously, no WHERE\nTYPE P[A, B] = P(A, B)\n\nCLASS Eq FOR P[S, T] {\n  FUN eq(a: P[S, T], b: P[S, T]) -> Bool { false }\n}\n\n; Nested type var: `Array[T]` inside the newtype\nNEWTYPE Z[T] = Array[T]\n\nCLASS Eq FOR Z[T] {\n  FUN eq(a: Z[T], b: Z[T]) -> Bool { false }\n}\n"
+---
+FALSE
+TRUE
+FALSE
+FALSE
+FALSE
+FALSE
+FALSE
