@@ -4,8 +4,8 @@
 //! representations, and static `Ty` types.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
 
+use indexmap::IndexMap;
 use smallvec::SmallVec;
 
 use super::{Constraint, InferCtx};
@@ -275,7 +275,7 @@ impl InferCtx<'_> {
     pub(crate) fn ast_type_to_ty(
         &mut self,
         id: AstTypeExprId,
-        subst: &HashMap<StringId, Ty>,
+        subst: &IndexMap<StringId, Ty>,
     ) -> Ty {
         // Clone to avoid borrow issues with mutable ast reference
         match self.ast.get_type_expr(id).cloned() {
@@ -643,7 +643,7 @@ impl InferCtx<'_> {
     pub(super) fn ast_class_to_ty_class(
         &mut self,
         c: &BuiltinClass<AstTypeExprId>,
-        subst: &HashMap<StringId, Ty>,
+        subst: &IndexMap<StringId, Ty>,
     ) -> BuiltinClass<Ty> {
         c.map_ref(|id| self.ast_type_to_ty(*id, subst))
     }
@@ -786,7 +786,7 @@ impl InferCtx<'_> {
                                     .map(|(_, ty)| *ty);
                                 match field_ty_id {
                                     Some(ty_id) => {
-                                        let subst: HashMap<_, _> = params
+                                        let subst: IndexMap<_, _> = params
                                             .iter()
                                             .zip(type_args.iter())
                                             .map(|(p, a)| (*p, a.clone()))
@@ -945,6 +945,26 @@ impl InferCtx<'_> {
         let mut out = SmallVec::new();
         self.collect_type_vars_rec(id, &mut out);
         out
+    }
+
+    /// Merge type variables from a `for_type` AST node into a substitution map.
+    ///
+    /// Type variables appearing in `for_type` (e.g. `T` in `X[T]`) that are
+    /// not already present in `subst` get fresh type variables allocated.
+    pub(super) fn merge_for_type_vars(
+        &mut self,
+        for_type: AstTypeExprId,
+        subst: &mut IndexMap<StringId, Ty>,
+    ) {
+        self.collect_type_vars_from_ast(for_type)
+            .into_iter()
+            .for_each(|name| {
+                let id = self.env.intern(&name);
+                if !subst.contains_key(&id) {
+                    let tv = self.fresh_var();
+                    subst.insert(id, Ty::Var(tv));
+                }
+            });
     }
 
     fn collect_type_vars_rec(

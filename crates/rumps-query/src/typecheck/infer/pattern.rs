@@ -3,8 +3,9 @@
 //! Contains methods for analyzing match patterns, extracting bindings,
 //! and verifying exhaustiveness of match expressions.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
+use indexmap::IndexMap;
 use smallvec::SmallVec;
 
 use super::InferCtx;
@@ -84,7 +85,7 @@ impl InferCtx<'_> {
                             _ => SmallVec::new(),
                         };
 
-                    let subst: HashMap<StringId, Ty> = type_params
+                    let subst: IndexMap<StringId, Ty> = type_params
                         .iter()
                         .zip(type_args.iter())
                         .map(|(p, a)| (*p, a.clone()))
@@ -246,7 +247,7 @@ impl InferCtx<'_> {
 
                 MatchPattern::Is(name, ty_id) => {
                     let narrowed_ty =
-                        self.ast_type_to_ty(*ty_id, &HashMap::new());
+                        self.ast_type_to_ty(*ty_id, &IndexMap::new());
 
                     // Skip check if narrowed type is the union itself
                     let is_same_union = *scrutinee_ty == narrowed_ty;
@@ -456,7 +457,7 @@ impl InferCtx<'_> {
                     let covered: Vec<Ty> = ty_ids
                         .into_iter()
                         .map(|ty_id| {
-                            self.ast_type_to_ty(ty_id, &HashMap::new())
+                            self.ast_type_to_ty(ty_id, &IndexMap::new())
                         })
                         .collect();
 

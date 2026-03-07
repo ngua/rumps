@@ -29,6 +29,7 @@ mod stmt;
 
 use std::collections::{HashMap, HashSet};
 
+use indexmap::IndexMap;
 use nonempty::NonEmpty;
 use smallvec::SmallVec;
 
@@ -68,7 +69,7 @@ pub(super) struct InstanceMethodInput<'a> {
     pub(super) class: BuiltinClassTag,
     pub(super) for_ty: &'a Ty,
     pub(super) class_arg_tys: &'a SmallVec<[Ty; 2]>,
-    pub(super) type_param_subst: &'a HashMap<StringId, Ty>,
+    pub(super) type_param_subst: &'a IndexMap<StringId, Ty>,
     pub(super) method: &'a InstanceMethodDef,
     pub(super) inst_span: Span,
 }

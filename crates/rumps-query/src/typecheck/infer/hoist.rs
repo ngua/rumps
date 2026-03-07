@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 
+use indexmap::IndexMap;
 use smallvec::SmallVec;
 
 use super::{ClassInstanceInput, InferCtx};
@@ -118,7 +119,7 @@ impl InferCtx<'_> {
             })
             .collect();
 
-        let type_param_subst: HashMap<_, _> = type_param_vars
+        let type_param_subst: IndexMap<_, _> = type_param_vars
             .iter()
             .map(|(tp, tv)| {
                 let id = self.env.intern(&tp.name);
@@ -293,7 +294,7 @@ impl InferCtx<'_> {
                 )) => {
                     // Use annotation if present, else fresh type variable
                     let ty = match ann {
-                        Some(id) => self.ast_type_to_ty(*id, &HashMap::new()),
+                        Some(id) => self.ast_type_to_ty(*id, &IndexMap::new()),
                         None => self.fresh(),
                     };
                     let scheme = Scheme::mono(ty);
@@ -359,7 +360,8 @@ impl InferCtx<'_> {
         // Parse class name; silently skip if invalid (error in Pass 2)
         if let Some(class) = BuiltinClassTag::from_str(class_name) {
             // Build type parameter substitution from WHERE constraints
-            let type_param_subst: HashMap<_, _> = if type_params.is_empty() {
+            let mut type_param_subst: IndexMap<_, _> = if type_params.is_empty()
+            {
                 constraints
                     .iter()
                     .map(|(name, _)| {
@@ -378,6 +380,9 @@ impl InferCtx<'_> {
                     })
                     .collect()
             };
+
+            // Merge type vars from `for_type` (e.g. `T` in `X[T]`)
+            self.merge_for_type_vars(for_type, &mut type_param_subst);
 
             // Resolve for_type
             let for_ty = self.ast_type_to_ty(for_type, &type_param_subst);
@@ -492,33 +497,13 @@ impl InferCtx<'_> {
 
                     // Extract type params as TyVars
                     let type_var_params: SmallVec<[TyVar; 2]> =
-                        if type_params.is_empty() {
-                            constraints
-                                .iter()
-                                .filter_map(|(name, _)| {
-                                    let id = self.env.intern(name);
-                                    type_param_subst.get(&id).and_then(|ty| {
-                                        match ty {
-                                            Ty::Var(v) => Some(*v),
-                                            _ => None,
-                                        }
-                                    })
-                                })
-                                .collect()
-                        } else {
-                            type_params
-                                .iter()
-                                .filter_map(|tp| {
-                                    let id = self.env.intern(&tp.name);
-                                    type_param_subst.get(&id).and_then(|ty| {
-                                        match ty {
-                                            Ty::Var(v) => Some(*v),
-                                            _ => None,
-                                        }
-                                    })
-                                })
-                                .collect()
-                        };
+                        type_param_subst
+                            .values()
+                            .filter_map(|ty| match ty {
+                                Ty::Var(v) => Some(*v),
+                                _ => None,
+                            })
+                            .collect();
 
                     // Register instance (ignore duplicate errors; caught in Pass 2)
                     let inst = Instance {

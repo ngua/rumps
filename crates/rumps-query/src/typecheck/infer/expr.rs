@@ -388,7 +388,7 @@ impl InferCtx<'_> {
         method: &str,
         span: Span,
     ) -> Ty {
-        let empty_subst = HashMap::new();
+        let empty_subst = IndexMap::new();
 
         match BuiltinClassTag::from_str(class) {
             Some(k) => {
@@ -1178,7 +1178,7 @@ impl InferCtx<'_> {
                                 spread_struct = None;
                             }
                             // Merge fields (convert AstTypeExprId -> Ty)
-                            let empty_subst = HashMap::new();
+                            let empty_subst = IndexMap::new();
                             fields.iter().for_each(|(name, ast_ty_id)| {
                                 let k = self.env.intern(name);
                                 let field_ty = self
@@ -1719,7 +1719,7 @@ impl InferCtx<'_> {
         &mut self,
         params: &SmallVec<[(String, Option<AstTypeExprId>); 4]>,
     ) -> Vec<Ty> {
-        self.param_tys_with_subst(params, &HashMap::new())
+        self.param_tys_with_subst(params, &IndexMap::new())
     }
 
     /// Infer types for function/closure parameters with type param substitution.
@@ -1729,7 +1729,7 @@ impl InferCtx<'_> {
     pub(super) fn param_tys_with_subst(
         &mut self,
         params: &SmallVec<[(String, Option<AstTypeExprId>); 4]>,
-        subst: &HashMap<StringId, Ty>,
+        subst: &IndexMap<StringId, Ty>,
     ) -> Vec<Ty> {
         params
             .iter()
@@ -1780,7 +1780,7 @@ impl InferCtx<'_> {
             .map(|tp| (tp.name.as_str(), self.fresh_var()))
             .collect();
 
-        let type_param_subst: HashMap<_, _> = type_params
+        let type_param_subst: IndexMap<_, _> = type_params
             .iter()
             .map(|tp| {
                 let id = self.env.intern(&tp.name);
@@ -2270,7 +2270,7 @@ impl InferCtx<'_> {
                                         .iter()
                                         .map(|_| self.fresh())
                                         .collect();
-                                    let subst: HashMap<
+                                    let subst: IndexMap<
                                         crate::intern::StringId,
                                         Ty,
                                     > = type_params
@@ -2384,7 +2384,7 @@ impl InferCtx<'_> {
     fn sum_type_with_fresh_args(
         &mut self,
         type_id: TypeId,
-    ) -> (Ty, HashMap<StringId, Ty>) {
+    ) -> (Ty, IndexMap<StringId, Ty>) {
         // Handle builtin types
         if type_id == TypeId::OPTION {
             let inner = self.fresh();
@@ -2406,14 +2406,14 @@ impl InferCtx<'_> {
                 Some(TypeDef::Sum { type_params, .. }) => {
                     let type_args: Vec<Ty> =
                         type_params.iter().map(|_| self.fresh()).collect();
-                    let map: HashMap<_, _> = type_params
+                    let map: IndexMap<_, _> = type_params
                         .iter()
                         .zip(type_args.iter())
                         .map(|(&param_id, ty)| (param_id, ty.clone()))
                         .collect();
                     (Ty::Named(type_id, type_args), map)
                 }
-                _ => (Ty::Error, HashMap::new()),
+                _ => (Ty::Error, IndexMap::new()),
             }
         }
     }
@@ -2497,7 +2497,7 @@ impl InferCtx<'_> {
 
         match pattern {
             TypePattern::Type(ty_id) => {
-                let target_ty = self.ast_type_to_ty(*ty_id, &HashMap::new());
+                let target_ty = self.ast_type_to_ty(*ty_id, &IndexMap::new());
                 // If scrutinee is a union, verify target is a member
                 // Skip check if target is the union type itself (e.g., `x IS Storable`)
                 // or if target is also a union that contains the scrutinee members
@@ -2617,7 +2617,7 @@ impl InferCtx<'_> {
                 }
                 // Resolve field types (validates type expressions)
                 fields.iter().for_each(|(_, ty_id)| {
-                    self.ast_type_to_ty(*ty_id, &HashMap::new());
+                    self.ast_type_to_ty(*ty_id, &IndexMap::new());
                 });
             }
         }
@@ -2640,7 +2640,7 @@ impl InferCtx<'_> {
         span: Span,
     ) -> Ty {
         let inner_ty = self.expr(inner_id);
-        let target_ty = self.ast_type_to_ty(ty_id, &HashMap::new());
+        let target_ty = self.ast_type_to_ty(ty_id, &IndexMap::new());
 
         // Emit Into constraint for validation
         self.constrain(Constraint::Class {
@@ -2686,7 +2686,7 @@ impl InferCtx<'_> {
         span: Span,
     ) -> Ty {
         let inner_ty = self.expr(inner_id);
-        let target_ty = self.ast_type_to_ty(ty_id, &HashMap::new());
+        let target_ty = self.ast_type_to_ty(ty_id, &IndexMap::new());
 
         // Emit TryInto constraint for validation
         self.constrain(Constraint::Class {
@@ -2866,7 +2866,7 @@ impl InferCtx<'_> {
         ty_id: AstTypeExprId,
         span: Span,
     ) -> Ty {
-        let ann_ty = self.ast_type_to_ty(ty_id, &HashMap::new());
+        let ann_ty = self.ast_type_to_ty(ty_id, &IndexMap::new());
 
         // Clone inner expression to avoid borrow issues
         let inner_expr = self.ast.get_expr(inner_id).cloned();
@@ -2993,7 +2993,7 @@ impl InferCtx<'_> {
         // State parameter type: annotation or unify with seed
         let state_ty = state_param
             .1
-            .map(|id| self.ast_type_to_ty(id, &HashMap::new()))
+            .map(|id| self.ast_type_to_ty(id, &IndexMap::new()))
             .unwrap_or_else(|| seed_ty.clone());
 
         // Unify seed with state type
@@ -3007,7 +3007,7 @@ impl InferCtx<'_> {
 
         // Check cont_param annotation if present
         if let Some(ann_id) = cont_param.1 {
-            let ann_ty = self.ast_type_to_ty(ann_id, &HashMap::new());
+            let ann_ty = self.ast_type_to_ty(ann_id, &IndexMap::new());
             self.unify(cont_ty.clone(), ann_ty, span);
         }
 

@@ -5,6 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use indexmap::IndexMap;
 use smallvec::SmallVec;
 
 use super::{
@@ -449,7 +450,7 @@ impl InferCtx<'_> {
             .collect();
 
         // Build type_param_subst (StringId -> Ty) for type resolution
-        let type_param_subst: HashMap<_, _> = type_params
+        let type_param_subst: IndexMap<_, _> = type_params
             .iter()
             .map(|tp| {
                 let id = self.env.intern(&tp.name);
@@ -565,7 +566,7 @@ impl InferCtx<'_> {
         let ty = match ann {
             None => Some(self.expr(rhs)),
             Some(id) => {
-                let ann_ty = self.ast_type_to_ty(*id, &HashMap::new());
+                let ann_ty = self.ast_type_to_ty(*id, &IndexMap::new());
 
                 // Clone to avoid borrow issues with mutable self
                 let rhs_expr = self.ast.get_expr(rhs).cloned();
@@ -844,7 +845,7 @@ impl InferCtx<'_> {
         // 2. Build type parameter substitution map (BEFORE resolving for_type)
         //    If `type_params` is empty, extract type param names from the
         //    WHERE constraints (e.g., `L: Display, R: Display` gives `[L, R]`)
-        let type_param_subst: HashMap<_, _> = if type_params.is_empty() {
+        let mut type_param_subst: IndexMap<_, _> = if type_params.is_empty() {
             constraints
                 .iter()
                 .map(|(name, _)| {
@@ -863,6 +864,9 @@ impl InferCtx<'_> {
                 })
                 .collect()
         };
+
+        // Merge type vars from `for_type` (e.g. `T` in `X[T]`)
+        self.merge_for_type_vars(for_type, &mut type_param_subst);
 
         // 3. Resolve for_type and get its TypeId
         let for_ty = self.ast_type_to_ty(for_type, &type_param_subst);
@@ -1003,14 +1007,11 @@ impl InferCtx<'_> {
                 })
                 .collect();
 
-            let type_var_params: SmallVec<[TyVar; 2]> = type_params
-                .iter()
-                .filter_map(|tp| {
-                    let id = self.env.intern(&tp.name);
-                    type_param_subst.get(&id).and_then(|ty| match ty {
-                        Ty::Var(v) => Some(*v),
-                        _ => None,
-                    })
+            let type_var_params: SmallVec<[TyVar; 2]> = type_param_subst
+                .values()
+                .filter_map(|ty| match ty {
+                    Ty::Var(v) => Some(*v),
+                    _ => None,
                 })
                 .collect();
 

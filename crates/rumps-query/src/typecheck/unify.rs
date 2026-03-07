@@ -114,7 +114,7 @@ impl<'a> InferCtx<'a> {
                         if is_obj {
                             None
                         } else {
-                            let subst: HashMap<StringId, Ty> = type_params
+                            let subst: IndexMap<StringId, Ty> = type_params
                                 .iter()
                                 .zip(args.iter())
                                 .map(|(p, a)| (*p, a.clone()))
@@ -716,7 +716,7 @@ impl<'a> InferCtx<'a> {
                 match self.ast().get_type_expr(target).cloned() {
                     Some(AstTypeExpr::Object(alias_fields)) => {
                         // Build substitution from type params to type args
-                        let param_subst: HashMap<StringId, Ty> = type_params
+                        let param_subst: IndexMap<StringId, Ty> = type_params
                             .iter()
                             .zip(type_args.iter())
                             .map(|(p, a)| (*p, a.clone()))
@@ -2612,11 +2612,12 @@ impl<'a> InferCtx<'a> {
                                     .map(|(_, ty)| *ty);
                                 match field_ty_id {
                                     Some(ast_ty_id) => {
-                                        let param_subst: HashMap<_, _> = params
-                                            .iter()
-                                            .zip(type_args.iter())
-                                            .map(|(p, a)| (*p, a.clone()))
-                                            .collect();
+                                        let param_subst: IndexMap<_, _> =
+                                            params
+                                                .iter()
+                                                .zip(type_args.iter())
+                                                .map(|(p, a)| (*p, a.clone()))
+                                                .collect();
                                         let actual_ty = self.ast_type_to_ty(
                                             ast_ty_id,
                                             &param_subst,
