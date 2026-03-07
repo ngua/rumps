@@ -6,6 +6,8 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
+use smallvec::SmallVec;
+
 use super::{Constraint, InferCtx};
 use crate::ast::{AstTypeExpr, AstTypeExprId, Visibility};
 use crate::intern::StringId;
@@ -587,35 +589,43 @@ impl InferCtx<'_> {
 
     /// Convert a simple named type to `Ty`.
     pub(super) fn named_type_to_ty(&mut self, name: &str) -> Ty {
+        Self::builtin_type_from_name(name).unwrap_or_else(|| {
+            // Look up in registry
+            self.env
+                .lookup_str(name)
+                .and_then(|id| self.registry.lookup(id))
+                .map_or(Ty::Unknown, |ty_id| {
+                    self.expand_alias_or_named(ty_id, vec![])
+                })
+        })
+    }
+
+    /// Map builtin type names to their `Ty` representation.
+    ///
+    /// Returns `None` for non-builtin names. This is the single source of
+    /// truth for simple (non-parameterized) builtin type names.
+    fn builtin_type_from_name(name: &str) -> Option<Ty> {
         match name {
-            "Bool" => Ty::Bool,
-            "Int" => Ty::Int,
-            "Word" => Ty::Word,
-            "Float" => Ty::Float,
-            "Char" => Ty::Char,
-            "String" => Ty::String,
-            "Unit" => Ty::Unit,
-            "Time" => Ty::Time,
-            "Range" => Ty::Range,
-            "Json" => Ty::Json,
-            "Ordering" => Ty::Ordering,
-            "DataStatus" => Ty::DataStatus,
-            "FilePath" => Ty::FilePath,
-            "Path" => Ty::Path,
-            "Regex" => Ty::Regex,
-            // Ref union type; Local and Global are the concrete types
-            "Local" => Ty::Local,
-            "Global" => Ty::Global,
-            "Ref" => Ty::Named(TypeId::REF, vec![]),
-            _ => {
-                // Look up in registry
-                self.env
-                    .lookup_str(name)
-                    .and_then(|id| self.registry.lookup(id))
-                    .map_or(Ty::Unknown, |ty_id| {
-                        self.expand_alias_or_named(ty_id, vec![])
-                    })
-            }
+            "Bool" => Some(Ty::Bool),
+            "Int" => Some(Ty::Int),
+            "Word" => Some(Ty::Word),
+            "Float" => Some(Ty::Float),
+            "Char" => Some(Ty::Char),
+            "String" => Some(Ty::String),
+            "Unit" => Some(Ty::Unit),
+            "Time" => Some(Ty::Time),
+            "Range" => Some(Ty::Range),
+            "Json" => Some(Ty::Json),
+            "Ordering" => Some(Ty::Ordering),
+            "DataStatus" => Some(Ty::DataStatus),
+            "FilePath" => Some(Ty::FilePath),
+            "Path" => Some(Ty::Path),
+            "Regex" => Some(Ty::Regex),
+            "Error" => Some(Ty::RuntimeError),
+            "Local" => Some(Ty::Local),
+            "Global" => Some(Ty::Global),
+            "Ref" => Some(Ty::Named(TypeId::REF, vec![])),
+            _ => None,
         }
     }
 
@@ -913,5 +923,67 @@ impl InferCtx<'_> {
         self.env
             .lookup_str(name)
             .and_then(|id| self.registry.lookup(id))
+    }
+
+    /// Check if `name` refers to a known (builtin or user-defined) type,
+    /// as opposed to a type variable.
+    pub(super) fn is_known_type_name(&self, name: &str) -> bool {
+        Self::builtin_type_from_name(name).is_some()
+            || Self::expected_type_arity(name).is_some()
+            || self.resolve_type_name(name).is_some()
+    }
+
+    /// Collect type variable names from an AST type expression.
+    ///
+    /// Recursively walks the type expression tree, returning names that
+    /// are type variables (i.e. not known/builtin types). Used to extract
+    /// implicit type parameters from `for_type` in class instances.
+    pub(super) fn collect_type_vars_from_ast(
+        &self,
+        id: AstTypeExprId,
+    ) -> SmallVec<[String; 4]> {
+        let mut out = SmallVec::new();
+        self.collect_type_vars_rec(id, &mut out);
+        out
+    }
+
+    fn collect_type_vars_rec(
+        &self,
+        id: AstTypeExprId,
+        out: &mut SmallVec<[String; 4]>,
+    ) {
+        if let Some(te) = self.ast.get_type_expr(id).cloned() {
+            match te {
+                AstTypeExpr::Named(name) => {
+                    if !self.is_known_type_name(&name) {
+                        out.push(name);
+                    }
+                }
+                AstTypeExpr::VarApp(name, args) => {
+                    out.push(name);
+                    args.iter()
+                        .for_each(|a| self.collect_type_vars_rec(*a, out));
+                }
+                AstTypeExpr::App(_, args) => {
+                    args.iter()
+                        .for_each(|a| self.collect_type_vars_rec(*a, out));
+                }
+                AstTypeExpr::Fn(params, ret) => {
+                    params
+                        .iter()
+                        .for_each(|p| self.collect_type_vars_rec(*p, out));
+                    self.collect_type_vars_rec(ret, out);
+                }
+                AstTypeExpr::Tuple(es) | AstTypeExpr::Union(es) => {
+                    es.iter().for_each(|e| self.collect_type_vars_rec(*e, out));
+                }
+                AstTypeExpr::Object(fs) => {
+                    fs.iter().for_each(|(_, t)| {
+                        self.collect_type_vars_rec(*t, out);
+                    });
+                }
+                AstTypeExpr::Wildcard | AstTypeExpr::AssocType { .. } => {}
+            }
+        }
     }
 }
