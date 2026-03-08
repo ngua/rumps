@@ -2183,22 +2183,12 @@ impl<'a> InferCtx<'a> {
                 }
             }
 
-            // `Mappable(opt_elem)`: `Array[T]`, `Range`, `Option[T]`, `Result[T, E]`
+            // `Mappable(opt_elem)`: `Array[T]`, `Option[T]`, `Result[T, E]`
             BuiltinClass::Hkt(BuiltinClassTag::Mappable, opt_elem) => {
                 match ty {
                     Ty::Array(inner) => {
                         if let Some(elem) = opt_elem {
                             match self.unify_types(elem, inner, span) {
-                                UnifyResult::Ok(s) => {
-                                    *subst = subst.compose(&s)
-                                }
-                                UnifyResult::Err(e) => self.error(e),
-                            }
-                        }
-                    }
-                    Ty::Range => {
-                        if let Some(elem) = opt_elem {
-                            match self.unify_types(elem, &Ty::Int, span) {
                                 UnifyResult::Ok(s) => {
                                     *subst = subst.compose(&s)
                                 }

@@ -17,9 +17,9 @@ FUN main() {
   WRITE "Range contains 5: {Iterable:contains(1 ..= 10, 5)}"
   WRITE "Range contains 11: {Iterable:contains(1 ..= 10, 11)}"
 
-  ; Mappable:map on Array and Range
+  ; Mappable:map on Array (Range is not Mappable; collect first)
   WRITE "Doubled array: {Mappable:map(x => x * 2, arr)}"
-  WRITE "Doubled range: {Mappable:map(x => x * 2, 1 ..= 5)}"
+  WRITE "Doubled range: {Mappable:map(x => x * 2, Filterable:filter(x => true, 1 ..= 5))}"
 
   ; Filterable:filter on Array and Range
   WRITE "Evens from array: {Filterable:filter(x => x % 2 == 0, arr)}"

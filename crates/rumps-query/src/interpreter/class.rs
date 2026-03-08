@@ -2226,8 +2226,6 @@ impl Mappable {
         enum Kind {
             EmptyArray,
             Array(ValueId),
-            EmptyRange,
-            Range(i64, i64),
             OptionSome(ValueId),
             OptionNone(TypeExprId),
             ResultOk(ValueId, TypeExprId), // inner, err_ty
@@ -2239,18 +2237,6 @@ impl Mappable {
                 Kind::EmptyArray
             }
             Some(Value::Array(_, elems)) => Kind::Array(elems[0]),
-            Some(Value::Range {
-                start,
-                end,
-                inclusive,
-            }) => {
-                let e = if *inclusive { *end + 1 } else { *end };
-                if *start >= e {
-                    Kind::EmptyRange
-                } else {
-                    Kind::Range(*start, e)
-                }
-            }
             // Option.Some(v) -> map inner
             Some(Value::Tagged(ty, 1, payloads))
                 if ctx
@@ -2304,7 +2290,7 @@ impl Mappable {
         };
 
         match kind {
-            Kind::EmptyArray | Kind::EmptyRange => {
+            Kind::EmptyArray => {
                 let ty = ctx.type_exprs.named(TypeId::UNKNOWN);
                 Ok(MethodResult::Done(Value::Array(ty, SmallVec::new())))
             }
@@ -2320,21 +2306,6 @@ impl Mappable {
                     elem_ty: None,
                 },
             })),
-            Kind::Range(start, end) => {
-                let int_id = ctx.arena.add(Value::Int(start), ctx.span);
-                Ok(MethodResult::Invoke(Continuation {
-                    callee: fn_id,
-                    args: smallvec![int_id],
-                    state: HofState::MapIter {
-                        kind: IterKind::Range {
-                            current: start + 1,
-                            end,
-                        },
-                        acc: SmallVec::new(),
-                        elem_ty: None,
-                    },
-                }))
-            }
             Kind::OptionSome(inner) => Ok(MethodResult::Invoke(Continuation {
                 callee: fn_id,
                 args: smallvec![inner],

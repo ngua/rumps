@@ -467,7 +467,7 @@ impl BuiltinClassDef {
                 methods: vec![(
                     "map",
                     MethodSpec::Standard(
-                        scheme!(forall T, U, M: Mappable. ((T) -> U, M[T]) -> Array[U]),
+                        scheme!(forall T, U, M: Mappable. ((T) -> U, M[T]) -> M[U]),
                     ),
                 )],
             },

@@ -47,15 +47,14 @@ pub(crate) struct Continuation {
     pub(crate) state: HofState,
 }
 
-/// Iteration kind for iterable HoFs (Array vs Range).
+/// Iteration kind for iterable HoFs.
 pub(crate) enum IterKind {
     Array { source: ValueId, idx: usize },
-    Range { current: i64, end: i64 },
 }
 
 /// HoF-specific state for resumption after closure invocation.
 pub(crate) enum HofState {
-    /// `Mappable:map` over iterables (Array, Range).
+    /// `Mappable:map` over `Array`.
     MapIter {
         kind: IterKind,
         acc: SmallVec<[ValueId; 4]>,
@@ -174,62 +173,31 @@ pub(crate) fn resume(
             let ty = elem_ty
                 .or_else(|| ctx.arena.base_type_of(result, ctx.type_exprs));
             acc.push(result);
-            match kind {
-                IterKind::Array { source, idx } => {
-                    let next_idx = idx + 1;
-                    match ctx.arena.get(source) {
-                        Some(Value::Array(_, elems))
-                            if next_idx >= elems.len() =>
-                        {
-                            let arr_ty = ty
-                                .map(|t| ctx.type_exprs.named(t))
-                                .unwrap_or_else(|| {
-                                    ctx.type_exprs.named(TypeId::UNKNOWN)
-                                });
-                            Ok(MethodResult::Done(Value::Array(arr_ty, acc)))
-                        }
-                        Some(Value::Array(_, elems)) => {
-                            Ok(MethodResult::Invoke(Continuation {
-                                callee: cont.callee,
-                                args: smallvec![elems[next_idx]],
-                                state: HofState::MapIter {
-                                    kind: IterKind::Array {
-                                        source,
-                                        idx: next_idx,
-                                    },
-                                    acc,
-                                    elem_ty: ty,
-                                },
-                            }))
-                        }
-                        _ => invariant!("MapIter Array source must be Array"),
-                    }
+            let IterKind::Array { source, idx } = kind;
+            let next_idx = idx + 1;
+            match ctx.arena.get(source) {
+                Some(Value::Array(_, elems)) if next_idx >= elems.len() => {
+                    let arr_ty =
+                        ty.map(|t| ctx.type_exprs.named(t)).unwrap_or_else(
+                            || ctx.type_exprs.named(TypeId::UNKNOWN),
+                        );
+                    Ok(MethodResult::Done(Value::Array(arr_ty, acc)))
                 }
-                IterKind::Range { current, end } => {
-                    // `current` is the next value to process.
-                    if current >= end {
-                        let arr_ty =
-                            ty.map(|t| ctx.type_exprs.named(t)).unwrap_or_else(
-                                || ctx.type_exprs.named(TypeId::UNKNOWN),
-                            );
-                        Ok(MethodResult::Done(Value::Array(arr_ty, acc)))
-                    } else {
-                        let int_id =
-                            ctx.arena.add(Value::Int(current), ctx.span);
-                        Ok(MethodResult::Invoke(Continuation {
-                            callee: cont.callee,
-                            args: smallvec![int_id],
-                            state: HofState::MapIter {
-                                kind: IterKind::Range {
-                                    current: current + 1,
-                                    end,
-                                },
-                                acc,
-                                elem_ty: ty,
+                Some(Value::Array(_, elems)) => {
+                    Ok(MethodResult::Invoke(Continuation {
+                        callee: cont.callee,
+                        args: smallvec![elems[next_idx]],
+                        state: HofState::MapIter {
+                            kind: IterKind::Array {
+                                source,
+                                idx: next_idx,
                             },
-                        }))
-                    }
+                            acc,
+                            elem_ty: ty,
+                        },
+                    }))
                 }
+                _ => invariant!("MapIter Array source must be Array"),
             }
         }
         HofState::MapContainer {
