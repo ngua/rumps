@@ -14,8 +14,8 @@ use super::{
 use crate::ast::{
     ArrayElem, AssocTypeDef, AstTypeExpr, AstTypeExprId, BindingPattern, DbRef,
     Expr, ExprId, Import, ImportItem, InstanceMethodDef, Literal, OutputFormat,
-    OutputTarget, RefTarget, Stmt, StmtId, SubscriptElem, TxnId, TypeParam,
-    UnOp, Visibility, WriteExpr,
+    OutputTarget, RefTarget, Stmt, StmtId, SubscriptElem, TxnId, TypeDefAst,
+    TypeParam, UnOp, Visibility, WriteExpr,
 };
 use crate::intern::StringId;
 use crate::typecheck::error::TypeError;
@@ -76,23 +76,45 @@ impl InferCtx<'_> {
                 self.expr(expr);
             }
 
-            Some(Stmt::Type { .. }) => {
+            Some(Stmt::Type {
+                ref type_params,
+                ref def,
+                ..
+            }) => {
                 self.env.mark_non_import();
-                // Type declarations are processed by the registry; nothing to
-                // infer here. The types are registered before type checking.
+                // Type definitions are registered in the registry, but we
+                // still validate that all type expressions in variant
+                // payloads are fully saturated.
+                self.validate_type_decl_body(type_params, &def);
             }
 
-            Some(Stmt::Union { .. }) => {
+            Some(Stmt::Union {
+                ref type_params,
+                ref members,
+                ..
+            }) => {
                 self.env.mark_non_import();
-                // Union declarations are processed by the registry; nothing to
-                // infer here. The unions are registered before type checking.
+                // Union members are registered in the registry, but we
+                // still validate that all member type expressions are
+                // fully saturated.
+                let subst = self.type_param_subst(type_params);
+                members.iter().for_each(|m| {
+                    self.ast_type_to_ty(*m, &subst);
+                });
             }
 
-            Some(Stmt::NewType { .. }) => {
+            Some(Stmt::NewType {
+                ref type_params,
+                target,
+                ..
+            }) => {
                 self.env.mark_non_import();
-                // NewType declarations are processed by the registry; nothing
-                // to infer here. The type aliases are registered before type
-                // checking.
+                // Aliases are registered in the registry, but we still
+                // validate that the target type expression is fully
+                // saturated (e.g. `NEWTYPE G = Array` is invalid because
+                // `Array` expects a type argument).
+                let subst = self.type_param_subst(type_params);
+                self.ast_type_to_ty(target, &subst);
             }
 
             Some(Stmt::Module { name, body }) => {
@@ -215,23 +237,39 @@ impl InferCtx<'_> {
                         span: item_span,
                     });
                 }
-                Some(Stmt::Type { ref name, vis, .. }) => {
-                    // Type declarations are processed by the registry with
-                    // qualified names; register visibility for access checks.
+                Some(Stmt::Type {
+                    ref name,
+                    vis,
+                    ref type_params,
+                    ref def,
+                }) => {
                     let qname = format!("{}.{}", mod_path, name);
                     self.env.register_user_module_type_vis(&qname, vis);
+                    self.validate_type_decl_body(type_params, &def);
                 }
-                Some(Stmt::Union { ref name, vis, .. }) => {
-                    // Union declarations are processed by the registry with
-                    // qualified names; register visibility for access checks.
+                Some(Stmt::Union {
+                    ref name,
+                    vis,
+                    ref type_params,
+                    ref members,
+                }) => {
                     let qname = format!("{}.{}", mod_path, name);
                     self.env.register_user_module_type_vis(&qname, vis);
+                    let subst = self.type_param_subst(type_params);
+                    members.iter().for_each(|m| {
+                        self.ast_type_to_ty(*m, &subst);
+                    });
                 }
-                Some(Stmt::NewType { ref name, vis, .. }) => {
-                    // NewType declarations are processed by the registry with
-                    // qualified names; register visibility for access checks.
+                Some(Stmt::NewType {
+                    ref name,
+                    vis,
+                    ref type_params,
+                    target,
+                }) => {
                     let qname = format!("{}.{}", mod_path, name);
                     self.env.register_user_module_type_vis(&qname, vis);
+                    let subst = self.type_param_subst(type_params);
+                    self.ast_type_to_ty(target, &subst);
                 }
                 Some(Stmt::Import(_)) => {
                     // Imports inside modules are processed during hoisting;
@@ -1324,6 +1362,36 @@ impl InferCtx<'_> {
             ),
             // Primitives and other non-parametric types pass through
             _ => ty.clone(),
+        }
+    }
+
+    /// Build a type parameter substitution map from a list of `TypeParam`s.
+    ///
+    /// Each type parameter is mapped to a fresh type variable.
+    fn type_param_subst(
+        &mut self,
+        tps: &[TypeParam],
+    ) -> IndexMap<StringId, Ty> {
+        tps.iter()
+            .map(|tp| {
+                let id = self.env.intern(&tp.name);
+                (id, Ty::Var(self.fresh_var()))
+            })
+            .collect()
+    }
+
+    /// Validate that all type expressions in a `TYPE` declaration body are
+    /// fully saturated (no unsaturated type synonyms like bare `Array`).
+    fn validate_type_decl_body(&mut self, tps: &[TypeParam], def: &TypeDefAst) {
+        let subst = self.type_param_subst(tps);
+        match def {
+            TypeDefAst::Sum(variants) => {
+                variants.iter().for_each(|v| {
+                    v.payloads.iter().for_each(|p| {
+                        self.ast_type_to_ty(*p, &subst);
+                    });
+                });
+            }
         }
     }
 }

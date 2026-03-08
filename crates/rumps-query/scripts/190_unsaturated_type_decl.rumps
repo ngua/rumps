@@ -1,0 +1,18 @@
+; Test: unsaturated type synonyms in declarations
+; Parameterized types must be fully applied in newtype, union, and type bodies
+
+; Invalid: bare `Array` in newtype (expects 1 type arg)
+newtype Bad1 = Array
+
+; Invalid: bare `Option` in union member
+union Bad2 = Int | Option
+
+; Invalid: bare `Map` in type variant payload
+type Bad3 = Foo(Map)
+
+; Valid: fully applied
+newtype Good1[T] = Array[T]
+newtype Good2 = Array[Int]
+union Good3 = Int | Option[String]
+
+fun main() {}
