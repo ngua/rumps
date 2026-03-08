@@ -9,7 +9,7 @@
 use rumps_types::Name;
 use smallvec::SmallVec;
 
-use crate::typecheck::BuiltinClass;
+use crate::typecheck::{BuiltinClass, BuiltinClassTag};
 use crate::{Error, Result, Span};
 
 /// Unique identifier for a `TRANSACTION` block.
@@ -376,6 +376,39 @@ pub(crate) enum BinOp {
 
     // Pipeline
     Pipe, // `|>`
+}
+
+impl BinOp {
+    /// Maps a binary operator to its dispatching class and method name.
+    ///
+    /// Returns `None` for operators that don't dispatch through a class
+    /// (e.g. `And`, `Or`, `Coalesce`, `Pipe`, `Div`).
+    ///
+    /// For derived operators (`!=`, `<`, `>`, `<=`, `>=`), returns the
+    /// *base* class method (`"eq"` or `"compare"`); the caller is
+    /// responsible for post-processing the result.
+    pub(crate) fn class_dispatch(
+        self,
+    ) -> Option<(BuiltinClassTag, &'static str)> {
+        match self {
+            Self::Add => Some((BuiltinClassTag::Numeric, "add")),
+            Self::Sub => Some((BuiltinClassTag::Numeric, "sub")),
+            Self::Mul => Some((BuiltinClassTag::Numeric, "mul")),
+            Self::FloorDiv => Some((BuiltinClassTag::Numeric, "floor-div")),
+            Self::Mod => Some((BuiltinClassTag::Numeric, "mod")),
+            Self::Pow => Some((BuiltinClassTag::Numeric, "pow")),
+            Self::Eq | Self::Ne => Some((BuiltinClassTag::Eq, "eq")),
+            Self::Lt | Self::Gt | Self::Le | Self::Ge => {
+                Some((BuiltinClassTag::Ord, "compare"))
+            }
+            Self::Concat => Some((BuiltinClassTag::Monoid, "concat")),
+            Self::BitAnd => Some((BuiltinClassTag::BitLike, "bit-and")),
+            Self::BitOr => Some((BuiltinClassTag::BitLike, "bit-or")),
+            Self::Shl => Some((BuiltinClassTag::BitLike, "shl")),
+            Self::Shr => Some((BuiltinClassTag::BitLike, "shr")),
+            _ => None,
+        }
+    }
 }
 
 /// Unary (prefix) operators.

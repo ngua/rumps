@@ -61,7 +61,9 @@ impl InferCtx<'_> {
             Expr::Var(name) => self.var(name, span),
 
             // Binary operations
-            Expr::Binary(lhs, op, rhs) => self.binary(*lhs, *op, *rhs, span),
+            Expr::Binary(lhs, op, rhs) => {
+                self.binary(id, *lhs, *op, *rhs, span)
+            }
 
             // Unary operations
             Expr::Unary(op, operand) => self.unary(id, *op, *operand, span),
@@ -939,6 +941,7 @@ impl InferCtx<'_> {
     /// the result type. Operands must satisfy the scheme's constraints.
     fn binary(
         &mut self,
+        id: ExprId,
         lhs_id: ExprId,
         op: BinOp,
         rhs_id: ExprId,
@@ -947,7 +950,7 @@ impl InferCtx<'_> {
         let lhs_ty = self.expr(lhs_id);
         let rhs_ty = self.expr(rhs_id);
 
-        match op {
+        let ret = match op {
             // FIXME: Special case for Ref comparison. This allows comparing
             // `Local` and `Global` refs (e.g., `data{1} == ^info{"key"}`).
             // Once union types are properly represented in the interpreter
@@ -962,7 +965,7 @@ impl InferCtx<'_> {
                     // Both are refs (Local/Global), but don't unify them.
                     // Just require both satisfy Eq and return Bool.
                     self.constrain(Constraint::Class {
-                        ty: lhs_ty,
+                        ty: lhs_ty.clone(),
                         class: BuiltinClass::Simple(BuiltinClassTag::Eq),
                         span,
                     });
@@ -974,7 +977,11 @@ impl InferCtx<'_> {
                     Ty::Bool
                 } else {
                     // Not refs, use normal type scheme (which unifies types)
-                    self.apply_op_scheme(&op.def().ty, &[lhs_ty, rhs_ty], span)
+                    self.apply_op_scheme(
+                        &op.def().ty,
+                        &[lhs_ty.clone(), rhs_ty],
+                        span,
+                    )
                 }
             }
 
@@ -983,7 +990,7 @@ impl InferCtx<'_> {
                 let result = self.fresh();
                 self.constrain(Constraint::Callable {
                     callee: rhs_ty,
-                    args: smallvec::smallvec![lhs_ty],
+                    args: smallvec::smallvec![lhs_ty.clone()],
                     ret: result.clone(),
                     span,
                 });
@@ -991,8 +998,52 @@ impl InferCtx<'_> {
             }
 
             // All other operators use their type schemes
-            _ => self.apply_op_scheme(&op.def().ty, &[lhs_ty, rhs_ty], span),
+            _ => self.apply_op_scheme(
+                &op.def().ty,
+                &[lhs_ty.clone(), rhs_ty],
+                span,
+            ),
+        };
+
+        // Track user instance calls for binary operators that dispatch to
+        // class methods. This mirrors what `class_method()` does for explicit
+        // `Class:method(...)` calls.
+        //
+        // Skip when inside a class instance body for the same (class, type);
+        // otherwise operators like `a + b` inside `CLASS Numeric FOR MyInt`
+        // would recurse infinitely instead of auto-deriving from the inner type.
+        let class_tag = op.class_dispatch().map(|(tag, _)| tag);
+
+        if let Some(kind) = class_tag {
+            let type_id = match &lhs_ty {
+                Ty::Named(tid, _) => Some(*tid),
+                _ => self.primitive_type_id(&lhs_ty),
+            };
+
+            // Suppress if we're inside the class instance for this exact
+            // (class, type) combination to prevent infinite recursion.
+            let inside_same = self
+                .class_context
+                .as_ref()
+                .is_some_and(|ctx| ctx.class == kind && ctx.type_id == type_id);
+
+            if !inside_same {
+                match type_id {
+                    Some(tid)
+                        if self
+                            .check_instance_available(kind, tid, span)
+                            .is_some() =>
+                    {
+                        self.instance_calls.insert(id, tid);
+                    }
+                    _ => {
+                        self.deferred_instance_calls.push((id, lhs_ty, kind));
+                    }
+                }
+            }
         }
+
+        ret
     }
 
     /// Infer type of a unary operation.

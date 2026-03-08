@@ -460,7 +460,9 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::Intrinsic(op, ref rt, val, txn_id) => {
                 self.intrinsic(op, rt, val, txn_id, span).await
             }
-            Expr::Binary(lhs, op, rhs) => self.binary(lhs, op, rhs, span).await,
+            Expr::Binary(lhs, op, rhs) => {
+                self.binary(id, lhs, op, rhs, span).await
+            }
             Expr::Unary(op, operand) => self.unary(id, op, operand, span).await,
             Expr::Call(callee, args) => self.call(callee, &args, span).await,
             Expr::Object(entries) => self.object(&entries, span).await,
@@ -1462,9 +1464,12 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Evaluate a binary operation.
     ///
     /// Handles short-circuit evaluation for `AND`, `OR`, and `Coalesce`.
+    /// For class-dispatched operators (`==`, `+`, `<`, etc.), checks for
+    /// user-defined class instances before falling through to builtin dispatch.
     #[async_recursion]
     async fn binary(
         &mut self,
+        id: ExprId,
         lhs: ExprId,
         op: BinOp,
         rhs: ExprId,
@@ -1513,10 +1518,16 @@ impl<I: IoContext> Interpreter<'_, I> {
                 self.pipeline(left, right, span).await
             }
             // All other operators: both sides evaluated, sync computation
+            // (unless a user-defined class instance exists, which requires
+            // async function invocation).
             _ => {
                 let left = self.eval(lhs).await?;
                 let right = self.eval(rhs).await?;
-                self.apply_binop(&left, op, &right, span)
+                if self.instance_calls.contains_key(&id) {
+                    self.dispatch_binop_user(id, &left, op, &right, span).await
+                } else {
+                    self.apply_binop(&left, op, &right, span)
+                }
             }
         }
     }

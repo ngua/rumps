@@ -158,6 +158,8 @@ impl Constraint {
 pub(crate) struct ClassContext {
     /// The class being implemented (e.g., `Indexable`).
     pub(crate) class: BuiltinClassTag,
+    /// The `TypeId` of the type this instance is for (e.g., `MyInt`).
+    pub(crate) type_id: Option<TypeId>,
     /// Associated type definitions for this instance.
     ///
     /// Maps associated type names to their concrete types. For example,

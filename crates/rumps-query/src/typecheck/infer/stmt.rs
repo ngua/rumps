@@ -954,6 +954,7 @@ impl InferCtx<'_> {
         // Set class context for method body type checking
         self.class_context = Some(ClassContext {
             class,
+            type_id,
             assoc_types: assoc_type_map.clone(),
         });
 

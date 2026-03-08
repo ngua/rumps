@@ -1,5 +1,6 @@
 //! Binary and unary operator implementations.
 
+use async_recursion::async_recursion;
 use ordered_float::OrderedFloat;
 
 use super::class::ClassCtx;
@@ -202,6 +203,58 @@ impl<I: IoContext> Interpreter<'_, I> {
         };
         self.class_methods
             .dispatch_binary(kind, method, &mut ctx, l, r)
+    }
+
+    /// Dispatch a binary operator through user-defined class instance.
+    ///
+    /// Called when the typechecker recorded a user instance for this binary
+    /// expression in `instance_calls`. Maps the operator to its class and
+    /// method, then dispatches through `dispatch_class_method` which handles
+    /// user instance lookup and invocation.
+    #[async_recursion]
+    pub(super) async fn dispatch_binop_user(
+        &mut self,
+        id: ExprId,
+        left: &Value,
+        op: BinOp,
+        right: &Value,
+        span: Span,
+    ) -> Result<Value> {
+        let (class, method) = op.class_dispatch().unwrap_or_else(|| {
+            typechecked!("binop user dispatch", "class-dispatched op")
+        });
+
+        let l = self.arena.add(left.clone(), span);
+        let r = self.arena.add(right.clone(), span);
+        let result = self
+            .dispatch_class_method(Some(id), class, method, &[l, r], span)
+            .await?;
+
+        // Post-process for operators that transform the class method result.
+        // User `compare` returns `Ordering` (Tagged discriminant: `0`=Lt, `1`=Eq, `2`=Gt).
+        match op {
+            BinOp::Ne => match result {
+                Value::Bool(b) => Ok(Value::Bool(!b)),
+                _ => typechecked!("!=", "Bool"),
+            },
+            BinOp::Lt => match result {
+                Value::Tagged(_, d, _) => Ok(Value::Bool(d == 0)),
+                _ => typechecked!("compare result", "Ordering"),
+            },
+            BinOp::Gt => match result {
+                Value::Tagged(_, d, _) => Ok(Value::Bool(d == 2)),
+                _ => typechecked!("compare result", "Ordering"),
+            },
+            BinOp::Le => match result {
+                Value::Tagged(_, d, _) => Ok(Value::Bool(d <= 1)),
+                _ => typechecked!("compare result", "Ordering"),
+            },
+            BinOp::Ge => match result {
+                Value::Tagged(_, d, _) => Ok(Value::Bool(d >= 1)),
+                _ => typechecked!("compare result", "Ordering"),
+            },
+            _ => Ok(result),
+        }
     }
 
     /// Unary operation application.
