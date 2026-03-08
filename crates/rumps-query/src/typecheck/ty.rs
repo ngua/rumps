@@ -316,6 +316,12 @@ impl BuiltinClassDef {
                             scheme!(forall T, I: Iterable. ((T) -> Unit, I[T]) -> Unit),
                         ),
                     ),
+                    (
+                        "collect",
+                        MethodSpec::Standard(
+                            scheme!(forall T, I: Iterable. (I[T]) -> Array[T]),
+                        ),
+                    ),
                 ],
             },
             Self {

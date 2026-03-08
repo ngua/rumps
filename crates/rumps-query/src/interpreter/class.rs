@@ -376,6 +376,11 @@ impl ClassMethods {
             MethodFn::Unary(Iterable::reverse),
         );
         self.register(
+            BuiltinClassTag::Iterable,
+            "collect",
+            MethodFn::Unary(Iterable::collect),
+        );
+        self.register(
             BuiltinClassTag::Fallible,
             "flat-map",
             MethodFn::Hof(Fallible::flat_map),
@@ -2637,6 +2642,26 @@ impl Iterable {
                 Value::Bool(found)
             }
             _ => typechecked!("Iterable:contains", "Iterable"),
+        })
+    }
+
+    /// `Iterable:collect`; materializes an iterable into an `Array`.
+    pub(crate) fn collect(ctx: &mut ClassCtx<'_>, v: &Value) -> Result<Value> {
+        Ok(match v {
+            Value::Array(ty, elems) => Value::Array(*ty, elems.clone()),
+            Value::Range {
+                start,
+                end,
+                inclusive,
+            } => {
+                let actual_end = if *inclusive { *end + 1 } else { *end };
+                let elems: SmallVec<[ValueId; 4]> = (*start..actual_end)
+                    .map(|i| ctx.arena.add(Value::Int(i), ctx.span))
+                    .collect();
+                let ty = ctx.type_exprs.named(TypeId::INT);
+                Value::Array(ty, elems)
+            }
+            _ => typechecked!("Iterable:collect", "Iterable"),
         })
     }
 

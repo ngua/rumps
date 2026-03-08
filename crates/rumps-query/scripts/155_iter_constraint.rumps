@@ -19,7 +19,7 @@ FUN main() {
 
   ; Mappable:map on Array (Range is not Mappable; collect first)
   WRITE "Doubled array: {Mappable:map(x => x * 2, arr)}"
-  WRITE "Doubled range: {Mappable:map(x => x * 2, Filterable:filter(x => true, 1 ..= 5))}"
+  WRITE "Doubled range: {Mappable:map(x => x * 2, Iterable:collect(1 ..= 5))}"
 
   ; Filterable:filter on Array and Range
   WRITE "Evens from array: {Filterable:filter(x => x % 2 == 0, arr)}"

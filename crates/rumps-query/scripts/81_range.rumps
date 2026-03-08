@@ -20,11 +20,11 @@ FUN main() {
   WRITE r3  ; 0..4
 
   ; Collect range to array then map (Range is not Mappable)
-  LET squares = Mappable:map(x => x * x, Filterable:filter(x => true, 1 .. 4))
+  LET squares = Mappable:map(x => x * x, Iterable:collect(1 .. 4))
   WRITE squares  ; [1, 4, 9]
 
   ; Collect inclusive range to array then map
-  LET cubes = Mappable:map(x => x * x * x, Filterable:filter(x => true, 1 ..= 3))
+  LET cubes = Mappable:map(x => x * x * x, Iterable:collect(1 ..= 3))
   WRITE cubes  ; [1, 8, 27]
 
   ; Filterable:filter with range
@@ -53,14 +53,14 @@ FUN main() {
   WRITE result  ; [30, 40, 50]
 
   ; Empty range (start >= end for exclusive)
-  LET empty = Filterable:filter(x => true, 5 .. 5)
+  LET empty = Iterable:collect(5 .. 5)
   WRITE empty  ; []
 
   ; Negative ranges
-  LET negatives = Filterable:filter(x => true, -3 .. 1)
+  LET negatives = Iterable:collect(-3 .. 1)
   WRITE negatives  ; [-3, -2, -1, 0]
 
   ; Range with named function (collect first)
-  LET doubles = Mappable:map(double, Filterable:filter(x => true, 1 .. 5))
+  LET doubles = Mappable:map(double, Iterable:collect(1 .. 5))
   WRITE doubles  ; [2, 4, 6, 8]
 }
