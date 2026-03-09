@@ -7,8 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use indexmap::IndexMap;
-use rumps_query_macros::scheme;
-use smallvec::SmallVec;
+use smallvec::{smallvec, SmallVec};
 
 use super::error::TypeError;
 use crate::intern::StringId;
@@ -251,39 +250,105 @@ impl BuiltinClassDef {
                 methods: vec![
                     (
                         "add",
-                        MethodSpec::Standard(
-                            scheme!(forall T: Numeric. (T, T) -> T),
-                        ),
+                        MethodSpec::Standard(Scheme {
+                            vars: vec![TyVar::new(0)],
+                            ty: Ty::Fn(
+                                vec![
+                                    Ty::Var(TyVar::new(0)),
+                                    Ty::Var(TyVar::new(0)),
+                                ],
+                                Box::new(Ty::Var(TyVar::new(0))),
+                            ),
+                            constraints: smallvec![(
+                                TyVar::new(0),
+                                BuiltinClass::Simple(BuiltinClassTag::Numeric)
+                            )],
+                        }),
                     ),
                     (
                         "sub",
-                        MethodSpec::Standard(
-                            scheme!(forall T: Numeric. (T, T) -> T),
-                        ),
+                        MethodSpec::Standard(Scheme {
+                            vars: vec![TyVar::new(0)],
+                            ty: Ty::Fn(
+                                vec![
+                                    Ty::Var(TyVar::new(0)),
+                                    Ty::Var(TyVar::new(0)),
+                                ],
+                                Box::new(Ty::Var(TyVar::new(0))),
+                            ),
+                            constraints: smallvec![(
+                                TyVar::new(0),
+                                BuiltinClass::Simple(BuiltinClassTag::Numeric)
+                            )],
+                        }),
                     ),
                     (
                         "mul",
-                        MethodSpec::Standard(
-                            scheme!(forall T: Numeric. (T, T) -> T),
-                        ),
+                        MethodSpec::Standard(Scheme {
+                            vars: vec![TyVar::new(0)],
+                            ty: Ty::Fn(
+                                vec![
+                                    Ty::Var(TyVar::new(0)),
+                                    Ty::Var(TyVar::new(0)),
+                                ],
+                                Box::new(Ty::Var(TyVar::new(0))),
+                            ),
+                            constraints: smallvec![(
+                                TyVar::new(0),
+                                BuiltinClass::Simple(BuiltinClassTag::Numeric)
+                            )],
+                        }),
                     ),
                     (
                         "floor-div",
-                        MethodSpec::Standard(
-                            scheme!(forall T: Numeric. (T, T) -> T),
-                        ),
+                        MethodSpec::Standard(Scheme {
+                            vars: vec![TyVar::new(0)],
+                            ty: Ty::Fn(
+                                vec![
+                                    Ty::Var(TyVar::new(0)),
+                                    Ty::Var(TyVar::new(0)),
+                                ],
+                                Box::new(Ty::Var(TyVar::new(0))),
+                            ),
+                            constraints: smallvec![(
+                                TyVar::new(0),
+                                BuiltinClass::Simple(BuiltinClassTag::Numeric)
+                            )],
+                        }),
                     ),
                     (
                         "mod",
-                        MethodSpec::Standard(
-                            scheme!(forall T: Numeric. (T, T) -> T),
-                        ),
+                        MethodSpec::Standard(Scheme {
+                            vars: vec![TyVar::new(0)],
+                            ty: Ty::Fn(
+                                vec![
+                                    Ty::Var(TyVar::new(0)),
+                                    Ty::Var(TyVar::new(0)),
+                                ],
+                                Box::new(Ty::Var(TyVar::new(0))),
+                            ),
+                            constraints: smallvec![(
+                                TyVar::new(0),
+                                BuiltinClass::Simple(BuiltinClassTag::Numeric)
+                            )],
+                        }),
                     ),
                     (
                         "pow",
-                        MethodSpec::Standard(
-                            scheme!(forall T: Numeric. (T, T) -> T),
-                        ),
+                        MethodSpec::Standard(Scheme {
+                            vars: vec![TyVar::new(0)],
+                            ty: Ty::Fn(
+                                vec![
+                                    Ty::Var(TyVar::new(0)),
+                                    Ty::Var(TyVar::new(0)),
+                                ],
+                                Box::new(Ty::Var(TyVar::new(0))),
+                            ),
+                            constraints: smallvec![(
+                                TyVar::new(0),
+                                BuiltinClass::Simple(BuiltinClassTag::Numeric)
+                            )],
+                        }),
                     ),
                 ],
             },
@@ -294,33 +359,116 @@ impl BuiltinClassDef {
                 methods: vec![
                     (
                         "length",
-                        MethodSpec::Standard(
-                            scheme!(forall T, I: Iterable. (I[T]) -> Int),
-                        ),
+                        MethodSpec::Standard(Scheme {
+                            vars: vec![TyVar::new(0), TyVar::new(1)],
+                            ty: Ty::Fn(
+                                vec![Ty::Apply(
+                                    TyVar::new(1),
+                                    vec![Ty::Var(TyVar::new(0))],
+                                )],
+                                Box::new(Ty::Int),
+                            ),
+                            constraints: smallvec![(
+                                TyVar::new(1),
+                                BuiltinClass::Hkt(
+                                    BuiltinClassTag::Iterable,
+                                    None
+                                )
+                            )],
+                        }),
                     ),
                     (
                         "contains",
-                        MethodSpec::Standard(
-                            scheme!(forall T, I: Iterable. (I[T], T) -> Bool),
-                        ),
+                        MethodSpec::Standard(Scheme {
+                            vars: vec![TyVar::new(0), TyVar::new(1)],
+                            ty: Ty::Fn(
+                                vec![
+                                    Ty::Apply(
+                                        TyVar::new(1),
+                                        vec![Ty::Var(TyVar::new(0))],
+                                    ),
+                                    Ty::Var(TyVar::new(0)),
+                                ],
+                                Box::new(Ty::Bool),
+                            ),
+                            constraints: smallvec![(
+                                TyVar::new(1),
+                                BuiltinClass::Hkt(
+                                    BuiltinClassTag::Iterable,
+                                    None
+                                )
+                            )],
+                        }),
                     ),
                     (
                         "reverse",
-                        MethodSpec::Standard(
-                            scheme!(forall T, I: Iterable. (I[T]) -> Array[T]),
-                        ),
+                        MethodSpec::Standard(Scheme {
+                            vars: vec![TyVar::new(0), TyVar::new(1)],
+                            ty: Ty::Fn(
+                                vec![Ty::Apply(
+                                    TyVar::new(1),
+                                    vec![Ty::Var(TyVar::new(0))],
+                                )],
+                                Box::new(Ty::Array(Box::new(Ty::Var(
+                                    TyVar::new(0),
+                                )))),
+                            ),
+                            constraints: smallvec![(
+                                TyVar::new(1),
+                                BuiltinClass::Hkt(
+                                    BuiltinClassTag::Iterable,
+                                    None
+                                )
+                            )],
+                        }),
                     ),
                     (
                         "foreach",
-                        MethodSpec::Standard(
-                            scheme!(forall T, I: Iterable. ((T) -> Unit, I[T]) -> Unit),
-                        ),
+                        MethodSpec::Standard(Scheme {
+                            vars: vec![TyVar::new(0), TyVar::new(1)],
+                            ty: Ty::Fn(
+                                vec![
+                                    Ty::Fn(
+                                        vec![Ty::Var(TyVar::new(0))],
+                                        Box::new(Ty::Unit),
+                                    ),
+                                    Ty::Apply(
+                                        TyVar::new(1),
+                                        vec![Ty::Var(TyVar::new(0))],
+                                    ),
+                                ],
+                                Box::new(Ty::Unit),
+                            ),
+                            constraints: smallvec![(
+                                TyVar::new(1),
+                                BuiltinClass::Hkt(
+                                    BuiltinClassTag::Iterable,
+                                    None
+                                )
+                            )],
+                        }),
                     ),
                     (
                         "collect",
-                        MethodSpec::Standard(
-                            scheme!(forall T, I: Iterable. (I[T]) -> Array[T]),
-                        ),
+                        MethodSpec::Standard(Scheme {
+                            vars: vec![TyVar::new(0), TyVar::new(1)],
+                            ty: Ty::Fn(
+                                vec![Ty::Apply(
+                                    TyVar::new(1),
+                                    vec![Ty::Var(TyVar::new(0))],
+                                )],
+                                Box::new(Ty::Array(Box::new(Ty::Var(
+                                    TyVar::new(0),
+                                )))),
+                            ),
+                            constraints: smallvec![(
+                                TyVar::new(1),
+                                BuiltinClass::Hkt(
+                                    BuiltinClassTag::Iterable,
+                                    None
+                                )
+                            )],
+                        }),
                     ),
                 ],
             },
@@ -332,15 +480,38 @@ impl BuiltinClassDef {
                     (
                         "identity",
                         MethodSpec::Tracked {
-                            scheme: scheme!(forall T: Monoid. () -> T),
+                            scheme: Scheme {
+                                vars: vec![TyVar::new(0)],
+                                ty: Ty::Fn(
+                                    vec![],
+                                    Box::new(Ty::Var(TyVar::new(0))),
+                                ),
+                                constraints: smallvec![(
+                                    TyVar::new(0),
+                                    BuiltinClass::Simple(
+                                        BuiltinClassTag::Monoid
+                                    )
+                                )],
+                            },
                             track: TrackKind::Mempty,
                         },
                     ),
                     (
                         "concat",
-                        MethodSpec::Standard(
-                            scheme!(forall T: Monoid. (T, T) -> T),
-                        ),
+                        MethodSpec::Standard(Scheme {
+                            vars: vec![TyVar::new(0)],
+                            ty: Ty::Fn(
+                                vec![
+                                    Ty::Var(TyVar::new(0)),
+                                    Ty::Var(TyVar::new(0)),
+                                ],
+                                Box::new(Ty::Var(TyVar::new(0))),
+                            ),
+                            constraints: smallvec![(
+                                TyVar::new(0),
+                                BuiltinClass::Simple(BuiltinClassTag::Monoid)
+                            )],
+                        }),
                     ),
                 ],
             },
@@ -351,27 +522,71 @@ impl BuiltinClassDef {
                 methods: vec![
                     (
                         "bit-and",
-                        MethodSpec::Standard(
-                            scheme!(forall T: BitLike. (T, T) -> T),
-                        ),
+                        MethodSpec::Standard(Scheme {
+                            vars: vec![TyVar::new(0)],
+                            ty: Ty::Fn(
+                                vec![
+                                    Ty::Var(TyVar::new(0)),
+                                    Ty::Var(TyVar::new(0)),
+                                ],
+                                Box::new(Ty::Var(TyVar::new(0))),
+                            ),
+                            constraints: smallvec![(
+                                TyVar::new(0),
+                                BuiltinClass::Simple(BuiltinClassTag::BitLike)
+                            )],
+                        }),
                     ),
                     (
                         "bit-or",
-                        MethodSpec::Standard(
-                            scheme!(forall T: BitLike. (T, T) -> T),
-                        ),
+                        MethodSpec::Standard(Scheme {
+                            vars: vec![TyVar::new(0)],
+                            ty: Ty::Fn(
+                                vec![
+                                    Ty::Var(TyVar::new(0)),
+                                    Ty::Var(TyVar::new(0)),
+                                ],
+                                Box::new(Ty::Var(TyVar::new(0))),
+                            ),
+                            constraints: smallvec![(
+                                TyVar::new(0),
+                                BuiltinClass::Simple(BuiltinClassTag::BitLike)
+                            )],
+                        }),
                     ),
                     (
                         "shl",
-                        MethodSpec::Standard(
-                            scheme!(forall T: BitLike. (T, T) -> T),
-                        ),
+                        MethodSpec::Standard(Scheme {
+                            vars: vec![TyVar::new(0)],
+                            ty: Ty::Fn(
+                                vec![
+                                    Ty::Var(TyVar::new(0)),
+                                    Ty::Var(TyVar::new(0)),
+                                ],
+                                Box::new(Ty::Var(TyVar::new(0))),
+                            ),
+                            constraints: smallvec![(
+                                TyVar::new(0),
+                                BuiltinClass::Simple(BuiltinClassTag::BitLike)
+                            )],
+                        }),
                     ),
                     (
                         "shr",
-                        MethodSpec::Standard(
-                            scheme!(forall T: BitLike. (T, T) -> T),
-                        ),
+                        MethodSpec::Standard(Scheme {
+                            vars: vec![TyVar::new(0)],
+                            ty: Ty::Fn(
+                                vec![
+                                    Ty::Var(TyVar::new(0)),
+                                    Ty::Var(TyVar::new(0)),
+                                ],
+                                Box::new(Ty::Var(TyVar::new(0))),
+                            ),
+                            constraints: smallvec![(
+                                TyVar::new(0),
+                                BuiltinClass::Simple(BuiltinClassTag::BitLike)
+                            )],
+                        }),
                     ),
                 ],
             },
@@ -381,9 +596,17 @@ impl BuiltinClassDef {
                 assoc_types: &[],
                 methods: vec![(
                     "neg",
-                    MethodSpec::Standard(
-                        scheme!(forall T: Negatable. (T) -> T),
-                    ),
+                    MethodSpec::Standard(Scheme {
+                        vars: vec![TyVar::new(0)],
+                        ty: Ty::Fn(
+                            vec![Ty::Var(TyVar::new(0))],
+                            Box::new(Ty::Var(TyVar::new(0))),
+                        ),
+                        constraints: smallvec![(
+                            TyVar::new(0),
+                            BuiltinClass::Simple(BuiltinClassTag::Negatable)
+                        )],
+                    }),
                 )],
             },
             Self {
@@ -393,22 +616,82 @@ impl BuiltinClassDef {
                 methods: vec![
                     (
                         "unwrap",
-                        MethodSpec::Standard(
-                            scheme!(forall T, F: Fallible. (F[T]) -> T),
-                        ),
+                        MethodSpec::Standard(Scheme {
+                            vars: vec![TyVar::new(0), TyVar::new(1)],
+                            ty: Ty::Fn(
+                                vec![Ty::Apply(
+                                    TyVar::new(1),
+                                    vec![Ty::Var(TyVar::new(0))],
+                                )],
+                                Box::new(Ty::Var(TyVar::new(0))),
+                            ),
+                            constraints: smallvec![(
+                                TyVar::new(1),
+                                BuiltinClass::Hkt(
+                                    BuiltinClassTag::Fallible,
+                                    None
+                                )
+                            )],
+                        }),
                     ),
                     (
                         "wrap",
                         MethodSpec::Tracked {
-                            scheme: scheme!(forall T, F: Fallible. (T) -> F[T]),
+                            scheme: Scheme {
+                                vars: vec![TyVar::new(0), TyVar::new(1)],
+                                ty: Ty::Fn(
+                                    vec![Ty::Var(TyVar::new(0))],
+                                    Box::new(Ty::Apply(
+                                        TyVar::new(1),
+                                        vec![Ty::Var(TyVar::new(0))],
+                                    )),
+                                ),
+                                constraints: smallvec![(
+                                    TyVar::new(1),
+                                    BuiltinClass::Hkt(
+                                        BuiltinClassTag::Fallible,
+                                        None
+                                    )
+                                )],
+                            },
                             track: TrackKind::Convert,
                         },
                     ),
                     (
                         "flat-map",
-                        MethodSpec::Standard(
-                            scheme!(forall T, U, F: Fallible. (F[T], (T) -> F[U]) -> F[U]),
-                        ),
+                        MethodSpec::Standard(Scheme {
+                            vars: vec![
+                                TyVar::new(0),
+                                TyVar::new(1),
+                                TyVar::new(2),
+                            ],
+                            ty: Ty::Fn(
+                                vec![
+                                    Ty::Apply(
+                                        TyVar::new(2),
+                                        vec![Ty::Var(TyVar::new(0))],
+                                    ),
+                                    Ty::Fn(
+                                        vec![Ty::Var(TyVar::new(0))],
+                                        Box::new(Ty::Apply(
+                                            TyVar::new(2),
+                                            vec![Ty::Var(TyVar::new(1))],
+                                        )),
+                                    ),
+                                ],
+                                Box::new(Ty::Apply(
+                                    TyVar::new(2),
+                                    vec![Ty::Var(TyVar::new(1))],
+                                )),
+                            ),
+                            constraints: smallvec![(
+                                TyVar::new(2),
+                                BuiltinClass::Hkt(
+                                    BuiltinClassTag::Fallible,
+                                    None
+                                )
+                            )],
+                        }),
                     ),
                 ],
             },
@@ -419,7 +702,20 @@ impl BuiltinClassDef {
                 methods: vec![(
                     "into",
                     MethodSpec::Tracked {
-                        scheme: scheme!(forall T: Into[U], U. (T) -> U),
+                        scheme: Scheme {
+                            vars: vec![TyVar::new(0), TyVar::new(1)],
+                            ty: Ty::Fn(
+                                vec![Ty::Var(TyVar::new(0))],
+                                Box::new(Ty::Var(TyVar::new(1))),
+                            ),
+                            constraints: smallvec![(
+                                TyVar::new(0),
+                                BuiltinClass::Parameterized(
+                                    BuiltinClassTag::Into,
+                                    Ty::Var(TyVar::new(1))
+                                )
+                            )],
+                        },
                         track: TrackKind::Convert,
                     },
                 )],
@@ -431,7 +727,23 @@ impl BuiltinClassDef {
                 methods: vec![(
                     "try-into",
                     MethodSpec::Tracked {
-                        scheme: scheme!(forall T: TryInto[U], U. (T) -> Result[U, String]),
+                        scheme: Scheme {
+                            vars: vec![TyVar::new(0), TyVar::new(1)],
+                            ty: Ty::Fn(
+                                vec![Ty::Var(TyVar::new(0))],
+                                Box::new(Ty::Result(
+                                    Box::new(Ty::Var(TyVar::new(1))),
+                                    Box::new(Ty::String),
+                                )),
+                            ),
+                            constraints: smallvec![(
+                                TyVar::new(0),
+                                BuiltinClass::Parameterized(
+                                    BuiltinClassTag::TryInto,
+                                    Ty::Var(TyVar::new(1))
+                                )
+                            )],
+                        },
                         track: TrackKind::ConvertResultInner,
                     },
                 )],
@@ -443,15 +755,53 @@ impl BuiltinClassDef {
                 methods: vec![
                     (
                         "index",
-                        MethodSpec::Standard(
-                            scheme!(forall B: Indexable[E], E. (B, B:Indexable:Index) -> E),
-                        ),
+                        MethodSpec::Standard(Scheme {
+                            vars: vec![TyVar::new(0), TyVar::new(1)],
+                            ty: Ty::Fn(
+                                vec![
+                                    Ty::Var(TyVar::new(0)),
+                                    Ty::AssocType(
+                                        TyVar::new(0),
+                                        BuiltinClassTag::Indexable,
+                                        intern("Index"),
+                                    ),
+                                ],
+                                Box::new(Ty::Var(TyVar::new(1))),
+                            ),
+                            constraints: smallvec![(
+                                TyVar::new(0),
+                                BuiltinClass::Parameterized(
+                                    BuiltinClassTag::Indexable,
+                                    Ty::Var(TyVar::new(1))
+                                )
+                            )],
+                        }),
                     ),
                     (
                         "get",
-                        MethodSpec::Standard(
-                            scheme!(forall B: Indexable[E], E. (B, B:Indexable:Index) -> Option[E]),
-                        ),
+                        MethodSpec::Standard(Scheme {
+                            vars: vec![TyVar::new(0), TyVar::new(1)],
+                            ty: Ty::Fn(
+                                vec![
+                                    Ty::Var(TyVar::new(0)),
+                                    Ty::AssocType(
+                                        TyVar::new(0),
+                                        BuiltinClassTag::Indexable,
+                                        intern("Index"),
+                                    ),
+                                ],
+                                Box::new(Ty::Option(Box::new(Ty::Var(
+                                    TyVar::new(1),
+                                )))),
+                            ),
+                            constraints: smallvec![(
+                                TyVar::new(0),
+                                BuiltinClass::Parameterized(
+                                    BuiltinClassTag::Indexable,
+                                    Ty::Var(TyVar::new(1))
+                                )
+                            )],
+                        }),
                     ),
                 ],
             },
@@ -461,9 +811,20 @@ impl BuiltinClassDef {
                 assoc_types: &[],
                 methods: vec![(
                     "compare",
-                    MethodSpec::Standard(
-                        scheme!(forall T: Ord. (T, T) -> Ordering),
-                    ),
+                    MethodSpec::Standard(Scheme {
+                        vars: vec![TyVar::new(0)],
+                        ty: Ty::Fn(
+                            vec![
+                                Ty::Var(TyVar::new(0)),
+                                Ty::Var(TyVar::new(0)),
+                            ],
+                            Box::new(Ty::Ordering),
+                        ),
+                        constraints: smallvec![(
+                            TyVar::new(0),
+                            BuiltinClass::Simple(BuiltinClassTag::Ord)
+                        )],
+                    }),
                 )],
             },
             Self {
@@ -472,9 +833,29 @@ impl BuiltinClassDef {
                 assoc_types: &[],
                 methods: vec![(
                     "map",
-                    MethodSpec::Standard(
-                        scheme!(forall T, U, M: Mappable. ((T) -> U, M[T]) -> M[U]),
-                    ),
+                    MethodSpec::Standard(Scheme {
+                        vars: vec![TyVar::new(0), TyVar::new(1), TyVar::new(2)],
+                        ty: Ty::Fn(
+                            vec![
+                                Ty::Fn(
+                                    vec![Ty::Var(TyVar::new(0))],
+                                    Box::new(Ty::Var(TyVar::new(1))),
+                                ),
+                                Ty::Apply(
+                                    TyVar::new(2),
+                                    vec![Ty::Var(TyVar::new(0))],
+                                ),
+                            ],
+                            Box::new(Ty::Apply(
+                                TyVar::new(2),
+                                vec![Ty::Var(TyVar::new(1))],
+                            )),
+                        ),
+                        constraints: smallvec![(
+                            TyVar::new(2),
+                            BuiltinClass::Hkt(BuiltinClassTag::Mappable, None)
+                        )],
+                    }),
                 )],
             },
             Self {
@@ -483,9 +864,30 @@ impl BuiltinClassDef {
                 assoc_types: &[],
                 methods: vec![(
                     "reduce",
-                    MethodSpec::Standard(
-                        scheme!(forall T, U, F: Foldable. ((U, T) -> U, U, F[T]) -> U),
-                    ),
+                    MethodSpec::Standard(Scheme {
+                        vars: vec![TyVar::new(0), TyVar::new(1), TyVar::new(2)],
+                        ty: Ty::Fn(
+                            vec![
+                                Ty::Fn(
+                                    vec![
+                                        Ty::Var(TyVar::new(1)),
+                                        Ty::Var(TyVar::new(0)),
+                                    ],
+                                    Box::new(Ty::Var(TyVar::new(1))),
+                                ),
+                                Ty::Var(TyVar::new(1)),
+                                Ty::Apply(
+                                    TyVar::new(2),
+                                    vec![Ty::Var(TyVar::new(0))],
+                                ),
+                            ],
+                            Box::new(Ty::Var(TyVar::new(1))),
+                        ),
+                        constraints: smallvec![(
+                            TyVar::new(2),
+                            BuiltinClass::Hkt(BuiltinClassTag::Foldable, None)
+                        )],
+                    }),
                 )],
             },
             Self {
@@ -494,9 +896,31 @@ impl BuiltinClassDef {
                 assoc_types: &[],
                 methods: vec![(
                     "filter",
-                    MethodSpec::Standard(
-                        scheme!(forall T, F: Filterable. ((T) -> Bool, F[T]) -> Array[T]),
-                    ),
+                    MethodSpec::Standard(Scheme {
+                        vars: vec![TyVar::new(0), TyVar::new(1)],
+                        ty: Ty::Fn(
+                            vec![
+                                Ty::Fn(
+                                    vec![Ty::Var(TyVar::new(0))],
+                                    Box::new(Ty::Bool),
+                                ),
+                                Ty::Apply(
+                                    TyVar::new(1),
+                                    vec![Ty::Var(TyVar::new(0))],
+                                ),
+                            ],
+                            Box::new(Ty::Array(Box::new(Ty::Var(TyVar::new(
+                                0,
+                            ))))),
+                        ),
+                        constraints: smallvec![(
+                            TyVar::new(1),
+                            BuiltinClass::Hkt(
+                                BuiltinClassTag::Filterable,
+                                None
+                            )
+                        )],
+                    }),
                 )],
             },
             Self {
@@ -505,9 +929,17 @@ impl BuiltinClassDef {
                 assoc_types: &[],
                 methods: vec![(
                     "display",
-                    MethodSpec::Standard(
-                        scheme!(forall T: Display. (T) -> String),
-                    ),
+                    MethodSpec::Standard(Scheme {
+                        vars: vec![TyVar::new(0)],
+                        ty: Ty::Fn(
+                            vec![Ty::Var(TyVar::new(0))],
+                            Box::new(Ty::String),
+                        ),
+                        constraints: smallvec![(
+                            TyVar::new(0),
+                            BuiltinClass::Simple(BuiltinClassTag::Display)
+                        )],
+                    }),
                 )],
             },
             Self {
@@ -516,7 +948,20 @@ impl BuiltinClassDef {
                 assoc_types: &[],
                 methods: vec![(
                     "eq",
-                    MethodSpec::Standard(scheme!(forall T: Eq. (T, T) -> Bool)),
+                    MethodSpec::Standard(Scheme {
+                        vars: vec![TyVar::new(0)],
+                        ty: Ty::Fn(
+                            vec![
+                                Ty::Var(TyVar::new(0)),
+                                Ty::Var(TyVar::new(0)),
+                            ],
+                            Box::new(Ty::Bool),
+                        ),
+                        constraints: smallvec![(
+                            TyVar::new(0),
+                            BuiltinClass::Simple(BuiltinClassTag::Eq)
+                        )],
+                    }),
                 )],
             },
         ]

@@ -7,9 +7,7 @@
 
 use std::collections::HashMap;
 
-use rumps_query_macros::scheme;
-
-use crate::typecheck::{Scheme, Ty};
+use crate::typecheck::{BuiltinClass, BuiltinClassTag, Scheme, Ty, TyVar};
 
 /// Names of built-in modules.
 ///
@@ -232,32 +230,67 @@ impl Intrinsic {
         match self {
             Self::Get => IntrinsicDef {
                 name: "@GET",
-                ty: scheme!((Ref) -> Option[Storable]),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![Ty::Named(TypeId::REF, vec![])],
+                    Box::new(Ty::Option(Box::new(Ty::Named(
+                        TypeId::STORABLE,
+                        vec![],
+                    )))),
+                )),
                 txn: TxnReq::None,
             },
             Self::Set => IntrinsicDef {
                 name: "@SET",
-                ty: scheme!((Ref, Storable) -> Result[Unit, String]),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![
+                        Ty::Named(TypeId::REF, vec![]),
+                        Ty::Named(TypeId::STORABLE, vec![]),
+                    ],
+                    Box::new(Ty::Result(
+                        Box::new(Ty::Unit),
+                        Box::new(Ty::String),
+                    )),
+                )),
                 txn: TxnReq::Globals,
             },
             Self::Kill => IntrinsicDef {
                 name: "@KILL",
-                ty: scheme!((Ref) -> Result[Unit, String]),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![Ty::Named(TypeId::REF, vec![])],
+                    Box::new(Ty::Result(
+                        Box::new(Ty::Unit),
+                        Box::new(Ty::String),
+                    )),
+                )),
                 txn: TxnReq::Globals,
             },
             Self::Data => IntrinsicDef {
                 name: "@DATA",
-                ty: scheme!((Ref) -> DataStatus),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![Ty::Named(TypeId::REF, vec![])],
+                    Box::new(Ty::DataStatus),
+                )),
                 txn: TxnReq::None,
             },
             Self::Order => IntrinsicDef {
                 name: "@ORDER",
-                ty: scheme!((Ref) -> Option[Subscript]),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![Ty::Named(TypeId::REF, vec![])],
+                    Box::new(Ty::Option(Box::new(Ty::Named(
+                        TypeId::SUBSCRIPT,
+                        vec![],
+                    )))),
+                )),
                 txn: TxnReq::None,
             },
             Self::Query => IntrinsicDef {
                 name: "@QUERY",
-                ty: scheme!((Ref) -> Option[Array[Subscript]]),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![Ty::Named(TypeId::REF, vec![])],
+                    Box::new(Ty::Option(Box::new(Ty::Array(Box::new(
+                        Ty::Named(TypeId::SUBSCRIPT, vec![]),
+                    ))))),
+                )),
                 txn: TxnReq::None,
             },
         }
@@ -274,106 +307,314 @@ impl BinOp {
     /// Get the definition for this binary operator.
     pub(crate) fn def(self) -> BinOpDef {
         match self {
-            // Arithmetic: forall T: Numeric. (T, T) -> T
+            // Arithmetic: `forall T: Numeric. (T, T) -> T`
             Self::Add => BinOpDef {
                 name: "+",
-                ty: scheme!(forall T: Numeric. (T, T) -> T),
+                ty: Scheme {
+                    vars: vec![TyVar::new(0)],
+                    ty: Ty::Fn(
+                        vec![Ty::Var(TyVar::new(0)), Ty::Var(TyVar::new(0))],
+                        Box::new(Ty::Var(TyVar::new(0))),
+                    ),
+                    constraints: smallvec![(
+                        TyVar::new(0),
+                        BuiltinClass::Simple(BuiltinClassTag::Numeric)
+                    )],
+                },
             },
             Self::Sub => BinOpDef {
                 name: "-",
-                ty: scheme!(forall T: Numeric. (T, T) -> T),
+                ty: Scheme {
+                    vars: vec![TyVar::new(0)],
+                    ty: Ty::Fn(
+                        vec![Ty::Var(TyVar::new(0)), Ty::Var(TyVar::new(0))],
+                        Box::new(Ty::Var(TyVar::new(0))),
+                    ),
+                    constraints: smallvec![(
+                        TyVar::new(0),
+                        BuiltinClass::Simple(BuiltinClassTag::Numeric)
+                    )],
+                },
             },
             Self::Mul => BinOpDef {
                 name: "*",
-                ty: scheme!(forall T: Numeric. (T, T) -> T),
+                ty: Scheme {
+                    vars: vec![TyVar::new(0)],
+                    ty: Ty::Fn(
+                        vec![Ty::Var(TyVar::new(0)), Ty::Var(TyVar::new(0))],
+                        Box::new(Ty::Var(TyVar::new(0))),
+                    ),
+                    constraints: smallvec![(
+                        TyVar::new(0),
+                        BuiltinClass::Simple(BuiltinClassTag::Numeric)
+                    )],
+                },
             },
             Self::Div => BinOpDef {
                 name: "/",
-                ty: scheme!((Float, Float) -> Float),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![Ty::Float, Ty::Float],
+                    Box::new(Ty::Float),
+                )),
             },
             Self::FloorDiv => BinOpDef {
                 name: "//",
-                ty: scheme!(forall T: Numeric. (T, T) -> T),
+                ty: Scheme {
+                    vars: vec![TyVar::new(0)],
+                    ty: Ty::Fn(
+                        vec![Ty::Var(TyVar::new(0)), Ty::Var(TyVar::new(0))],
+                        Box::new(Ty::Var(TyVar::new(0))),
+                    ),
+                    constraints: smallvec![(
+                        TyVar::new(0),
+                        BuiltinClass::Simple(BuiltinClassTag::Numeric)
+                    )],
+                },
             },
             Self::Mod => BinOpDef {
                 name: "%",
-                ty: scheme!(forall T: Numeric. (T, T) -> T),
+                ty: Scheme {
+                    vars: vec![TyVar::new(0)],
+                    ty: Ty::Fn(
+                        vec![Ty::Var(TyVar::new(0)), Ty::Var(TyVar::new(0))],
+                        Box::new(Ty::Var(TyVar::new(0))),
+                    ),
+                    constraints: smallvec![(
+                        TyVar::new(0),
+                        BuiltinClass::Simple(BuiltinClassTag::Numeric)
+                    )],
+                },
             },
             Self::Pow => BinOpDef {
                 name: "**",
-                ty: scheme!(forall T: Numeric. (T, T) -> T),
+                ty: Scheme {
+                    vars: vec![TyVar::new(0)],
+                    ty: Ty::Fn(
+                        vec![Ty::Var(TyVar::new(0)), Ty::Var(TyVar::new(0))],
+                        Box::new(Ty::Var(TyVar::new(0))),
+                    ),
+                    constraints: smallvec![(
+                        TyVar::new(0),
+                        BuiltinClass::Simple(BuiltinClassTag::Numeric)
+                    )],
+                },
             },
 
-            // Comparison: forall T. (T, T) -> Bool
+            // Comparison: `forall T: Eq. (T, T) -> Bool`
             Self::Eq => BinOpDef {
                 name: "==",
-                ty: scheme!(forall T: Eq. (T, T) -> Bool),
+                ty: Scheme {
+                    vars: vec![TyVar::new(0)],
+                    ty: Ty::Fn(
+                        vec![Ty::Var(TyVar::new(0)), Ty::Var(TyVar::new(0))],
+                        Box::new(Ty::Bool),
+                    ),
+                    constraints: smallvec![(
+                        TyVar::new(0),
+                        BuiltinClass::Simple(BuiltinClassTag::Eq)
+                    )],
+                },
             },
             Self::Ne => BinOpDef {
                 name: "!=",
-                ty: scheme!(forall T: Eq. (T, T) -> Bool),
+                ty: Scheme {
+                    vars: vec![TyVar::new(0)],
+                    ty: Ty::Fn(
+                        vec![Ty::Var(TyVar::new(0)), Ty::Var(TyVar::new(0))],
+                        Box::new(Ty::Bool),
+                    ),
+                    constraints: smallvec![(
+                        TyVar::new(0),
+                        BuiltinClass::Simple(BuiltinClassTag::Eq)
+                    )],
+                },
             },
             Self::Lt => BinOpDef {
                 name: "<",
-                ty: scheme!(forall T: Ord. (T, T) -> Bool),
+                ty: Scheme {
+                    vars: vec![TyVar::new(0)],
+                    ty: Ty::Fn(
+                        vec![Ty::Var(TyVar::new(0)), Ty::Var(TyVar::new(0))],
+                        Box::new(Ty::Bool),
+                    ),
+                    constraints: smallvec![(
+                        TyVar::new(0),
+                        BuiltinClass::Simple(BuiltinClassTag::Ord)
+                    )],
+                },
             },
             Self::Gt => BinOpDef {
                 name: ">",
-                ty: scheme!(forall T: Ord. (T, T) -> Bool),
+                ty: Scheme {
+                    vars: vec![TyVar::new(0)],
+                    ty: Ty::Fn(
+                        vec![Ty::Var(TyVar::new(0)), Ty::Var(TyVar::new(0))],
+                        Box::new(Ty::Bool),
+                    ),
+                    constraints: smallvec![(
+                        TyVar::new(0),
+                        BuiltinClass::Simple(BuiltinClassTag::Ord)
+                    )],
+                },
             },
             Self::Le => BinOpDef {
                 name: "<=",
-                ty: scheme!(forall T: Ord. (T, T) -> Bool),
+                ty: Scheme {
+                    vars: vec![TyVar::new(0)],
+                    ty: Ty::Fn(
+                        vec![Ty::Var(TyVar::new(0)), Ty::Var(TyVar::new(0))],
+                        Box::new(Ty::Bool),
+                    ),
+                    constraints: smallvec![(
+                        TyVar::new(0),
+                        BuiltinClass::Simple(BuiltinClassTag::Ord)
+                    )],
+                },
             },
             Self::Ge => BinOpDef {
                 name: ">=",
-                ty: scheme!(forall T: Ord. (T, T) -> Bool),
+                ty: Scheme {
+                    vars: vec![TyVar::new(0)],
+                    ty: Ty::Fn(
+                        vec![Ty::Var(TyVar::new(0)), Ty::Var(TyVar::new(0))],
+                        Box::new(Ty::Bool),
+                    ),
+                    constraints: smallvec![(
+                        TyVar::new(0),
+                        BuiltinClass::Simple(BuiltinClassTag::Ord)
+                    )],
+                },
             },
 
-            // Logical: (Bool, Bool) -> Bool
+            // Logical: `(Bool, Bool) -> Bool`
             Self::And => BinOpDef {
                 name: "AND",
-                ty: scheme!((Bool, Bool) -> Bool),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![Ty::Bool, Ty::Bool],
+                    Box::new(Ty::Bool),
+                )),
             },
             Self::Or => BinOpDef {
                 name: "OR",
-                ty: scheme!((Bool, Bool) -> Bool),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![Ty::Bool, Ty::Bool],
+                    Box::new(Ty::Bool),
+                )),
             },
 
-            // Bitwise: forall T: BitLike. (T, T) -> T
+            // Bitwise: `forall T: BitLike. (T, T) -> T`
             Self::BitAnd => BinOpDef {
                 name: "&",
-                ty: scheme!(forall T: BitLike. (T, T) -> T),
+                ty: Scheme {
+                    vars: vec![TyVar::new(0)],
+                    ty: Ty::Fn(
+                        vec![Ty::Var(TyVar::new(0)), Ty::Var(TyVar::new(0))],
+                        Box::new(Ty::Var(TyVar::new(0))),
+                    ),
+                    constraints: smallvec![(
+                        TyVar::new(0),
+                        BuiltinClass::Simple(BuiltinClassTag::BitLike)
+                    )],
+                },
             },
             Self::BitOr => BinOpDef {
                 name: "|",
-                ty: scheme!(forall T: BitLike. (T, T) -> T),
+                ty: Scheme {
+                    vars: vec![TyVar::new(0)],
+                    ty: Ty::Fn(
+                        vec![Ty::Var(TyVar::new(0)), Ty::Var(TyVar::new(0))],
+                        Box::new(Ty::Var(TyVar::new(0))),
+                    ),
+                    constraints: smallvec![(
+                        TyVar::new(0),
+                        BuiltinClass::Simple(BuiltinClassTag::BitLike)
+                    )],
+                },
             },
             Self::Shl => BinOpDef {
                 name: "<<",
-                ty: scheme!(forall T: BitLike. (T, T) -> T),
+                ty: Scheme {
+                    vars: vec![TyVar::new(0)],
+                    ty: Ty::Fn(
+                        vec![Ty::Var(TyVar::new(0)), Ty::Var(TyVar::new(0))],
+                        Box::new(Ty::Var(TyVar::new(0))),
+                    ),
+                    constraints: smallvec![(
+                        TyVar::new(0),
+                        BuiltinClass::Simple(BuiltinClassTag::BitLike)
+                    )],
+                },
             },
             Self::Shr => BinOpDef {
                 name: ">>",
-                ty: scheme!(forall T: BitLike. (T, T) -> T),
+                ty: Scheme {
+                    vars: vec![TyVar::new(0)],
+                    ty: Ty::Fn(
+                        vec![Ty::Var(TyVar::new(0)), Ty::Var(TyVar::new(0))],
+                        Box::new(Ty::Var(TyVar::new(0))),
+                    ),
+                    constraints: smallvec![(
+                        TyVar::new(0),
+                        BuiltinClass::Simple(BuiltinClassTag::BitLike)
+                    )],
+                },
             },
 
-            // Concat: forall T: Monoid. (T, T) -> T
+            // Concat: `forall T: Monoid. (T, T) -> T`
             Self::Concat => BinOpDef {
                 name: "++",
-                ty: scheme!(forall T: Monoid. (T, T) -> T),
+                ty: Scheme {
+                    vars: vec![TyVar::new(0)],
+                    ty: Ty::Fn(
+                        vec![Ty::Var(TyVar::new(0)), Ty::Var(TyVar::new(0))],
+                        Box::new(Ty::Var(TyVar::new(0))),
+                    ),
+                    constraints: smallvec![(
+                        TyVar::new(0),
+                        BuiltinClass::Simple(BuiltinClassTag::Monoid)
+                    )],
+                },
             },
 
             // Coalesce: `forall T, F: Fallible. (F[T], T) -> T`
             Self::Coalesce => BinOpDef {
                 name: "??",
-                ty: scheme!(forall T, F: Fallible. (F[T], T) -> T),
+                ty: Scheme {
+                    vars: vec![TyVar::new(0), TyVar::new(1)],
+                    ty: Ty::Fn(
+                        vec![
+                            Ty::Apply(
+                                TyVar::new(1),
+                                vec![Ty::Var(TyVar::new(0))],
+                            ),
+                            Ty::Var(TyVar::new(0)),
+                        ],
+                        Box::new(Ty::Var(TyVar::new(0))),
+                    ),
+                    constraints: smallvec![(
+                        TyVar::new(1),
+                        BuiltinClass::Hkt(BuiltinClassTag::Fallible, None)
+                    )],
+                },
             },
 
-            // Pipe: forall T, U. (T, (T) -> U) -> U
+            // Pipe: `forall T, U. (T, (T) -> U) -> U`
             Self::Pipe => BinOpDef {
                 name: "|>",
-                ty: scheme!(forall T, U. (T, (T) -> U) -> U),
+                ty: Scheme {
+                    vars: vec![TyVar::new(0), TyVar::new(1)],
+                    ty: Ty::Fn(
+                        vec![
+                            Ty::Var(TyVar::new(0)),
+                            Ty::Fn(
+                                vec![Ty::Var(TyVar::new(0))],
+                                Box::new(Ty::Var(TyVar::new(1))),
+                            ),
+                        ],
+                        Box::new(Ty::Var(TyVar::new(1))),
+                    ),
+                    constraints: smallvec![],
+                },
             },
         }
     }
@@ -391,15 +632,38 @@ impl UnOp {
         match self {
             Self::Neg => UnOpDef {
                 name: "-",
-                ty: scheme!(forall T: Negatable. (T) -> T),
+                ty: Scheme {
+                    vars: vec![TyVar::new(0)],
+                    ty: Ty::Fn(
+                        vec![Ty::Var(TyVar::new(0))],
+                        Box::new(Ty::Var(TyVar::new(0))),
+                    ),
+                    constraints: smallvec![(
+                        TyVar::new(0),
+                        BuiltinClass::Simple(BuiltinClassTag::Negatable)
+                    )],
+                },
             },
             Self::Not => UnOpDef {
                 name: "NOT",
-                ty: scheme!((Bool) -> Bool),
+                ty: Scheme::mono(Ty::Fn(vec![Ty::Bool], Box::new(Ty::Bool))),
             },
             Self::Wrap => UnOpDef {
                 name: "?",
-                ty: scheme!(forall T, F: Fallible. (T) -> F[T]),
+                ty: Scheme {
+                    vars: vec![TyVar::new(0), TyVar::new(1)],
+                    ty: Ty::Fn(
+                        vec![Ty::Var(TyVar::new(0))],
+                        Box::new(Ty::Apply(
+                            TyVar::new(1),
+                            vec![Ty::Var(TyVar::new(0))],
+                        )),
+                    ),
+                    constraints: smallvec![(
+                        TyVar::new(1),
+                        BuiltinClass::Hkt(BuiltinClassTag::Fallible, None)
+                    )],
+                },
             },
         }
     }
@@ -417,7 +681,20 @@ impl PostfixOp {
         match self {
             Self::Unwrap => PostfixOpDef {
                 name: "!",
-                ty: scheme!(forall T, F: Fallible. (F[T]) -> T),
+                ty: Scheme {
+                    vars: vec![TyVar::new(0), TyVar::new(1)],
+                    ty: Ty::Fn(
+                        vec![Ty::Apply(
+                            TyVar::new(1),
+                            vec![Ty::Var(TyVar::new(0))],
+                        )],
+                        Box::new(Ty::Var(TyVar::new(0))),
+                    ),
+                    constraints: smallvec![(
+                        TyVar::new(1),
+                        BuiltinClass::Hkt(BuiltinClassTag::Fallible, None)
+                    )],
+                },
             },
         }
     }
@@ -847,62 +1124,210 @@ impl Environment {
                 PrimDef {
                     name: "push",
                     f: Array::push,
-                    ty: scheme!(forall T. (Array[T], T) -> Array[T]),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0)],
+                        ty: Ty::Fn(
+                            vec![
+                                Ty::Array(Box::new(Ty::Var(TyVar::new(0)))),
+                                Ty::Var(TyVar::new(0)),
+                            ],
+                            Box::new(Ty::Array(Box::new(Ty::Var(TyVar::new(
+                                0,
+                            ))))),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 PrimDef {
                     name: "pop",
                     f: Array::pop,
-                    ty: scheme!(forall T. (Array[T]) -> Array[T]),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0)],
+                        ty: Ty::Fn(
+                            vec![Ty::Array(Box::new(Ty::Var(TyVar::new(0))))],
+                            Box::new(Ty::Array(Box::new(Ty::Var(TyVar::new(
+                                0,
+                            ))))),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 PrimDef {
                     name: "head",
                     f: Array::head,
-                    ty: scheme!(forall T. (Array[T]) -> Option[T]),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0)],
+                        ty: Ty::Fn(
+                            vec![Ty::Array(Box::new(Ty::Var(TyVar::new(0))))],
+                            Box::new(Ty::Option(Box::new(Ty::Var(
+                                TyVar::new(0),
+                            )))),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 PrimDef {
                     name: "tail",
                     f: Array::tail,
-                    ty: scheme!(forall T. (Array[T]) -> Array[T]),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0)],
+                        ty: Ty::Fn(
+                            vec![Ty::Array(Box::new(Ty::Var(TyVar::new(0))))],
+                            Box::new(Ty::Array(Box::new(Ty::Var(TyVar::new(
+                                0,
+                            ))))),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 PrimDef {
                     name: "sort",
                     f: Array::sort,
-                    ty: scheme!(forall T. (Array[T]) -> Array[T]),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0)],
+                        ty: Ty::Fn(
+                            vec![Ty::Array(Box::new(Ty::Var(TyVar::new(0))))],
+                            Box::new(Ty::Array(Box::new(Ty::Var(TyVar::new(
+                                0,
+                            ))))),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 PrimDef {
                     name: "slice",
                     f: Array::slice,
-                    ty: scheme!(forall T. (Array[T], Int, Int) -> Array[T]),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0)],
+                        ty: Ty::Fn(
+                            vec![
+                                Ty::Array(Box::new(Ty::Var(TyVar::new(0)))),
+                                Ty::Int,
+                                Ty::Int,
+                            ],
+                            Box::new(Ty::Array(Box::new(Ty::Var(TyVar::new(
+                                0,
+                            ))))),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 PrimDef {
                     name: "concat",
                     f: Array::concat,
-                    ty: scheme!(forall T. (Array[T], Array[T]) -> Array[T]),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0)],
+                        ty: Ty::Fn(
+                            vec![
+                                Ty::Array(Box::new(Ty::Var(TyVar::new(0)))),
+                                Ty::Array(Box::new(Ty::Var(TyVar::new(0)))),
+                            ],
+                            Box::new(Ty::Array(Box::new(Ty::Var(TyVar::new(
+                                0,
+                            ))))),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 PrimDef {
                     name: "sort-by",
                     f: Array::placeholder,
-                    ty: scheme!(forall T. ((T, T) -> Ordering, Array[T]) -> Array[T]),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0)],
+                        ty: Ty::Fn(
+                            vec![
+                                Ty::Fn(
+                                    vec![
+                                        Ty::Var(TyVar::new(0)),
+                                        Ty::Var(TyVar::new(0)),
+                                    ],
+                                    Box::new(Ty::Ordering),
+                                ),
+                                Ty::Array(Box::new(Ty::Var(TyVar::new(0)))),
+                            ],
+                            Box::new(Ty::Array(Box::new(Ty::Var(TyVar::new(
+                                0,
+                            ))))),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 PrimDef {
                     name: "zip",
                     f: Array::zip,
-                    ty: scheme!(forall T U. (Array[T], Array[U]) -> Array[(T, U)]),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0), TyVar::new(1)],
+                        ty: Ty::Fn(
+                            vec![
+                                Ty::Array(Box::new(Ty::Var(TyVar::new(0)))),
+                                Ty::Array(Box::new(Ty::Var(TyVar::new(1)))),
+                            ],
+                            Box::new(Ty::Array(Box::new(Ty::Tuple(vec![
+                                Ty::Var(TyVar::new(0)),
+                                Ty::Var(TyVar::new(1)),
+                            ])))),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 PrimDef {
                     name: "zip-with",
                     f: Array::placeholder,
-                    ty: scheme!(forall T U V. ((T, U) -> V, Array[T], Array[U]) -> Array[V]),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0), TyVar::new(1), TyVar::new(2)],
+                        ty: Ty::Fn(
+                            vec![
+                                Ty::Fn(
+                                    vec![
+                                        Ty::Var(TyVar::new(0)),
+                                        Ty::Var(TyVar::new(1)),
+                                    ],
+                                    Box::new(Ty::Var(TyVar::new(2))),
+                                ),
+                                Ty::Array(Box::new(Ty::Var(TyVar::new(0)))),
+                                Ty::Array(Box::new(Ty::Var(TyVar::new(1)))),
+                            ],
+                            Box::new(Ty::Array(Box::new(Ty::Var(TyVar::new(
+                                2,
+                            ))))),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 PrimDef {
                     name: "unzip",
                     f: Array::unzip,
-                    ty: scheme!(forall T U. (Array[(T, U)]) -> (Array[T], Array[U])),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0), TyVar::new(1)],
+                        ty: Ty::Fn(
+                            vec![Ty::Array(Box::new(Ty::Tuple(vec![
+                                Ty::Var(TyVar::new(0)),
+                                Ty::Var(TyVar::new(1)),
+                            ])))],
+                            Box::new(Ty::Tuple(vec![
+                                Ty::Array(Box::new(Ty::Var(TyVar::new(0)))),
+                                Ty::Array(Box::new(Ty::Var(TyVar::new(1)))),
+                            ])),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 PrimDef {
                     name: "intersperse",
                     f: Array::intersperse,
-                    ty: scheme!(forall T. (T, Array[T]) -> Array[T]),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0)],
+                        ty: Ty::Fn(
+                            vec![
+                                Ty::Var(TyVar::new(0)),
+                                Ty::Array(Box::new(Ty::Var(TyVar::new(0)))),
+                            ],
+                            Box::new(Ty::Array(Box::new(Ty::Var(TyVar::new(
+                                0,
+                            ))))),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
             ]),
         );
@@ -913,52 +1338,82 @@ impl Environment {
                 PrimDef {
                     name: "length",
                     f: Str::length,
-                    ty: scheme!((String) -> Int),
+                    ty: Scheme::mono(Ty::Fn(
+                        vec![Ty::String],
+                        Box::new(Ty::Int),
+                    )),
                 },
                 PrimDef {
                     name: "upper",
                     f: Str::upper,
-                    ty: scheme!((String) -> String),
+                    ty: Scheme::mono(Ty::Fn(
+                        vec![Ty::String],
+                        Box::new(Ty::String),
+                    )),
                 },
                 PrimDef {
                     name: "lower",
                     f: Str::lower,
-                    ty: scheme!((String) -> String),
+                    ty: Scheme::mono(Ty::Fn(
+                        vec![Ty::String],
+                        Box::new(Ty::String),
+                    )),
                 },
                 PrimDef {
                     name: "trim",
                     f: Str::trim,
-                    ty: scheme!((String) -> String),
+                    ty: Scheme::mono(Ty::Fn(
+                        vec![Ty::String],
+                        Box::new(Ty::String),
+                    )),
                 },
                 PrimDef {
                     name: "split",
                     f: Str::split,
-                    ty: scheme!((String, String) -> Array[String]),
+                    ty: Scheme::mono(Ty::Fn(
+                        vec![Ty::String, Ty::String],
+                        Box::new(Ty::Array(Box::new(Ty::String))),
+                    )),
                 },
                 PrimDef {
                     name: "join",
                     f: Str::join,
-                    ty: scheme!((Array[String], String) -> String),
+                    ty: Scheme::mono(Ty::Fn(
+                        vec![Ty::Array(Box::new(Ty::String)), Ty::String],
+                        Box::new(Ty::String),
+                    )),
                 },
                 PrimDef {
                     name: "slice",
                     f: Str::slice,
-                    ty: scheme!((String, Int, Int) -> String),
+                    ty: Scheme::mono(Ty::Fn(
+                        vec![Ty::String, Ty::Int, Ty::Int],
+                        Box::new(Ty::String),
+                    )),
                 },
                 PrimDef {
                     name: "contains",
                     f: Str::contains,
-                    ty: scheme!((String, String) -> Bool),
+                    ty: Scheme::mono(Ty::Fn(
+                        vec![Ty::String, Ty::String],
+                        Box::new(Ty::Bool),
+                    )),
                 },
                 PrimDef {
                     name: "replace",
                     f: Str::replace,
-                    ty: scheme!((String, String, String) -> String),
+                    ty: Scheme::mono(Ty::Fn(
+                        vec![Ty::String, Ty::String, Ty::String],
+                        Box::new(Ty::String),
+                    )),
                 },
                 PrimDef {
                     name: "escape",
                     f: Str::escape,
-                    ty: scheme!((String) -> String),
+                    ty: Scheme::mono(Ty::Fn(
+                        vec![Ty::String],
+                        Box::new(Ty::String),
+                    )),
                 },
             ]),
         );
@@ -968,42 +1423,72 @@ impl Environment {
             PrimDef {
                 name: "abs",
                 f: Math::abs,
-                ty: scheme!(forall T: Numeric. (T) -> T),
+                ty: Scheme {
+                    vars: vec![TyVar::new(0)],
+                    ty: Ty::Fn(
+                        vec![Ty::Var(TyVar::new(0))],
+                        Box::new(Ty::Var(TyVar::new(0))),
+                    ),
+                    constraints: smallvec![(
+                        TyVar::new(0),
+                        BuiltinClass::Simple(BuiltinClassTag::Numeric)
+                    )],
+                },
             },
             PrimDef {
                 name: "min",
                 f: Math::min,
-                ty: scheme!(forall T: Numeric. (T, T) -> T),
+                ty: Scheme {
+                    vars: vec![TyVar::new(0)],
+                    ty: Ty::Fn(
+                        vec![Ty::Var(TyVar::new(0)), Ty::Var(TyVar::new(0))],
+                        Box::new(Ty::Var(TyVar::new(0))),
+                    ),
+                    constraints: smallvec![(
+                        TyVar::new(0),
+                        BuiltinClass::Simple(BuiltinClassTag::Numeric)
+                    )],
+                },
             },
             PrimDef {
                 name: "max",
                 f: Math::max,
-                ty: scheme!(forall T: Numeric. (T, T) -> T),
+                ty: Scheme {
+                    vars: vec![TyVar::new(0)],
+                    ty: Ty::Fn(
+                        vec![Ty::Var(TyVar::new(0)), Ty::Var(TyVar::new(0))],
+                        Box::new(Ty::Var(TyVar::new(0))),
+                    ),
+                    constraints: smallvec![(
+                        TyVar::new(0),
+                        BuiltinClass::Simple(BuiltinClassTag::Numeric)
+                    )],
+                },
             },
             PrimDef {
                 name: "floor",
                 f: Math::floor,
-                ty: scheme!((Float) -> Int),
+                ty: Scheme::mono(Ty::Fn(vec![Ty::Float], Box::new(Ty::Int))),
             },
             PrimDef {
                 name: "ceil",
                 f: Math::ceil,
-                ty: scheme!((Float) -> Int),
+                ty: Scheme::mono(Ty::Fn(vec![Ty::Float], Box::new(Ty::Int))),
             },
             PrimDef {
                 name: "round",
                 f: Math::round,
-                ty: scheme!((Float) -> Int),
+                ty: Scheme::mono(Ty::Fn(vec![Ty::Float], Box::new(Ty::Int))),
             },
             PrimDef {
                 name: "sqrt",
                 f: Math::sqrt,
-                ty: scheme!((Float) -> Float),
+                ty: Scheme::mono(Ty::Fn(vec![Ty::Float], Box::new(Ty::Float))),
             },
             PrimDef {
                 name: "log",
                 f: Math::log,
-                ty: scheme!((Float) -> Float),
+                ty: Scheme::mono(Ty::Fn(vec![Ty::Float], Box::new(Ty::Float))),
             },
         ]);
 
@@ -1032,37 +1517,58 @@ impl Environment {
                     PrimDef {
                         name: "sin",
                         f: Trig::sin,
-                        ty: scheme!((Float) -> Float),
+                        ty: Scheme::mono(Ty::Fn(
+                            vec![Ty::Float],
+                            Box::new(Ty::Float),
+                        )),
                     },
                     PrimDef {
                         name: "cos",
                         f: Trig::cos,
-                        ty: scheme!((Float) -> Float),
+                        ty: Scheme::mono(Ty::Fn(
+                            vec![Ty::Float],
+                            Box::new(Ty::Float),
+                        )),
                     },
                     PrimDef {
                         name: "tan",
                         f: Trig::tan,
-                        ty: scheme!((Float) -> Float),
+                        ty: Scheme::mono(Ty::Fn(
+                            vec![Ty::Float],
+                            Box::new(Ty::Float),
+                        )),
                     },
                     PrimDef {
                         name: "asin",
                         f: Trig::asin,
-                        ty: scheme!((Float) -> Float),
+                        ty: Scheme::mono(Ty::Fn(
+                            vec![Ty::Float],
+                            Box::new(Ty::Float),
+                        )),
                     },
                     PrimDef {
                         name: "acos",
                         f: Trig::acos,
-                        ty: scheme!((Float) -> Float),
+                        ty: Scheme::mono(Ty::Fn(
+                            vec![Ty::Float],
+                            Box::new(Ty::Float),
+                        )),
                     },
                     PrimDef {
                         name: "atan",
                         f: Trig::atan,
-                        ty: scheme!((Float) -> Float),
+                        ty: Scheme::mono(Ty::Fn(
+                            vec![Ty::Float],
+                            Box::new(Ty::Float),
+                        )),
                     },
                     PrimDef {
                         name: "atan2",
                         f: Trig::atan2,
-                        ty: scheme!((Float, Float) -> Float),
+                        ty: Scheme::mono(Ty::Fn(
+                            vec![Ty::Float, Ty::Float],
+                            Box::new(Ty::Float),
+                        )),
                     },
                 ]),
             ),
@@ -1074,42 +1580,81 @@ impl Environment {
                 PrimDef {
                     name: "random",
                     f: Random::random,
-                    ty: scheme!(() -> Float),
+                    ty: Scheme::mono(Ty::Fn(vec![], Box::new(Ty::Float))),
                 },
                 PrimDef {
                     name: "range",
                     f: Random::range,
-                    ty: scheme!((Float, Float) -> Float),
+                    ty: Scheme::mono(Ty::Fn(
+                        vec![Ty::Float, Ty::Float],
+                        Box::new(Ty::Float),
+                    )),
                 },
                 PrimDef {
                     name: "int",
                     f: Random::int,
-                    ty: scheme!((Int, Int) -> Int),
+                    ty: Scheme::mono(Ty::Fn(
+                        vec![Ty::Int, Ty::Int],
+                        Box::new(Ty::Int),
+                    )),
                 },
                 PrimDef {
                     name: "bool",
                     f: Random::bool,
-                    ty: scheme!(() -> Bool),
+                    ty: Scheme::mono(Ty::Fn(vec![], Box::new(Ty::Bool))),
                 },
                 PrimDef {
                     name: "choice",
                     f: Random::choice,
-                    ty: scheme!(forall T. (Array[T]) -> Option[T]),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0)],
+                        ty: Ty::Fn(
+                            vec![Ty::Array(Box::new(Ty::Var(TyVar::new(0))))],
+                            Box::new(Ty::Option(Box::new(Ty::Var(
+                                TyVar::new(0),
+                            )))),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 PrimDef {
                     name: "shuffle",
                     f: Random::shuffle,
-                    ty: scheme!(forall T. (Array[T]) -> Array[T]),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0)],
+                        ty: Ty::Fn(
+                            vec![Ty::Array(Box::new(Ty::Var(TyVar::new(0))))],
+                            Box::new(Ty::Array(Box::new(Ty::Var(TyVar::new(
+                                0,
+                            ))))),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 PrimDef {
                     name: "sample",
                     f: Random::sample,
-                    ty: scheme!(forall T. (Array[T], Int) -> Result[Array[T], String]),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0)],
+                        ty: Ty::Fn(
+                            vec![
+                                Ty::Array(Box::new(Ty::Var(TyVar::new(0)))),
+                                Ty::Int,
+                            ],
+                            Box::new(Ty::Result(
+                                Box::new(Ty::Array(Box::new(Ty::Var(
+                                    TyVar::new(0),
+                                )))),
+                                Box::new(Ty::String),
+                            )),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 PrimDef {
                     name: "uuid",
                     f: Random::uuid,
-                    ty: scheme!(() -> String),
+                    ty: Scheme::mono(Ty::Fn(vec![], Box::new(Ty::String))),
                 },
             ]),
         );
@@ -1120,57 +1665,207 @@ impl Environment {
                 PrimDef {
                     name: "empty",
                     f: Map::empty,
-                    ty: scheme!(forall K V. () -> Map[K, V]),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0), TyVar::new(1)],
+                        ty: Ty::Fn(
+                            vec![],
+                            Box::new(Ty::Map(
+                                Box::new(Ty::Var(TyVar::new(0))),
+                                Box::new(Ty::Var(TyVar::new(1))),
+                            )),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 PrimDef {
                     name: "length",
                     f: Map::length,
-                    ty: scheme!(forall K V. (Map[K, V]) -> Int),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0), TyVar::new(1)],
+                        ty: Ty::Fn(
+                            vec![Ty::Map(
+                                Box::new(Ty::Var(TyVar::new(0))),
+                                Box::new(Ty::Var(TyVar::new(1))),
+                            )],
+                            Box::new(Ty::Int),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 PrimDef {
                     name: "keys",
                     f: Map::keys,
-                    ty: scheme!(forall K V. (Map[K, V]) -> Array[K]),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0), TyVar::new(1)],
+                        ty: Ty::Fn(
+                            vec![Ty::Map(
+                                Box::new(Ty::Var(TyVar::new(0))),
+                                Box::new(Ty::Var(TyVar::new(1))),
+                            )],
+                            Box::new(Ty::Array(Box::new(Ty::Var(TyVar::new(
+                                0,
+                            ))))),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 PrimDef {
                     name: "values",
                     f: Map::values,
-                    ty: scheme!(forall K V. (Map[K, V]) -> Array[V]),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0), TyVar::new(1)],
+                        ty: Ty::Fn(
+                            vec![Ty::Map(
+                                Box::new(Ty::Var(TyVar::new(0))),
+                                Box::new(Ty::Var(TyVar::new(1))),
+                            )],
+                            Box::new(Ty::Array(Box::new(Ty::Var(TyVar::new(
+                                1,
+                            ))))),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 PrimDef {
                     name: "entries",
                     f: Map::entries,
-                    ty: scheme!(forall K V. (Map[K, V]) -> Array[(K, V)]),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0), TyVar::new(1)],
+                        ty: Ty::Fn(
+                            vec![Ty::Map(
+                                Box::new(Ty::Var(TyVar::new(0))),
+                                Box::new(Ty::Var(TyVar::new(1))),
+                            )],
+                            Box::new(Ty::Array(Box::new(Ty::Tuple(vec![
+                                Ty::Var(TyVar::new(0)),
+                                Ty::Var(TyVar::new(1)),
+                            ])))),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 PrimDef {
                     name: "has",
                     f: Map::has,
-                    ty: scheme!(forall K V. (Map[K, V], K) -> Bool),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0), TyVar::new(1)],
+                        ty: Ty::Fn(
+                            vec![
+                                Ty::Map(
+                                    Box::new(Ty::Var(TyVar::new(0))),
+                                    Box::new(Ty::Var(TyVar::new(1))),
+                                ),
+                                Ty::Var(TyVar::new(0)),
+                            ],
+                            Box::new(Ty::Bool),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 PrimDef {
                     name: "lookup",
                     f: Map::get,
-                    ty: scheme!(forall K V. (Map[K, V], K) -> Option[V]),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0), TyVar::new(1)],
+                        ty: Ty::Fn(
+                            vec![
+                                Ty::Map(
+                                    Box::new(Ty::Var(TyVar::new(0))),
+                                    Box::new(Ty::Var(TyVar::new(1))),
+                                ),
+                                Ty::Var(TyVar::new(0)),
+                            ],
+                            Box::new(Ty::Option(Box::new(Ty::Var(
+                                TyVar::new(1),
+                            )))),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 PrimDef {
                     name: "insert",
                     f: Map::set,
-                    ty: scheme!(forall K V. (Map[K, V], K, V) -> Map[K, V]),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0), TyVar::new(1)],
+                        ty: Ty::Fn(
+                            vec![
+                                Ty::Map(
+                                    Box::new(Ty::Var(TyVar::new(0))),
+                                    Box::new(Ty::Var(TyVar::new(1))),
+                                ),
+                                Ty::Var(TyVar::new(0)),
+                                Ty::Var(TyVar::new(1)),
+                            ],
+                            Box::new(Ty::Map(
+                                Box::new(Ty::Var(TyVar::new(0))),
+                                Box::new(Ty::Var(TyVar::new(1))),
+                            )),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 PrimDef {
                     name: "remove",
                     f: Map::remove,
-                    ty: scheme!(forall K V. (Map[K, V], K) -> Map[K, V]),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0), TyVar::new(1)],
+                        ty: Ty::Fn(
+                            vec![
+                                Ty::Map(
+                                    Box::new(Ty::Var(TyVar::new(0))),
+                                    Box::new(Ty::Var(TyVar::new(1))),
+                                ),
+                                Ty::Var(TyVar::new(0)),
+                            ],
+                            Box::new(Ty::Map(
+                                Box::new(Ty::Var(TyVar::new(0))),
+                                Box::new(Ty::Var(TyVar::new(1))),
+                            )),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 PrimDef {
                     name: "merge",
                     f: Map::merge,
-                    ty: scheme!(forall K V. (Map[K, V], Map[K, V]) -> Map[K, V]),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0), TyVar::new(1)],
+                        ty: Ty::Fn(
+                            vec![
+                                Ty::Map(
+                                    Box::new(Ty::Var(TyVar::new(0))),
+                                    Box::new(Ty::Var(TyVar::new(1))),
+                                ),
+                                Ty::Map(
+                                    Box::new(Ty::Var(TyVar::new(0))),
+                                    Box::new(Ty::Var(TyVar::new(1))),
+                                ),
+                            ],
+                            Box::new(Ty::Map(
+                                Box::new(Ty::Var(TyVar::new(0))),
+                                Box::new(Ty::Var(TyVar::new(1))),
+                            )),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 PrimDef {
                     name: "from-entries",
                     f: Map::from_entries,
-                    ty: scheme!(forall K V. (Array[(K, V)]) -> Map[K, V]),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0), TyVar::new(1)],
+                        ty: Ty::Fn(
+                            vec![Ty::Array(Box::new(Ty::Tuple(vec![
+                                Ty::Var(TyVar::new(0)),
+                                Ty::Var(TyVar::new(1)),
+                            ])))],
+                            Box::new(Ty::Map(
+                                Box::new(Ty::Var(TyVar::new(0))),
+                                Box::new(Ty::Var(TyVar::new(1))),
+                            )),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
             ]),
         );
@@ -1181,67 +1876,82 @@ impl Environment {
                 PrimDef {
                     name: "now",
                     f: Time::now,
-                    ty: scheme!(() -> Time),
+                    ty: Scheme::mono(Ty::Fn(vec![], Box::new(Ty::Time))),
                 },
                 PrimDef {
                     name: "epoch",
                     f: Time::epoch,
-                    ty: scheme!(() -> Time),
+                    ty: Scheme::mono(Ty::Fn(vec![], Box::new(Ty::Time))),
                 },
                 PrimDef {
                     name: "parse",
                     f: Time::parse,
-                    ty: scheme!((String, String) -> Result[Time, String]),
+                    ty: Scheme::mono(Ty::Fn(
+                        vec![Ty::String, Ty::String],
+                        Box::new(Ty::Result(
+                            Box::new(Ty::Time),
+                            Box::new(Ty::String),
+                        )),
+                    )),
                 },
                 PrimDef {
                     name: "format",
                     f: Time::format,
-                    ty: scheme!((String, Time) -> String),
+                    ty: Scheme::mono(Ty::Fn(
+                        vec![Ty::String, Ty::Time],
+                        Box::new(Ty::String),
+                    )),
                 },
                 PrimDef {
                     name: "add-seconds",
                     f: Time::add_seconds,
-                    ty: scheme!((Time, Int) -> Time),
+                    ty: Scheme::mono(Ty::Fn(
+                        vec![Ty::Time, Ty::Int],
+                        Box::new(Ty::Time),
+                    )),
                 },
                 PrimDef {
                     name: "diff-seconds",
                     f: Time::diff_seconds,
-                    ty: scheme!((Time, Time) -> Float),
+                    ty: Scheme::mono(Ty::Fn(
+                        vec![Ty::Time, Ty::Time],
+                        Box::new(Ty::Float),
+                    )),
                 },
                 PrimDef {
                     name: "year",
                     f: Time::year,
-                    ty: scheme!((Time) -> Int),
+                    ty: Scheme::mono(Ty::Fn(vec![Ty::Time], Box::new(Ty::Int))),
                 },
                 PrimDef {
                     name: "month",
                     f: Time::month,
-                    ty: scheme!((Time) -> Int),
+                    ty: Scheme::mono(Ty::Fn(vec![Ty::Time], Box::new(Ty::Int))),
                 },
                 PrimDef {
                     name: "day",
                     f: Time::day,
-                    ty: scheme!((Time) -> Int),
+                    ty: Scheme::mono(Ty::Fn(vec![Ty::Time], Box::new(Ty::Int))),
                 },
                 PrimDef {
                     name: "hour",
                     f: Time::hour,
-                    ty: scheme!((Time) -> Int),
+                    ty: Scheme::mono(Ty::Fn(vec![Ty::Time], Box::new(Ty::Int))),
                 },
                 PrimDef {
                     name: "minute",
                     f: Time::minute,
-                    ty: scheme!((Time) -> Int),
+                    ty: Scheme::mono(Ty::Fn(vec![Ty::Time], Box::new(Ty::Int))),
                 },
                 PrimDef {
                     name: "second",
                     f: Time::second,
-                    ty: scheme!((Time) -> Int),
+                    ty: Scheme::mono(Ty::Fn(vec![Ty::Time], Box::new(Ty::Int))),
                 },
                 PrimDef {
                     name: "sleep",
                     f: Time::sleep,
-                    ty: scheme!((Int) -> Unit),
+                    ty: Scheme::mono(Ty::Fn(vec![Ty::Int], Box::new(Ty::Unit))),
                 },
             ]),
         );
@@ -1253,23 +1963,72 @@ impl Environment {
                 PrimDef {
                     name: "map",
                     f: Opt::placeholder,
-                    ty: scheme!(forall T U. (Option[T], (T) -> U) -> Option[U]),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0), TyVar::new(1)],
+                        ty: Ty::Fn(
+                            vec![
+                                Ty::Option(Box::new(Ty::Var(TyVar::new(0)))),
+                                Ty::Fn(
+                                    vec![Ty::Var(TyVar::new(0))],
+                                    Box::new(Ty::Var(TyVar::new(1))),
+                                ),
+                            ],
+                            Box::new(Ty::Option(Box::new(Ty::Var(
+                                TyVar::new(1),
+                            )))),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 // Regular primitives
                 PrimDef {
                     name: "unwrap-or",
                     f: Opt::unwrap_or,
-                    ty: scheme!(forall T. (Option[T], T) -> T),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0)],
+                        ty: Ty::Fn(
+                            vec![
+                                Ty::Option(Box::new(Ty::Var(TyVar::new(0)))),
+                                Ty::Var(TyVar::new(0)),
+                            ],
+                            Box::new(Ty::Var(TyVar::new(0))),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 PrimDef {
                     name: "flatten",
                     f: Opt::flatten,
-                    ty: scheme!(forall T. (Option[Option[T]]) -> Option[T]),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0)],
+                        ty: Ty::Fn(
+                            vec![Ty::Option(Box::new(Ty::Option(Box::new(
+                                Ty::Var(TyVar::new(0)),
+                            ))))],
+                            Box::new(Ty::Option(Box::new(Ty::Var(
+                                TyVar::new(0),
+                            )))),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 PrimDef {
                     name: "note",
                     f: Opt::note,
-                    ty: scheme!(forall T E. (E, Option[T]) -> Result[T, E]),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0), TyVar::new(1)],
+                        ty: Ty::Fn(
+                            vec![
+                                Ty::Var(TyVar::new(1)),
+                                Ty::Option(Box::new(Ty::Var(TyVar::new(0)))),
+                            ],
+                            Box::new(Ty::Result(
+                                Box::new(Ty::Var(TyVar::new(0))),
+                                Box::new(Ty::Var(TyVar::new(1))),
+                            )),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
             ]),
         );
@@ -1281,28 +2040,107 @@ impl Environment {
                 PrimDef {
                     name: "map",
                     f: Res::placeholder,
-                    ty: scheme!(forall T U E. (Result[T, E], (T) -> U) -> Result[U, E]),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0), TyVar::new(1), TyVar::new(2)],
+                        ty: Ty::Fn(
+                            vec![
+                                Ty::Result(
+                                    Box::new(Ty::Var(TyVar::new(0))),
+                                    Box::new(Ty::Var(TyVar::new(2))),
+                                ),
+                                Ty::Fn(
+                                    vec![Ty::Var(TyVar::new(0))],
+                                    Box::new(Ty::Var(TyVar::new(1))),
+                                ),
+                            ],
+                            Box::new(Ty::Result(
+                                Box::new(Ty::Var(TyVar::new(1))),
+                                Box::new(Ty::Var(TyVar::new(2))),
+                            )),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 PrimDef {
                     name: "map-err",
                     f: Res::placeholder,
-                    ty: scheme!(forall T E F. (Result[T, E], (E) -> F) -> Result[T, F]),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0), TyVar::new(1), TyVar::new(2)],
+                        ty: Ty::Fn(
+                            vec![
+                                Ty::Result(
+                                    Box::new(Ty::Var(TyVar::new(0))),
+                                    Box::new(Ty::Var(TyVar::new(1))),
+                                ),
+                                Ty::Fn(
+                                    vec![Ty::Var(TyVar::new(1))],
+                                    Box::new(Ty::Var(TyVar::new(2))),
+                                ),
+                            ],
+                            Box::new(Ty::Result(
+                                Box::new(Ty::Var(TyVar::new(0))),
+                                Box::new(Ty::Var(TyVar::new(2))),
+                            )),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 // Regular primitives
                 PrimDef {
                     name: "unwrap-or",
                     f: Res::unwrap_or,
-                    ty: scheme!(forall T E. (Result[T, E], T) -> T),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0), TyVar::new(1)],
+                        ty: Ty::Fn(
+                            vec![
+                                Ty::Result(
+                                    Box::new(Ty::Var(TyVar::new(0))),
+                                    Box::new(Ty::Var(TyVar::new(1))),
+                                ),
+                                Ty::Var(TyVar::new(0)),
+                            ],
+                            Box::new(Ty::Var(TyVar::new(0))),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 PrimDef {
                     name: "flatten",
                     f: Res::flatten,
-                    ty: scheme!(forall T E. (Result[Result[T, E], E]) -> Result[T, E]),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0), TyVar::new(1)],
+                        ty: Ty::Fn(
+                            vec![Ty::Result(
+                                Box::new(Ty::Result(
+                                    Box::new(Ty::Var(TyVar::new(0))),
+                                    Box::new(Ty::Var(TyVar::new(1))),
+                                )),
+                                Box::new(Ty::Var(TyVar::new(1))),
+                            )],
+                            Box::new(Ty::Result(
+                                Box::new(Ty::Var(TyVar::new(0))),
+                                Box::new(Ty::Var(TyVar::new(1))),
+                            )),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
                 PrimDef {
                     name: "hush",
                     f: Res::hush,
-                    ty: scheme!(forall T E. (Result[T, E]) -> Option[T]),
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0), TyVar::new(1)],
+                        ty: Ty::Fn(
+                            vec![Ty::Result(
+                                Box::new(Ty::Var(TyVar::new(0))),
+                                Box::new(Ty::Var(TyVar::new(1))),
+                            )],
+                            Box::new(Ty::Option(Box::new(Ty::Var(
+                                TyVar::new(0),
+                            )))),
+                        ),
+                        constraints: smallvec![],
+                    },
                 },
             ]),
         );
@@ -1316,27 +2154,39 @@ impl Environment {
                 PrimDef {
                     name: "get-line",
                     f: Io::get_line,
-                    ty: scheme!(() -> String),
+                    ty: Scheme::mono(Ty::Fn(vec![], Box::new(Ty::String))),
                 },
                 PrimDef {
                     name: "print",
                     f: Io::print,
-                    ty: scheme!((String) -> Unit),
+                    ty: Scheme::mono(Ty::Fn(
+                        vec![Ty::String],
+                        Box::new(Ty::Unit),
+                    )),
                 },
                 PrimDef {
                     name: "println",
                     f: Io::println,
-                    ty: scheme!((String) -> Unit),
+                    ty: Scheme::mono(Ty::Fn(
+                        vec![Ty::String],
+                        Box::new(Ty::Unit),
+                    )),
                 },
                 PrimDef {
                     name: "eprint",
                     f: Io::eprint,
-                    ty: scheme!((String) -> Unit),
+                    ty: Scheme::mono(Ty::Fn(
+                        vec![Ty::String],
+                        Box::new(Ty::Unit),
+                    )),
                 },
                 PrimDef {
                     name: "eprintln",
                     f: Io::eprintln,
-                    ty: scheme!((String) -> Unit),
+                    ty: Scheme::mono(Ty::Fn(
+                        vec![Ty::String],
+                        Box::new(Ty::Unit),
+                    )),
                 },
             ])
             .with_submodule("Directory", directory_module),
@@ -1347,129 +2197,211 @@ impl Environment {
     fn build_directory_module(&mut self) -> Module {
         use crate::primitives::Directory;
 
-        // Alias for macro context
+        // Borrow `consts` to avoid borrow-splitting issues with `self`.
+        // TODO: re-enable `scheme!` macro once `Ty` -> `TyId` switch is done
         let consts = &mut self.consts;
 
         Module::from_prims(&[
             PrimDef {
                 name: "list-dir",
                 f: Directory::list_dir,
-                ty: scheme!((FilePath) -> Array[Path]),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![Ty::FilePath],
+                    Box::new(Ty::Array(Box::new(Ty::Path))),
+                )),
             },
             PrimDef {
                 name: "exists",
                 f: Directory::exists,
-                ty: scheme!((FilePath) -> Bool),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![Ty::FilePath],
+                    Box::new(Ty::Bool),
+                )),
             },
             PrimDef {
                 name: "is-file",
                 f: Directory::is_file,
-                ty: scheme!((FilePath) -> Bool),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![Ty::FilePath],
+                    Box::new(Ty::Bool),
+                )),
             },
             PrimDef {
                 name: "is-dir",
                 f: Directory::is_dir,
-                ty: scheme!((FilePath) -> Bool),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![Ty::FilePath],
+                    Box::new(Ty::Bool),
+                )),
             },
             PrimDef {
                 name: "read-file",
                 f: Directory::read_file,
-                ty: scheme!((FilePath) -> String),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![Ty::FilePath],
+                    Box::new(Ty::String),
+                )),
             },
             PrimDef {
                 name: "remove",
                 f: Directory::remove,
-                ty: scheme!((FilePath) -> Unit),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![Ty::FilePath],
+                    Box::new(Ty::Unit),
+                )),
             },
             PrimDef {
                 name: "remove-all",
                 f: Directory::remove_all,
-                ty: scheme!((FilePath) -> Unit),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![Ty::FilePath],
+                    Box::new(Ty::Unit),
+                )),
             },
             PrimDef {
                 name: "create-dir",
                 f: Directory::create_dir,
-                ty: scheme!((FilePath) -> Unit),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![Ty::FilePath],
+                    Box::new(Ty::Unit),
+                )),
             },
             PrimDef {
                 name: "create-dir-all",
                 f: Directory::create_dir_all,
-                ty: scheme!((FilePath) -> Unit),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![Ty::FilePath],
+                    Box::new(Ty::Unit),
+                )),
             },
             PrimDef {
                 name: "pwd",
                 f: Directory::pwd,
-                ty: scheme!(() -> FilePath),
+                ty: Scheme::mono(Ty::Fn(vec![], Box::new(Ty::FilePath))),
             },
             PrimDef {
                 name: "set-pwd",
                 f: Directory::set_pwd,
-                ty: scheme!((FilePath) -> Unit),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![Ty::FilePath],
+                    Box::new(Ty::Unit),
+                )),
             },
             PrimDef {
                 name: "get-env",
                 f: Directory::get_env,
-                ty: scheme!((String) -> Option[String]),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![Ty::String],
+                    Box::new(Ty::Option(Box::new(Ty::String))),
+                )),
             },
             PrimDef {
                 name: "move-path",
                 f: Directory::move_path,
-                ty: scheme!(consts; ({ src: FilePath, dest: FilePath }) -> Unit),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![Ty::Object(indexmap::indexmap! {
+                        consts.intern("src") => Ty::FilePath,
+                        consts.intern("dest") => Ty::FilePath,
+                    })],
+                    Box::new(Ty::Unit),
+                )),
             },
             PrimDef {
                 name: "copy-path",
                 f: Directory::copy_path,
-                ty: scheme!(consts; ({ src: FilePath, dest: FilePath }) -> Unit),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![Ty::Object(indexmap::indexmap! {
+                        consts.intern("src") => Ty::FilePath,
+                        consts.intern("dest") => Ty::FilePath,
+                    })],
+                    Box::new(Ty::Unit),
+                )),
             },
             PrimDef {
                 name: "write-file",
                 f: Directory::write_file,
-                ty: scheme!(consts; ({ path: FilePath, contents: String }) -> Unit),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![Ty::Object(indexmap::indexmap! {
+                        consts.intern("path") => Ty::FilePath,
+                        consts.intern("contents") => Ty::String,
+                    })],
+                    Box::new(Ty::Unit),
+                )),
             },
             PrimDef {
                 name: "append-file",
                 f: Directory::append_file,
-                ty: scheme!(consts; ({ path: FilePath, contents: String }) -> Unit),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![Ty::Object(indexmap::indexmap! {
+                        consts.intern("path") => Ty::FilePath,
+                        consts.intern("contents") => Ty::String,
+                    })],
+                    Box::new(Ty::Unit),
+                )),
             },
             PrimDef {
                 name: "set-env",
                 f: Directory::set_env,
-                ty: scheme!(consts; ({ name: String, value: String }) -> Unit),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![Ty::Object(indexmap::indexmap! {
+                        consts.intern("name") => Ty::String,
+                        consts.intern("value") => Ty::String,
+                    })],
+                    Box::new(Ty::Unit),
+                )),
             },
             PrimDef {
                 name: "canonicalize",
                 f: Directory::canonicalize,
-                ty: scheme!((FilePath) -> FilePath),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![Ty::FilePath],
+                    Box::new(Ty::FilePath),
+                )),
             },
             PrimDef {
                 name: "parent",
                 f: Directory::parent,
-                ty: scheme!((FilePath) -> Option[FilePath]),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![Ty::FilePath],
+                    Box::new(Ty::Option(Box::new(Ty::FilePath))),
+                )),
             },
             PrimDef {
                 name: "file-name",
                 f: Directory::file_name,
-                ty: scheme!((FilePath) -> Option[String]),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![Ty::FilePath],
+                    Box::new(Ty::Option(Box::new(Ty::String))),
+                )),
             },
             PrimDef {
                 name: "extension",
                 f: Directory::extension,
-                ty: scheme!((FilePath) -> Option[String]),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![Ty::FilePath],
+                    Box::new(Ty::Option(Box::new(Ty::String))),
+                )),
             },
             PrimDef {
                 name: "join",
                 f: Directory::join,
-                ty: scheme!((FilePath, Array[String]) -> FilePath),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![Ty::FilePath, Ty::Array(Box::new(Ty::String))],
+                    Box::new(Ty::FilePath),
+                )),
             },
             PrimDef {
                 name: "temp-dir",
                 f: Directory::temp_dir,
-                ty: scheme!(() -> FilePath),
+                ty: Scheme::mono(Ty::Fn(vec![], Box::new(Ty::FilePath))),
             },
             PrimDef {
                 name: "with-extension",
                 f: Directory::with_extension,
-                ty: scheme!((FilePath, String) -> FilePath),
+                ty: Scheme::mono(Ty::Fn(
+                    vec![Ty::FilePath, Ty::String],
+                    Box::new(Ty::FilePath),
+                )),
             },
         ])
     }

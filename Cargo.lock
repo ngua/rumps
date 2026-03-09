@@ -1481,7 +1481,6 @@ dependencies = [
  "ordered-float",
  "rand",
  "regex",
- "rumps-query-macros",
  "rumps-storage",
  "rumps-types",
  "serde_json",
