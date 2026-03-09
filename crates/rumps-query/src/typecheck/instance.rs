@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use smallvec::SmallVec;
 
-use super::ty::{BuiltinClass, BuiltinClassTag, Ty, TyVar};
+use super::ty::{BuiltinClass, BuiltinClassTag, TyId, TyVar};
 use super::TypeError;
 use crate::intern::StringId;
 use crate::{Span, TypeId};
@@ -23,9 +23,9 @@ pub(crate) struct AssocTypeDef {
     /// The associated type name (e.g., `"Index"`).
     pub(crate) name: StringId,
     /// The concrete type this instance defines for the associated type.
-    pub(crate) ty: Ty,
+    pub(crate) ty: TyId,
     /// Optional constraints on the associated type (e.g., `: Ord`).
-    pub(crate) constraints: SmallVec<[BuiltinClass<Ty>; 1]>,
+    pub(crate) constraints: SmallVec<[BuiltinClass<TyId>; 1]>,
     /// Source span for error messages.
     pub(crate) span: Span,
 }
@@ -41,12 +41,12 @@ pub(crate) struct AssocTypeDef {
 pub(crate) struct Instance {
     /// The class being implemented (e.g., `BuiltinClassTag::Display`).
     pub(crate) class: BuiltinClassTag,
-    /// Type arguments to the class (e.g., `[Ty::String]` for `Into[String]`).
-    pub(crate) class_args: SmallVec<[Ty; 2]>,
+    /// Type arguments to the class (e.g., `[TyArena::STRING]` for `Into[String]`).
+    pub(crate) class_args: SmallVec<[TyId; 2]>,
     /// Type parameters on the implementing type (e.g., `[L, R]` for `Either[L, R]`).
     pub(crate) type_params: SmallVec<[TyVar; 2]>,
     /// WHERE clause constraints (e.g., `[(L, Display), (R, Display)]`).
-    pub(crate) constraints: SmallVec<[(TyVar, BuiltinClass<Ty>); 2]>,
+    pub(crate) constraints: SmallVec<[(TyVar, BuiltinClass<TyId>); 2]>,
     /// Method implementations: method name -> generated function name.
     ///
     /// Populated in Phase 5 (Resolution) when `CLASS` statements are lowered.

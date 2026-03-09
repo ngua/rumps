@@ -23,7 +23,9 @@ use smallvec::SmallVec;
 
 use super::error::TypeError;
 use super::infer::{Constraint, InferCtx};
-use super::ty::{BuiltinClass, BuiltinClassTag, Subst, Ty, TyVar};
+use super::ty::{
+    BuiltinClass, BuiltinClassTag, Subst, Ty, TyArena, TyId, TyVar,
+};
 use crate::ast::AstTypeExpr;
 use crate::intern::StringId;
 use crate::value::TypeDef;
@@ -60,8 +62,8 @@ impl<'a> InferCtx<'a> {
     /// Use explicit `AS` casts to convert between them.
     pub(crate) fn unify_types(
         &mut self,
-        t1: &Ty,
-        t2: &Ty,
+        t1: TyId,
+        t2: TyId,
         span: Span,
     ) -> UnifyResult {
         self.unify_inner(t1, t2, span)
@@ -72,11 +74,11 @@ impl<'a> InferCtx<'a> {
     /// Recursively expands chained aliases (e.g., `A = B`, `B = Int`) until
     /// reaching a non-alias type. Object aliases are NOT expanded; they need
     /// special handling in `unify_named_with_object`.
-    fn expand_alias_fully(&mut self, ty: &Ty) -> Option<Ty> {
-        let mut current = ty.clone();
+    fn expand_alias_fully(&mut self, ty: TyId) -> Option<TyId> {
+        let mut current = ty;
         let mut expanded = false;
         // Expand until we hit a non-alias or object alias
-        while let Some(next) = self.expand_alias_once(&current) {
+        while let Some(next) = self.expand_alias_once(current) {
             current = next;
             expanded = true;
         }
@@ -95,35 +97,34 @@ impl<'a> InferCtx<'a> {
     ///
     /// Note: Aliases to object types are NOT expanded here; they need special
     /// handling in `unify_named_with_object` to check all required fields.
-    fn expand_alias_once(&mut self, ty: &Ty) -> Option<Ty> {
-        match ty {
-            Ty::Named(type_id, args) => {
-                match self.registry().get_def(*type_id) {
-                    Some(TypeDef::Alias {
-                        type_params,
-                        target,
-                        ..
-                    }) => {
-                        // Don't expand if target is an object type; let
-                        // `unify_named_with_object` handle it for proper
-                        // required-field checking
-                        let is_obj =
-                            self.ast().get_type_expr(*target).is_some_and(
-                                |te| matches!(te, AstTypeExpr::Object(_)),
-                            );
-                        if is_obj {
-                            None
-                        } else {
-                            let subst: IndexMap<StringId, Ty> = type_params
-                                .iter()
-                                .zip(args.iter())
-                                .map(|(p, a)| (*p, a.clone()))
-                                .collect();
-                            let target = *target;
-                            Some(self.ast_type_to_ty(target, &subst))
-                        }
-                    }
-                    _ => None,
+    fn expand_alias_once(&mut self, ty: TyId) -> Option<TyId> {
+        let (type_id, args) = match self.ty_arena.get(ty) {
+            Ty::Named(id, a) => (*id, a.clone()),
+            _ => None?,
+        };
+        match self.registry().get_def(type_id) {
+            Some(TypeDef::Alias {
+                type_params,
+                target,
+                ..
+            }) => {
+                // Don't expand if target is an object type; let
+                // `unify_named_with_object` handle it for proper
+                // required-field checking
+                let is_obj = self
+                    .ast()
+                    .get_type_expr(*target)
+                    .is_some_and(|te| matches!(te, AstTypeExpr::Object(_)));
+                if is_obj {
+                    None
+                } else {
+                    let subst: IndexMap<StringId, TyId> = type_params
+                        .iter()
+                        .zip(args.iter())
+                        .map(|(p, a)| (*p, *a))
+                        .collect();
+                    let target = *target;
+                    Some(self.ast_type_to_ty(target, &subst))
                 }
             }
             _ => None,
@@ -131,14 +132,33 @@ impl<'a> InferCtx<'a> {
     }
 
     /// Core unification logic.
-    fn unify_inner(&mut self, t1: &Ty, t2: &Ty, span: Span) -> UnifyResult {
+    fn unify_inner(&mut self, t1: TyId, t2: TyId, span: Span) -> UnifyResult {
         // Expand aliases fully before unifying (transparent type aliases)
-        let exp1 = self.expand_alias_fully(t1);
-        let exp2 = self.expand_alias_fully(t2);
-        let t1 = exp1.as_ref().unwrap_or(t1);
-        let t2 = exp2.as_ref().unwrap_or(t2);
+        let t1 = self.expand_alias_fully(t1).unwrap_or(t1);
+        let t2 = self.expand_alias_fully(t2).unwrap_or(t2);
 
-        match (t1, t2) {
+        // Equal TyIds are trivially unified
+        if t1 == t2 {
+            UnifyResult::Ok(Subst::empty())
+        } else {
+            // Clone both Ty to release borrow on arena
+            let ty1 = self.ty_arena.get(t1).clone();
+            let ty2 = self.ty_arena.get(t2).clone();
+            self.unify_inner_dispatch(t1, t2, &ty1, &ty2, span)
+        }
+    }
+
+    /// Dispatch on cloned `Ty` pair; `t1`/`t2` are the original `TyId`s for
+    /// error messages, `ty1`/`ty2` are the cloned shapes for matching.
+    fn unify_inner_dispatch(
+        &mut self,
+        t1: TyId,
+        t2: TyId,
+        ty1: &Ty,
+        ty2: &Ty,
+        span: Span,
+    ) -> UnifyResult {
+        match (ty1, ty2) {
             // Error recovery: Error unifies with anything
             (Ty::Error, _) | (_, Ty::Error) => UnifyResult::Ok(Subst::empty()),
 
@@ -148,12 +168,14 @@ impl<'a> InferCtx<'a> {
             }
 
             // Type variable on left: bind it
-            (Ty::Var(v), t) => self.unify_var(*v, t, span),
+            (Ty::Var(v), _) => self.unify_var(*v, t2, span),
 
             // Type variable on right: symmetric
-            (t, Ty::Var(v)) => self.unify_var(*v, t, span),
+            (_, Ty::Var(v)) => self.unify_var(*v, t1, span),
 
-            // Identical primitives
+            // Identical primitives (handled by TyId equality above for
+            // pre-interned constants, but needed for dynamically allocated
+            // duplicates)
             (Ty::Bool, Ty::Bool)
             | (Ty::Unit, Ty::Unit)
             | (Ty::Char, Ty::Char)
@@ -181,26 +203,27 @@ impl<'a> InferCtx<'a> {
             | (Ty::Float, Ty::Float) => UnifyResult::Ok(Subst::empty()),
 
             // Array: unify element types
-            (Ty::Array(a), Ty::Array(b)) => self.unify_inner(a, b, span),
+            (Ty::Array(a), Ty::Array(b)) => self.unify_inner(*a, *b, span),
 
             // Range coerces to Array[Int] (for Array HOFs)
             (Ty::Range, Ty::Array(elem)) | (Ty::Array(elem), Ty::Range) => {
-                self.unify_inner(elem, &Ty::Int, span)
+                self.unify_inner(*elem, TyArena::INT, span)
             }
 
             // Option: unify inner types
-            (Ty::Option(a), Ty::Option(b)) => self.unify_inner(a, b, span),
+            (Ty::Option(a), Ty::Option(b)) => self.unify_inner(*a, *b, span),
 
             // Result: unify both ok and err types
             (Ty::Result(ok1, err1), Ty::Result(ok2, err2)) => {
+                let (ok1, err1, ok2, err2) = (*ok1, *err1, *ok2, *err2);
                 match self.unify_inner(ok1, ok2, span) {
                     UnifyResult::Ok(s1) => {
-                        let err1 = err1.apply(&s1);
-                        let err2 = err2.apply(&s1);
-                        match self.unify_inner(&err1, &err2, span) {
-                            UnifyResult::Ok(s2) => {
-                                UnifyResult::Ok(s1.compose(&s2))
-                            }
+                        let err1 = self.ty_arena.apply(err1, &s1);
+                        let err2 = self.ty_arena.apply(err2, &s1);
+                        match self.unify_inner(err1, err2, span) {
+                            UnifyResult::Ok(s2) => UnifyResult::Ok(
+                                s1.compose(&s2, &mut self.ty_arena),
+                            ),
                             err => err,
                         }
                     }
@@ -210,14 +233,15 @@ impl<'a> InferCtx<'a> {
 
             // Map: unify key and value types
             (Ty::Map(k1, v1), Ty::Map(k2, v2)) => {
+                let (k1, v1, k2, v2) = (*k1, *v1, *k2, *v2);
                 match self.unify_inner(k1, k2, span) {
                     UnifyResult::Ok(s1) => {
-                        let v1 = v1.apply(&s1);
-                        let v2 = v2.apply(&s1);
-                        match self.unify_inner(&v1, &v2, span) {
-                            UnifyResult::Ok(s2) => {
-                                UnifyResult::Ok(s1.compose(&s2))
-                            }
+                        let v1 = self.ty_arena.apply(v1, &s1);
+                        let v2 = self.ty_arena.apply(v2, &s1);
+                        match self.unify_inner(v1, v2, span) {
+                            UnifyResult::Ok(s2) => UnifyResult::Ok(
+                                s1.compose(&s2, &mut self.ty_arena),
+                            ),
                             err => err,
                         }
                     }
@@ -229,12 +253,18 @@ impl<'a> InferCtx<'a> {
             (Ty::Tuple(ts1), Ty::Tuple(ts2)) => {
                 if ts1.len() != ts2.len() {
                     UnifyResult::Err(TypeError::Mismatch {
-                        expected: t2.clone(),
-                        got: t1.clone(),
+                        expected: t2,
+                        got: t1,
                         span,
                     })
                 } else {
-                    self.unify_sequence(ts1.iter(), ts2.iter(), span)
+                    let v1: SmallVec<[TyId; 4]> = ts1.clone();
+                    let v2: SmallVec<[TyId; 4]> = ts2.clone();
+                    self.unify_sequence(
+                        v1.iter().copied(),
+                        v2.iter().copied(),
+                        span,
+                    )
                 }
             }
 
@@ -247,18 +277,21 @@ impl<'a> InferCtx<'a> {
                         span,
                     })
                 } else {
+                    let p1: SmallVec<[TyId; 4]> = params1.clone();
+                    let p2: SmallVec<[TyId; 4]> = params2.clone();
+                    let (r1, r2) = (*ret1, *ret2);
                     match self.unify_sequence(
-                        params1.iter(),
-                        params2.iter(),
+                        p1.iter().copied(),
+                        p2.iter().copied(),
                         span,
                     ) {
                         UnifyResult::Ok(s) => {
-                            let ret1 = ret1.apply(&s);
-                            let ret2 = ret2.apply(&s);
-                            match self.unify_inner(&ret1, &ret2, span) {
-                                UnifyResult::Ok(s2) => {
-                                    UnifyResult::Ok(s.compose(&s2))
-                                }
+                            let ret1 = self.ty_arena.apply(r1, &s);
+                            let ret2 = self.ty_arena.apply(r2, &s);
+                            match self.unify_inner(ret1, ret2, span) {
+                                UnifyResult::Ok(s2) => UnifyResult::Ok(
+                                    s.compose(&s2, &mut self.ty_arena),
+                                ),
                                 err => err,
                             }
                         }
@@ -269,25 +302,36 @@ impl<'a> InferCtx<'a> {
 
             // Structural objects: unify common fields
             (Ty::Object(fields1), Ty::Object(fields2)) => {
-                self.unify_objects(fields1, fields2, span)
+                let f1 = fields1.clone();
+                let f2 = fields2.clone();
+                self.unify_objects(&f1, &f2, span)
             }
 
             // Named type with structural object (extensible record check)
             (Ty::Named(id, args), Ty::Object(obj_fields))
             | (Ty::Object(obj_fields), Ty::Named(id, args)) => {
-                self.unify_named_with_object(*id, args, obj_fields, span)
+                let id = *id;
+                let args: SmallVec<[TyId; 4]> = args.clone();
+                let obj = obj_fields.clone();
+                self.unify_named_with_object(id, &args, &obj, span)
             }
 
             // Named types: same TypeId, unify type arguments
             (Ty::Named(id1, args1), Ty::Named(id2, args2)) => {
                 if id1 != id2 || args1.len() != args2.len() {
                     UnifyResult::Err(TypeError::Mismatch {
-                        expected: t2.clone(),
-                        got: t1.clone(),
+                        expected: t2,
+                        got: t1,
                         span,
                     })
                 } else {
-                    self.unify_sequence(args1.iter(), args2.iter(), span)
+                    let a1: SmallVec<[TyId; 4]> = args1.clone();
+                    let a2: SmallVec<[TyId; 4]> = args2.clone();
+                    self.unify_sequence(
+                        a1.iter().copied(),
+                        a2.iter().copied(),
+                        span,
+                    )
                 }
             }
 
@@ -295,24 +339,26 @@ impl<'a> InferCtx<'a> {
             (Ty::Union(members1), Ty::Union(members2)) => {
                 if members1.len() != members2.len() {
                     UnifyResult::Err(TypeError::Mismatch {
-                        expected: t2.clone(),
-                        got: t1.clone(),
+                        expected: t2,
+                        got: t1,
                         span,
                     })
                 } else {
+                    let m1: SmallVec<[TyId; 4]> = members1.clone();
+                    let m2: SmallVec<[TyId; 4]> = members2.clone();
                     // Find a bijective matching between union members
-                    let available: Vec<usize> = (0..members2.len()).collect();
+                    let available: Vec<usize> = (0..m2.len()).collect();
                     self.unify_union_bijection(
-                        members1,
-                        members2,
+                        &m1,
+                        &m2,
                         &available,
                         Subst::empty(),
                         span,
                     )
-                    .unwrap_or_else(|| {
+                    .unwrap_or({
                         UnifyResult::Err(TypeError::Mismatch {
-                            expected: t1.clone(),
-                            got: t2.clone(),
+                            expected: t1,
+                            got: t2,
                             span,
                         })
                     })
@@ -320,77 +366,128 @@ impl<'a> InferCtx<'a> {
             }
 
             // Concrete type with union: T unifies if it matches any member
-            (t, Ty::Union(members)) | (Ty::Union(members), t) => members
-                .iter()
-                .find_map(|m| match self.unify_inner(t, m, span) {
-                    ok @ UnifyResult::Ok(_) => Some(ok),
-                    _ => None,
-                })
-                .unwrap_or_else(|| {
-                    UnifyResult::Err(TypeError::Mismatch {
-                        expected: t2.clone(),
-                        got: t1.clone(),
-                        span,
+            (_, Ty::Union(members)) => {
+                let ms: SmallVec<[TyId; 4]> = members.clone();
+                ms.iter()
+                    .find_map(|&m| match self.unify_inner(t1, m, span) {
+                        ok @ UnifyResult::Ok(_) => Some(ok),
+                        _ => None,
                     })
-                }),
-
-            // Named union with concrete type: expand union and check membership
-            (t, named @ Ty::Named(..)) | (named @ Ty::Named(..), t) => {
-                self.expand_union_members(named).map_or_else(
-                    || {
+                    .unwrap_or({
                         UnifyResult::Err(TypeError::Mismatch {
-                            expected: t1.clone(),
-                            got: t2.clone(),
+                            expected: t2,
+                            got: t1,
                             span,
                         })
-                    },
-                    |members| {
-                        members
-                            .iter()
-                            .find_map(|m| match self.unify_inner(t, m, span) {
-                                ok @ UnifyResult::Ok(_) => Some(ok),
-                                _ => None,
-                            })
-                            .unwrap_or_else(|| {
-                                UnifyResult::Err(TypeError::Mismatch {
-                                    expected: t1.clone(),
-                                    got: t2.clone(),
-                                    span,
-                                })
-                            })
-                    },
-                )
+                    })
             }
+            (Ty::Union(members), _) => {
+                let ms: SmallVec<[TyId; 4]> = members.clone();
+                ms.iter()
+                    .find_map(|&m| match self.unify_inner(m, t2, span) {
+                        ok @ UnifyResult::Ok(_) => Some(ok),
+                        _ => None,
+                    })
+                    .unwrap_or({
+                        UnifyResult::Err(TypeError::Mismatch {
+                            expected: t2,
+                            got: t1,
+                            span,
+                        })
+                    })
+            }
+
+            // Named union with concrete type: expand union and check membership
+            (_, Ty::Named(..)) => self.expand_union_members(t2).map_or_else(
+                || {
+                    UnifyResult::Err(TypeError::Mismatch {
+                        expected: t1,
+                        got: t2,
+                        span,
+                    })
+                },
+                |members| {
+                    members
+                        .iter()
+                        .find_map(|&m| match self.unify_inner(t1, m, span) {
+                            ok @ UnifyResult::Ok(_) => Some(ok),
+                            _ => None,
+                        })
+                        .unwrap_or({
+                            UnifyResult::Err(TypeError::Mismatch {
+                                expected: t1,
+                                got: t2,
+                                span,
+                            })
+                        })
+                },
+            ),
+            (Ty::Named(..), _) => self.expand_union_members(t1).map_or_else(
+                || {
+                    UnifyResult::Err(TypeError::Mismatch {
+                        expected: t1,
+                        got: t2,
+                        span,
+                    })
+                },
+                |members| {
+                    members
+                        .iter()
+                        .find_map(|&m| match self.unify_inner(m, t2, span) {
+                            ok @ UnifyResult::Ok(_) => Some(ok),
+                            _ => None,
+                        })
+                        .unwrap_or({
+                            UnifyResult::Err(TypeError::Mismatch {
+                                expected: t1,
+                                got: t2,
+                                span,
+                            })
+                        })
+                },
+            ),
 
             // HKT type application: `F[T]` where `F` is a type variable.
             //
             // Decompose the other type into constructor + element,
             // bind the type variable to the constructor shape, and
             // unify args with the element types.
-            (Ty::Apply(tv, args), other) | (other, Ty::Apply(tv, args)) => {
-                self.unify_apply(*tv, args, other, span)
+            (Ty::Apply(tv, args), _) => {
+                let tv = *tv;
+                let args: SmallVec<[TyId; 4]> = args.clone();
+                self.unify_apply(tv, &args, t2, span)
+            }
+            (_, Ty::Apply(tv, args)) => {
+                let tv = *tv;
+                let args: SmallVec<[TyId; 4]> = args.clone();
+                self.unify_apply(tv, &args, t1, span)
             }
 
             // Associated type projection: resolve and unify
-            (Ty::AssocType(tv, class, name), other)
-            | (other, Ty::AssocType(tv, class, name)) => {
-                // Try to resolve the base type variable
-                let base = Ty::Var(*tv);
-                match self.resolve_assoc_type(&base, *class, *name, span) {
-                    Ok(resolved) => self.unify_inner(&resolved, other, span),
+            (Ty::AssocType(tv, class, name), _) => {
+                let (tv, class, name) = (*tv, *class, *name);
+                let base = self.ty_arena.alloc(Ty::Var(tv));
+                match self.resolve_assoc_type(base, class, name, span) {
+                    Ok(resolved) => self.unify_inner(resolved, t2, span),
                     Err(_) => {
                         // Base type is unresolved (type variable); defer
-                        // For now, allow the unification to succeed as we
-                        // can't determine the concrete type yet
                         UnifyResult::Ok(Subst::empty())
                     }
+                }
+            }
+            (_, Ty::AssocType(tv, class, name)) => {
+                let (tv, class, name) = (*tv, *class, *name);
+                let base = self.ty_arena.alloc(Ty::Var(tv));
+                match self.resolve_assoc_type(base, class, name, span) {
+                    Ok(resolved) => self.unify_inner(t1, resolved, span),
+                    Err(_) => UnifyResult::Ok(Subst::empty()),
                 }
             }
 
             // All other combinations are type mismatches
             _ => UnifyResult::Err(TypeError::Mismatch {
-                expected: t2.clone(),
-                got: t1.clone(),
+                expected: t2,
+                got: t1,
                 span,
             }),
         }
@@ -399,15 +496,15 @@ impl<'a> InferCtx<'a> {
     /// Unify a type variable with a type.
     ///
     /// Performs the occurs check to prevent infinite types like `a = Array[a]`.
-    fn unify_var(&mut self, v: TyVar, t: &Ty, span: Span) -> UnifyResult {
+    fn unify_var(&mut self, v: TyVar, t: TyId, span: Span) -> UnifyResult {
         // If t is the same variable, nothing to do
-        if *t == Ty::Var(v) {
+        if matches!(self.ty_arena.get(t), Ty::Var(w) if *w == v) {
             UnifyResult::Ok(Subst::empty())
-        } else if t.occurs(v) {
+        } else if self.ty_arena.occurs(t, v) {
             // Occurs check failed; would create infinite type
-            UnifyResult::Err(TypeError::InfiniteType(v, t.clone(), span))
+            UnifyResult::Err(TypeError::InfiniteType(v, t, span))
         } else {
-            UnifyResult::Ok(Subst::singleton(v, t.clone()))
+            UnifyResult::Ok(Subst::singleton(v, t))
         }
     }
 
@@ -418,42 +515,44 @@ impl<'a> InferCtx<'a> {
     fn unify_apply(
         &mut self,
         tv: TyVar,
-        args: &[Ty],
-        other: &Ty,
+        args: &[TyId],
+        other: TyId,
         span: Span,
     ) -> UnifyResult {
-        match other {
+        // Clone the shape to release arena borrow
+        let shape = self.ty_arena.get(other).clone();
+        match shape {
             // Parameterized builtins: decompose into constructor + element
             Ty::Option(inner) => {
-                let ctor = Ty::Option(Box::new(Ty::Error));
-                self.unify_apply_inner(tv, args, &ctor, inner, span)
+                let ctor = self.ty_arena.option(TyArena::ERROR);
+                self.unify_apply_inner(tv, args, ctor, inner, span)
             }
             Ty::Result(ok, err) => {
-                let ctor = Ty::Result(Box::new(Ty::Error), err.clone());
-                self.unify_apply_inner(tv, args, &ctor, ok, span)
+                let ctor = self.ty_arena.result(TyArena::ERROR, err);
+                self.unify_apply_inner(tv, args, ctor, ok, span)
             }
             Ty::Array(inner) => {
-                let ctor = Ty::Array(Box::new(Ty::Error));
-                self.unify_apply_inner(tv, args, &ctor, inner, span)
+                let ctor = self.ty_arena.array(TyArena::ERROR);
+                self.unify_apply_inner(tv, args, ctor, inner, span)
             }
             Ty::Map(k, v) => {
-                let ctor = Ty::Map(Box::new(Ty::Error), v.clone());
-                self.unify_apply_inner(tv, args, &ctor, k, span)
+                let ctor = self.ty_arena.map_ty(TyArena::ERROR, v);
+                self.unify_apply_inner(tv, args, ctor, k, span)
             }
 
             // Non-parameterized types with known element types
             Ty::Range => {
-                let s1 = self.unify_var(tv, &Ty::Range, span);
-                self.unify_apply_first_arg(s1, args, &Ty::Int, span)
+                let s1 = self.unify_var(tv, TyArena::RANGE, span);
+                self.unify_apply_first_arg(s1, args, TyArena::INT, span)
             }
 
             // User-defined named types: decompose into constructor + type args
-            Ty::Named(id, type_args) => {
-                if let Some(first_arg) = type_args.first() {
-                    let placeholder: Vec<_> =
-                        type_args.iter().map(|_| Ty::Error).collect();
-                    let ctor = Ty::Named(*id, placeholder);
-                    self.unify_apply_inner(tv, args, &ctor, first_arg, span)
+            Ty::Named(id, ref type_args) => {
+                if let Some(&first_arg) = type_args.first() {
+                    let placeholder: SmallVec<[TyId; 4]> =
+                        type_args.iter().map(|_| TyArena::ERROR).collect();
+                    let ctor = self.ty_arena.named(id, placeholder);
+                    self.unify_apply_inner(tv, args, ctor, first_arg, span)
                 } else {
                     // Named type with no params; just bind tv
                     self.unify_var(tv, other, span)
@@ -461,28 +560,38 @@ impl<'a> InferCtx<'a> {
             }
 
             // Two `Apply` nodes: unify constructors and args pairwise
-            Ty::Apply(tv2, args2) => {
+            Ty::Apply(tv2, ref args2) => {
                 if args.len() != args2.len() {
+                    let exp = self.ty_arena.hkt(tv2, args2.clone());
+                    let got_args: SmallVec<[TyId; 4]> =
+                        args.iter().copied().collect();
+                    let got = self.ty_arena.hkt(tv, got_args);
                     UnifyResult::Err(TypeError::Mismatch {
-                        expected: Ty::Apply(*tv2, args2.clone()),
-                        got: Ty::Apply(tv, args.to_vec()),
+                        expected: exp,
+                        got,
                         span,
                     })
                 } else {
-                    match self.unify_var(tv, &Ty::Var(*tv2), span) {
+                    let a2: SmallVec<[TyId; 4]> = args2.clone();
+                    let tv2_id = self.ty_arena.alloc(Ty::Var(tv2));
+                    match self.unify_var(tv, tv2_id, span) {
                         UnifyResult::Ok(s1) => {
-                            let a1: Vec<_> =
-                                args.iter().map(|a| a.apply(&s1)).collect();
-                            let a2: Vec<_> =
-                                args2.iter().map(|a| a.apply(&s1)).collect();
+                            let a1: SmallVec<[TyId; 4]> = args
+                                .iter()
+                                .map(|&a| self.ty_arena.apply(a, &s1))
+                                .collect();
+                            let a2: SmallVec<[TyId; 4]> = a2
+                                .iter()
+                                .map(|&a| self.ty_arena.apply(a, &s1))
+                                .collect();
                             match self.unify_sequence(
-                                a1.iter(),
-                                a2.iter(),
+                                a1.iter().copied(),
+                                a2.iter().copied(),
                                 span,
                             ) {
-                                UnifyResult::Ok(s2) => {
-                                    UnifyResult::Ok(s1.compose(&s2))
-                                }
+                                UnifyResult::Ok(s2) => UnifyResult::Ok(
+                                    s1.compose(&s2, &mut self.ty_arena),
+                                ),
                                 err => err,
                             }
                         }
@@ -491,11 +600,16 @@ impl<'a> InferCtx<'a> {
                 }
             }
 
-            _ => UnifyResult::Err(TypeError::Mismatch {
-                expected: other.clone(),
-                got: Ty::Apply(tv, args.to_vec()),
-                span,
-            }),
+            _ => {
+                let got_args: SmallVec<[TyId; 4]> =
+                    args.iter().copied().collect();
+                let got = self.ty_arena.hkt(tv, got_args);
+                UnifyResult::Err(TypeError::Mismatch {
+                    expected: other,
+                    got,
+                    span,
+                })
+            }
         }
     }
 
@@ -504,9 +618,9 @@ impl<'a> InferCtx<'a> {
     fn unify_apply_inner(
         &mut self,
         tv: TyVar,
-        args: &[Ty],
-        ctor: &Ty,
-        elem: &Ty,
+        args: &[TyId],
+        ctor: TyId,
+        elem: TyId,
         span: Span,
     ) -> UnifyResult {
         let s1 = self.unify_var(tv, ctor, span);
@@ -518,24 +632,26 @@ impl<'a> InferCtx<'a> {
     fn unify_apply_first_arg(
         &mut self,
         ctor_result: UnifyResult,
-        args: &[Ty],
-        elem: &Ty,
+        args: &[TyId],
+        elem: TyId,
         span: Span,
     ) -> UnifyResult {
         match ctor_result {
             UnifyResult::Ok(s1) => args.first().map_or_else(
                 || {
                     UnifyResult::Err(TypeError::Mismatch {
-                        expected: elem.clone(),
-                        got: Ty::Unit,
+                        expected: elem,
+                        got: TyArena::UNIT,
                         span,
                     })
                 },
-                |arg| {
-                    let arg = arg.apply(&s1);
-                    let elem = elem.apply(&s1);
-                    match self.unify_inner(&arg, &elem, span) {
-                        UnifyResult::Ok(s2) => UnifyResult::Ok(s1.compose(&s2)),
+                |&arg| {
+                    let arg = self.ty_arena.apply(arg, &s1);
+                    let elem = self.ty_arena.apply(elem, &s1);
+                    match self.unify_inner(arg, elem, span) {
+                        UnifyResult::Ok(s2) => {
+                            UnifyResult::Ok(s1.compose(&s2, &mut self.ty_arena))
+                        }
                         err => err,
                     }
                 },
@@ -545,18 +661,20 @@ impl<'a> InferCtx<'a> {
     }
 
     /// Unify two sequences of types element-wise.
-    fn unify_sequence<'b>(
+    fn unify_sequence(
         &mut self,
-        ts1: impl Iterator<Item = &'b Ty>,
-        ts2: impl Iterator<Item = &'b Ty>,
+        ts1: impl Iterator<Item = TyId>,
+        ts2: impl Iterator<Item = TyId>,
         span: Span,
     ) -> UnifyResult {
         ts1.zip(ts2)
             .try_fold(Subst::empty(), |acc, (t1, t2)| {
-                let t1 = t1.apply(&acc);
-                let t2 = t2.apply(&acc);
-                match self.unify_inner(&t1, &t2, span) {
-                    UnifyResult::Ok(s) => Ok(acc.compose(&s)),
+                let t1 = self.ty_arena.apply(t1, &acc);
+                let t2 = self.ty_arena.apply(t2, &acc);
+                match self.unify_inner(t1, t2, span) {
+                    UnifyResult::Ok(s) => {
+                        Ok(acc.compose(&s, &mut self.ty_arena))
+                    }
                     UnifyResult::Err(e) => Err(e),
                 }
             })
@@ -570,15 +688,15 @@ impl<'a> InferCtx<'a> {
     /// matching is found or definitely fails, `None` to signal backtracking.
     fn unify_union_bijection(
         &mut self,
-        remaining1: &[Ty],
-        all2: &[Ty],
+        remaining1: &[TyId],
+        all2: &[TyId],
         available: &[usize],
         acc: Subst,
         span: Span,
     ) -> Option<UnifyResult> {
         match remaining1.split_first() {
             None => Some(UnifyResult::Ok(acc)),
-            Some((first, rest)) => {
+            Some((&first, rest)) => {
                 // Try each available index, backtracking on failure
                 self.try_union_matches(
                     first, rest, all2, available, acc, span, 0,
@@ -592,22 +710,22 @@ impl<'a> InferCtx<'a> {
     #[allow(clippy::too_many_arguments)]
     fn try_union_matches(
         &mut self,
-        first: &Ty,
-        rest: &[Ty],
-        all2: &[Ty],
+        first: TyId,
+        rest: &[TyId],
+        all2: &[TyId],
         available: &[usize],
         acc: Subst,
         span: Span,
         start_idx: usize,
     ) -> Option<UnifyResult> {
         available.get(start_idx).and_then(|&idx| {
-            let m2 = all2.get(idx)?;
-            let first_applied = first.apply(&acc);
-            let m2_applied = m2.apply(&acc);
+            let m2 = *all2.get(idx)?;
+            let first_applied = self.ty_arena.apply(first, &acc);
+            let m2_applied = self.ty_arena.apply(m2, &acc);
 
-            match self.unify_inner(&first_applied, &m2_applied, span) {
+            match self.unify_inner(first_applied, m2_applied, span) {
                 UnifyResult::Ok(s) => {
-                    let new_acc = acc.compose(&s);
+                    let new_acc = acc.compose(&s, &mut self.ty_arena);
                     let new_available: Vec<usize> = available
                         .iter()
                         .copied()
@@ -656,8 +774,8 @@ impl<'a> InferCtx<'a> {
     /// the required fields with matching types. Extra fields are allowed.
     fn unify_objects(
         &mut self,
-        fields1: &IndexMap<StringId, Ty>,
-        fields2: &IndexMap<StringId, Ty>,
+        fields1: &IndexMap<StringId, TyId>,
+        fields2: &IndexMap<StringId, TyId>,
         span: Span,
     ) -> UnifyResult {
         // Collect all field names from both objects
@@ -674,11 +792,13 @@ impl<'a> InferCtx<'a> {
             .iter()
             .try_fold(Subst::empty(), |acc, key| {
                 match (fields1.get(key), fields2.get(key)) {
-                    (Some(t1), Some(t2)) => {
-                        let t1 = t1.apply(&acc);
-                        let t2 = t2.apply(&acc);
-                        match self.unify_inner(&t1, &t2, span) {
-                            UnifyResult::Ok(s) => Ok(acc.compose(&s)),
+                    (Some(&t1), Some(&t2)) => {
+                        let t1 = self.ty_arena.apply(t1, &acc);
+                        let t2 = self.ty_arena.apply(t2, &acc);
+                        match self.unify_inner(t1, t2, span) {
+                            UnifyResult::Ok(s) => {
+                                Ok(acc.compose(&s, &mut self.ty_arena))
+                            }
                             UnifyResult::Err(e) => Err(e),
                         }
                     }
@@ -697,8 +817,8 @@ impl<'a> InferCtx<'a> {
     fn unify_named_with_object(
         &mut self,
         type_id: crate::TypeId,
-        type_args: &[Ty],
-        obj_fields: &IndexMap<StringId, Ty>,
+        type_args: &[TyId],
+        obj_fields: &IndexMap<StringId, TyId>,
         span: Span,
     ) -> UnifyResult {
         // Look up alias definition
@@ -716,10 +836,10 @@ impl<'a> InferCtx<'a> {
                 match self.ast().get_type_expr(target).cloned() {
                     Some(AstTypeExpr::Object(alias_fields)) => {
                         // Build substitution from type params to type args
-                        let param_subst: IndexMap<StringId, Ty> = type_params
+                        let param_subst: IndexMap<StringId, TyId> = type_params
                             .iter()
                             .zip(type_args.iter())
-                            .map(|(p, a)| (*p, a.clone()))
+                            .map(|(p, a)| (*p, *a))
                             .collect();
 
                         // Pre-intern field names before the fold
@@ -741,18 +861,18 @@ impl<'a> InferCtx<'a> {
                                         *field_ty_id,
                                         &param_subst,
                                     );
-                                    let expected_ty = expected_ty.apply(&acc);
+                                    let expected_ty = self.ty_arena.apply(expected_ty, &acc);
 
                                     match obj_fields.get(field_name_id) {
-                                        Some(obj_ty) => {
-                                            let obj_ty = obj_ty.apply(&acc);
+                                        Some(&obj_ty) => {
+                                            let obj_ty = self.ty_arena.apply(obj_ty, &acc);
                                             match self.unify_inner(
-                                                &expected_ty,
-                                                &obj_ty,
+                                                expected_ty,
+                                                obj_ty,
                                                 span,
                                             ) {
                                                 UnifyResult::Ok(s) => {
-                                                    Ok(acc.compose(&s))
+                                                    Ok(acc.compose(&s, &mut self.ty_arena))
                                                 }
                                                 UnifyResult::Err(e) => Err(e),
                                             }
@@ -772,38 +892,32 @@ impl<'a> InferCtx<'a> {
                     }
                     _ => {
                         // Not an object alias, can't unify with object
+                        let named = self.ty_arena.named(
+                            type_id,
+                            type_args.iter().copied().collect(),
+                        );
+                        let obj =
+                            self.ty_arena.alloc(Ty::Object(obj_fields.clone()));
                         UnifyResult::Err(TypeError::Mismatch {
-                            expected: Ty::Named(type_id, type_args.to_vec()),
-                            got: Ty::Object(obj_fields.clone()),
+                            expected: named,
+                            got: obj,
                             span,
                         })
                     }
                 }
             }
 
-            Some(TypeDef::Union { .. }) => {
-                // Union types don't unify with structural objects directly
+            Some(TypeDef::Union { .. })
+            | Some(TypeDef::Sum { .. })
+            | Some(TypeDef::Builtin(_))
+            | None => {
+                let named = self
+                    .ty_arena
+                    .named(type_id, type_args.iter().copied().collect());
+                let obj = self.ty_arena.alloc(Ty::Object(obj_fields.clone()));
                 UnifyResult::Err(TypeError::Mismatch {
-                    expected: Ty::Named(type_id, type_args.to_vec()),
-                    got: Ty::Object(obj_fields.clone()),
-                    span,
-                })
-            }
-
-            Some(TypeDef::Sum { .. }) => {
-                // Sum types don't unify with structural objects
-                UnifyResult::Err(TypeError::Mismatch {
-                    expected: Ty::Named(type_id, type_args.to_vec()),
-                    got: Ty::Object(obj_fields.clone()),
-                    span,
-                })
-            }
-
-            Some(TypeDef::Builtin(_)) | None => {
-                // Builtin types don't unify with structural objects
-                UnifyResult::Err(TypeError::Mismatch {
-                    expected: Ty::Named(type_id, type_args.to_vec()),
-                    got: Ty::Object(obj_fields.clone()),
+                    expected: named,
+                    got: obj,
                     span,
                 })
             }
@@ -839,11 +953,11 @@ impl<'a> InferCtx<'a> {
         // other constraints (Numeric, Into[String], etc.) depend on.
         constraints.iter().for_each(|c| match c {
             Constraint::Unify(t1, t2, span) => {
-                let t1 = t1.apply(&subst);
-                let t2 = t2.apply(&subst);
-                match self.unify_types(&t1, &t2, *span) {
+                let t1 = self.ty_arena.apply(*t1, &subst);
+                let t2 = self.ty_arena.apply(*t2, &subst);
+                match self.unify_types(t1, t2, *span) {
                     UnifyResult::Ok(s) => {
-                        subst = subst.compose(&s);
+                        subst = subst.compose(&s, &mut self.ty_arena);
                     }
                     UnifyResult::Err(e) => {
                         self.error(e);
@@ -856,11 +970,11 @@ impl<'a> InferCtx<'a> {
                 ret,
                 span,
             } => {
-                let callee = callee.apply(&subst);
-                let args: Vec<Ty> =
-                    args.iter().map(|t| t.apply(&subst)).collect();
-                let ret = ret.apply(&subst);
-                self.check_callable(&callee, &args, &ret, *span, &mut subst);
+                let callee = self.ty_arena.apply(*callee, &subst);
+                let args: SmallVec<[TyId; 4]> =
+                    args.iter().map(|&t| self.ty_arena.apply(t, &subst)).collect();
+                let ret = self.ty_arena.apply(*ret, &subst);
+                self.check_callable(callee, &args, ret, *span, &mut subst);
             }
             Constraint::HasField {
                 base,
@@ -868,19 +982,19 @@ impl<'a> InferCtx<'a> {
                 field_ty,
                 span,
             } => {
-                let base = base.apply(&subst);
-                let field_ty = field_ty.apply(&subst);
+                let base = self.ty_arena.apply(*base, &subst);
+                let field_ty = self.ty_arena.apply(*field_ty, &subst);
                 self.check_has_field(
-                    &base, *field, &field_ty, *span, &mut subst,
+                    base, *field, field_ty, *span, &mut subst,
                 );
             }
             Constraint::Class { ty, class, span } => match class {
                 // Iterable (with element type) and Indexable: first pass
                 BuiltinClass::Hkt(BuiltinClassTag::Iterable, Some(_))
                 | BuiltinClass::Parameterized(BuiltinClassTag::Indexable, _) => {
-                    let ty = ty.apply(&subst);
-                    let class = class.apply(&subst);
-                    self.satisfies_class(&class, &ty, *span, &mut subst);
+                    let ty = self.ty_arena.apply(*ty, &subst);
+                    let class = class.apply(&subst, &mut self.ty_arena);
+                    self.satisfies_class(&class, ty, *span, &mut subst);
                 }
                 // HKT constraints deferred to third pass
                 BuiltinClass::Hkt(..) => {}
@@ -899,9 +1013,10 @@ impl<'a> InferCtx<'a> {
         // numeric type var was unified with another var (e.g., `?N -> ?F`), we
         // must bind `?F -> Int`, not overwrite `?N` (which would lose the link).
         numeric_vars.iter().for_each(|v| {
-            let resolved = Ty::Var(*v).apply(&subst);
-            if let Ty::Var(root) = resolved {
-                subst.extend(root, Ty::Int);
+            let vid = self.ty_arena.alloc(Ty::Var(*v));
+            let resolved = self.ty_arena.apply(vid, &subst);
+            if let Ty::Var(root) = self.ty_arena.get(resolved) {
+                subst.extend(*root, TyArena::INT);
             }
         });
 
@@ -910,8 +1025,8 @@ impl<'a> InferCtx<'a> {
             if let Constraint::Class { ty, class, span } = c {
                 match class {
                     BuiltinClass::Simple(_) => {
-                        let ty = ty.apply(&subst);
-                        self.satisfies_class(class, &ty, *span, &mut subst);
+                        let ty = self.ty_arena.apply(*ty, &subst);
+                        self.satisfies_class(class, ty, *span, &mut subst);
                     }
                     BuiltinClass::Hkt(..) | BuiltinClass::Parameterized(..) => {
                     }
@@ -926,9 +1041,9 @@ impl<'a> InferCtx<'a> {
             if let Constraint::Class { ty, class, span } = c {
                 match class {
                     BuiltinClass::Hkt(..) | BuiltinClass::Parameterized(..) => {
-                        let ty = ty.apply(&subst);
-                        let class = class.apply(&subst);
-                        self.satisfies_class(&class, &ty, *span, &mut subst);
+                        let ty = self.ty_arena.apply(*ty, &subst);
+                        let class = class.apply(&subst, &mut self.ty_arena);
+                        self.satisfies_class(&class, ty, *span, &mut subst);
                     }
                     BuiltinClass::Simple(_) => {}
                 }
@@ -946,19 +1061,21 @@ impl<'a> InferCtx<'a> {
     /// constraint involves unification (e.g., `Fallible`, `Iterable`, `Indexable`).
     fn satisfies_class(
         &mut self,
-        class: &BuiltinClass<Ty>,
-        ty: &Ty,
+        class: &BuiltinClass<TyId>,
+        ty: TyId,
         span: Span,
         subst: &mut Subst,
     ) {
         // Handle associated types: resolve to concrete type before checking
-        if let Ty::AssocType(tv, assoc_class, name) = ty {
+        let shape = self.ty_arena.get(ty).clone();
+        if let Ty::AssocType(tv, assoc_class, name) = shape {
             // Apply current substitution to resolve the base type variable
-            let base = subst.apply(&Ty::Var(*tv));
-            match self.resolve_assoc_type(&base, *assoc_class, *name, span) {
+            let base_id = self.ty_arena.alloc(Ty::Var(tv));
+            let base = self.ty_arena.apply(base_id, subst);
+            match self.resolve_assoc_type(base, assoc_class, name, span) {
                 Ok(resolved) => {
                     // Resolved; check the concrete type against the class
-                    self.satisfies_class(class, &resolved, span, subst);
+                    self.satisfies_class(class, resolved, span, subst);
                 }
                 Err(_) => {
                     // Base type still unresolved; defer constraint
@@ -972,65 +1089,73 @@ impl<'a> InferCtx<'a> {
     /// Inner implementation of class constraint checking.
     fn satisfies_class_inner(
         &mut self,
-        class: &BuiltinClass<Ty>,
-        ty: &Ty,
+        class: &BuiltinClass<TyId>,
+        ty: TyId,
         span: Span,
         subst: &mut Subst,
     ) {
+        let ty_shape = self.ty_arena.get(ty).clone();
         match class {
             // `Numeric`: `Int`, `Word`, `Float`
-            BuiltinClass::Simple(BuiltinClassTag::Numeric) => match ty {
+            BuiltinClass::Simple(BuiltinClassTag::Numeric) => match ty_shape {
                 Ty::Int | Ty::Word | Ty::Float => {}
                 Ty::Var(_) | Ty::Error | Ty::Unknown => {}
                 Ty::Union(members) => {
                     // At least one member must be numeric (for literal coercion)
-                    let any_numeric = members
-                        .iter()
-                        .any(|m| matches!(m, Ty::Int | Ty::Word | Ty::Float));
+                    let any_numeric = members.iter().any(|&m| {
+                        matches!(
+                            self.ty_arena.get(m),
+                            Ty::Int | Ty::Word | Ty::Float
+                        )
+                    });
                     if !any_numeric {
                         self.error(TypeError::UnsatisfiedClass(
                             BuiltinClass::Simple(BuiltinClassTag::Numeric),
-                            ty.clone(),
+                            ty,
                             span,
                         ));
                     }
                 }
-                Ty::Named(id, type_args) => {
+                Ty::Named(id, ref type_args) => {
                     match self
                         .instance_registry
-                        .lookup(BuiltinClassTag::Numeric, *id)
+                        .lookup(BuiltinClassTag::Numeric, id)
                         .cloned()
                     {
                         Some(inst) => {
+                            let args: SmallVec<[TyId; 4]> = type_args.clone();
                             self.check_instance_constraints(
-                                &inst, type_args, span, subst,
+                                &inst, &args, span, subst,
                             );
                         }
                         None => match self.expand_union_members(ty) {
                             Some(members) => {
-                                let any_numeric = members.iter().any(|m| {
-                                    matches!(m, Ty::Int | Ty::Word | Ty::Float)
+                                let any_numeric = members.iter().any(|&m| {
+                                    matches!(
+                                        self.ty_arena.get(m),
+                                        Ty::Int | Ty::Word | Ty::Float
+                                    )
                                 });
                                 if !any_numeric {
                                     self.error(TypeError::UnsatisfiedClass(
                                         BuiltinClass::Simple(
                                             BuiltinClassTag::Numeric,
                                         ),
-                                        ty.clone(),
+                                        ty,
                                         span,
                                     ));
                                 }
                             }
                             None => match self.expand_alias_fully(ty) {
                                 Some(expanded) => self.satisfies_class(
-                                    class, &expanded, span, subst,
+                                    class, expanded, span, subst,
                                 ),
                                 None => {
                                     self.error(TypeError::UnsatisfiedClass(
                                         BuiltinClass::Simple(
                                             BuiltinClassTag::Numeric,
                                         ),
-                                        ty.clone(),
+                                        ty,
                                         span,
                                     ));
                                 }
@@ -1041,104 +1166,114 @@ impl<'a> InferCtx<'a> {
                 _ => {
                     self.error(TypeError::UnsatisfiedClass(
                         BuiltinClass::Simple(BuiltinClassTag::Numeric),
-                        ty.clone(),
+                        ty,
                         span,
                     ));
                 }
             },
 
             // `BitLike`: `Bool`, `Int`, `Word`
-            BuiltinClass::Simple(BuiltinClassTag::BitLike) => match ty {
-                Ty::Bool | Ty::Int | Ty::Word => {}
-                Ty::Var(_) | Ty::Error | Ty::Unknown => {}
-                Ty::Union(members) => {
-                    members.iter().for_each(|m| {
-                        self.satisfies_class(class, m, span, subst)
-                    });
-                }
-                Ty::Named(id, type_args) => {
-                    match self
-                        .instance_registry
-                        .lookup(BuiltinClassTag::BitLike, *id)
-                        .cloned()
-                    {
-                        Some(inst) => {
-                            self.check_instance_constraints(
-                                &inst, type_args, span, subst,
-                            );
-                        }
-                        None => match self.expand_union_members(ty) {
-                            Some(members) => members.iter().for_each(|m| {
-                                self.satisfies_class(class, m, span, subst)
-                            }),
-                            None => match self.expand_alias_fully(ty) {
-                                Some(expanded) => self.satisfies_class(
-                                    class, &expanded, span, subst,
-                                ),
+            BuiltinClass::Simple(BuiltinClassTag::BitLike) => {
+                match self.ty_arena.get(ty).clone() {
+                    Ty::Bool | Ty::Int | Ty::Word => {}
+                    Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+                    Ty::Union(members) => {
+                        members.iter().for_each(|m| {
+                            self.satisfies_class(class, *m, span, subst)
+                        });
+                    }
+                    Ty::Named(id, type_args) => {
+                        match self
+                            .instance_registry
+                            .lookup(BuiltinClassTag::BitLike, id)
+                            .cloned()
+                        {
+                            Some(inst) => {
+                                self.check_instance_constraints(
+                                    &inst, &type_args, span, subst,
+                                );
+                            }
+                            None => match self.expand_union_members(ty) {
+                                Some(members) => members.iter().for_each(|m| {
+                                    self.satisfies_class(class, *m, span, subst)
+                                }),
                                 None => {
-                                    self.error(TypeError::UnsatisfiedClass(
+                                    match self.expand_alias_fully(ty) {
+                                        Some(expanded) => self.satisfies_class(
+                                            class, expanded, span, subst,
+                                        ),
+                                        None => {
+                                            self.error(TypeError::UnsatisfiedClass(
                                         BuiltinClass::Simple(
                                             BuiltinClassTag::BitLike,
                                         ),
-                                        ty.clone(),
+                                        ty,
                                         span,
                                     ));
+                                        }
+                                    }
                                 }
                             },
-                        },
+                        }
+                    }
+                    _ => {
+                        self.error(TypeError::UnsatisfiedClass(
+                            BuiltinClass::Simple(BuiltinClassTag::BitLike),
+                            ty,
+                            span,
+                        ));
                     }
                 }
-                _ => {
-                    self.error(TypeError::UnsatisfiedClass(
-                        BuiltinClass::Simple(BuiltinClassTag::BitLike),
-                        ty.clone(),
-                        span,
-                    ));
-                }
-            },
+            }
 
             // `Negatable`: `Int`, `Float` (not `Word`; unsigned)
-            BuiltinClass::Simple(BuiltinClassTag::Negatable) => match ty {
-                Ty::Int | Ty::Float => {}
-                Ty::Var(_) | Ty::Error | Ty::Unknown => {}
-                Ty::Union(members) => {
-                    members.iter().for_each(|m| {
-                        self.satisfies_class(class, m, span, subst)
-                    });
-                }
-                Ty::Named(id, type_args) => {
-                    match self
-                        .instance_registry
-                        .lookup(BuiltinClassTag::Negatable, *id)
-                        .cloned()
-                    {
-                        Some(inst) => {
-                            self.check_instance_constraints(
-                                &inst, type_args, span, subst,
-                            );
-                        }
-                        None => {
-                            self.error(TypeError::UnsatisfiedClass(
-                                BuiltinClass::Simple(
-                                    BuiltinClassTag::Negatable,
-                                ),
-                                ty.clone(),
-                                span,
-                            ));
+            BuiltinClass::Simple(BuiltinClassTag::Negatable) => {
+                match self.ty_arena.get(ty).clone() {
+                    Ty::Int | Ty::Float => {}
+                    Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+                    Ty::Union(members) => {
+                        members.iter().for_each(|m| {
+                            self.satisfies_class(class, *m, span, subst)
+                        });
+                    }
+                    Ty::Named(id, type_args) => {
+                        match self
+                            .instance_registry
+                            .lookup(BuiltinClassTag::Negatable, id)
+                            .cloned()
+                        {
+                            Some(inst) => {
+                                self.check_instance_constraints(
+                                    &inst, &type_args, span, subst,
+                                );
+                            }
+                            None => {
+                                self.error(TypeError::UnsatisfiedClass(
+                                    BuiltinClass::Simple(
+                                        BuiltinClassTag::Negatable,
+                                    ),
+                                    ty,
+                                    span,
+                                ));
+                            }
                         }
                     }
+                    _ => {
+                        self.error(TypeError::UnsatisfiedClass(
+                            BuiltinClass::Simple(BuiltinClassTag::Negatable),
+                            ty,
+                            span,
+                        ));
+                    }
                 }
-                _ => {
-                    self.error(TypeError::UnsatisfiedClass(
-                        BuiltinClass::Simple(BuiltinClassTag::Negatable),
-                        ty.clone(),
-                        span,
-                    ));
-                }
-            },
+            }
 
             // `Ord`: primitives + containers (if elements are `Ord`)
-            BuiltinClass::Simple(BuiltinClassTag::Ord) => match ty {
+            BuiltinClass::Simple(BuiltinClassTag::Ord) => match self
+                .ty_arena
+                .get(ty)
+                .clone()
+            {
                 Ty::Bool
                 | Ty::Int
                 | Ty::Word
@@ -1155,7 +1290,7 @@ impl<'a> InferCtx<'a> {
                 // Tuples are `Ord` if all elements are `Ord` (lexicographic)
                 Ty::Tuple(elems) => {
                     elems.iter().for_each(|e| {
-                        self.satisfies_class(class, e, span, subst);
+                        self.satisfies_class(class, *e, span, subst);
                     });
                 }
                 // `Option[T]` is `Ord` if `T: Ord` (`None < Some`)
@@ -1174,7 +1309,7 @@ impl<'a> InferCtx<'a> {
                 }
                 Ty::Union(members) => {
                     members.iter().for_each(|m| {
-                        self.satisfies_class(class, m, span, subst)
+                        self.satisfies_class(class, *m, span, subst)
                     });
                 }
                 Ty::Named(id, args) => {
@@ -1182,7 +1317,7 @@ impl<'a> InferCtx<'a> {
                     // unions are represented as `Ty::Named(union_id, ...)` rather than
                     // `Ty::Union([members...])`. Once unions are properly represented
                     // at the type level, this special case can be removed.
-                    if let Some(def) = self.registry.get_def(*id) {
+                    if let Some(def) = self.registry.get_def(id) {
                         if let crate::value::TypeDef::Union {
                             members, ..
                         } = def
@@ -1192,19 +1327,19 @@ impl<'a> InferCtx<'a> {
                                 let member_ty =
                                     self.type_expr_to_ty(*member_id);
                                 self.satisfies_class(
-                                    class, &member_ty, span, subst,
+                                    class, member_ty, span, subst,
                                 );
                             });
                         } else {
                             // Not a union, check instance registry
                             match self
                                 .instance_registry
-                                .lookup(BuiltinClassTag::Ord, *id)
+                                .lookup(BuiltinClassTag::Ord, id)
                                 .cloned()
                             {
                                 Some(inst) => {
                                     self.check_instance_constraints(
-                                        &inst, args, span, subst,
+                                        &inst, &args, span, subst,
                                     );
                                 }
                                 None => {
@@ -1212,7 +1347,7 @@ impl<'a> InferCtx<'a> {
                                         BuiltinClass::Simple(
                                             BuiltinClassTag::Ord,
                                         ),
-                                        ty.clone(),
+                                        ty,
                                         span,
                                     ));
                                 }
@@ -1221,7 +1356,7 @@ impl<'a> InferCtx<'a> {
                     } else {
                         self.error(TypeError::UnsatisfiedClass(
                             BuiltinClass::Simple(BuiltinClassTag::Ord),
-                            ty.clone(),
+                            ty,
                             span,
                         ));
                     }
@@ -1229,14 +1364,18 @@ impl<'a> InferCtx<'a> {
                 _ => {
                     self.error(TypeError::UnsatisfiedClass(
                         BuiltinClass::Simple(BuiltinClassTag::Ord),
-                        ty.clone(),
+                        ty,
                         span,
                     ));
                 }
             },
 
             // `Eq`: primitives + containers (if elements are `Eq`)
-            BuiltinClass::Simple(BuiltinClassTag::Eq) => match ty {
+            BuiltinClass::Simple(BuiltinClassTag::Eq) => match self
+                .ty_arena
+                .get(ty)
+                .clone()
+            {
                 Ty::Unit
                 | Ty::Bool
                 | Ty::Int
@@ -1256,7 +1395,7 @@ impl<'a> InferCtx<'a> {
                 // `Tuple[T1, T2, ...]` is `Eq` if all elements are `Eq`
                 Ty::Tuple(elems) => {
                     elems.iter().for_each(|e| {
-                        self.satisfies_class(class, e, span, subst);
+                        self.satisfies_class(class, *e, span, subst);
                     });
                 }
                 // `Map[K, V]` is `Eq` if `K: Eq` and `V: Eq`
@@ -1275,13 +1414,13 @@ impl<'a> InferCtx<'a> {
                 }
                 // `Object` is `Eq` if all field types are `Eq`
                 Ty::Object(fields) => {
-                    fields.values().for_each(|ty| {
-                        self.satisfies_class(class, ty, span, subst);
+                    fields.values().for_each(|t| {
+                        self.satisfies_class(class, *t, span, subst);
                     });
                 }
                 Ty::Union(members) => {
                     members.iter().for_each(|m| {
-                        self.satisfies_class(class, m, span, subst)
+                        self.satisfies_class(class, *m, span, subst)
                     });
                 }
                 Ty::Named(id, args) => {
@@ -1289,7 +1428,7 @@ impl<'a> InferCtx<'a> {
                     // unions are represented as `Ty::Named(union_id, ...)` rather than
                     // `Ty::Union([members...])`. Once unions are properly represented
                     // at the type level, this special case can be removed.
-                    if let Some(def) = self.registry.get_def(*id) {
+                    if let Some(def) = self.registry.get_def(id) {
                         if let crate::value::TypeDef::Union {
                             members, ..
                         } = def
@@ -1299,19 +1438,19 @@ impl<'a> InferCtx<'a> {
                                 let member_ty =
                                     self.type_expr_to_ty(*member_id);
                                 self.satisfies_class(
-                                    class, &member_ty, span, subst,
+                                    class, member_ty, span, subst,
                                 );
                             });
                         } else {
                             // Not a union, check instance registry
                             match self
                                 .instance_registry
-                                .lookup(BuiltinClassTag::Eq, *id)
+                                .lookup(BuiltinClassTag::Eq, id)
                                 .cloned()
                             {
                                 Some(inst) => {
                                     self.check_instance_constraints(
-                                        &inst, args, span, subst,
+                                        &inst, &args, span, subst,
                                     );
                                 }
                                 None => {
@@ -1319,7 +1458,7 @@ impl<'a> InferCtx<'a> {
                                         BuiltinClass::Simple(
                                             BuiltinClassTag::Eq,
                                         ),
-                                        ty.clone(),
+                                        ty,
                                         span,
                                     ));
                                 }
@@ -1328,7 +1467,7 @@ impl<'a> InferCtx<'a> {
                     } else {
                         self.error(TypeError::UnsatisfiedClass(
                             BuiltinClass::Simple(BuiltinClassTag::Eq),
-                            ty.clone(),
+                            ty,
                             span,
                         ));
                     }
@@ -1336,98 +1475,106 @@ impl<'a> InferCtx<'a> {
                 _ => {
                     self.error(TypeError::UnsatisfiedClass(
                         BuiltinClass::Simple(BuiltinClassTag::Eq),
-                        ty.clone(),
+                        ty,
                         span,
                     ));
                 }
             },
 
             // `Display`: everything except `Fn`
-            BuiltinClass::Simple(BuiltinClassTag::Display) => match ty {
-                Ty::Bool
-                | Ty::Int
-                | Ty::Word
-                | Ty::Float
-                | Ty::Char
-                | Ty::String
-                | Ty::Unit
-                | Ty::Time
-                | Ty::Range
-                | Ty::Json
-                | Ty::Ordering
-                | Ty::DataStatus
-                | Ty::FilePath
-                | Ty::Path
-                | Ty::Regex
-                | Ty::RuntimeError
-                | Ty::Local
-                | Ty::Global => {}
-                Ty::Array(_)
-                | Ty::Option(_)
-                | Ty::Result(_, _)
-                | Ty::Map(_, _)
-                | Ty::Tuple(_)
-                | Ty::Object(_) => {}
-                Ty::Var(_) | Ty::Error | Ty::Unknown => {}
-                Ty::Fn(_, _) => {
-                    self.error(TypeError::UnsatisfiedClass(
-                        BuiltinClass::Simple(BuiltinClassTag::Display),
-                        ty.clone(),
-                        span,
-                    ));
-                }
-                Ty::Union(members) => {
-                    members.iter().for_each(|m| {
-                        self.satisfies_class(class, m, span, subst)
-                    });
-                }
-                Ty::Named(id, args) => {
-                    match self
-                        .instance_registry
-                        .lookup(BuiltinClassTag::Display, *id)
-                        .cloned()
-                    {
-                        Some(inst) => {
-                            self.check_instance_constraints(
-                                &inst, args, span, subst,
-                            );
-                        }
-                        None => {
-                            self.error(TypeError::UnsatisfiedClass(
-                                BuiltinClass::Simple(BuiltinClassTag::Display),
-                                ty.clone(),
-                                span,
-                            ));
+            BuiltinClass::Simple(BuiltinClassTag::Display) => {
+                match self.ty_arena.get(ty).clone() {
+                    Ty::Bool
+                    | Ty::Int
+                    | Ty::Word
+                    | Ty::Float
+                    | Ty::Char
+                    | Ty::String
+                    | Ty::Unit
+                    | Ty::Time
+                    | Ty::Range
+                    | Ty::Json
+                    | Ty::Ordering
+                    | Ty::DataStatus
+                    | Ty::FilePath
+                    | Ty::Path
+                    | Ty::Regex
+                    | Ty::RuntimeError
+                    | Ty::Local
+                    | Ty::Global => {}
+                    Ty::Array(_)
+                    | Ty::Option(_)
+                    | Ty::Result(_, _)
+                    | Ty::Map(_, _)
+                    | Ty::Tuple(_)
+                    | Ty::Object(_) => {}
+                    Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+                    Ty::Fn(_, _) => {
+                        self.error(TypeError::UnsatisfiedClass(
+                            BuiltinClass::Simple(BuiltinClassTag::Display),
+                            ty,
+                            span,
+                        ));
+                    }
+                    Ty::Union(members) => {
+                        members.iter().for_each(|m| {
+                            self.satisfies_class(class, *m, span, subst)
+                        });
+                    }
+                    Ty::Named(id, args) => {
+                        match self
+                            .instance_registry
+                            .lookup(BuiltinClassTag::Display, id)
+                            .cloned()
+                        {
+                            Some(inst) => {
+                                self.check_instance_constraints(
+                                    &inst, &args, span, subst,
+                                );
+                            }
+                            None => {
+                                self.error(TypeError::UnsatisfiedClass(
+                                    BuiltinClass::Simple(
+                                        BuiltinClassTag::Display,
+                                    ),
+                                    ty,
+                                    span,
+                                ));
+                            }
                         }
                     }
+                    Ty::Apply(_, _) | Ty::AssocType(_, _, _) => {}
                 }
-                Ty::Apply(_, _) | Ty::AssocType(_, _, _) => {}
-            },
+            }
 
             // `Monoid`: `String`, `Array`, `Map`, `Option`
-            BuiltinClass::Simple(BuiltinClassTag::Monoid) => match ty {
+            BuiltinClass::Simple(BuiltinClassTag::Monoid) => match self
+                .ty_arena
+                .get(ty)
+                .clone()
+            {
                 Ty::String | Ty::Array(_) | Ty::Map(_, _) | Ty::Option(_) => {}
                 Ty::Var(_) | Ty::Error | Ty::Unknown => {}
                 Ty::Union(members) => {
                     members.iter().for_each(|m| {
-                        self.satisfies_class(class, m, span, subst)
+                        self.satisfies_class(class, *m, span, subst)
                     });
                 }
                 Ty::Named(id, type_args) => {
                     match self
                         .instance_registry
-                        .lookup(BuiltinClassTag::Monoid, *id)
+                        .lookup(BuiltinClassTag::Monoid, id)
                         .cloned()
                     {
                         Some(inst) => {
                             self.check_instance_constraints(
-                                &inst, type_args, span, subst,
+                                &inst, &type_args, span, subst,
                             );
                         }
                         None => {
                             self.error(TypeError::UnsatisfiedClass(
                                 BuiltinClass::Simple(BuiltinClassTag::Monoid),
-                                ty.clone(),
+                                ty,
                                 span,
                             ));
                         }
@@ -1436,7 +1583,7 @@ impl<'a> InferCtx<'a> {
                 _ => {
                     self.error(TypeError::UnsatisfiedClass(
                         BuiltinClass::Simple(BuiltinClassTag::Monoid),
-                        ty.clone(),
+                        ty,
                         span,
                     ));
                 }
@@ -1444,30 +1591,33 @@ impl<'a> InferCtx<'a> {
 
             // `Into(target)`: `AS` casts
             BuiltinClass::Parameterized(BuiltinClassTag::Into, to) => {
-                match (ty, to) {
+                let to = *to;
+                let ty_shape = self.ty_arena.get(ty).clone();
+                let to_shape = self.ty_arena.get(to).clone();
+                match (&ty_shape, &to_shape) {
                     (Ty::Var(_), _) | (_, Ty::Var(_)) => {}
                     (Ty::Error, _) | (_, Ty::Error) => {}
                     (Ty::Unknown, _) | (_, Ty::Unknown) => {}
 
-                    (a, b) if a == b => {}
+                    _ if ty == to => {}
 
                     // Functions cannot be stringified
                     (Ty::Fn(_, _), Ty::String) => {
                         self.error(TypeError::InvalidCast {
-                            from: ty.clone(),
-                            to: to.clone(),
+                            from: ty,
+                            to,
                             span,
                         });
                     }
                     (Ty::Union(members), Ty::String) => {
-                        let to = to.clone();
-                        members.iter().for_each(|m| {
+                        let ms: SmallVec<[TyId; 4]> = members.clone();
+                        ms.iter().for_each(|m| {
                             self.satisfies_class(
                                 &BuiltinClass::Parameterized(
                                     BuiltinClassTag::Into,
-                                    to.clone(),
+                                    to,
                                 ),
-                                m,
+                                *m,
                                 span,
                                 subst,
                             )
@@ -1481,34 +1631,35 @@ impl<'a> InferCtx<'a> {
                     | (Ty::Local, Ty::Json)
                     | (Ty::Global, Ty::Json) => {
                         self.error(TypeError::InvalidCast {
-                            from: ty.clone(),
-                            to: to.clone(),
+                            from: ty,
+                            to,
                             span,
                         });
                     }
                     (Ty::Array(elem), Ty::Json) => self.satisfies_class(
                         &BuiltinClass::Parameterized(
                             BuiltinClassTag::Into,
-                            Ty::Json,
+                            TyArena::JSON,
                         ),
-                        elem,
+                        *elem,
                         span,
                         subst,
                     ),
                     (Ty::Option(inner), Ty::Json) => self.satisfies_class(
                         &BuiltinClass::Parameterized(
                             BuiltinClassTag::Into,
-                            Ty::Json,
+                            TyArena::JSON,
                         ),
-                        inner,
+                        *inner,
                         span,
                         subst,
                     ),
                     (Ty::Result(ok, err), Ty::Json) => {
+                        let (ok, err) = (*ok, *err);
                         self.satisfies_class(
                             &BuiltinClass::Parameterized(
                                 BuiltinClassTag::Into,
-                                Ty::Json,
+                                TyArena::JSON,
                             ),
                             ok,
                             span,
@@ -1517,7 +1668,7 @@ impl<'a> InferCtx<'a> {
                         self.satisfies_class(
                             &BuiltinClass::Parameterized(
                                 BuiltinClassTag::Into,
-                                Ty::Json,
+                                TyArena::JSON,
                             ),
                             err,
                             span,
@@ -1525,10 +1676,11 @@ impl<'a> InferCtx<'a> {
                         );
                     }
                     (Ty::Map(k, v), Ty::Json) => {
+                        let (k, v) = (*k, *v);
                         self.satisfies_class(
                             &BuiltinClass::Parameterized(
                                 BuiltinClassTag::Into,
-                                Ty::Json,
+                                TyArena::JSON,
                             ),
                             k,
                             span,
@@ -1537,7 +1689,7 @@ impl<'a> InferCtx<'a> {
                         self.satisfies_class(
                             &BuiltinClass::Parameterized(
                                 BuiltinClassTag::Into,
-                                Ty::Json,
+                                TyArena::JSON,
                             ),
                             v,
                             span,
@@ -1545,52 +1697,57 @@ impl<'a> InferCtx<'a> {
                         );
                     }
                     (Ty::Tuple(elems), Ty::Json) => {
-                        elems.iter().for_each(|e| {
+                        let es: SmallVec<[TyId; 4]> = elems.clone();
+                        es.iter().for_each(|e| {
                             self.satisfies_class(
                                 &BuiltinClass::Parameterized(
                                     BuiltinClassTag::Into,
-                                    Ty::Json,
+                                    TyArena::JSON,
                                 ),
-                                e,
+                                *e,
                                 span,
                                 subst,
                             )
                         });
                     }
                     (Ty::Object(fields), Ty::Json) => {
-                        fields.values().for_each(|t| {
+                        let vals: SmallVec<[TyId; 4]> =
+                            fields.values().copied().collect();
+                        vals.iter().for_each(|t| {
                             self.satisfies_class(
                                 &BuiltinClass::Parameterized(
                                     BuiltinClassTag::Into,
-                                    Ty::Json,
+                                    TyArena::JSON,
                                 ),
-                                t,
+                                *t,
                                 span,
                                 subst,
                             )
                         });
                     }
                     (Ty::Union(members), Ty::Json) => {
-                        members.iter().for_each(|m| {
+                        let ms: SmallVec<[TyId; 4]> = members.clone();
+                        ms.iter().for_each(|m| {
                             self.satisfies_class(
                                 &BuiltinClass::Parameterized(
                                     BuiltinClassTag::Into,
-                                    Ty::Json,
+                                    TyArena::JSON,
                                 ),
-                                m,
+                                *m,
                                 span,
                                 subst,
                             )
                         });
                     }
                     (Ty::Named(_, args), Ty::Json) => {
-                        args.iter().for_each(|a| {
+                        let as_: SmallVec<[TyId; 4]> = args.clone();
+                        as_.iter().for_each(|a| {
                             self.satisfies_class(
                                 &BuiltinClass::Parameterized(
                                     BuiltinClassTag::Into,
-                                    Ty::Json,
+                                    TyArena::JSON,
                                 ),
-                                a,
+                                *a,
                                 span,
                                 subst,
                             )
@@ -1611,50 +1768,49 @@ impl<'a> InferCtx<'a> {
                         if *id == crate::TypeId::PATH => {}
 
                     // Storable to member type
-                    (Ty::Named(id, _), target)
-                        if *id == crate::TypeId::STORABLE =>
-                    {
-                        if !Ty::STORABLE_MEMBERS.contains(target) {
+                    (Ty::Named(id, _), _) if *id == crate::TypeId::STORABLE => {
+                        if !TyArena::STORABLE_MEMBERS.contains(&to) {
                             self.error(TypeError::InvalidCast {
-                                from: ty.clone(),
-                                to: to.clone(),
+                                from: ty,
+                                to,
                                 span,
                             });
                         }
                     }
 
                     // Member to union type
-                    (member, Ty::Named(id, _))
+                    (_, Ty::Named(id, _))
                         if *id == crate::TypeId::STORABLE
                             || *id == crate::TypeId::SCALAR
                             || *id == crate::TypeId::SUBSCRIPT =>
                     {
-                        let is_member = if *id == crate::TypeId::STORABLE {
-                            Ty::STORABLE_MEMBERS.contains(member)
-                        } else if *id == crate::TypeId::SCALAR {
-                            Ty::SCALAR_MEMBERS.contains(member)
+                        let uid = *id;
+                        let is_member = if uid == crate::TypeId::STORABLE {
+                            TyArena::STORABLE_MEMBERS.contains(&ty)
+                        } else if uid == crate::TypeId::SCALAR {
+                            TyArena::SCALAR_MEMBERS.contains(&ty)
                         } else {
-                            Ty::SUBSCRIPT_MEMBERS.contains(member)
+                            TyArena::SUBSCRIPT_MEMBERS.contains(&ty)
                         };
                         if !is_member {
                             self.error(TypeError::InvalidCast {
-                                from: ty.clone(),
-                                to: to.clone(),
+                                from: ty,
+                                to,
                                 span,
                             });
                         }
                     }
 
                     // Union handling
-                    (Ty::Union(members), target) => {
-                        let target = target.clone();
-                        members.iter().for_each(|m| {
+                    (Ty::Union(members), _) => {
+                        let ms: SmallVec<[TyId; 4]> = members.clone();
+                        ms.iter().for_each(|m| {
                             self.satisfies_class(
                                 &BuiltinClass::Parameterized(
                                     BuiltinClassTag::Into,
-                                    target.clone(),
+                                    to,
                                 ),
-                                m,
+                                *m,
                                 span,
                                 subst,
                             )
@@ -1662,35 +1818,32 @@ impl<'a> InferCtx<'a> {
                     }
 
                     // User type with Into instance
-                    (Ty::Named(id, type_args), target) => {
+                    (Ty::Named(id, type_args), _) => {
+                        let (id, type_args) = (*id, type_args.clone());
                         match self
                             .instance_registry
-                            .lookup(BuiltinClassTag::Into, *id)
+                            .lookup(BuiltinClassTag::Into, id)
                             .cloned()
                         {
                             Some(inst) => {
-                                let inst_target = inst.class_args.first();
-                                match inst_target {
-                                    Some(inst_target)
-                                        if inst_target == target =>
-                                    {
-                                        self.check_instance_constraints(
-                                            &inst, type_args, span, subst,
-                                        );
-                                    }
-                                    _ => {
-                                        self.error(TypeError::InvalidCast {
-                                            from: ty.clone(),
-                                            to: to.clone(),
-                                            span,
-                                        });
-                                    }
+                                let inst_target =
+                                    inst.class_args.first().copied();
+                                if inst_target == Some(to) {
+                                    self.check_instance_constraints(
+                                        &inst, &type_args, span, subst,
+                                    );
+                                } else {
+                                    self.error(TypeError::InvalidCast {
+                                        from: ty,
+                                        to,
+                                        span,
+                                    });
                                 }
                             }
                             None => {
                                 self.error(TypeError::InvalidCast {
-                                    from: ty.clone(),
-                                    to: to.clone(),
+                                    from: ty,
+                                    to,
                                     span,
                                 });
                             }
@@ -1699,31 +1852,29 @@ impl<'a> InferCtx<'a> {
 
                     // Builtin type with user-defined Into[UserType] instance
                     // E.g., `CLASS Into[UserId] FOR Int { ... }`
-                    (from, target) => {
-                        let type_id = self.primitive_type_id(from);
+                    _ => {
+                        let type_id =
+                            self.primitive_type_id(self.ty_arena.get(ty));
                         match type_id.and_then(|id| {
                             self.instance_registry
                                 .lookup(BuiltinClassTag::Into, id)
                                 .cloned()
                         }) {
                             Some(inst) => {
-                                let inst_target = inst.class_args.first();
-                                match inst_target {
-                                    Some(inst_target)
-                                        if inst_target == target => {}
-                                    _ => {
-                                        self.error(TypeError::InvalidCast {
-                                            from: ty.clone(),
-                                            to: to.clone(),
-                                            span,
-                                        });
-                                    }
+                                let inst_target =
+                                    inst.class_args.first().copied();
+                                if inst_target != Some(to) {
+                                    self.error(TypeError::InvalidCast {
+                                        from: ty,
+                                        to,
+                                        span,
+                                    });
                                 }
                             }
                             None => {
                                 self.error(TypeError::InvalidCast {
-                                    from: ty.clone(),
-                                    to: to.clone(),
+                                    from: ty,
+                                    to,
                                     span,
                                 });
                             }
@@ -1734,18 +1885,21 @@ impl<'a> InferCtx<'a> {
 
             // `TryInto(target)`: `READ` casts
             BuiltinClass::Parameterized(BuiltinClassTag::TryInto, to) => {
-                match (ty, to) {
+                let to = *to;
+                let ty_shape = self.ty_arena.get(ty).clone();
+                let to_shape = self.ty_arena.get(to).clone();
+                match (&ty_shape, &to_shape) {
                     (Ty::Var(_), _) | (_, Ty::Var(_)) => {}
                     (Ty::Error, _) | (_, Ty::Error) => {}
                     (Ty::Unknown, _) | (_, Ty::Unknown) => {}
 
-                    (a, b) if a == b => {}
+                    _ if ty == to => {}
 
                     // Function types cannot be source for READ
                     (Ty::Fn(_, _), _) => {
                         self.error(TypeError::InvalidRead {
-                            from: ty.clone(),
-                            to: to.clone(),
+                            from: ty,
+                            to,
                             span,
                         });
                     }
@@ -1756,8 +1910,8 @@ impl<'a> InferCtx<'a> {
                     | (_, Ty::Local)
                     | (_, Ty::Global) => {
                         self.error(TypeError::InvalidRead {
-                            from: ty.clone(),
-                            to: to.clone(),
+                            from: ty,
+                            to,
                             span,
                         });
                     }
@@ -1767,34 +1921,35 @@ impl<'a> InferCtx<'a> {
                     | (Ty::Local, Ty::Json)
                     | (Ty::Global, Ty::Json) => {
                         self.error(TypeError::InvalidRead {
-                            from: ty.clone(),
-                            to: to.clone(),
+                            from: ty,
+                            to,
                             span,
                         });
                     }
                     (Ty::Array(elem), Ty::Json) => self.satisfies_class(
                         &BuiltinClass::Parameterized(
                             BuiltinClassTag::TryInto,
-                            Ty::Json,
+                            TyArena::JSON,
                         ),
-                        elem,
+                        *elem,
                         span,
                         subst,
                     ),
                     (Ty::Option(inner), Ty::Json) => self.satisfies_class(
                         &BuiltinClass::Parameterized(
                             BuiltinClassTag::TryInto,
-                            Ty::Json,
+                            TyArena::JSON,
                         ),
-                        inner,
+                        *inner,
                         span,
                         subst,
                     ),
                     (Ty::Result(ok, err), Ty::Json) => {
+                        let (ok, err) = (*ok, *err);
                         self.satisfies_class(
                             &BuiltinClass::Parameterized(
                                 BuiltinClassTag::TryInto,
-                                Ty::Json,
+                                TyArena::JSON,
                             ),
                             ok,
                             span,
@@ -1803,7 +1958,7 @@ impl<'a> InferCtx<'a> {
                         self.satisfies_class(
                             &BuiltinClass::Parameterized(
                                 BuiltinClassTag::TryInto,
-                                Ty::Json,
+                                TyArena::JSON,
                             ),
                             err,
                             span,
@@ -1811,10 +1966,11 @@ impl<'a> InferCtx<'a> {
                         );
                     }
                     (Ty::Map(k, v), Ty::Json) => {
+                        let (k, v) = (*k, *v);
                         self.satisfies_class(
                             &BuiltinClass::Parameterized(
                                 BuiltinClassTag::TryInto,
-                                Ty::Json,
+                                TyArena::JSON,
                             ),
                             k,
                             span,
@@ -1823,7 +1979,7 @@ impl<'a> InferCtx<'a> {
                         self.satisfies_class(
                             &BuiltinClass::Parameterized(
                                 BuiltinClassTag::TryInto,
-                                Ty::Json,
+                                TyArena::JSON,
                             ),
                             v,
                             span,
@@ -1831,39 +1987,43 @@ impl<'a> InferCtx<'a> {
                         );
                     }
                     (Ty::Tuple(elems), Ty::Json) => {
-                        elems.iter().for_each(|e| {
+                        let es: SmallVec<[TyId; 4]> = elems.clone();
+                        es.iter().for_each(|e| {
                             self.satisfies_class(
                                 &BuiltinClass::Parameterized(
                                     BuiltinClassTag::TryInto,
-                                    Ty::Json,
+                                    TyArena::JSON,
                                 ),
-                                e,
+                                *e,
                                 span,
                                 subst,
                             )
                         });
                     }
                     (Ty::Object(fields), Ty::Json) => {
-                        fields.values().for_each(|t| {
+                        let vals: SmallVec<[TyId; 4]> =
+                            fields.values().copied().collect();
+                        vals.iter().for_each(|t| {
                             self.satisfies_class(
                                 &BuiltinClass::Parameterized(
                                     BuiltinClassTag::TryInto,
-                                    Ty::Json,
+                                    TyArena::JSON,
                                 ),
-                                t,
+                                *t,
                                 span,
                                 subst,
                             )
                         });
                     }
                     (Ty::Named(_, args), Ty::Json) => {
-                        args.iter().for_each(|a| {
+                        let as_: SmallVec<[TyId; 4]> = args.clone();
+                        as_.iter().for_each(|a| {
                             self.satisfies_class(
                                 &BuiltinClass::Parameterized(
                                     BuiltinClassTag::TryInto,
-                                    Ty::Json,
+                                    TyArena::JSON,
                                 ),
-                                a,
+                                *a,
                                 span,
                                 subst,
                             )
@@ -1871,15 +2031,15 @@ impl<'a> InferCtx<'a> {
                     }
 
                     // Union handling
-                    (Ty::Union(members), target) => {
-                        let target = target.clone();
-                        members.iter().for_each(|m| {
+                    (Ty::Union(members), _) => {
+                        let ms: SmallVec<[TyId; 4]> = members.clone();
+                        ms.iter().for_each(|m| {
                             self.satisfies_class(
                                 &BuiltinClass::Parameterized(
                                     BuiltinClassTag::TryInto,
-                                    target.clone(),
+                                    to,
                                 ),
-                                m,
+                                *m,
                                 span,
                                 subst,
                             )
@@ -1887,16 +2047,16 @@ impl<'a> InferCtx<'a> {
                     }
 
                     // User type with TryInto instance
-                    (Ty::Named(id, type_args), target) => {
+                    (Ty::Named(id, type_args), _) => {
+                        let (id, type_args) = (*id, type_args.clone());
                         if let Some(inst) = self
                             .instance_registry
-                            .lookup(BuiltinClassTag::TryInto, *id)
+                            .lookup(BuiltinClassTag::TryInto, id)
                             .cloned()
                         {
-                            let inst_target = inst.class_args.first();
-                            if inst_target == Some(target) {
+                            if inst.class_args.first().copied() == Some(to) {
                                 self.check_instance_constraints(
-                                    &inst, type_args, span, subst,
+                                    &inst, &type_args, span, subst,
                                 );
                             }
                         }
@@ -1911,15 +2071,16 @@ impl<'a> InferCtx<'a> {
             // `None` = polymorphic (just check the type is fallible)
             // `Some(inner)` = check and unify element type
             BuiltinClass::Hkt(BuiltinClassTag::Fallible, opt_inner) => {
-                let expanded = self.expand_alias_fully(ty);
-                let ty = expanded.as_ref().unwrap_or(ty);
+                let opt_inner = *opt_inner;
+                let ty = self.expand_alias_fully(ty).unwrap_or(ty);
 
-                match ty {
+                match self.ty_arena.get(ty).clone() {
                     Ty::Option(opt_elem) => {
                         if let Some(inner) = opt_inner {
                             match self.unify_types(inner, opt_elem, span) {
                                 UnifyResult::Ok(s) => {
-                                    *subst = subst.compose(&s)
+                                    *subst =
+                                        subst.compose(&s, &mut self.ty_arena)
                                 }
                                 UnifyResult::Err(e) => self.error(e),
                             }
@@ -1929,7 +2090,8 @@ impl<'a> InferCtx<'a> {
                         if let Some(inner) = opt_inner {
                             match self.unify_types(inner, ok, span) {
                                 UnifyResult::Ok(s) => {
-                                    *subst = subst.compose(&s)
+                                    *subst =
+                                        subst.compose(&s, &mut self.ty_arena)
                                 }
                                 UnifyResult::Err(e) => self.error(e),
                             }
@@ -1937,15 +2099,17 @@ impl<'a> InferCtx<'a> {
                     }
                     Ty::Union(members) => {
                         members.iter().for_each(|m| {
-                            self.satisfies_class(class, m, span, subst)
+                            self.satisfies_class(class, *m, span, subst)
                         });
                     }
                     Ty::Var(v) => {
                         // Default unresolved to `Option`
-                        let elem = opt_inner
-                            .clone()
-                            .unwrap_or_else(|| Ty::Var(self.fresh_var()));
-                        subst.extend(*v, Ty::Option(Box::new(elem)));
+                        let elem = opt_inner.unwrap_or_else(|| {
+                            let fv = self.fresh_var();
+                            self.ty_arena.alloc(Ty::Var(fv))
+                        });
+                        let opt_id = self.ty_arena.option(elem);
+                        subst.extend(v, opt_id);
                     }
                     Ty::Apply(_, _) => {
                         // HKT variable application; defer
@@ -1954,28 +2118,32 @@ impl<'a> InferCtx<'a> {
                     Ty::Named(id, type_args) => {
                         match self
                             .instance_registry
-                            .lookup(BuiltinClassTag::Fallible, *id)
+                            .lookup(BuiltinClassTag::Fallible, id)
                             .cloned()
                         {
                             Some(inst) => {
                                 if let Some(inner) = opt_inner {
-                                    if let Some(inst_inner) =
+                                    if let Some(&inst_inner) =
                                         inst.class_args.first()
                                     {
                                         let param_subst = Subst(
                                             inst.type_params
                                                 .iter()
                                                 .zip(type_args.iter())
-                                                .map(|(p, a)| (*p, a.clone()))
+                                                .map(|(p, &a)| (*p, a))
                                                 .collect(),
                                         );
-                                        let resolved =
-                                            inst_inner.apply(&param_subst);
+                                        let resolved = self
+                                            .ty_arena
+                                            .apply(inst_inner, &param_subst);
                                         match self
-                                            .unify_types(inner, &resolved, span)
+                                            .unify_types(inner, resolved, span)
                                         {
                                             UnifyResult::Ok(s) => {
-                                                *subst = subst.compose(&s)
+                                                *subst = subst.compose(
+                                                    &s,
+                                                    &mut self.ty_arena,
+                                                )
                                             }
                                             UnifyResult::Err(e) => {
                                                 self.error(e)
@@ -1984,13 +2152,13 @@ impl<'a> InferCtx<'a> {
                                     }
                                 }
                                 self.check_instance_constraints(
-                                    &inst, type_args, span, subst,
+                                    &inst, &type_args, span, subst,
                                 );
                             }
                             None => {
                                 self.error(TypeError::UnsatisfiedClass(
                                     class.clone(),
-                                    ty.clone(),
+                                    ty,
                                     span,
                                 ));
                             }
@@ -1999,7 +2167,7 @@ impl<'a> InferCtx<'a> {
                     _ => {
                         self.error(TypeError::UnsatisfiedClass(
                             class.clone(),
-                            ty.clone(),
+                            ty,
                             span,
                         ));
                     }
@@ -2010,12 +2178,14 @@ impl<'a> InferCtx<'a> {
             // `None` = polymorphic (just check the type is iterable)
             // `Some(elem)` = check and unify element type
             BuiltinClass::Hkt(BuiltinClassTag::Iterable, opt_elem) => {
-                match ty {
+                let opt_elem = *opt_elem;
+                match self.ty_arena.get(ty).clone() {
                     Ty::Array(inner) => {
                         if let Some(elem) = opt_elem {
                             match self.unify_types(elem, inner, span) {
                                 UnifyResult::Ok(s) => {
-                                    *subst = subst.compose(&s)
+                                    *subst =
+                                        subst.compose(&s, &mut self.ty_arena)
                                 }
                                 UnifyResult::Err(e) => self.error(e),
                             }
@@ -2023,9 +2193,10 @@ impl<'a> InferCtx<'a> {
                     }
                     Ty::Range => {
                         if let Some(elem) = opt_elem {
-                            match self.unify_types(elem, &Ty::Int, span) {
+                            match self.unify_types(elem, TyArena::INT, span) {
                                 UnifyResult::Ok(s) => {
-                                    *subst = subst.compose(&s)
+                                    *subst =
+                                        subst.compose(&s, &mut self.ty_arena)
                                 }
                                 UnifyResult::Err(e) => self.error(e),
                             }
@@ -2033,35 +2204,39 @@ impl<'a> InferCtx<'a> {
                     }
                     Ty::Union(members) => {
                         members.iter().for_each(|m| {
-                            self.satisfies_class(class, m, span, subst)
+                            self.satisfies_class(class, *m, span, subst)
                         });
                     }
                     Ty::Var(_) | Ty::Apply(_, _) | Ty::Error | Ty::Unknown => {}
                     Ty::Named(id, type_args) => {
                         match self
                             .instance_registry
-                            .lookup(BuiltinClassTag::Iterable, *id)
+                            .lookup(BuiltinClassTag::Iterable, id)
                             .cloned()
                         {
                             Some(inst) => {
                                 if let Some(elem) = opt_elem {
-                                    if let Some(inst_elem) =
+                                    if let Some(&inst_elem) =
                                         inst.class_args.first()
                                     {
                                         let param_subst = Subst(
                                             inst.type_params
                                                 .iter()
                                                 .zip(type_args.iter())
-                                                .map(|(p, a)| (*p, a.clone()))
+                                                .map(|(p, &a)| (*p, a))
                                                 .collect(),
                                         );
-                                        let resolved =
-                                            inst_elem.apply(&param_subst);
+                                        let resolved = self
+                                            .ty_arena
+                                            .apply(inst_elem, &param_subst);
                                         match self
-                                            .unify_types(elem, &resolved, span)
+                                            .unify_types(elem, resolved, span)
                                         {
                                             UnifyResult::Ok(s) => {
-                                                *subst = subst.compose(&s)
+                                                *subst = subst.compose(
+                                                    &s,
+                                                    &mut self.ty_arena,
+                                                )
                                             }
                                             UnifyResult::Err(e) => {
                                                 self.error(e)
@@ -2070,28 +2245,26 @@ impl<'a> InferCtx<'a> {
                                     }
                                 }
                                 self.check_instance_constraints(
-                                    &inst, type_args, span, subst,
+                                    &inst, &type_args, span, subst,
                                 );
                             }
                             None => {
-                                let err_ty = opt_elem
-                                    .as_ref()
-                                    .map_or_else(|| Ty::Unknown, |e| e.clone());
+                                let exp = opt_elem.unwrap_or(TyArena::UNKNOWN);
+                                let arr = self.ty_arena.array(exp);
                                 self.error(TypeError::Mismatch {
-                                    expected: Ty::Array(Box::new(err_ty)),
-                                    got: ty.clone(),
+                                    expected: arr,
+                                    got: ty,
                                     span,
                                 });
                             }
                         }
                     }
                     _ => {
-                        let err_ty = opt_elem
-                            .as_ref()
-                            .map_or_else(|| Ty::Unknown, |e| e.clone());
+                        let exp = opt_elem.unwrap_or(TyArena::UNKNOWN);
+                        let arr = self.ty_arena.array(exp);
                         self.error(TypeError::Mismatch {
-                            expected: Ty::Array(Box::new(err_ty)),
-                            got: ty.clone(),
+                            expected: arr,
+                            got: ty,
                             span,
                         });
                     }
@@ -2103,39 +2276,46 @@ impl<'a> InferCtx<'a> {
             // The index type is now accessed via the associated type `.Index`,
             // not as a class parameter. Only the element type is unified here.
             BuiltinClass::Parameterized(BuiltinClassTag::Indexable, elem) => {
-                match ty {
+                let elem = *elem;
+                match self.ty_arena.get(ty).clone() {
                     Ty::Array(inner) => {
                         // Array[T]: elem = T (index type is Int, via .Index)
                         match self.unify_types(elem, inner, span) {
-                            UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                            UnifyResult::Ok(s) => {
+                                *subst = subst.compose(&s, &mut self.ty_arena)
+                            }
                             UnifyResult::Err(e) => self.error(e),
                         }
                     }
                     Ty::Map(_key, val) => {
                         // Map[K, V]: elem = Option[V] (index type is K, via .Index)
-                        let opt_val = Ty::Option(val.clone());
-                        match self.unify_types(elem, &opt_val, span) {
-                            UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                        let opt_val = self.ty_arena.option(val);
+                        match self.unify_types(elem, opt_val, span) {
+                            UnifyResult::Ok(s) => {
+                                *subst = subst.compose(&s, &mut self.ty_arena)
+                            }
                             UnifyResult::Err(e) => self.error(e),
                         }
                     }
                     Ty::String => {
                         // String: elem = Char (index type is Int, via .Index)
-                        match self.unify_types(elem, &Ty::Char, span) {
-                            UnifyResult::Ok(s) => *subst = subst.compose(&s),
+                        match self.unify_types(elem, TyArena::CHAR, span) {
+                            UnifyResult::Ok(s) => {
+                                *subst = subst.compose(&s, &mut self.ty_arena)
+                            }
                             UnifyResult::Err(e) => self.error(e),
                         }
                     }
                     Ty::Union(members) => {
                         members.iter().for_each(|m| {
-                            self.satisfies_class(class, m, span, subst)
+                            self.satisfies_class(class, *m, span, subst)
                         });
                     }
                     Ty::Var(_) | Ty::Error | Ty::Unknown => {}
                     Ty::Named(id, type_args) => {
                         match self
                             .instance_registry
-                            .lookup(BuiltinClassTag::Indexable, *id)
+                            .lookup(BuiltinClassTag::Indexable, id)
                             .cloned()
                         {
                             Some(inst) => {
@@ -2143,31 +2323,33 @@ impl<'a> InferCtx<'a> {
                                     inst.type_params
                                         .iter()
                                         .zip(type_args.iter())
-                                        .map(|(p, a)| (*p, a.clone()))
+                                        .map(|(p, &a)| (*p, a))
                                         .collect(),
                                 );
                                 // class_args[0] is the element type
-                                if let Some(inst_elem) = inst.class_args.first()
+                                if let Some(&inst_elem) =
+                                    inst.class_args.first()
                                 {
-                                    let resolved =
-                                        inst_elem.apply(&param_subst);
-                                    match self
-                                        .unify_types(elem, &resolved, span)
+                                    let resolved = self
+                                        .ty_arena
+                                        .apply(inst_elem, &param_subst);
+                                    match self.unify_types(elem, resolved, span)
                                     {
                                         UnifyResult::Ok(s) => {
-                                            *subst = subst.compose(&s)
+                                            *subst = subst
+                                                .compose(&s, &mut self.ty_arena)
                                         }
                                         UnifyResult::Err(e) => self.error(e),
                                     }
                                 }
                                 self.check_instance_constraints(
-                                    &inst, type_args, span, subst,
+                                    &inst, &type_args, span, subst,
                                 );
                             }
                             None => {
                                 self.error(TypeError::UnsatisfiedClass(
                                     class.clone(),
-                                    ty.clone(),
+                                    ty,
                                     span,
                                 ));
                             }
@@ -2176,7 +2358,7 @@ impl<'a> InferCtx<'a> {
                     _ => {
                         self.error(TypeError::UnsatisfiedClass(
                             class.clone(),
-                            ty.clone(),
+                            ty,
                             span,
                         ));
                     }
@@ -2185,12 +2367,14 @@ impl<'a> InferCtx<'a> {
 
             // `Mappable(opt_elem)`: `Array[T]`, `Option[T]`, `Result[T, E]`
             BuiltinClass::Hkt(BuiltinClassTag::Mappable, opt_elem) => {
-                match ty {
+                let opt_elem = *opt_elem;
+                match self.ty_arena.get(ty).clone() {
                     Ty::Array(inner) => {
                         if let Some(elem) = opt_elem {
                             match self.unify_types(elem, inner, span) {
                                 UnifyResult::Ok(s) => {
-                                    *subst = subst.compose(&s)
+                                    *subst =
+                                        subst.compose(&s, &mut self.ty_arena)
                                 }
                                 UnifyResult::Err(e) => self.error(e),
                             }
@@ -2200,7 +2384,8 @@ impl<'a> InferCtx<'a> {
                         if let Some(elem) = opt_elem {
                             match self.unify_types(elem, inner, span) {
                                 UnifyResult::Ok(s) => {
-                                    *subst = subst.compose(&s)
+                                    *subst =
+                                        subst.compose(&s, &mut self.ty_arena)
                                 }
                                 UnifyResult::Err(e) => self.error(e),
                             }
@@ -2210,7 +2395,8 @@ impl<'a> InferCtx<'a> {
                         if let Some(elem) = opt_elem {
                             match self.unify_types(elem, ok, span) {
                                 UnifyResult::Ok(s) => {
-                                    *subst = subst.compose(&s)
+                                    *subst =
+                                        subst.compose(&s, &mut self.ty_arena)
                                 }
                                 UnifyResult::Err(e) => self.error(e),
                             }
@@ -2218,35 +2404,39 @@ impl<'a> InferCtx<'a> {
                     }
                     Ty::Union(members) => {
                         members.iter().for_each(|m| {
-                            self.satisfies_class(class, m, span, subst)
+                            self.satisfies_class(class, *m, span, subst)
                         });
                     }
                     Ty::Var(_) | Ty::Apply(_, _) | Ty::Error | Ty::Unknown => {}
                     Ty::Named(id, type_args) => {
                         match self
                             .instance_registry
-                            .lookup(BuiltinClassTag::Mappable, *id)
+                            .lookup(BuiltinClassTag::Mappable, id)
                             .cloned()
                         {
                             Some(inst) => {
                                 if let Some(elem) = opt_elem {
-                                    if let Some(inst_elem) =
+                                    if let Some(&inst_elem) =
                                         inst.class_args.first()
                                     {
                                         let param_subst = Subst(
                                             inst.type_params
                                                 .iter()
                                                 .zip(type_args.iter())
-                                                .map(|(p, a)| (*p, a.clone()))
+                                                .map(|(p, &a)| (*p, a))
                                                 .collect(),
                                         );
-                                        let resolved =
-                                            inst_elem.apply(&param_subst);
+                                        let resolved = self
+                                            .ty_arena
+                                            .apply(inst_elem, &param_subst);
                                         match self
-                                            .unify_types(elem, &resolved, span)
+                                            .unify_types(elem, resolved, span)
                                         {
                                             UnifyResult::Ok(s) => {
-                                                *subst = subst.compose(&s)
+                                                *subst = subst.compose(
+                                                    &s,
+                                                    &mut self.ty_arena,
+                                                )
                                             }
                                             UnifyResult::Err(e) => {
                                                 self.error(e)
@@ -2255,13 +2445,13 @@ impl<'a> InferCtx<'a> {
                                     }
                                 }
                                 self.check_instance_constraints(
-                                    &inst, type_args, span, subst,
+                                    &inst, &type_args, span, subst,
                                 );
                             }
                             None => {
                                 self.error(TypeError::UnsatisfiedClass(
                                     class.clone(),
-                                    ty.clone(),
+                                    ty,
                                     span,
                                 ));
                             }
@@ -2270,7 +2460,7 @@ impl<'a> InferCtx<'a> {
                     _ => {
                         self.error(TypeError::UnsatisfiedClass(
                             class.clone(),
-                            ty.clone(),
+                            ty,
                             span,
                         ));
                     }
@@ -2279,12 +2469,14 @@ impl<'a> InferCtx<'a> {
 
             // `Filterable(opt_elem)`: `Array[T]`, `Range`, `Option[T]`, `Result[T]`
             BuiltinClass::Hkt(BuiltinClassTag::Filterable, opt_elem) => {
-                match ty {
+                let opt_elem = *opt_elem;
+                match self.ty_arena.get(ty).clone() {
                     Ty::Array(inner) => {
                         if let Some(elem) = opt_elem {
                             match self.unify_types(elem, inner, span) {
                                 UnifyResult::Ok(s) => {
-                                    *subst = subst.compose(&s)
+                                    *subst =
+                                        subst.compose(&s, &mut self.ty_arena)
                                 }
                                 UnifyResult::Err(e) => self.error(e),
                             }
@@ -2292,9 +2484,10 @@ impl<'a> InferCtx<'a> {
                     }
                     Ty::Range => {
                         if let Some(elem) = opt_elem {
-                            match self.unify_types(elem, &Ty::Int, span) {
+                            match self.unify_types(elem, TyArena::INT, span) {
                                 UnifyResult::Ok(s) => {
-                                    *subst = subst.compose(&s)
+                                    *subst =
+                                        subst.compose(&s, &mut self.ty_arena)
                                 }
                                 UnifyResult::Err(e) => self.error(e),
                             }
@@ -2302,35 +2495,39 @@ impl<'a> InferCtx<'a> {
                     }
                     Ty::Union(members) => {
                         members.iter().for_each(|m| {
-                            self.satisfies_class(class, m, span, subst)
+                            self.satisfies_class(class, *m, span, subst)
                         });
                     }
                     Ty::Var(_) | Ty::Apply(_, _) | Ty::Error | Ty::Unknown => {}
                     Ty::Named(id, type_args) => {
                         match self
                             .instance_registry
-                            .lookup(BuiltinClassTag::Filterable, *id)
+                            .lookup(BuiltinClassTag::Filterable, id)
                             .cloned()
                         {
                             Some(inst) => {
                                 if let Some(elem) = opt_elem {
-                                    if let Some(inst_elem) =
+                                    if let Some(&inst_elem) =
                                         inst.class_args.first()
                                     {
                                         let param_subst = Subst(
                                             inst.type_params
                                                 .iter()
                                                 .zip(type_args.iter())
-                                                .map(|(p, a)| (*p, a.clone()))
+                                                .map(|(p, &a)| (*p, a))
                                                 .collect(),
                                         );
-                                        let resolved =
-                                            inst_elem.apply(&param_subst);
+                                        let resolved = self
+                                            .ty_arena
+                                            .apply(inst_elem, &param_subst);
                                         match self
-                                            .unify_types(elem, &resolved, span)
+                                            .unify_types(elem, resolved, span)
                                         {
                                             UnifyResult::Ok(s) => {
-                                                *subst = subst.compose(&s)
+                                                *subst = subst.compose(
+                                                    &s,
+                                                    &mut self.ty_arena,
+                                                )
                                             }
                                             UnifyResult::Err(e) => {
                                                 self.error(e)
@@ -2339,13 +2536,13 @@ impl<'a> InferCtx<'a> {
                                     }
                                 }
                                 self.check_instance_constraints(
-                                    &inst, type_args, span, subst,
+                                    &inst, &type_args, span, subst,
                                 );
                             }
                             None => {
                                 self.error(TypeError::UnsatisfiedClass(
                                     class.clone(),
-                                    ty.clone(),
+                                    ty,
                                     span,
                                 ));
                             }
@@ -2354,7 +2551,7 @@ impl<'a> InferCtx<'a> {
                     _ => {
                         self.error(TypeError::UnsatisfiedClass(
                             class.clone(),
-                            ty.clone(),
+                            ty,
                             span,
                         ));
                     }
@@ -2363,12 +2560,14 @@ impl<'a> InferCtx<'a> {
 
             // `Foldable(opt_elem)`: `Array[T]`, `Range`, `Option[T]`, `Result[T]`
             BuiltinClass::Hkt(BuiltinClassTag::Foldable, opt_elem) => {
-                match ty {
+                let opt_elem = *opt_elem;
+                match self.ty_arena.get(ty).clone() {
                     Ty::Array(inner) => {
                         if let Some(elem) = opt_elem {
                             match self.unify_types(elem, inner, span) {
                                 UnifyResult::Ok(s) => {
-                                    *subst = subst.compose(&s)
+                                    *subst =
+                                        subst.compose(&s, &mut self.ty_arena)
                                 }
                                 UnifyResult::Err(e) => self.error(e),
                             }
@@ -2376,9 +2575,10 @@ impl<'a> InferCtx<'a> {
                     }
                     Ty::Range => {
                         if let Some(elem) = opt_elem {
-                            match self.unify_types(elem, &Ty::Int, span) {
+                            match self.unify_types(elem, TyArena::INT, span) {
                                 UnifyResult::Ok(s) => {
-                                    *subst = subst.compose(&s)
+                                    *subst =
+                                        subst.compose(&s, &mut self.ty_arena)
                                 }
                                 UnifyResult::Err(e) => self.error(e),
                             }
@@ -2386,35 +2586,39 @@ impl<'a> InferCtx<'a> {
                     }
                     Ty::Union(members) => {
                         members.iter().for_each(|m| {
-                            self.satisfies_class(class, m, span, subst)
+                            self.satisfies_class(class, *m, span, subst)
                         });
                     }
                     Ty::Var(_) | Ty::Apply(_, _) | Ty::Error | Ty::Unknown => {}
                     Ty::Named(id, type_args) => {
                         match self
                             .instance_registry
-                            .lookup(BuiltinClassTag::Foldable, *id)
+                            .lookup(BuiltinClassTag::Foldable, id)
                             .cloned()
                         {
                             Some(inst) => {
                                 if let Some(elem) = opt_elem {
-                                    if let Some(inst_elem) =
+                                    if let Some(&inst_elem) =
                                         inst.class_args.first()
                                     {
                                         let param_subst = Subst(
                                             inst.type_params
                                                 .iter()
                                                 .zip(type_args.iter())
-                                                .map(|(p, a)| (*p, a.clone()))
+                                                .map(|(p, &a)| (*p, a))
                                                 .collect(),
                                         );
-                                        let resolved =
-                                            inst_elem.apply(&param_subst);
+                                        let resolved = self
+                                            .ty_arena
+                                            .apply(inst_elem, &param_subst);
                                         match self
-                                            .unify_types(elem, &resolved, span)
+                                            .unify_types(elem, resolved, span)
                                         {
                                             UnifyResult::Ok(s) => {
-                                                *subst = subst.compose(&s)
+                                                *subst = subst.compose(
+                                                    &s,
+                                                    &mut self.ty_arena,
+                                                )
                                             }
                                             UnifyResult::Err(e) => {
                                                 self.error(e)
@@ -2423,13 +2627,13 @@ impl<'a> InferCtx<'a> {
                                     }
                                 }
                                 self.check_instance_constraints(
-                                    &inst, type_args, span, subst,
+                                    &inst, &type_args, span, subst,
                                 );
                             }
                             None => {
                                 self.error(TypeError::UnsatisfiedClass(
                                     class.clone(),
-                                    ty.clone(),
+                                    ty,
                                     span,
                                 ));
                             }
@@ -2438,7 +2642,7 @@ impl<'a> InferCtx<'a> {
                     _ => {
                         self.error(TypeError::UnsatisfiedClass(
                             class.clone(),
-                            ty.clone(),
+                            ty,
                             span,
                         ));
                     }
@@ -2454,7 +2658,7 @@ impl<'a> InferCtx<'a> {
     fn check_instance_constraints(
         &mut self,
         inst: &super::instance::Instance,
-        type_args: &[Ty],
+        type_args: &[TyId],
         span: Span,
         subst: &mut Subst,
     ) {
@@ -2462,27 +2666,32 @@ impl<'a> InferCtx<'a> {
             inst.type_params
                 .iter()
                 .zip(type_args.iter())
-                .map(|(p, a)| (*p, a.clone()))
+                .map(|(p, &a)| (*p, a))
                 .collect(),
         );
-        inst.constraints.iter().for_each(|(var, class)| {
-            let ty = Ty::Var(*var).apply(&inst_subst);
-            let class = class.apply(&inst_subst);
-            self.satisfies_class(&class, &ty, span, subst);
+        // Collect constraints to avoid borrow conflict
+        let constraints: SmallVec<[(TyVar, BuiltinClass<TyId>); 2]> =
+            inst.constraints.clone();
+        constraints.iter().for_each(|(var, class)| {
+            let var_id = self.ty_arena.alloc(Ty::Var(*var));
+            let ty = self.ty_arena.apply(var_id, &inst_subst);
+            let class = class.apply(&inst_subst, &mut self.ty_arena);
+            self.satisfies_class(&class, ty, span, subst);
         });
     }
 
     /// Check that a callee type is callable and unify with expected signature.
     fn check_callable(
         &mut self,
-        callee: &Ty,
-        args: &[Ty],
-        ret: &Ty,
+        callee: TyId,
+        args: &[TyId],
+        ret: TyId,
         span: Span,
         subst: &mut Subst,
     ) {
-        match callee {
-            Ty::Fn(params, fn_ret) => {
+        let shape = self.ty_arena.get(callee).clone();
+        match shape {
+            Ty::Fn(ref params, fn_ret) => {
                 if params.len() != args.len() {
                     self.error(TypeError::ArityMismatch {
                         expected: params.len(),
@@ -2490,13 +2699,14 @@ impl<'a> InferCtx<'a> {
                         span,
                     });
                 } else {
+                    let params: SmallVec<[TyId; 4]> = params.clone();
                     // Unify each parameter with corresponding argument
-                    params.iter().zip(args.iter()).for_each(|(p, a)| {
-                        let p = p.apply(subst);
-                        let a = a.apply(subst);
-                        match self.unify_types(&p, &a, span) {
+                    params.iter().zip(args.iter()).for_each(|(&p, &a)| {
+                        let p = self.ty_arena.apply(p, subst);
+                        let a = self.ty_arena.apply(a, subst);
+                        match self.unify_types(p, a, span) {
                             UnifyResult::Ok(s) => {
-                                *subst = subst.compose(&s);
+                                *subst = subst.compose(&s, &mut self.ty_arena);
                             }
                             UnifyResult::Err(e) => {
                                 self.error(e);
@@ -2505,11 +2715,11 @@ impl<'a> InferCtx<'a> {
                     });
 
                     // Unify return type
-                    let fn_ret = fn_ret.apply(subst);
-                    let ret = ret.apply(subst);
-                    match self.unify_types(&fn_ret, &ret, span) {
+                    let fn_ret = self.ty_arena.apply(fn_ret, subst);
+                    let ret = self.ty_arena.apply(ret, subst);
+                    match self.unify_types(fn_ret, ret, span) {
                         UnifyResult::Ok(s) => {
-                            *subst = subst.compose(&s);
+                            *subst = subst.compose(&s, &mut self.ty_arena);
                         }
                         UnifyResult::Err(e) => {
                             self.error(e);
@@ -2520,10 +2730,11 @@ impl<'a> InferCtx<'a> {
 
             Ty::Var(v) => {
                 // Callee is unresolved; create function type and bind
-                let fn_ty = Ty::Fn(args.to_vec(), Box::new(ret.clone()));
-                match self.unify_var(*v, &fn_ty, span) {
+                let fn_ty =
+                    self.ty_arena.func(args.iter().copied().collect(), ret);
+                match self.unify_var(v, fn_ty, span) {
                     UnifyResult::Ok(s) => {
-                        *subst = subst.compose(&s);
+                        *subst = subst.compose(&s, &mut self.ty_arena);
                     }
                     UnifyResult::Err(e) => {
                         self.error(e);
@@ -2534,7 +2745,7 @@ impl<'a> InferCtx<'a> {
             Ty::Error | Ty::Unknown => {}
 
             _ => {
-                self.error(TypeError::NotCallable(callee.clone(), span));
+                self.error(TypeError::NotCallable(callee, span));
             }
         }
     }
@@ -2546,19 +2757,20 @@ impl<'a> InferCtx<'a> {
     /// this only checks the single accessed field, not all object fields.
     fn check_has_field(
         &mut self,
-        base: &Ty,
+        base: TyId,
         field: StringId,
-        field_ty: &Ty,
+        field_ty: TyId,
         span: Span,
         subst: &mut Subst,
     ) {
-        match base {
+        let shape = self.ty_arena.get(base).clone();
+        match shape {
             // Structural object: look up field directly
-            Ty::Object(fields) => match fields.get(&field) {
-                Some(actual_ty) => {
+            Ty::Object(ref fields) => match fields.get(&field) {
+                Some(&actual_ty) => {
                     match self.unify_types(field_ty, actual_ty, span) {
                         UnifyResult::Ok(s) => {
-                            *subst = subst.compose(&s);
+                            *subst = subst.compose(&s, &mut self.ty_arena);
                         }
                         UnifyResult::Err(e) => {
                             self.error(e);
@@ -2572,7 +2784,7 @@ impl<'a> InferCtx<'a> {
                         .unwrap_or("<unknown>")
                         .to_string();
                     self.error(TypeError::FieldNotFound {
-                        ty: base.clone(),
+                        ty: base,
                         field: name,
                         span,
                     });
@@ -2580,8 +2792,9 @@ impl<'a> InferCtx<'a> {
             },
 
             // Named alias to object: look up field in alias definition
-            Ty::Named(type_id, type_args) => {
-                let def = self.registry().get_def(*type_id);
+            Ty::Named(type_id, ref type_args) => {
+                let type_args: SmallVec<[TyId; 4]> = type_args.clone();
+                let def = self.registry().get_def(type_id);
                 match def {
                     Some(TypeDef::Alias {
                         type_params,
@@ -2606,17 +2819,20 @@ impl<'a> InferCtx<'a> {
                                             params
                                                 .iter()
                                                 .zip(type_args.iter())
-                                                .map(|(p, a)| (*p, a.clone()))
+                                                .map(|(p, &a)| (*p, a))
                                                 .collect();
                                         let actual_ty = self.ast_type_to_ty(
                                             ast_ty_id,
                                             &param_subst,
                                         );
                                         match self.unify_types(
-                                            field_ty, &actual_ty, span,
+                                            field_ty, actual_ty, span,
                                         ) {
                                             UnifyResult::Ok(s) => {
-                                                *subst = subst.compose(&s);
+                                                *subst = subst.compose(
+                                                    &s,
+                                                    &mut self.ty_arena,
+                                                );
                                             }
                                             UnifyResult::Err(e) => {
                                                 self.error(e);
@@ -2625,7 +2841,7 @@ impl<'a> InferCtx<'a> {
                                     }
                                     None => {
                                         self.error(TypeError::FieldNotFound {
-                                            ty: base.clone(),
+                                            ty: base,
                                             field: field_str.to_string(),
                                             span,
                                         });
@@ -2633,23 +2849,20 @@ impl<'a> InferCtx<'a> {
                                 }
                             }
                             _ => {
-                                self.error(TypeError::NotAnObject(
-                                    base.clone(),
-                                    span,
-                                ));
+                                self.error(TypeError::NotAnObject(base, span));
                             }
                         }
                     }
                     _ => {
-                        self.error(TypeError::NotAnObject(base.clone(), span));
+                        self.error(TypeError::NotAnObject(base, span));
                     }
                 }
             }
 
             // Json: any field access is valid and returns Json
-            Ty::Json => match self.unify_types(field_ty, &Ty::Json, span) {
+            Ty::Json => match self.unify_types(field_ty, TyArena::JSON, span) {
                 UnifyResult::Ok(s) => {
-                    *subst = subst.compose(&s);
+                    *subst = subst.compose(&s, &mut self.ty_arena);
                 }
                 UnifyResult::Err(e) => {
                     self.error(e);
@@ -2657,8 +2870,9 @@ impl<'a> InferCtx<'a> {
             },
 
             // Union: all members must have the field with compatible types
-            Ty::Union(members) => {
-                members.iter().for_each(|m| {
+            Ty::Union(ref members) => {
+                let ms: SmallVec<[TyId; 4]> = members.clone();
+                ms.iter().for_each(|&m| {
                     self.check_has_field(m, field, field_ty, span, subst);
                 });
             }
@@ -2672,7 +2886,7 @@ impl<'a> InferCtx<'a> {
             Ty::Error | Ty::Unknown => {}
 
             _ => {
-                self.error(TypeError::NotAnObject(base.clone(), span));
+                self.error(TypeError::NotAnObject(base, span));
             }
         }
     }
@@ -2695,12 +2909,12 @@ impl<'a> InferCtx<'a> {
     /// retrieves the associated type definition.
     ///
     pub(crate) fn resolve_assoc_type(
-        &self,
-        base: &Ty,
+        &mut self,
+        base: TyId,
         class: BuiltinClassTag,
         assoc_name: StringId,
         span: Span,
-    ) -> Result<Ty, TypeError> {
+    ) -> Result<TyId, TypeError> {
         // Validate that assoc_name is a valid associated type for this class
         let assoc_str = self.env().get_str(assoc_name);
         let assoc_types = self.env.class_def(class).assoc_types;
@@ -2711,38 +2925,41 @@ impl<'a> InferCtx<'a> {
                 span,
             })
         } else {
-            match base {
+            let shape = self.ty_arena.get(base).clone();
+            match shape {
                 // Builtin: Array[T] with Indexable:Index = Int
                 Ty::Array(_) if class == BuiltinClassTag::Indexable => {
-                    Ok(Ty::Int)
+                    Ok(TyArena::INT)
                 }
 
                 // Builtin: Map[K, V] with Indexable:Index = K
-                Ty::Map(k, _) if class == BuiltinClassTag::Indexable => {
-                    Ok(k.as_ref().clone())
-                }
+                Ty::Map(k, _) if class == BuiltinClassTag::Indexable => Ok(k),
 
                 // Builtin: String with Indexable:Index = Int
                 Ty::String if class == BuiltinClassTag::Indexable => {
-                    Ok(Ty::Int)
+                    Ok(TyArena::INT)
                 }
 
                 // User type: look up instance in registry
-                Ty::Named(type_id, type_args) => {
-                    match self.instance_registry.lookup(class, *type_id) {
+                Ty::Named(type_id, ref type_args) => {
+                    let type_args: SmallVec<[TyId; 4]> = type_args.clone();
+                    match self.instance_registry.lookup(class, type_id) {
                         Some(inst) => {
                             // Find the associated type definition
                             match inst.get_assoc_type(assoc_name) {
                                 Some(assoc_def) => {
                                     // Substitute type parameters
+                                    let assoc_ty = assoc_def.ty;
                                     let param_subst = Subst(
                                         inst.type_params
                                             .iter()
                                             .zip(type_args.iter())
-                                            .map(|(p, a)| (*p, a.clone()))
+                                            .map(|(p, &a)| (*p, a))
                                             .collect(),
                                     );
-                                    Ok(assoc_def.ty.apply(&param_subst))
+                                    Ok(self
+                                        .ty_arena
+                                        .apply(assoc_ty, &param_subst))
                                 }
                                 None => Err(TypeError::MissingAssocType {
                                     class,
@@ -2753,7 +2970,7 @@ impl<'a> InferCtx<'a> {
                         }
                         None => Err(TypeError::UnsatisfiedClass(
                             BuiltinClass::placeholder(class),
-                            base.clone(),
+                            base,
                             span,
                         )),
                     }
@@ -2761,18 +2978,18 @@ impl<'a> InferCtx<'a> {
 
                 // Type variable: cannot resolve yet (defer resolution)
                 Ty::Var(_) => Err(TypeError::UnknownAssocType {
-                    ty: base.clone(),
+                    ty: base,
                     assoc: assoc_name,
                     span,
                 }),
 
                 // Error/Unknown: propagate
-                Ty::Error | Ty::Unknown => Ok(Ty::Error),
+                Ty::Error | Ty::Unknown => Ok(TyArena::ERROR),
 
                 // Other types: no instance for this class
                 _ => Err(TypeError::UnsatisfiedClass(
                     BuiltinClass::placeholder(class),
-                    base.clone(),
+                    base,
                     span,
                 )),
             }
@@ -2826,40 +3043,40 @@ mod tests {
     /// Test that `check_display` passes for builtin displayable types.
     #[test]
     fn check_display_builtins() {
+        let mut a = TyArena::new();
         // Functions are NOT displayable
-        let fn_ty = Ty::Fn(vec![Ty::Int], Box::new(Ty::Int));
+        let fn_ty = a.func(smallvec::smallvec![TyArena::INT], TyArena::INT);
         assert!(
-            matches!(fn_ty, Ty::Fn(_, _)),
+            matches!(a.get(fn_ty), Ty::Fn(_, _)),
             "Fn types should not be displayable"
         );
 
         // All primitives are displayable
         let displayable = [
-            Ty::Bool,
-            Ty::Int,
-            Ty::Word,
-            Ty::Float,
-            Ty::Char,
-            Ty::String,
-            Ty::Unit,
-            Ty::Time,
-            Ty::Range,
-            Ty::Json,
-            Ty::Ordering,
-            Ty::DataStatus,
-            Ty::FilePath,
-            Ty::Path,
-            Ty::Regex,
-            Ty::RuntimeError,
-            Ty::Local,
-            Ty::Global,
+            TyArena::BOOL,
+            TyArena::INT,
+            TyArena::WORD,
+            TyArena::FLOAT,
+            TyArena::CHAR,
+            TyArena::STRING,
+            TyArena::UNIT,
+            TyArena::TIME,
+            TyArena::RANGE,
+            TyArena::JSON,
+            TyArena::ORDERING,
+            TyArena::DATA_STATUS,
+            TyArena::FILEPATH,
+            TyArena::PATH,
+            TyArena::REGEX,
+            TyArena::RUNTIME_ERROR,
+            TyArena::LOCAL,
+            TyArena::GLOBAL,
         ];
 
-        displayable.iter().for_each(|ty| {
+        displayable.iter().for_each(|&tid| {
             assert!(
-                !matches!(ty, Ty::Fn(_, _)),
-                "expected {} to be displayable",
-                ty
+                !matches!(a.get(tid), Ty::Fn(_, _)),
+                "expected type to be displayable"
             );
         });
     }
@@ -2935,21 +3152,26 @@ mod tests {
     /// Test constraint substitution.
     #[test]
     fn constraint_substitution() {
+        let mut a = TyArena::new();
         let t = TyVar::new(0);
+        let var_id = a.var(0);
         let constraint =
-            BuiltinClass::Hkt(BuiltinClassTag::Iterable, Some(Ty::Var(t)));
+            BuiltinClass::Hkt(BuiltinClassTag::Iterable, Some(var_id));
 
         // Create substitution: T -> Int
-        let subst = Subst::singleton(t, Ty::Int);
+        let subst = Subst::singleton(t, TyArena::INT);
 
         // Apply substitution to constraint
-        let resolved = constraint.apply(&subst);
+        let resolved = constraint.apply(&subst, &mut a);
 
         // Should now be `Iterable(Some(Int))`
         assert!(
             matches!(
                 resolved,
-                BuiltinClass::Hkt(BuiltinClassTag::Iterable, Some(Ty::Int))
+                BuiltinClass::Hkt(
+                    BuiltinClassTag::Iterable,
+                    Some(TyArena::INT)
+                )
             ),
             "constraint should be Iterable(Some(Int)) after substitution"
         );

@@ -7,7 +7,7 @@ use std::fmt;
 
 use thiserror::Error;
 
-use super::ty::{BuiltinClass, BuiltinClassTag, Ty, TyVar};
+use super::ty::{BuiltinClass, BuiltinClassTag, Ty, TyArena, TyId, TyVar};
 use crate::intern::StringInterner;
 use crate::value::{TypeRegistry, ValueArena};
 use crate::{Span, StringId, TypeId};
@@ -18,8 +18,9 @@ use crate::{Span, StringId, TypeId};
 /// (via `StringInterner`).
 pub(crate) struct TyPrinter<'a> {
     registry: &'a TypeRegistry,
-    arena: &'a ValueArena,
-    strings: &'a StringInterner,
+    val_arena: &'a ValueArena,
+    pub(crate) ty_arena: &'a TyArena,
+    pub(crate) strings: &'a StringInterner,
     numeric_vars: &'a [TyVar],
 }
 
@@ -32,25 +33,27 @@ impl<'a> TyPrinter<'a> {
     /// integer literals; they display as `Int` (the default) in errors.
     pub(crate) fn new(
         registry: &'a TypeRegistry,
-        arena: &'a ValueArena,
+        val_arena: &'a ValueArena,
+        ty_arena: &'a TyArena,
         strings: &'a StringInterner,
         numeric_vars: &'a [TyVar],
     ) -> Self {
         Self {
             registry,
-            arena,
+            val_arena,
+            ty_arena,
             strings,
             numeric_vars,
         }
     }
 
     /// Format a type as a human-readable string.
-    pub(crate) fn format(&self, ty: &Ty) -> String {
-        self.format_inner(ty, &mut TyVarNamer::new())
+    pub(crate) fn format(&self, id: TyId) -> String {
+        self.format_inner(id, &mut TyVarNamer::new())
     }
 
-    fn format_inner(&self, ty: &Ty, namer: &mut TyVarNamer) -> String {
-        match ty {
+    fn format_inner(&self, id: TyId, namer: &mut TyVarNamer) -> String {
+        match self.ty_arena.get(id) {
             // Numeric vars (from integer literals) display as Int (the default)
             Ty::Var(v) if self.numeric_vars.contains(v) => "Int".to_owned(),
             Ty::Var(v) => namer.name(*v),
@@ -72,25 +75,29 @@ impl<'a> TyPrinter<'a> {
             Ty::RuntimeError => "Error".to_owned(),
             Ty::Unknown => "_".to_owned(),
             Ty::Error => "<error>".to_owned(),
-            Ty::Array(t) => format!("Array[{}]", self.format_inner(t, namer)),
-            Ty::Option(t) => format!("Option[{}]", self.format_inner(t, namer)),
+            Ty::Array(t) => {
+                format!("Array[{}]", self.format_inner(*t, namer))
+            }
+            Ty::Option(t) => {
+                format!("Option[{}]", self.format_inner(*t, namer))
+            }
             Ty::Result(ok, err) => {
                 format!(
                     "Result[{}, {}]",
-                    self.format_inner(ok, namer),
-                    self.format_inner(err, namer)
+                    self.format_inner(*ok, namer),
+                    self.format_inner(*err, namer)
                 )
             }
             Ty::Map(k, v) => {
                 format!(
                     "Map[{}, {}]",
-                    self.format_inner(k, namer),
-                    self.format_inner(v, namer)
+                    self.format_inner(*k, namer),
+                    self.format_inner(*v, namer)
                 )
             }
             Ty::Tuple(ts) => {
                 let parts: Vec<_> =
-                    ts.iter().map(|t| self.format_inner(t, namer)).collect();
+                    ts.iter().map(|&t| self.format_inner(t, namer)).collect();
                 // Single-element tuples need trailing comma: `(Int,)`
                 let trail = if ts.len() == 1 { "," } else { "" };
                 format!("({}{})", parts.join(", "), trail)
@@ -98,19 +105,19 @@ impl<'a> TyPrinter<'a> {
             Ty::Fn(params, ret) => {
                 let ps: Vec<_> = params
                     .iter()
-                    .map(|t| self.format_inner(t, namer))
+                    .map(|&t| self.format_inner(t, namer))
                     .collect();
                 format!(
                     "({}) -> {}",
                     ps.join(", "),
-                    self.format_inner(ret, namer)
+                    self.format_inner(*ret, namer)
                 )
             }
             Ty::Object(fields) => {
                 let parts: Vec<_> = fields
                     .iter()
-                    .map(|(k, t)| {
-                        let name = self.strings.get(*k).unwrap_or("<unknown>");
+                    .map(|(&k, &t)| {
+                        let name = self.strings.get(k).unwrap_or("<unknown>");
                         format!("{}: {}", name, self.format_inner(t, namer))
                     })
                     .collect();
@@ -119,21 +126,21 @@ impl<'a> TyPrinter<'a> {
             Ty::Union(members) => {
                 let parts: Vec<_> = members
                     .iter()
-                    .map(|t| self.format_inner(t, namer))
+                    .map(|&t| self.format_inner(t, namer))
                     .collect();
                 parts.join(" | ")
             }
             Ty::Named(id, args) => {
                 let name = self
                     .registry
-                    .type_name(*id, self.arena)
+                    .type_name(*id, self.val_arena)
                     .unwrap_or("<unknown type>");
                 if args.is_empty() {
                     name.to_owned()
                 } else {
                     let ps: Vec<_> = args
                         .iter()
-                        .map(|t| self.format_inner(t, namer))
+                        .map(|&t| self.format_inner(t, namer))
                         .collect();
                     format!("{}[{}]", name, ps.join(", "))
                 }
@@ -143,7 +150,7 @@ impl<'a> TyPrinter<'a> {
             Ty::Apply(v, args) => {
                 let vname = namer.name(*v);
                 let ps: Vec<_> =
-                    args.iter().map(|t| self.format_inner(t, namer)).collect();
+                    args.iter().map(|&t| self.format_inner(t, namer)).collect();
                 format!("{}[{}]", vname, ps.join(", "))
             }
             Ty::AssocType(v, _class, name) => {
@@ -157,7 +164,7 @@ impl<'a> TyPrinter<'a> {
     /// Format a `TypeId` as a type name.
     pub(crate) fn type_name(&self, id: TypeId) -> String {
         self.registry
-            .type_name(id, self.arena)
+            .type_name(id, self.val_arena)
             .map(str::to_owned)
             .unwrap_or_else(|| "<unknown type>".to_owned())
     }
@@ -208,7 +215,11 @@ impl TyVarNamer {
 pub(crate) enum TypeError {
     /// Type mismatch: expected one type, got another.
     #[error("type mismatch: expected `{expected}`, got `{got}`")]
-    Mismatch { expected: Ty, got: Ty, span: Span },
+    Mismatch {
+        expected: TyId,
+        got: TyId,
+        span: Span,
+    },
 
     /// Reference to undefined variable.
     #[error("undefined variable `{0}`")]
@@ -216,7 +227,7 @@ pub(crate) enum TypeError {
 
     /// Attempt to call a non-function type.
     #[error("type `{0}` is not callable")]
-    NotCallable(Ty, Span),
+    NotCallable(TyId, Span),
 
     /// Function called with wrong number of arguments.
     #[error("arity mismatch: expected {expected} argument(s), got {got}")]
@@ -228,7 +239,7 @@ pub(crate) enum TypeError {
 
     /// Type does not satisfy a class (Numeric, Into[Json], etc.).
     #[error("type `{1}` does not satisfy `{0}` class")]
-    UnsatisfiedClass(BuiltinClass<Ty>, Ty, Span),
+    UnsatisfiedClass(BuiltinClass<TyId>, TyId, Span),
 
     /// Struct literal missing a required field.
     #[error("missing required field `{field}` for type `{ty:?}`")]
@@ -242,14 +253,14 @@ pub(crate) enum TypeError {
     #[error("field `{field}` has type `{got}`, expected `{expected}`")]
     FieldTypeMismatch {
         field: String,
-        expected: Ty,
-        got: Ty,
+        expected: TyId,
+        got: TyId,
         span: Span,
     },
 
     /// Occurs check failed; would create infinite type.
     #[error("infinite type: `{0}` occurs in `{1}`")]
-    InfiniteType(TyVar, Ty, Span),
+    InfiniteType(TyVar, TyId, Span),
 
     /// Type annotation required but not provided.
     #[error("type annotation required")]
@@ -274,15 +285,15 @@ pub(crate) enum TypeError {
 
     /// Field access on non-object type.
     #[error("type `{0}` has no fields")]
-    NotAnObject(Ty, Span),
+    NotAnObject(TyId, Span),
 
     /// Field not found on object type.
     #[error("field `{field}` not found on type `{ty}`")]
-    FieldNotFound { ty: Ty, field: String, span: Span },
+    FieldNotFound { ty: TyId, field: String, span: Span },
 
     /// Tuple index on non-tuple type.
     #[error("type `{0}` is not a tuple")]
-    NotATuple(Ty, Span),
+    NotATuple(TyId, Span),
 
     /// Array pattern in LET binding (only allowed in MATCH).
     #[error("array destructuring is only allowed in MATCH expressions")]
@@ -294,15 +305,15 @@ pub(crate) enum TypeError {
 
     /// Spread on non-array type.
     #[error("cannot spread type `{0}` in array literal; expected `Array`")]
-    NotAnArray(Ty, Span),
+    NotAnArray(TyId, Span),
 
     /// Spread on non-object type.
     #[error("cannot spread type `{0}` in object literal; expected `Object`")]
-    NotAnObjectSpread(Ty, Span),
+    NotAnObjectSpread(TyId, Span),
 
     /// JSON access on non-JSON type.
     #[error("type `{0}` is not JSON; cannot use JSON access operators")]
-    NotJson(Ty, Span),
+    NotJson(TyId, Span),
 
     /// Empty union type.
     #[error("union type must have at least one member")]
@@ -315,8 +326,8 @@ pub(crate) enum TypeError {
     /// Type is not a member of the union being matched.
     #[error("type `{member}` is not a member of union `{union_ty}`")]
     NotAUnionMember {
-        member: Ty,
-        union_ty: Ty,
+        member: TyId,
+        union_ty: TyId,
         span: Span,
     },
 
@@ -330,7 +341,7 @@ pub(crate) enum TypeError {
     )]
     IncompatibleVariantPattern {
         pattern_ty: String,
-        scrutinee_ty: Ty,
+        scrutinee_ty: TyId,
         span: Span,
     },
 
@@ -339,14 +350,14 @@ pub(crate) enum TypeError {
     /// The source type cannot be cast to the target type. Suggests alternatives
     /// like `READ` for fallible conversion or `MATCH`/`IS` for narrowing.
     #[error("cannot cast `{from}` to `{to}`; use `READ` for fallible conversion or `MATCH`/`IS` for narrowing")]
-    InvalidCast { from: Ty, to: Ty, span: Span },
+    InvalidCast { from: TyId, to: TyId, span: Span },
 
     /// Invalid `READ` conversion.
     ///
     /// The source type cannot be fallibly converted to the target type via `READ`.
     /// Function types, regex, and refs cannot be source or target of `READ`.
     #[error("cannot `READ` `{from}` as `{to}`")]
-    InvalidRead { from: Ty, to: Ty, span: Span },
+    InvalidRead { from: TyId, to: TyId, span: Span },
 
     /// Custom error with a message.
     ///
@@ -466,7 +477,11 @@ pub(crate) enum TypeError {
     ///
     /// Attempting to project an associated type from a type that doesn't support it.
     #[error("type `{ty}` has no associated type `#{}`", assoc.idx())]
-    UnknownAssocType { ty: Ty, assoc: StringId, span: Span },
+    UnknownAssocType {
+        ty: TyId,
+        assoc: StringId,
+        span: Span,
+    },
 
     /// Associated type constraint not satisfied.
     ///
@@ -476,8 +491,8 @@ pub(crate) enum TypeError {
     )]
     AssocTypeConstraint {
         assoc: String,
-        constraint: BuiltinClass<Ty>,
-        actual: Ty,
+        constraint: BuiltinClass<TyId>,
+        actual: TyId,
         span: Span,
     },
 
@@ -540,7 +555,7 @@ pub(crate) enum TypeError {
     /// The `main` function must have signature `() -> Unit`; it takes no
     /// arguments and returns nothing.
     #[error("`main` must have signature `() -> Unit`; got `{got}`")]
-    InvalidMainSignature { got: Ty, span: Span },
+    InvalidMainSignature { got: TyId, span: Span },
 }
 
 impl TypeError {
@@ -605,8 +620,8 @@ impl TypeError {
             Self::Mismatch { expected, got, .. } => (
                 format!(
                     "type mismatch: expected `{}`, got `{}`",
-                    p.format(expected),
-                    p.format(got)
+                    p.format(*expected),
+                    p.format(*got)
                 ),
                 None,
             ),
@@ -614,7 +629,7 @@ impl TypeError {
                 (format!("undefined variable `{name}`"), None)
             }
             Self::NotCallable(ty, _) => {
-                (format!("type `{}` is not callable", p.format(ty)), None)
+                (format!("type `{}` is not callable", p.format(*ty)), None)
             }
             Self::ArityMismatch { expected, got, .. } => (
                 format!("expected {expected} argument(s), got {got}"),
@@ -623,7 +638,7 @@ impl TypeError {
             Self::UnsatisfiedClass(class, ty, _) => (
                 format!(
                     "type `{}` does not satisfy `{}` class",
-                    p.format(ty),
+                    p.format(*ty),
                     class.name()
                 ),
                 class.tag().help().map(str::to_owned),
@@ -645,8 +660,8 @@ impl TypeError {
                 format!(
                     "field `{}` has type `{}`, expected `{}`",
                     field,
-                    p.format(got),
-                    p.format(expected)
+                    p.format(*got),
+                    p.format(*expected)
                 ),
                 None,
             ),
@@ -656,7 +671,7 @@ impl TypeError {
                     format!(
                         "infinite type: `{}` occurs in `{}`",
                         namer.name(*v),
-                        p.format(ty)
+                        p.format(*ty)
                     ),
                     Some("this would create a recursive type".to_owned()),
                 )
@@ -684,14 +699,18 @@ impl TypeError {
                 Some("add a `_` pattern to handle remaining cases".to_owned()),
             ),
             Self::NotAnObject(ty, _) => {
-                (format!("type `{}` has no fields", p.format(ty)), None)
+                (format!("type `{}` has no fields", p.format(*ty)), None)
             }
             Self::FieldNotFound { ty, field, .. } => (
-                format!("field `{}` not found on type `{}`", field, p.format(ty)),
+                format!(
+                    "field `{}` not found on type `{}`",
+                    field,
+                    p.format(*ty)
+                ),
                 None,
             ),
             Self::NotATuple(ty, _) => (
-                format!("type `{}` is not a tuple", p.format(ty)),
+                format!("type `{}` is not a tuple", p.format(*ty)),
                 None,
             ),
             Self::ArrayPatternInLet(_) => (
@@ -707,21 +726,21 @@ impl TypeError {
             Self::NotAnArray(ty, _) => (
                 format!(
                     "cannot spread type `{}` in array literal",
-                    p.format(ty)
+                    p.format(*ty)
                 ),
                 Some("spread requires an `Array` type".to_owned()),
             ),
             Self::NotAnObjectSpread(ty, _) => (
                 format!(
                     "cannot spread type `{}` in object literal",
-                    p.format(ty)
+                    p.format(*ty)
                 ),
                 Some("spread requires an `Object` type".to_owned()),
             ),
             Self::NotJson(ty, _) => (
                 format!(
                     "type `{}` is not JSON; cannot use JSON access operators",
-                    p.format(ty)
+                    p.format(*ty)
                 ),
                 Some("use `.field` for objects or `[idx]` for arrays".to_owned()),
             ),
@@ -736,8 +755,8 @@ impl TypeError {
             Self::NotAUnionMember { member, union_ty, .. } => (
                 format!(
                     "type `{}` is not a member of union `{}`",
-                    p.format(member),
-                    p.format(union_ty)
+                    p.format(*member),
+                    p.format(*union_ty)
                 ),
                 None,
             ),
@@ -746,17 +765,18 @@ impl TypeError {
                 scrutinee_ty,
                 ..
             } => {
-                let scrutinee_str = p.format(scrutinee_ty);
-                let help = if matches!(scrutinee_ty, Ty::Var(_)) {
-                    Some(format!(
-                        "type variables cannot be refined by variant patterns; \
-                         `{scrutinee_str}` could be any type satisfying its constraints"
-                    ))
-                } else {
-                    Some(format!(
-                        "expected `{pattern_ty}` type, found `{scrutinee_str}`"
-                    ))
-                };
+                let scrutinee_str = p.format(*scrutinee_ty);
+                let help =
+                    if matches!(p.ty_arena.get(*scrutinee_ty), Ty::Var(_)) {
+                        Some(format!(
+                            "type variables cannot be refined by variant patterns; \
+                             `{scrutinee_str}` could be any type satisfying its constraints"
+                        ))
+                    } else {
+                        Some(format!(
+                            "expected `{pattern_ty}` type, found `{scrutinee_str}`"
+                        ))
+                    };
                 (
                     format!(
                         "cannot match `{pattern_ty}` pattern against type `{scrutinee_str}`"
@@ -767,16 +787,16 @@ impl TypeError {
             Self::InvalidCast { from, to, .. } => (
                 format!(
                     "cannot cast `{}` to `{}`",
-                    p.format(from),
-                    p.format(to)
+                    p.format(*from),
+                    p.format(*to)
                 ),
                 Some("use `READ` for fallible conversion or `MATCH`/`IS` for narrowing".to_owned()),
             ),
             Self::InvalidRead { from, to, .. } => (
                 format!(
                     "cannot `READ` `{}` as `{}`",
-                    p.format(from),
-                    p.format(to)
+                    p.format(*from),
+                    p.format(*to)
                 ),
                 Some("function types, regex, and refs cannot be used with `READ`".to_owned()),
             ),
@@ -872,7 +892,7 @@ impl TypeError {
                 (
                     format!(
                         "type `{}` has no associated type `{name}`",
-                        p.format(ty)
+                        p.format(*ty)
                     ),
                     None,
                 )
@@ -885,7 +905,7 @@ impl TypeError {
             } => (
                 format!(
                     "associated type `{assoc}` must satisfy `{constraint}`, got `{}`",
-                    p.format(actual)
+                    p.format(*actual)
                 ),
                 None,
             ),
@@ -937,7 +957,10 @@ impl TypeError {
                 Some("add `FUN main() { ... }` or use `--interactive` mode".to_owned()),
             ),
             Self::InvalidMainSignature { got, .. } => (
-                format!("`main` must have signature `() -> Unit`; got `{}`", p.format(got)),
+                format!(
+                    "`main` must have signature `() -> Unit`; got `{}`",
+                    p.format(*got)
+                ),
                 None,
             ),
         };
@@ -972,7 +995,10 @@ impl fmt::Display for FormattedTypeError {
 
 impl std::error::Error for FormattedTypeError {}
 
-/// Display implementation for `Ty` (used in error messages).
+/// Debug display for `Ty` (inner types shown as `TyId` handles).
+///
+/// For human-readable output, use `TyPrinter::format` which resolves
+/// `TyId` handles through the arena.
 impl fmt::Display for Ty {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1007,7 +1033,6 @@ impl fmt::Display for Ty {
                     }
                     write!(f, "{t}")
                 })?;
-                // Single-element tuples need trailing comma: `(Int,)`
                 if ts.len() == 1 {
                     write!(f, ",")?;
                 }
@@ -1029,7 +1054,6 @@ impl fmt::Display for Ty {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    // Display StringId as field index; proper names require interner context
                     write!(f, "#{}: {t}", k.idx())
                 })?;
                 write!(f, "}}")
@@ -1043,7 +1067,6 @@ impl fmt::Display for Ty {
                 })
             }
             Self::Named(id, args) => {
-                // Use Debug format since TypeId field is private
                 write!(f, "{id:?}")?;
                 if !args.is_empty() {
                     write!(f, "[")?;
@@ -1070,7 +1093,6 @@ impl fmt::Display for Ty {
                 write!(f, "]")
             }
             Self::AssocType(v, _class, name) => {
-                // Display without interner context; name shown as StringId index
                 write!(f, "?{}.#{}", v.idx(), name.idx())
             }
         }
@@ -1097,21 +1119,9 @@ mod tests {
 
     #[test]
     fn ty_display_parameterized() {
-        assert_eq!(Ty::Array(Box::new(Ty::Int)).to_string(), "Array[Int]");
-        assert_eq!(
-            Ty::Option(Box::new(Ty::String)).to_string(),
-            "Option[String]"
-        );
-        assert_eq!(
-            Ty::Result(Box::new(Ty::Int), Box::new(Ty::String)).to_string(),
-            "Result[Int, String]"
-        );
-    }
-
-    #[test]
-    fn ty_display_fn() {
-        let f = Ty::Fn(vec![Ty::Int, Ty::String], Box::new(Ty::Bool));
-        assert_eq!(f.to_string(), "(Int, String) -> Bool");
+        // Inner types are `TyId` now; Display shows `#N` handles
+        assert_eq!(Ty::Array(TyId::from_raw(1)).to_string(), "Array[#1]");
+        assert_eq!(Ty::Option(TyId::from_raw(5)).to_string(), "Option[#5]");
     }
 
     #[test]
@@ -1123,8 +1133,8 @@ mod tests {
     fn error_span() {
         let span = Span::new(10, 20);
         let err = TypeError::Mismatch {
-            expected: Ty::Int,
-            got: Ty::String,
+            expected: TyArena::INT,
+            got: TyArena::STRING,
             span,
         };
         assert_eq!(err.span(), span);

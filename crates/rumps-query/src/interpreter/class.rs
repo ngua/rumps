@@ -35,7 +35,7 @@ use super::hof::{
     Continuation, FlatMapWrapper, HofMethodFn, HofState, IterKind, MethodResult,
 };
 use crate::intern::StringId;
-use crate::typecheck::{BuiltinClassTag, Ty};
+use crate::typecheck::{BuiltinClassTag, Ty, TyArena};
 use crate::value::{
     TypeExprArena, TypeExprId, TypeId, TypeRegistry, Value, ValueArena, ValueId,
 };
@@ -45,6 +45,7 @@ use crate::{Error, Result, Span};
 pub(crate) struct ClassCtx<'a> {
     pub(crate) arena: &'a mut ValueArena,
     pub(crate) type_exprs: &'a mut TypeExprArena,
+    pub(crate) ty_arena: &'a TyArena,
     pub(crate) registry: &'a TypeRegistry,
     pub(crate) regex_cache: &'a [regex::Regex],
     pub(crate) span: Span,
@@ -661,16 +662,18 @@ impl Monoid {
         Ok(match ty {
             Ty::String => Value::String(ctx.arena.intern("")),
             Ty::Array(elem) => {
-                let elem_ty = ctx.type_exprs.intern_ty_lenient(elem);
+                let elem_ty =
+                    ctx.type_exprs.intern_ty_lenient(*elem, ctx.ty_arena);
                 Value::Array(elem_ty, SmallVec::new())
             }
             Ty::Map(k, v) => {
-                let k_ty = ctx.type_exprs.intern_ty_lenient(k);
-                let v_ty = ctx.type_exprs.intern_ty_lenient(v);
+                let k_ty = ctx.type_exprs.intern_ty_lenient(*k, ctx.ty_arena);
+                let v_ty = ctx.type_exprs.intern_ty_lenient(*v, ctx.ty_arena);
                 Value::Map(k_ty, v_ty, IndexMap::new())
             }
             Ty::Option(inner) => {
-                let inner_ty = ctx.type_exprs.intern_ty_lenient(inner);
+                let inner_ty =
+                    ctx.type_exprs.intern_ty_lenient(*inner, ctx.ty_arena);
                 let opt_ty =
                     ctx.type_exprs.app(TypeId::OPTION, smallvec![inner_ty]);
                 Value::none(opt_ty)
@@ -1160,14 +1163,16 @@ impl Fallible {
         let v_id = ctx.arena.add(v.clone(), ctx.span);
         match target {
             Ty::Option(inner) => {
-                let inner_ty = ctx.type_exprs.intern_ty_lenient(inner);
+                let inner_ty =
+                    ctx.type_exprs.intern_ty_lenient(*inner, ctx.ty_arena);
                 let opt_ty =
                     ctx.type_exprs.app(TypeId::OPTION, smallvec![inner_ty]);
                 Ok(Value::some(opt_ty, v_id))
             }
             Ty::Result(ok, err) => {
-                let ok_ty = ctx.type_exprs.intern_ty_lenient(ok);
-                let err_ty = ctx.type_exprs.intern_ty_lenient(err);
+                let ok_ty = ctx.type_exprs.intern_ty_lenient(*ok, ctx.ty_arena);
+                let err_ty =
+                    ctx.type_exprs.intern_ty_lenient(*err, ctx.ty_arena);
                 let res_ty = ctx
                     .type_exprs
                     .app(TypeId::RESULT, smallvec![ok_ty, err_ty]);

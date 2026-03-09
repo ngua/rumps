@@ -6,13 +6,13 @@
 use std::collections::HashSet;
 
 use indexmap::IndexMap;
-use smallvec::SmallVec;
+use smallvec::{smallvec, SmallVec};
 
 use super::InferCtx;
 use crate::ast::{Literal, MatchArm, MatchPattern, MatchPatternId};
 use crate::intern::StringId;
 use crate::typecheck::error::TypeError;
-use crate::typecheck::ty::{Scheme, Ty};
+use crate::typecheck::ty::{Scheme, Ty, TyArena, TyId};
 use crate::value::{TypeDef, TypeId};
 use crate::Span;
 
@@ -25,9 +25,9 @@ impl InferCtx<'_> {
         &mut self,
         ty_name: &str,
         var_name: &str,
-        scrutinee_ty: &Ty,
+        scrutinee_ty: TyId,
         span: Span,
-    ) -> Vec<Ty> {
+    ) -> SmallVec<[TyId; 4]> {
         let var_name_id = self.env.intern(var_name);
         let lookup = self
             .env
@@ -45,36 +45,35 @@ impl InferCtx<'_> {
                     format!("{ty_name}.{var_name}"),
                     span,
                 ));
-                vec![]
+                SmallVec::new()
             }
             Some((type_id, var_def)) => {
+                let s_ty = self.ty_arena.get(scrutinee_ty).clone();
                 // Special handling for Option/Result builtins
                 if type_id == TypeId::OPTION {
                     if var_def.arity == 0 {
-                        vec![]
-                    } else if let Ty::Option(inner) = scrutinee_ty {
-                        vec![inner.as_ref().clone()]
+                        SmallVec::new()
+                    } else if let Ty::Option(inner) = s_ty {
+                        smallvec![inner]
                     } else {
-                        vec![self.fresh()]
+                        smallvec![self.fresh()]
                     }
                 } else if type_id == TypeId::RESULT {
-                    match (var_def.idx, scrutinee_ty) {
-                        (0, Ty::Result(ok, _)) => vec![ok.as_ref().clone()],
-                        (1, Ty::Result(_, err)) => vec![err.as_ref().clone()],
-                        _ => vec![self.fresh()],
+                    match (var_def.idx, &s_ty) {
+                        (0, Ty::Result(ok, _)) => smallvec![*ok],
+                        (1, Ty::Result(_, err)) => smallvec![*err],
+                        _ => smallvec![self.fresh()],
                     }
                 } else if type_id == TypeId::ERROR {
                     // All Error variants have a String payload
-                    vec![Ty::String]
+                    smallvec![TyArena::STRING]
                 } else {
                     // User-defined sum types
-                    let type_args: Vec<Ty> = match scrutinee_ty {
+                    let type_args: SmallVec<[TyId; 4]> = match &s_ty {
                         Ty::Named(_, args) => args.clone(),
-                        Ty::Option(inner) => vec![inner.as_ref().clone()],
-                        Ty::Result(ok, err) => {
-                            vec![ok.as_ref().clone(), err.as_ref().clone()]
-                        }
-                        _ => vec![],
+                        Ty::Option(inner) => smallvec![*inner],
+                        Ty::Result(ok, err) => smallvec![*ok, *err],
+                        _ => SmallVec::new(),
                     };
 
                     let type_params: SmallVec<[StringId; 2]> =
@@ -85,10 +84,10 @@ impl InferCtx<'_> {
                             _ => SmallVec::new(),
                         };
 
-                    let subst: IndexMap<StringId, Ty> = type_params
+                    let subst: IndexMap<StringId, TyId> = type_params
                         .iter()
                         .zip(type_args.iter())
-                        .map(|(p, a)| (*p, a.clone()))
+                        .map(|(p, &a)| (*p, a))
                         .collect();
 
                     var_def
@@ -107,7 +106,7 @@ impl InferCtx<'_> {
     pub(super) fn pattern_bindings(
         &mut self,
         pat_id: MatchPatternId,
-        scrutinee_ty: &Ty,
+        scrutinee_ty: TyId,
         span: Span,
     ) {
         if let Some(pat) = self.ast.get_pattern(pat_id).cloned() {
@@ -115,12 +114,12 @@ impl InferCtx<'_> {
                 MatchPattern::Wildcard => {}
 
                 MatchPattern::Var(name) => {
-                    self.env.bind(name, Scheme::mono(scrutinee_ty.clone()));
+                    self.env.bind(name, Scheme::mono(scrutinee_ty));
                 }
 
                 MatchPattern::Literal(lit) => {
                     let lit_ty = self.pattern_literal(lit, span);
-                    self.unify(lit_ty, scrutinee_ty.clone(), span);
+                    self.unify(lit_ty, scrutinee_ty, span);
                 }
 
                 MatchPattern::Variant(ty_name, var_name, sub_pats) => {
@@ -131,7 +130,7 @@ impl InferCtx<'_> {
                     ) {
                         self.error(TypeError::IncompatibleVariantPattern {
                             pattern_ty: ty_name.clone(),
-                            scrutinee_ty: scrutinee_ty.clone(),
+                            scrutinee_ty,
                             span,
                         });
                     }
@@ -162,7 +161,7 @@ impl InferCtx<'_> {
                         span,
                     );
                     sub_pats.iter().zip(payload_tys.iter()).for_each(
-                        |(sub_pat_id, payload_ty)| {
+                        |(sub_pat_id, &payload_ty)| {
                             self.pattern_bindings(
                                 *sub_pat_id,
                                 payload_ty,
@@ -176,33 +175,32 @@ impl InferCtx<'_> {
                     fields.iter().for_each(|(field_name, sub_pat_id)| {
                         let field_ty =
                             self.field_type(scrutinee_ty, field_name, span);
-                        self.pattern_bindings(*sub_pat_id, &field_ty, span);
+                        self.pattern_bindings(*sub_pat_id, field_ty, span);
                     });
                 }
 
                 MatchPattern::Tuple(pats) => {
-                    let elem_tys = match scrutinee_ty {
-                        Ty::Tuple(ts) => ts.clone(),
+                    let s_ty = self.ty_arena.get(scrutinee_ty).clone();
+                    let elem_tys: SmallVec<[TyId; 4]> = match s_ty {
+                        Ty::Tuple(ts) => ts,
                         Ty::Var(_) => {
-                            let tys: Vec<Ty> =
+                            let tys: SmallVec<[TyId; 4]> =
                                 (0..pats.len()).map(|_| self.fresh()).collect();
-                            self.unify(
-                                scrutinee_ty.clone(),
-                                Ty::Tuple(tys.clone()),
-                                span,
-                            );
+                            let tuple_ty =
+                                self.ty_arena.alloc(Ty::Tuple(tys.clone()));
+                            self.unify(scrutinee_ty, tuple_ty, span);
                             tys
                         }
                         _ => {
                             self.error(TypeError::NotATuple(
-                                scrutinee_ty.clone(),
+                                scrutinee_ty,
                                 span,
                             ));
-                            vec![Ty::Error; pats.len()]
+                            (0..pats.len()).map(|_| TyArena::ERROR).collect()
                         }
                     };
                     pats.iter().zip(elem_tys.iter()).for_each(
-                        |(pat_id, ty)| {
+                        |(pat_id, &ty)| {
                             self.pattern_bindings(*pat_id, ty, span);
                         },
                     );
@@ -210,38 +208,34 @@ impl InferCtx<'_> {
 
                 MatchPattern::Array(pats, rest) => {
                     // Extract element type from array type
-                    let elem_ty = match scrutinee_ty {
-                        Ty::Array(inner) => inner.as_ref().clone(),
+                    let s_ty = self.ty_arena.get(scrutinee_ty).clone();
+                    let elem_ty = match s_ty {
+                        Ty::Array(inner) => inner,
                         Ty::Var(_) => {
                             let elem = self.fresh();
-                            self.unify(
-                                scrutinee_ty.clone(),
-                                Ty::Array(Box::new(elem.clone())),
-                                span,
-                            );
+                            let arr_ty = self.ty_arena.array(elem);
+                            self.unify(scrutinee_ty, arr_ty, span);
                             elem
                         }
                         _ => {
                             self.error(TypeError::NotAnArray(
-                                scrutinee_ty.clone(),
+                                scrutinee_ty,
                                 span,
                             ));
-                            Ty::Error
+                            TyArena::ERROR
                         }
                     };
 
                     // Bind prefix patterns
                     pats.iter().for_each(|pat_id| {
-                        self.pattern_bindings(*pat_id, &elem_ty, span);
+                        self.pattern_bindings(*pat_id, elem_ty, span);
                     });
 
                     // Bind rest pattern if present
                     if let Some(crate::ast::RestPattern::Bind(name)) = rest {
                         // Rest has type `Array[T]` where `T` is the element type
-                        self.env.bind(
-                            name,
-                            Scheme::mono(Ty::Array(Box::new(elem_ty.clone()))),
-                        );
+                        let rest_ty = self.ty_arena.array(elem_ty);
+                        self.env.bind(name, Scheme::mono(rest_ty));
                     }
                 }
 
@@ -250,14 +244,14 @@ impl InferCtx<'_> {
                         self.ast_type_to_ty(*ty_id, &IndexMap::new());
 
                     // Skip check if narrowed type is the union itself
-                    let is_same_union = *scrutinee_ty == narrowed_ty;
+                    let is_same_union = scrutinee_ty == narrowed_ty;
                     if !is_same_union
                         && self.expand_union_members(scrutinee_ty).is_some()
-                        && !self.is_union_member(scrutinee_ty, &narrowed_ty)
+                        && !self.is_union_member(scrutinee_ty, narrowed_ty)
                     {
                         self.error(TypeError::NotAUnionMember {
-                            member: narrowed_ty.clone(),
-                            union_ty: scrutinee_ty.clone(),
+                            member: narrowed_ty,
+                            union_ty: scrutinee_ty,
                             span,
                         });
                     }
@@ -277,7 +271,7 @@ impl InferCtx<'_> {
     pub(super) fn check_exhaustiveness(
         &mut self,
         arms: &[MatchArm],
-        scrutinee_ty: &Ty,
+        scrutinee_ty: TyId,
         span: Span,
     ) {
         // Only unguarded patterns count for exhaustiveness
@@ -290,10 +284,11 @@ impl InferCtx<'_> {
             .any(|arm| self.is_irrefutable_pattern(arm.pattern));
 
         if !has_catch_all {
-            match scrutinee_ty {
+            let s_ty = self.ty_arena.get(scrutinee_ty).clone();
+            match s_ty {
                 Ty::Named(type_id, _) => {
                     if let Some(TypeDef::Sum { variants, .. }) =
-                        self.registry.get_def(*type_id)
+                        self.registry.get_def(type_id)
                     {
                         let covered: HashSet<u8> = unguarded
                             .iter()
@@ -308,9 +303,7 @@ impl InferCtx<'_> {
                                             let var_id =
                                                 self.env.intern(var_name);
                                             self.registry
-                                                .lookup_variant(
-                                                    *type_id, var_id,
-                                                )
+                                                .lookup_variant(type_id, var_id)
                                                 .map(|v| v.idx)
                                         }
                                         _ => None,
@@ -453,8 +446,8 @@ impl InferCtx<'_> {
                         })
                         .collect();
 
-                    // Now convert each to Ty (requires mutable self)
-                    let covered: Vec<Ty> = ty_ids
+                    // Now convert each to `TyId` (requires mutable self)
+                    let covered: SmallVec<[TyId; 4]> = ty_ids
                         .into_iter()
                         .map(|ty_id| {
                             self.ast_type_to_ty(ty_id, &IndexMap::new())

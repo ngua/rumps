@@ -267,6 +267,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         let ctx = super::class::ClassCtx {
             arena: &mut self.arena,
             type_exprs: &mut self.type_exprs,
+            ty_arena: &self.ty_arena,
             registry: &self.registry,
             regex_cache: &self.regex_cache,
             span: Span::default(),
@@ -285,6 +286,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         let ctx = super::class::ClassCtx {
             arena: &mut self.arena,
             type_exprs: &mut self.type_exprs,
+            ty_arena: &self.ty_arena,
             registry: &self.registry,
             regex_cache: &self.regex_cache,
             span: Span::default(),

@@ -5,8 +5,8 @@
 use std::collections::{HashMap, HashSet};
 
 use super::ty::{
-    BuiltinClassDef, BuiltinClassDefs, BuiltinClassTag, Scheme, Subst, Ty,
-    TyVar,
+    BuiltinClassDef, BuiltinClassDefs, BuiltinClassTag, Scheme, Subst, TyArena,
+    TyId, TyVar,
 };
 use crate::ast::Visibility;
 use crate::intern::{StringId, StringInterner};
@@ -59,9 +59,14 @@ impl TypeEnv {
     /// Create an empty environment with one global scope.
     ///
     /// The interner should be shared with `TypeRegistry` so `StringId`
-    /// lookups are consistent.
-    pub(crate) fn new(mut strings: StringInterner) -> Self {
-        let class_defs = BuiltinClassDef::build_all(&mut |s| strings.intern(s));
+    /// lookups are consistent. The `arena` is used to build class
+    /// definitions that reference interned types.
+    pub(crate) fn new(
+        mut strings: StringInterner,
+        arena: &mut TyArena,
+    ) -> Self {
+        let class_defs =
+            BuiltinClassDef::build_all(&mut |s| strings.intern(s), arena);
         Self {
             scopes: vec![Scope::default()],
             strings,
@@ -211,12 +216,7 @@ impl TypeEnv {
     }
 
     /// Pop the current scope (e.g., leaving a function body or block).
-    ///
-    /// # Panics
-    ///
-    /// Panics if there's only one scope remaining (the global scope).
     pub(crate) fn pop_scope(&mut self) {
-        debug_assert!(self.scopes.len() > 1, "cannot pop global scope");
         self.scopes.pop();
     }
 
@@ -290,11 +290,11 @@ impl TypeEnv {
     /// Collect all free type variables in the environment.
     ///
     /// A type variable is free in the environment if it's free in any binding.
-    pub(crate) fn free_vars(&self) -> HashSet<TyVar> {
+    pub(crate) fn free_vars(&self, arena: &TyArena) -> HashSet<TyVar> {
         self.scopes
             .iter()
             .flat_map(|scope| scope.bindings.values())
-            .flat_map(|scheme| scheme.free_vars())
+            .flat_map(|scheme| scheme.free_vars(arena))
             .collect()
     }
 
@@ -307,22 +307,22 @@ impl TypeEnv {
     /// functions, constraints are added separately in `InferCtx::fun`. This
     /// means closures with constrained type params will only be checked at
     /// definition time, not at call sites.
-    pub(crate) fn generalize(&self, ty: &Ty) -> Scheme {
-        let env_fv = self.free_vars();
-        let ty_fv = ty.free_vars();
+    pub(crate) fn generalize(&self, ty: TyId, arena: &TyArena) -> Scheme {
+        let env_fv = self.free_vars(arena);
+        let ty_fv = arena.free_vars(ty);
         let vars: Vec<TyVar> = ty_fv.difference(&env_fv).copied().collect();
         Scheme {
             vars,
-            ty: ty.clone(),
+            ty,
             constraints: smallvec::SmallVec::new(),
         }
     }
 
     /// Apply a substitution to all schemes in the environment.
-    pub(crate) fn apply(&mut self, subst: &Subst) {
+    pub(crate) fn apply(&mut self, subst: &Subst, arena: &mut TyArena) {
         self.scopes.iter_mut().for_each(|scope| {
             scope.bindings.values_mut().for_each(|scheme| {
-                *scheme = scheme.apply(subst);
+                *scheme = scheme.apply(subst, arena);
             });
         });
     }
@@ -330,74 +330,87 @@ impl TypeEnv {
 
 #[cfg(test)]
 mod tests {
+    use super::super::ty::TyArena;
     use super::*;
 
     #[test]
     fn new_has_one_scope() {
-        let env = TypeEnv::new(StringInterner::new());
+        let mut arena = TyArena::new();
+        let env = TypeEnv::new(StringInterner::new(), &mut arena);
         assert_eq!(env.scopes.len(), 1);
     }
 
     #[test]
     fn bind_and_lookup() {
-        let mut env = TypeEnv::new(StringInterner::new());
-        env.bind("x", Scheme::mono(Ty::Int));
-        assert_eq!(env.lookup("x"), Some(&Scheme::mono(Ty::Int)));
+        let mut arena = TyArena::new();
+        let mut env = TypeEnv::new(StringInterner::new(), &mut arena);
+        env.bind("x", Scheme::mono(TyArena::INT));
+        assert_eq!(env.lookup("x"), Some(&Scheme::mono(TyArena::INT)));
         assert_eq!(env.lookup("y"), None);
     }
 
     #[test]
     fn shadowing() {
-        let mut env = TypeEnv::new(StringInterner::new());
-        env.bind("x", Scheme::mono(Ty::Int));
+        let mut arena = TyArena::new();
+        let mut env = TypeEnv::new(StringInterner::new(), &mut arena);
+        env.bind("x", Scheme::mono(TyArena::INT));
         env.push_scope();
-        env.bind("x", Scheme::mono(Ty::String));
-        assert_eq!(env.lookup("x"), Some(&Scheme::mono(Ty::String)));
+        env.bind("x", Scheme::mono(TyArena::STRING));
+        assert_eq!(env.lookup("x"), Some(&Scheme::mono(TyArena::STRING)));
         env.pop_scope();
-        assert_eq!(env.lookup("x"), Some(&Scheme::mono(Ty::Int)));
+        assert_eq!(env.lookup("x"), Some(&Scheme::mono(TyArena::INT)));
     }
 
     #[test]
     fn inner_scope_sees_outer() {
-        let mut env = TypeEnv::new(StringInterner::new());
-        env.bind("x", Scheme::mono(Ty::Int));
+        let mut arena = TyArena::new();
+        let mut env = TypeEnv::new(StringInterner::new(), &mut arena);
+        env.bind("x", Scheme::mono(TyArena::INT));
         env.push_scope();
-        env.bind("y", Scheme::mono(Ty::String));
-        assert_eq!(env.lookup("x"), Some(&Scheme::mono(Ty::Int)));
-        assert_eq!(env.lookup("y"), Some(&Scheme::mono(Ty::String)));
+        env.bind("y", Scheme::mono(TyArena::STRING));
+        assert_eq!(env.lookup("x"), Some(&Scheme::mono(TyArena::INT)));
+        assert_eq!(env.lookup("y"), Some(&Scheme::mono(TyArena::STRING)));
     }
 
     #[test]
     fn free_vars_collects_all() {
-        let mut env = TypeEnv::new(StringInterner::new());
+        let mut arena = TyArena::new();
+        let mut env = TypeEnv::new(StringInterner::new(), &mut arena);
         let a = TyVar::new(0);
         let b = TyVar::new(1);
-        env.bind("x", Scheme::mono(Ty::Var(a)));
+        let va = arena.var(0);
+        let vb = arena.var(1);
+        env.bind("x", Scheme::mono(va));
         env.push_scope();
-        env.bind("y", Scheme::mono(Ty::Var(b)));
-        let fv = env.free_vars();
+        env.bind("y", Scheme::mono(vb));
+        let fv = env.free_vars(&arena);
         assert!(fv.contains(&a));
         assert!(fv.contains(&b));
     }
 
     #[test]
     fn generalize_no_env_vars() {
-        let env = TypeEnv::new(StringInterner::new());
+        let mut arena = TyArena::new();
+        let env = TypeEnv::new(StringInterner::new(), &mut arena);
         let a = TyVar::new(0);
-        let ty = Ty::Array(Box::new(Ty::Var(a)));
-        let scheme = env.generalize(&ty);
+        let va = arena.var(0);
+        let ty = arena.array(va);
+        let scheme = env.generalize(ty, &arena);
         assert!(scheme.vars.contains(&a));
     }
 
     #[test]
     fn generalize_excludes_env_vars() {
-        let mut env = TypeEnv::new(StringInterner::new());
+        let mut arena = TyArena::new();
+        let mut env = TypeEnv::new(StringInterner::new(), &mut arena);
         let a = TyVar::new(0);
         let b = TyVar::new(1);
-        env.bind("existing", Scheme::mono(Ty::Var(a)));
+        let va = arena.var(0);
+        let vb = arena.var(1);
+        env.bind("existing", Scheme::mono(va));
         // `b` is free in ty but not in env; `a` is in both
-        let ty = Ty::Fn(vec![Ty::Var(a)], Box::new(Ty::Var(b)));
-        let scheme = env.generalize(&ty);
+        let ty = arena.func(smallvec::smallvec![va], vb);
+        let scheme = env.generalize(ty, &arena);
         assert!(!scheme.vars.contains(&a)); // `a` in env, not generalized
         assert!(scheme.vars.contains(&b)); // `b` free, generalized
     }

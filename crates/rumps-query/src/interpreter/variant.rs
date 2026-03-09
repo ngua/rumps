@@ -197,15 +197,17 @@ impl<I: IoContext> Interpreter<'_, I> {
         id: crate::ast::ExprId,
         span: Span,
     ) -> crate::Result<Value> {
-        let ty = self
+        let ty_id = self
             .mempty_types
             .get(&id)
-            .cloned()
+            .copied()
             .unwrap_or_else(|| typechecked!("mempty", "resolved type"));
+        let ty = self.ty_arena.get(ty_id).clone();
 
         let mut ctx = ClassCtx {
             arena: &mut self.arena,
             type_exprs: &mut self.type_exprs,
+            ty_arena: &self.ty_arena,
             registry: &self.registry,
             regex_cache: &self.regex_cache,
             span,

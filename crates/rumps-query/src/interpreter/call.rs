@@ -612,6 +612,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let mut ctx = ClassCtx {
                     arena: &mut self.arena,
                     type_exprs: &mut self.type_exprs,
+                    ty_arena: &self.ty_arena,
                     registry: &self.registry,
                     regex_cache: &self.regex_cache,
                     span,
@@ -624,6 +625,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let mut ctx = ClassCtx {
                     arena: &mut self.arena,
                     type_exprs: &mut self.type_exprs,
+                    ty_arena: &self.ty_arena,
                     registry: &self.registry,
                     regex_cache: &self.regex_cache,
                     span,
@@ -635,13 +637,15 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let id = expr_id.unwrap_or_else(|| {
                     typechecked!("nullary class method", "expression id")
                 });
-                let ty =
-                    self.mempty_types.get(&id).cloned().unwrap_or_else(|| {
+                let ty_id =
+                    self.mempty_types.get(&id).copied().unwrap_or_else(|| {
                         typechecked!("nullary class method", "resolved type")
                     });
+                let ty = self.ty_arena.get(ty_id).clone();
                 let mut ctx = ClassCtx {
                     arena: &mut self.arena,
                     type_exprs: &mut self.type_exprs,
+                    ty_arena: &self.ty_arena,
                     registry: &self.registry,
                     regex_cache: &self.regex_cache,
                     span,
@@ -654,17 +658,20 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let id = expr_id.unwrap_or_else(|| {
                     typechecked!("convert class method", "expression id")
                 });
-                let ty = self.convert_targets.get(&id).cloned().unwrap_or_else(
-                    || {
-                        typechecked!(
-                            "convert class method",
-                            "resolved target type"
-                        )
-                    },
-                );
+                let ty_id =
+                    self.convert_targets.get(&id).copied().unwrap_or_else(
+                        || {
+                            typechecked!(
+                                "convert class method",
+                                "resolved target type"
+                            )
+                        },
+                    );
+                let ty = self.ty_arena.get(ty_id).clone();
                 let mut ctx = ClassCtx {
                     arena: &mut self.arena,
                     type_exprs: &mut self.type_exprs,
+                    ty_arena: &self.ty_arena,
                     registry: &self.registry,
                     regex_cache: &self.regex_cache,
                     span,
@@ -697,6 +704,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         let mut ctx = ClassCtx {
             arena: &mut self.arena,
             type_exprs: &mut self.type_exprs,
+            ty_arena: &self.ty_arena,
             registry: &self.registry,
             regex_cache: &self.regex_cache,
             span,
@@ -714,6 +722,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     let mut ctx = ClassCtx {
                         arena: &mut self.arena,
                         type_exprs: &mut self.type_exprs,
+                        ty_arena: &self.ty_arena,
                         registry: &self.registry,
                         regex_cache: &self.regex_cache,
                         span,

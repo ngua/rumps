@@ -197,6 +197,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         let mut ctx = ClassCtx {
             arena: &mut self.arena,
             type_exprs: &mut self.type_exprs,
+            ty_arena: &self.ty_arena,
             registry: &self.registry,
             regex_cache: &self.regex_cache,
             span,
@@ -291,10 +292,11 @@ impl<I: IoContext> Interpreter<'_, I> {
             }),
             UnOp::Wrap => {
                 // Look up target type (defaulted to `Option[T]` during constraint solving)
-                let ty =
-                    self.wrap_types.get(&id).cloned().unwrap_or_else(|| {
+                let ty_id =
+                    self.wrap_types.get(&id).copied().unwrap_or_else(|| {
                         typechecked!("?", "resolved wrap type")
                     });
+                let ty = self.ty_arena.get(ty_id).clone();
                 self.dispatch_convert(
                     BuiltinClassTag::Fallible,
                     "wrap",
@@ -323,6 +325,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         let mut ctx = ClassCtx {
             arena: &mut self.arena,
             type_exprs: &mut self.type_exprs,
+            ty_arena: &self.ty_arena,
             registry: &self.registry,
             regex_cache: &self.regex_cache,
             span,
@@ -349,6 +352,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         let mut ctx = ClassCtx {
             arena: &mut self.arena,
             type_exprs: &mut self.type_exprs,
+            ty_arena: &self.ty_arena,
             registry: &self.registry,
             regex_cache: &self.regex_cache,
             span,

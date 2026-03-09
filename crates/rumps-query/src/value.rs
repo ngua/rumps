@@ -23,7 +23,7 @@ use crate::ast::{
     Ast, AstTypeExprId, ExprId, Stmt, StmtId, TypeDefAst, TypeParam,
 };
 use crate::intern::{StringId, StringInterner};
-use crate::typecheck::Ty;
+use crate::typecheck::{Ty, TyArena, TyId};
 use crate::Span;
 
 /// A hashable key for `Map` values.
@@ -1296,8 +1296,8 @@ impl TypeExprArena {
     /// Panics if `ty` contains unresolved type variables (`Var`, `Unknown`, `Error`).
     /// These should be resolved during constraint solving before calling this.
     #[allow(dead_code)]
-    pub(crate) fn intern_ty(&mut self, ty: &Ty) -> TypeExprId {
-        match ty {
+    pub(crate) fn intern_ty(&mut self, id: TyId, ta: &TyArena) -> TypeExprId {
+        match ta.get(id) {
             Ty::Bool => self.named(TypeId::BOOL),
             Ty::Int => self.named(TypeId::INT),
             Ty::Word => self.named(TypeId::WORD),
@@ -1317,53 +1317,59 @@ impl TypeExprArena {
             Ty::Local => self.named(TypeId::LOCAL),
             Ty::Global => self.named(TypeId::GLOBAL),
             Ty::Array(elem) => {
-                let elem_id = self.intern_ty(elem);
+                let elem_id = self.intern_ty(*elem, ta);
                 self.app(TypeId::ARRAY, smallvec![elem_id])
             }
             Ty::Option(inner) => {
-                let inner_id = self.intern_ty(inner);
+                let inner_id = self.intern_ty(*inner, ta);
                 self.app(TypeId::OPTION, smallvec![inner_id])
             }
             Ty::Result(ok, err) => {
-                let ok_id = self.intern_ty(ok);
-                let err_id = self.intern_ty(err);
+                let ok_id = self.intern_ty(*ok, ta);
+                let err_id = self.intern_ty(*err, ta);
                 self.app(TypeId::RESULT, smallvec![ok_id, err_id])
             }
             Ty::Map(k, v) => {
-                let k_id = self.intern_ty(k);
-                let v_id = self.intern_ty(v);
+                let k_id = self.intern_ty(*k, ta);
+                let v_id = self.intern_ty(*v, ta);
                 self.app(TypeId::MAP, smallvec![k_id, v_id])
             }
             Ty::Tuple(elems) => {
+                let elems = elems.clone();
                 let elem_ids: SmallVec<[_; 4]> =
-                    elems.iter().map(|e| self.intern_ty(e)).collect();
+                    elems.iter().map(|&e| self.intern_ty(e, ta)).collect();
                 self.tuple(elem_ids)
             }
             Ty::Named(type_id, params) => {
                 if params.is_empty() {
                     self.named(*type_id)
                 } else {
+                    let params = params.clone();
                     let param_ids: SmallVec<[_; 2]> =
-                        params.iter().map(|p| self.intern_ty(p)).collect();
+                        params.iter().map(|&p| self.intern_ty(p, ta)).collect();
                     self.app(*type_id, param_ids)
                 }
             }
             Ty::Fn(params, ret) => {
+                let params = params.clone();
+                let ret = *ret;
                 let param_ids: SmallVec<[_; 4]> =
-                    params.iter().map(|p| self.intern_ty(p)).collect();
-                let ret_id = self.intern_ty(ret);
+                    params.iter().map(|&p| self.intern_ty(p, ta)).collect();
+                let ret_id = self.intern_ty(ret, ta);
                 self.fn_type(param_ids, ret_id)
             }
             Ty::Object(fields) => {
+                let fields = fields.clone();
                 let converted: IndexMap<StringId, TypeExprId> = fields
                     .iter()
-                    .map(|(k, t)| (*k, self.intern_ty(t)))
+                    .map(|(&k, &t)| (k, self.intern_ty(t, ta)))
                     .collect();
                 self.object(converted)
             }
             Ty::Union(members) => {
+                let members = members.clone();
                 let member_ids: SmallVec<[_; 4]> =
-                    members.iter().map(|m| self.intern_ty(m)).collect();
+                    members.iter().map(|&m| self.intern_ty(m, ta)).collect();
                 self.union(member_ids)
             }
             Ty::Var(_)
@@ -1371,7 +1377,7 @@ impl TypeExprArena {
             | Ty::AssocType(_, _, _)
             | Ty::Unknown
             | Ty::Error => {
-                unreachable!("intern_ty called on unresolved type: {ty:?}")
+                unreachable!("intern_ty called on unresolved type: {id:?}")
             }
         }
     }
@@ -1382,8 +1388,12 @@ impl TypeExprArena {
     /// Use this when the type may contain type variables (e.g., from generics
     /// that haven't been monomorphized). For empty containers, the element
     /// type doesn't matter at runtime.
-    pub(crate) fn intern_ty_lenient(&mut self, ty: &Ty) -> TypeExprId {
-        match ty {
+    pub(crate) fn intern_ty_lenient(
+        &mut self,
+        id: TyId,
+        ta: &TyArena,
+    ) -> TypeExprId {
+        match ta.get(id) {
             Ty::Bool => self.named(TypeId::BOOL),
             Ty::Int => self.named(TypeId::INT),
             Ty::Word => self.named(TypeId::WORD),
@@ -1403,55 +1413,67 @@ impl TypeExprArena {
             Ty::Local => self.named(TypeId::LOCAL),
             Ty::Global => self.named(TypeId::GLOBAL),
             Ty::Array(elem) => {
-                let elem_id = self.intern_ty_lenient(elem);
+                let elem_id = self.intern_ty_lenient(*elem, ta);
                 self.app(TypeId::ARRAY, smallvec![elem_id])
             }
             Ty::Option(inner) => {
-                let inner_id = self.intern_ty_lenient(inner);
+                let inner_id = self.intern_ty_lenient(*inner, ta);
                 self.app(TypeId::OPTION, smallvec![inner_id])
             }
             Ty::Result(ok, err) => {
-                let ok_id = self.intern_ty_lenient(ok);
-                let err_id = self.intern_ty_lenient(err);
+                let ok_id = self.intern_ty_lenient(*ok, ta);
+                let err_id = self.intern_ty_lenient(*err, ta);
                 self.app(TypeId::RESULT, smallvec![ok_id, err_id])
             }
             Ty::Map(k, v) => {
-                let k_id = self.intern_ty_lenient(k);
-                let v_id = self.intern_ty_lenient(v);
+                let k_id = self.intern_ty_lenient(*k, ta);
+                let v_id = self.intern_ty_lenient(*v, ta);
                 self.app(TypeId::MAP, smallvec![k_id, v_id])
             }
             Ty::Tuple(elems) => {
-                let elem_ids: SmallVec<[_; 4]> =
-                    elems.iter().map(|e| self.intern_ty_lenient(e)).collect();
+                let elems = elems.clone();
+                let elem_ids: SmallVec<[_; 4]> = elems
+                    .iter()
+                    .map(|&e| self.intern_ty_lenient(e, ta))
+                    .collect();
                 self.tuple(elem_ids)
             }
             Ty::Named(type_id, params) => {
                 if params.is_empty() {
                     self.named(*type_id)
                 } else {
+                    let params = params.clone();
                     let param_ids: SmallVec<[_; 2]> = params
                         .iter()
-                        .map(|p| self.intern_ty_lenient(p))
+                        .map(|&p| self.intern_ty_lenient(p, ta))
                         .collect();
                     self.app(*type_id, param_ids)
                 }
             }
             Ty::Fn(params, ret) => {
-                let param_ids: SmallVec<[_; 4]> =
-                    params.iter().map(|p| self.intern_ty_lenient(p)).collect();
-                let ret_id = self.intern_ty_lenient(ret);
+                let params = params.clone();
+                let ret = *ret;
+                let param_ids: SmallVec<[_; 4]> = params
+                    .iter()
+                    .map(|&p| self.intern_ty_lenient(p, ta))
+                    .collect();
+                let ret_id = self.intern_ty_lenient(ret, ta);
                 self.fn_type(param_ids, ret_id)
             }
             Ty::Object(fields) => {
+                let fields = fields.clone();
                 let converted: IndexMap<StringId, TypeExprId> = fields
                     .iter()
-                    .map(|(k, t)| (*k, self.intern_ty_lenient(t)))
+                    .map(|(&k, &t)| (k, self.intern_ty_lenient(t, ta)))
                     .collect();
                 self.object(converted)
             }
             Ty::Union(members) => {
-                let member_ids: SmallVec<[_; 4]> =
-                    members.iter().map(|m| self.intern_ty_lenient(m)).collect();
+                let members = members.clone();
+                let member_ids: SmallVec<[_; 4]> = members
+                    .iter()
+                    .map(|&m| self.intern_ty_lenient(m, ta))
+                    .collect();
                 self.union(member_ids)
             }
             // Unresolved types become UNKNOWN

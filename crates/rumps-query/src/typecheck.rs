@@ -28,7 +28,7 @@ pub(crate) use infer::{Constraint, InferCtx};
 pub(crate) use instance::{Instance, InstanceRegistry};
 pub(crate) use ty::{
     BuiltinClass, BuiltinClassDef, BuiltinClassDefs, BuiltinClassTag,
-    ClassShape, Scheme, Subst, Ty, TyVar,
+    ClassShape, Scheme, Subst, Ty, TyArena, TyId, TyVar,
 };
 
 use crate::ast::ExprId;
@@ -40,18 +40,20 @@ use crate::TypeId;
 /// patterns, type information for polymorphic expressions, and instance
 /// dispatch tables.
 pub(crate) struct TypecheckOutput {
+    /// Type arena; owns all interned types referenced by `TyId` handles.
+    pub(crate) ty_arena: TyArena,
     /// Compiled regex patterns, indexed by `regex_indices`.
     pub(crate) regex_cache: Vec<regex::Regex>,
     /// Mapping from regex expression IDs to cache indices.
     pub(crate) regex_indices: HashMap<ExprId, u32>,
     /// Resolved types for `MEMPTY` expressions (monoid identity values).
-    pub(crate) mempty_types: HashMap<ExprId, Ty>,
+    pub(crate) mempty_types: HashMap<ExprId, TyId>,
     /// Resolved types for numeric literals (defaulted to `Int` if ambiguous).
-    pub(crate) numeric_types: HashMap<ExprId, Ty>,
+    pub(crate) numeric_types: HashMap<ExprId, TyId>,
     /// Target types for `Into::into` and `TryInto::try_into` conversions.
-    pub(crate) convert_targets: HashMap<ExprId, Ty>,
+    pub(crate) convert_targets: HashMap<ExprId, TyId>,
     /// Target types for `?` (wrap) operators on `Fallible` types.
-    pub(crate) wrap_types: HashMap<ExprId, Ty>,
+    pub(crate) wrap_types: HashMap<ExprId, TyId>,
     /// Type IDs for class method calls on user-defined types.
     ///
     /// Used to dispatch to user-defined class instances at runtime.

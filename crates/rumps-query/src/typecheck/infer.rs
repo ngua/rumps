@@ -36,7 +36,9 @@ use smallvec::SmallVec;
 use super::env::TypeEnv;
 use super::error::{TyPrinter, TypeError};
 use super::instance::InstanceRegistry;
-use super::ty::{BuiltinClass, BuiltinClassTag, Scheme, Subst, Ty, TyVar};
+use super::ty::{
+    BuiltinClass, BuiltinClassTag, Scheme, Subst, Ty, TyArena, TyId, TyVar,
+};
 use super::TypecheckOutput;
 use crate::ast::{
     AssocTypeDef, AstClassConstraints, AstTypeExprId, ExprId,
@@ -67,9 +69,9 @@ pub(super) struct ClassInstanceInput<'a, A = ()> {
 /// Input for `instance_method`.
 pub(super) struct InstanceMethodInput<'a> {
     pub(super) class: BuiltinClassTag,
-    pub(super) for_ty: &'a Ty,
-    pub(super) class_arg_tys: &'a SmallVec<[Ty; 2]>,
-    pub(super) type_param_subst: &'a IndexMap<StringId, Ty>,
+    pub(super) for_ty: TyId,
+    pub(super) class_arg_tys: &'a SmallVec<[TyId; 2]>,
+    pub(super) type_param_subst: &'a IndexMap<StringId, TyId>,
     pub(super) method: &'a InstanceMethodDef,
     pub(super) inst_span: Span,
 }
@@ -80,7 +82,6 @@ pub(super) struct InstanceMethodInput<'a> {
 /// program to be well-typed. They are collected during the inference pass
 /// and solved together via unification.
 #[derive(Clone, Debug)]
-#[allow(clippy::large_enum_variant)] // Callable has SmallVec<[Ty; 4]>
 pub(crate) enum Constraint {
     /// Two types must unify.
     ///
@@ -90,7 +91,7 @@ pub(crate) enum Constraint {
     /// Example: `LET x: Int = e` generates `Unify(typeof(e), Int)`.
     ///
     /// Named `Unify` (not `Eq`) to disambiguate from `BuiltinClassTag::Eq`.
-    Unify(Ty, Ty, Span),
+    Unify(TyId, TyId, Span),
 
     /// Type must be callable with given argument types.
     ///
@@ -99,9 +100,9 @@ pub(crate) enum Constraint {
     ///
     /// Example: `f(x, y)` generates `Callable { callee: typeof(f), args: [typeof(x), typeof(y)], ret: ?r }`.
     Callable {
-        callee: Ty,
-        args: SmallVec<[Ty; 4]>,
-        ret: Ty,
+        callee: TyId,
+        args: SmallVec<[TyId; 4]>,
+        ret: TyId,
         span: Span,
     },
 
@@ -114,9 +115,9 @@ pub(crate) enum Constraint {
     /// Example: `x.name` where `x: ?t` generates
     /// `HasField { base: ?t, field: "name", field_ty: ?f }`.
     HasField {
-        base: Ty,
+        base: TyId,
         field: crate::intern::StringId,
-        field_ty: Ty,
+        field_ty: TyId,
         span: Span,
     },
 
@@ -131,8 +132,8 @@ pub(crate) enum Constraint {
     /// - `opt!` generates `Class { ty: typeof(opt), class: Hkt(Fallible, ?inner), span }`
     /// - `arr[i]` generates `Class { ty: typeof(arr), class: Parameterized(Indexable, ?elem), span }`
     Class {
-        ty: Ty,
-        class: BuiltinClass<Ty>,
+        ty: TyId,
+        class: BuiltinClass<TyId>,
         span: Span,
     },
 }
@@ -163,8 +164,8 @@ pub(crate) struct ClassContext {
     /// Associated type definitions for this instance.
     ///
     /// Maps associated type names to their concrete types. For example,
-    /// `NEWTYPE Index = Int` maps `"Index"` -> `Ty::Int`.
-    pub(crate) assoc_types: HashMap<StringId, Ty>,
+    /// `NEWTYPE Index = Int` maps `"Index"` -> `TyArena::INT`.
+    pub(crate) assoc_types: HashMap<StringId, TyId>,
 }
 
 /// Type inference context.
@@ -188,12 +189,14 @@ pub(crate) struct InferCtx<'a> {
     /// Used during constraint solving to check if a user type satisfies
     /// a class constraint via a user-provided implementation.
     pub(super) instance_registry: InstanceRegistry,
+    /// Type arena; owns all interned types.
+    pub(super) ty_arena: TyArena,
     /// Collected constraints to be solved.
     constraints: Vec<Constraint>,
     /// Counter for generating fresh type variables.
     pub(super) next_var: u32,
     /// Inferred types for each expression.
-    expr_types: HashMap<ExprId, Ty>,
+    expr_types: HashMap<ExprId, TyId>,
     /// Type errors encountered during inference.
     errors: Vec<TypeError>,
     /// Cache of compiled regex patterns (validated during typechecking).
@@ -210,25 +213,25 @@ pub(crate) struct InferCtx<'a> {
     /// Populated during inference with type variables; resolved after
     /// substitution to concrete `Monoid` types. The interpreter uses
     /// this to produce the correct empty value.
-    mempty_types: HashMap<ExprId, Ty>,
+    mempty_types: HashMap<ExprId, TyId>,
     /// Mapping from numeric literal expression IDs to their inferred types.
     ///
     /// Populated during inference with type variables; resolved after
     /// substitution to concrete `Numeric` types (`Int`, `Word`, `Float`).
     /// The interpreter uses this to convert numeric literals to the
     /// correct runtime value type.
-    numeric_types: HashMap<ExprId, Ty>,
+    numeric_types: HashMap<ExprId, TyId>,
     /// Mapping from conversion expression IDs to their target types.
     ///
     /// Populated when `Into::into` or `TryInto::try_into` methods are called.
     /// The interpreter uses this to dispatch the correct conversion.
-    convert_targets: HashMap<ExprId, Ty>,
+    convert_targets: HashMap<ExprId, TyId>,
     /// Mapping from wrap expression IDs to their target `Fallible` types.
     ///
     /// Populated during inference for `?` (wrap) operators; resolved after
     /// substitution to concrete `Option[T]` or `Result[T, E]` types.
     /// The interpreter uses this to produce the correct wrapper type.
-    wrap_types: HashMap<ExprId, Ty>,
+    wrap_types: HashMap<ExprId, TyId>,
     /// Mapping from class method call expression IDs to their receiver's TypeId.
     ///
     /// Populated when a class method is called on a NEWTYPE or UNION type.
@@ -241,7 +244,7 @@ pub(crate) struct InferCtx<'a> {
     /// During inference, class method calls on types that are still type
     /// variables are recorded here. After `apply_subst`, we resolve the types
     /// and populate `instance_calls` for any user instances found.
-    deferred_instance_calls: Vec<(ExprId, Ty, BuiltinClassTag)>,
+    deferred_instance_calls: Vec<(ExprId, TyId, BuiltinClassTag)>,
     /// Type variables created for integer literals, for defaulting to `Int`.
     ///
     /// Integer literals are polymorphic (no constraint) so they can unify with
@@ -309,13 +312,19 @@ impl<'a> InferCtx<'a> {
         strings: StringInterner,
         interactive: bool,
     ) -> Self {
+        // Snapshot the runtime environment's arena so that `TyId`s from
+        // builtin module schemes remain valid; inference will extend this
+        // copy with its own type allocations.
+        let mut ty_arena = runtime_env.ty_arena.clone();
+        let env = TypeEnv::new(strings, &mut ty_arena);
         Self {
             ast,
             registry,
             type_exprs,
             runtime_env,
-            env: TypeEnv::new(strings),
+            env,
             instance_registry: InstanceRegistry::new(),
+            ty_arena,
             constraints: Vec::new(),
             next_var: 0,
             expr_types: HashMap::new(),
@@ -371,9 +380,10 @@ impl<'a> InferCtx<'a> {
         v
     }
 
-    /// Generate a fresh type variable wrapped in `Ty::Var`.
-    pub(crate) fn fresh(&mut self) -> Ty {
-        Ty::Var(self.fresh_var())
+    /// Generate a fresh type variable wrapped in `Ty::Var`, interned.
+    pub(crate) fn fresh(&mut self) -> TyId {
+        let v = self.fresh_var();
+        self.ty_arena.alloc(Ty::Var(v))
     }
 
     /// Generate a fresh type variable for an integer literal.
@@ -381,10 +391,10 @@ impl<'a> InferCtx<'a> {
     /// Unlike `fresh`, this does NOT emit a `Numeric` constraint. The type
     /// variable can unify with any type (including `Json` in heterogeneous
     /// arrays). Unresolved numeric type vars default to `Int` after solving.
-    pub(crate) fn fresh_numeric(&mut self) -> Ty {
+    pub(crate) fn fresh_numeric(&mut self) -> TyId {
         let v = self.fresh_var();
         self.numeric_vars.push(v);
-        Ty::Var(v)
+        self.ty_arena.alloc(Ty::Var(v))
     }
 
     /// Clone the collected numeric type variables for defaulting.
@@ -403,7 +413,7 @@ impl<'a> InferCtx<'a> {
     /// Add a unification constraint between two types.
     ///
     /// Shorthand for `constrain(Constraint::Unify(t1, t2, span))`.
-    pub(crate) fn unify(&mut self, t1: Ty, t2: Ty, span: Span) {
+    pub(crate) fn unify(&mut self, t1: TyId, t2: TyId, span: Span) {
         self.constrain(Constraint::Unify(t1, t2, span));
     }
 
@@ -414,7 +424,7 @@ impl<'a> InferCtx<'a> {
     /// call sites, not just at function definition.
     pub(crate) fn emit_class_constraints(
         &mut self,
-        constraints: smallvec::SmallVec<[(Ty, BuiltinClass<Ty>); 2]>,
+        constraints: smallvec::SmallVec<[(TyId, BuiltinClass<TyId>); 2]>,
         span: Span,
     ) {
         constraints.into_iter().for_each(|(ty, class)| {
@@ -423,7 +433,7 @@ impl<'a> InferCtx<'a> {
     }
 
     /// Record the inferred type for an expression.
-    pub(crate) fn record_type(&mut self, id: ExprId, ty: Ty) {
+    pub(crate) fn record_type(&mut self, id: ExprId, ty: TyId) {
         self.expr_types.insert(id, ty);
     }
 
@@ -468,12 +478,12 @@ impl<'a> InferCtx<'a> {
     }
 
     /// Get the inferred type for an expression, if recorded.
-    pub(crate) fn get_type(&self, id: ExprId) -> Option<&Ty> {
-        self.expr_types.get(&id)
+    pub(crate) fn get_type(&self, id: ExprId) -> Option<TyId> {
+        self.expr_types.get(&id).copied()
     }
 
     /// Get all expression types.
-    pub(crate) fn expr_types(&self) -> &HashMap<ExprId, Ty> {
+    pub(crate) fn expr_types(&self) -> &HashMap<ExprId, TyId> {
         &self.expr_types
     }
 
@@ -497,21 +507,33 @@ impl<'a> InferCtx<'a> {
     /// Called after constraint solving to replace type variables with their
     /// resolved concrete types.
     pub(crate) fn apply_subst(&mut self, subst: &Subst) {
-        self.expr_types
-            .values_mut()
-            .for_each(|ty| *ty = ty.apply(subst));
-        self.mempty_types
-            .values_mut()
-            .for_each(|ty| *ty = ty.apply(subst));
-        self.numeric_types
-            .values_mut()
-            .for_each(|ty| *ty = ty.apply(subst));
-        self.convert_targets
-            .values_mut()
-            .for_each(|ty| *ty = ty.apply(subst));
-        self.wrap_types
-            .values_mut()
-            .for_each(|ty| *ty = ty.apply(subst));
+        // Collect keys first to avoid borrow conflict with `&mut self.ty_arena`
+        let expr_keys: Vec<_> = self.expr_types.keys().copied().collect();
+        expr_keys.into_iter().for_each(|k| {
+            let new = self.ty_arena.apply(self.expr_types[&k], subst);
+            self.expr_types.insert(k, new);
+        });
+        let mempty_keys: Vec<_> = self.mempty_types.keys().copied().collect();
+        mempty_keys.into_iter().for_each(|k| {
+            let new = self.ty_arena.apply(self.mempty_types[&k], subst);
+            self.mempty_types.insert(k, new);
+        });
+        let numeric_keys: Vec<_> = self.numeric_types.keys().copied().collect();
+        numeric_keys.into_iter().for_each(|k| {
+            let new = self.ty_arena.apply(self.numeric_types[&k], subst);
+            self.numeric_types.insert(k, new);
+        });
+        let convert_keys: Vec<_> =
+            self.convert_targets.keys().copied().collect();
+        convert_keys.into_iter().for_each(|k| {
+            let new = self.ty_arena.apply(self.convert_targets[&k], subst);
+            self.convert_targets.insert(k, new);
+        });
+        let wrap_keys: Vec<_> = self.wrap_types.keys().copied().collect();
+        wrap_keys.into_iter().for_each(|k| {
+            let new = self.ty_arena.apply(self.wrap_types[&k], subst);
+            self.wrap_types.insert(k, new);
+        });
     }
 
     /// Resolve deferred instance calls after substitution.
@@ -525,9 +547,9 @@ impl<'a> InferCtx<'a> {
         let deferred = std::mem::take(&mut self.deferred_instance_calls);
 
         deferred.into_iter().for_each(|(expr_id, ty, kind)| {
-            let resolved = ty.apply(subst);
-            let type_id = match resolved {
-                Ty::Named(id, _) => Some(id),
+            let resolved = self.ty_arena.apply(ty, subst);
+            let type_id = match self.ty_arena.get(resolved) {
+                Ty::Named(id, _) => Some(*id),
                 Ty::Bool => Some(TypeId::BOOL),
                 Ty::Int => Some(TypeId::INT),
                 Ty::Word => Some(TypeId::WORD),
@@ -564,7 +586,7 @@ impl<'a> InferCtx<'a> {
     pub(crate) fn check_remaining_unknowns(&mut self) {
         self.expr_types
             .iter()
-            .filter(|(_, ty)| Self::has_unresolved_vars(ty))
+            .filter(|(_, &ty)| Self::has_unresolved_vars(ty, &self.ty_arena))
             .map(|(id, _)| {
                 self.ast.expr_span(*id).unwrap_or_else(|| Span::new(0, 0))
             })
@@ -578,7 +600,9 @@ impl<'a> InferCtx<'a> {
         // `Ty::Var` or `Ty::Unknown` means we cannot produce the empty value.
         self.mempty_types
             .iter()
-            .filter(|(_, ty)| matches!(ty, Ty::Var(_) | Ty::Unknown))
+            .filter(|(_, &ty)| {
+                matches!(self.ty_arena.get(ty), Ty::Var(_) | Ty::Unknown)
+            })
             .map(|(id, _)| {
                 self.ast.expr_span(*id).unwrap_or_else(|| Span::new(0, 0))
             })
@@ -612,15 +636,16 @@ impl<'a> InferCtx<'a> {
 
             // Check for `main` function
             let file_span = Span::new(0, 0);
+            let expected =
+                self.ty_arena.func(smallvec::smallvec![], TyArena::UNIT);
             let main_err = self.env.lookup("main").map_or_else(
                 || Some(TypeError::MissingMain(file_span)),
                 |scheme| {
-                    let expected = Ty::Fn(vec![], Box::new(Ty::Unit));
                     if scheme.ty == expected {
                         None
                     } else {
                         Some(TypeError::InvalidMainSignature {
-                            got: scheme.ty.clone(),
+                            got: scheme.ty,
                             span: file_span,
                         })
                     }
@@ -669,10 +694,22 @@ impl<'a> InferCtx<'a> {
     fn into_output(
         self,
         registry: &TypeRegistry,
-        arena: &crate::value::ValueArena,
+        val_arena: &crate::value::ValueArena,
     ) -> Result<TypecheckOutput> {
-        NonEmpty::from_vec(self.errors).map_or(
+        if let Some(errs) = NonEmpty::from_vec(self.errors) {
+            let printer = TyPrinter::new(
+                registry,
+                val_arena,
+                &self.ty_arena,
+                &self.env.strings,
+                &self.numeric_vars,
+            );
+            let formatted = errs.map(|e| e.format_with(&printer));
+            let errors = formatted.map(crate::Error::FormattedType);
+            Err(crate::Error::multiple(errors))
+        } else {
             Ok(TypecheckOutput {
+                ty_arena: self.ty_arena,
                 regex_cache: self.regex_cache,
                 regex_indices: self.regex_indices,
                 mempty_types: self.mempty_types,
@@ -680,18 +717,7 @@ impl<'a> InferCtx<'a> {
                 convert_targets: self.convert_targets,
                 wrap_types: self.wrap_types,
                 instance_calls: self.instance_calls,
-            }),
-            |errs| {
-                let printer = TyPrinter::new(
-                    registry,
-                    arena,
-                    &self.env.strings,
-                    &self.numeric_vars,
-                );
-                let formatted = errs.map(|e| e.format_with(&printer));
-                let errors = formatted.map(crate::Error::FormattedType);
-                Err(crate::Error::multiple(errors))
-            },
-        )
+            })
+        }
     }
 }

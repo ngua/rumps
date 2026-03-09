@@ -7,7 +7,7 @@ use super::Interpreter;
 use crate::ast::{AstTypeExpr, AstTypeExprId};
 use crate::intern::StringId;
 use crate::io::IoContext;
-use crate::typecheck::{BuiltinClassTag, Ty};
+use crate::typecheck::{BuiltinClassTag, Ty, TyArena, TyId};
 use crate::value::{TypeExprId, TypeId, Value, ValueId};
 use crate::{Error, Result, Span};
 
@@ -251,7 +251,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 Ok(Value::Newtype(ty_expr, inner_id))
             }
             _ => {
-                let ty = Self::type_id_to_ty(target);
+                let ty_id = Self::type_id_to_ty_id(target, &mut self.ty_arena);
+                let ty = self.ty_arena.get(ty_id).clone();
                 self.dispatch_convert(
                     BuiltinClassTag::Into,
                     "into",
@@ -263,27 +264,27 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Convert a `TypeId` to the corresponding `Ty`.
-    fn type_id_to_ty(id: TypeId) -> Ty {
+    /// Convert a runtime `TypeId` to the corresponding `TyId` in the type arena.
+    fn type_id_to_ty_id(id: TypeId, ta: &mut TyArena) -> TyId {
         match id {
-            TypeId::UNIT => Ty::Unit,
-            TypeId::BOOL => Ty::Bool,
-            TypeId::INT => Ty::Int,
-            TypeId::WORD => Ty::Word,
-            TypeId::FLOAT => Ty::Float,
-            TypeId::CHAR => Ty::Char,
-            TypeId::STRING => Ty::String,
-            TypeId::FILEPATH => Ty::FilePath,
-            TypeId::JSON => Ty::Json,
-            TypeId::TIME => Ty::Time,
-            TypeId::RANGE => Ty::Range,
-            TypeId::ORDERING => Ty::Ordering,
-            TypeId::DATA_STATUS => Ty::DataStatus,
-            TypeId::PATH => Ty::Path,
-            TypeId::REGEX => Ty::Regex,
-            TypeId::LOCAL => Ty::Local,
-            TypeId::GLOBAL => Ty::Global,
-            other => Ty::Named(other, Vec::new()),
+            TypeId::UNIT => TyArena::UNIT,
+            TypeId::BOOL => TyArena::BOOL,
+            TypeId::INT => TyArena::INT,
+            TypeId::WORD => TyArena::WORD,
+            TypeId::FLOAT => TyArena::FLOAT,
+            TypeId::CHAR => TyArena::CHAR,
+            TypeId::STRING => TyArena::STRING,
+            TypeId::FILEPATH => TyArena::FILEPATH,
+            TypeId::JSON => TyArena::JSON,
+            TypeId::TIME => TyArena::TIME,
+            TypeId::RANGE => TyArena::RANGE,
+            TypeId::ORDERING => TyArena::ORDERING,
+            TypeId::DATA_STATUS => TyArena::DATA_STATUS,
+            TypeId::PATH => TyArena::PATH,
+            TypeId::REGEX => TyArena::REGEX,
+            TypeId::LOCAL => TyArena::LOCAL,
+            TypeId::GLOBAL => TyArena::GLOBAL,
+            other => ta.alloc(Ty::Named(other, smallvec::smallvec![])),
         }
     }
 
@@ -297,7 +298,8 @@ impl<I: IoContext> Interpreter<'_, I> {
         target: TypeId,
         span: Span,
     ) -> Result<Value> {
-        let ty = Self::type_id_to_ty(target);
+        let ty_id = Self::type_id_to_ty_id(target, &mut self.ty_arena);
+        let ty = self.ty_arena.get(ty_id).clone();
         self.dispatch_convert(
             BuiltinClassTag::TryInto,
             "try-into",

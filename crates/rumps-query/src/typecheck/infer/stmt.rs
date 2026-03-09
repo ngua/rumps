@@ -6,21 +6,22 @@
 use std::collections::{HashMap, HashSet};
 
 use indexmap::IndexMap;
-use smallvec::SmallVec;
+use smallvec::{smallvec, SmallVec};
 
 use super::{
     ClassContext, ClassInstanceInput, Constraint, InferCtx, InstanceMethodInput,
 };
 use crate::ast::{
-    ArrayElem, AssocTypeDef, AstTypeExpr, AstTypeExprId, BindingPattern, DbRef,
-    Expr, ExprId, Import, ImportItem, InstanceMethodDef, Literal, OutputFormat,
-    OutputTarget, RefTarget, Stmt, StmtId, SubscriptElem, TxnId, TypeDefAst,
-    TypeParam, UnOp, Visibility, WriteExpr,
+    AssocTypeDef, AstTypeExpr, AstTypeExprId, BindingPattern, DbRef, Expr,
+    ExprId, Import, ImportItem, OutputFormat, OutputTarget, RefTarget, Stmt,
+    StmtId, TypeDefAst, TypeParam, UnOp, Visibility, WriteExpr,
 };
 use crate::intern::StringId;
 use crate::typecheck::error::TypeError;
 use crate::typecheck::instance::{self, Instance};
-use crate::typecheck::ty::{BuiltinClass, BuiltinClassTag, Scheme, Ty, TyVar};
+use crate::typecheck::ty::{
+    BuiltinClass, BuiltinClassTag, Scheme, Subst, Ty, TyArena, TyId, TyVar,
+};
 use crate::value::{TypeDef, TypeId};
 use crate::Span;
 
@@ -85,7 +86,7 @@ impl InferCtx<'_> {
                 // Type definitions are registered in the registry, but we
                 // still validate that all type expressions in variant
                 // payloads are fully saturated.
-                self.validate_type_decl_body(type_params, &def);
+                self.validate_type_decl_body(type_params, def);
             }
 
             Some(Stmt::Union {
@@ -245,7 +246,7 @@ impl InferCtx<'_> {
                 }) => {
                     let qname = format!("{}.{}", mod_path, name);
                     self.env.register_user_module_type_vis(&qname, vis);
-                    self.validate_type_decl_body(type_params, &def);
+                    self.validate_type_decl_body(type_params, def);
                 }
                 Some(Stmt::Union {
                     ref name,
@@ -407,7 +408,6 @@ impl InferCtx<'_> {
                     .or_else(|| {
                         self.runtime_env
                             .get_module_const_type(&full_path)
-                            .cloned()
                             .map(Scheme::mono)
                     });
 
@@ -479,7 +479,7 @@ impl InferCtx<'_> {
         span: Span,
     ) {
         // Capture outer env free vars BEFORE binding function (for generalization)
-        let outer_free = self.env.free_vars();
+        let outer_free = self.env.free_vars(&self.ty_arena);
 
         // First pass: create fresh type variables for all type parameters
         let name_to_tv: HashMap<&str, TyVar> = type_params
@@ -487,35 +487,31 @@ impl InferCtx<'_> {
             .map(|tp| (tp.name.as_str(), self.fresh_var()))
             .collect();
 
-        // Build type_param_subst (StringId -> Ty) for type resolution
+        // Build `type_param_subst` (`StringId -> TyId`) for type resolution
         let type_param_subst: IndexMap<_, _> = type_params
             .iter()
             .map(|tp| {
                 let id = self.env.intern(&tp.name);
                 let tv = name_to_tv[tp.name.as_str()];
-                (id, Ty::Var(tv))
+                (id, self.ty_arena.alloc(Ty::Var(tv)))
             })
             .collect();
 
         // Second pass: process constraints now that all type params are known
-        // Convert `BuiltinClass<AstTypeExprId>` to `BuiltinClass<Ty>` for `Scheme`
-        let mut scheme_constraints: SmallVec<[(TyVar, BuiltinClass<Ty>); 2]> =
+        // Convert `BuiltinClass<AstTypeExprId>` to `BuiltinClass<TyId>` for `Scheme`
+        let mut scheme_constraints: SmallVec<[(TyVar, BuiltinClass<TyId>); 2]> =
             SmallVec::new();
 
         type_params.iter().for_each(|tp| {
             let tv = name_to_tv[tp.name.as_str()];
-            let ty = Ty::Var(tv);
+            let ty = self.ty_arena.alloc(Ty::Var(tv));
 
             tp.constraints.iter().for_each(|c| {
                 let class = self.ast_class_to_ty_class(c, &type_param_subst);
                 scheme_constraints.push((tv, class.clone()));
 
                 // Emit constraint for checking the function body
-                self.constrain(Constraint::Class {
-                    ty: ty.clone(),
-                    class,
-                    span,
-                });
+                self.constrain(Constraint::Class { ty, class, span });
             });
         });
 
@@ -528,8 +524,9 @@ impl InferCtx<'_> {
 
         // Fresh var for provisional return (supports recursive calls)
         let provisional_ret = self.fresh();
-        let provisional_fn =
-            Ty::Fn(param_tys.clone(), Box::new(provisional_ret.clone()));
+        let provisional_fn = self
+            .ty_arena
+            .func(param_tys.iter().copied().collect(), provisional_ret);
         self.env.bind(name, Scheme::mono(provisional_fn));
 
         self.env.push_scope();
@@ -549,18 +546,20 @@ impl InferCtx<'_> {
         // Determine actual return type: use annotation if present, else body type
         let actual_ret = match declared_ret {
             Some(ret_ty) => {
-                self.unify(body_ty.clone(), ret_ty.clone(), span);
+                self.unify(body_ty, ret_ty, span);
                 ret_ty
             }
             None => body_ty,
         };
 
         // Link provisional return var with actual (for recursive call consistency)
-        self.unify(provisional_ret, actual_ret.clone(), span);
+        self.unify(provisional_ret, actual_ret, span);
 
         // Build final function type and generalize
-        let fn_ty = Ty::Fn(param_tys, Box::new(actual_ret));
-        let ty_vars = fn_ty.free_vars();
+        let fn_ty = self
+            .ty_arena
+            .func(param_tys.iter().copied().collect(), actual_ret);
+        let ty_vars = self.ty_arena.free_vars(fn_ty);
         // Include all declared type params (they may only appear in constraints,
         // not in the function type itself; e.g. `T` in `[T, F: Fallible[T]]`)
         let declared_tvs: HashSet<_> = name_to_tv.values().copied().collect();
@@ -609,29 +608,33 @@ impl InferCtx<'_> {
                 // Clone to avoid borrow issues with mutable self
                 let rhs_expr = self.ast.get_expr(rhs).cloned();
 
+                // Copy what we need from arena before mutable calls
+                let ann_shape = self.ty_arena.get(ann_ty).clone();
+
                 // Reject negative literals for Word type
                 if let (Ty::Word, Some(Expr::Unary(UnOp::Neg, _))) =
-                    (&ann_ty, &rhs_expr)
+                    (&ann_shape, &rhs_expr)
                 {
                     self.error(TypeError::NegativeWord(span));
                     self.expr(rhs);
-                    self.bind_pattern(pattern, &Ty::Word, span);
+                    self.bind_pattern(pattern, TyArena::WORD, span);
                     None
                 // Try special case: array literal with `Array[UnionType]`
-                } else if let (Ty::Array(elem_ty), Some(Expr::Array(elems))) =
-                    (&ann_ty, &rhs_expr)
+                } else if let (Ty::Array(elem_id), Some(Expr::Array(elems))) =
+                    (&ann_shape, &rhs_expr)
                 {
-                    if self.expand_union_members(elem_ty).is_some() {
+                    let elem_id = *elem_id;
+                    if self.expand_union_members(elem_id).is_some() {
                         let result =
-                            self.array_with_expected(elems, elem_ty, span);
-                        self.record_type(rhs, result.clone());
-                        self.bind_pattern(pattern, &result, span);
+                            self.array_with_expected(elems, elem_id, span);
+                        self.record_type(rhs, result);
+                        self.bind_pattern(pattern, result, span);
                         None // Already bound
                     } else {
-                        self.infer_default_let(&ann_ty, rhs, span)
+                        self.infer_default_let(ann_ty, rhs, span)
                     }
                 } else {
-                    self.infer_default_let(&ann_ty, rhs, span)
+                    self.infer_default_let(ann_ty, rhs, span)
                 }
             }
         };
@@ -647,7 +650,7 @@ impl InferCtx<'_> {
                 (BindingPattern::Var(name), Some(scheme)) => {
                     self.env.bind(name, scheme);
                 }
-                _ => self.bind_pattern(pattern, &ty, span),
+                _ => self.bind_pattern(pattern, ty, span),
             }
         }
     }
@@ -655,18 +658,19 @@ impl InferCtx<'_> {
     /// Default inference for `LET` with type annotation.
     fn infer_default_let(
         &mut self,
-        ann_ty: &Ty,
+        ann_ty: TyId,
         rhs: ExprId,
         span: Span,
-    ) -> Option<Ty> {
+    ) -> Option<TyId> {
         let rhs_ty = self.expr(rhs);
-        self.unify(rhs_ty.clone(), ann_ty.clone(), span);
+        self.unify(rhs_ty, ann_ty, span);
 
         // Extensible records: if rhs is an object and annotation
         // is an alias to object, keep the full object type to
         // preserve extra fields
-        let is_obj_alias = matches!(ann_ty, Ty::Named(id, _)
-        if self.registry.get_def(*id).is_some_and(|def| match def {
+        let ann_shape = self.ty_arena.get(ann_ty).clone();
+        let is_obj_alias = matches!(ann_shape, Ty::Named(id, _)
+        if self.registry.get_def(id).is_some_and(|def| match def {
             TypeDef::Alias { target, .. } => self
                 .ast
                 .get_type_expr(*target)
@@ -677,11 +681,12 @@ impl InferCtx<'_> {
         // Preserve concrete type for:
         // 1. Extensible records (object rhs with object alias annotation)
         // 2. Ref types (Local/Global rhs with Ref union annotation)
-        let use_rhs_ty = (matches!(&rhs_ty, Ty::Object(_)) && is_obj_alias)
-            || (matches!(&rhs_ty, Ty::Local | Ty::Global)
-                && matches!(ann_ty, Ty::Named(id, _) if *id == TypeId::REF));
+        let rhs_shape = self.ty_arena.get(rhs_ty).clone();
+        let use_rhs_ty = (matches!(&rhs_shape, Ty::Object(_)) && is_obj_alias)
+            || (matches!(&rhs_shape, Ty::Local | Ty::Global)
+                && matches!(ann_shape, Ty::Named(id, _) if id == TypeId::REF));
 
-        Some(if use_rhs_ty { rhs_ty } else { ann_ty.clone() })
+        Some(if use_rhs_ty { rhs_ty } else { ann_ty })
     }
 
     /// Bind variables from a binding pattern to types in the environment.
@@ -691,12 +696,12 @@ impl InferCtx<'_> {
     pub(super) fn bind_pattern(
         &mut self,
         pattern: &BindingPattern,
-        ty: &Ty,
+        ty: TyId,
         span: Span,
     ) {
         match pattern {
             BindingPattern::Var(name) => {
-                self.env.bind(name, Scheme::mono(ty.clone()));
+                self.env.bind(name, Scheme::mono(ty));
             }
 
             BindingPattern::Wildcard => {
@@ -704,7 +709,9 @@ impl InferCtx<'_> {
             }
 
             BindingPattern::Tuple(pats) => {
-                let elem_tys = match ty {
+                // Copy the shape out before mutable calls
+                let shape = self.ty_arena.get(ty).clone();
+                let elem_tys: SmallVec<[TyId; 4]> = match shape {
                     Ty::Tuple(ts) => {
                         if ts.len() != pats.len() {
                             self.error(TypeError::ArityMismatch {
@@ -712,33 +719,34 @@ impl InferCtx<'_> {
                                 got: ts.len(),
                                 span,
                             });
-                            vec![Ty::Error; pats.len()]
+                            smallvec![TyArena::ERROR; pats.len()]
                         } else {
-                            ts.clone()
+                            ts
                         }
                     }
                     Ty::Var(_) => {
                         // Create fresh vars for each element and constrain
-                        let fresh: Vec<_> =
+                        let fresh: SmallVec<[TyId; 4]> =
                             (0..pats.len()).map(|_| self.fresh()).collect();
-                        self.unify(ty.clone(), Ty::Tuple(fresh.clone()), span);
+                        let tup = self.ty_arena.alloc(Ty::Tuple(fresh.clone()));
+                        self.unify(ty, tup, span);
                         fresh
                     }
-                    Ty::Error => vec![Ty::Error; pats.len()],
+                    Ty::Error => smallvec![TyArena::ERROR; pats.len()],
                     _ => {
-                        self.error(TypeError::NotATuple(ty.clone(), span));
-                        vec![Ty::Error; pats.len()]
+                        self.error(TypeError::NotATuple(ty, span));
+                        smallvec![TyArena::ERROR; pats.len()]
                     }
                 };
                 pats.iter()
                     .zip(elem_tys.iter())
-                    .for_each(|(p, t)| self.bind_pattern(p, t, span));
+                    .for_each(|(p, &t)| self.bind_pattern(p, t, span));
             }
 
             BindingPattern::Object(fields) => {
                 fields.iter().for_each(|(name, sub)| {
                     let fty = self.field_type(ty, name, span);
-                    self.bind_pattern(sub, &fty, span);
+                    self.bind_pattern(sub, fty, span);
                 });
             }
 
@@ -760,9 +768,9 @@ impl InferCtx<'_> {
                 // already be typechecked by `resolve_ref_target`; if not found,
                 // default to requiring transaction (safer; produces an error
                 // rather than silently allowing an unsafe global write).
-                self.expr_types
-                    .get(e)
-                    .is_none_or(|ty| matches!(ty, Ty::Global))
+                self.get_type(*e).is_none_or(|id| {
+                    matches!(self.ty_arena.get(id), Ty::Global)
+                })
             }
         };
         if needs_txn && self.in_transaction.is_none() {
@@ -784,9 +792,9 @@ impl InferCtx<'_> {
                 // already be typechecked by `resolve_ref_target`; if not found,
                 // default to requiring transaction (safer; produces an error
                 // rather than silently allowing an unsafe global write).
-                self.expr_types
-                    .get(e)
-                    .is_none_or(|ty| matches!(ty, Ty::Global))
+                self.get_type(*e).is_none_or(|id| {
+                    matches!(self.ty_arena.get(id), Ty::Global)
+                })
             }
         };
         if needs_txn && self.in_transaction.is_none() {
@@ -814,7 +822,7 @@ impl InferCtx<'_> {
                     ty: expr_ty,
                     class: BuiltinClass::Parameterized(
                         BuiltinClassTag::Into,
-                        Ty::String,
+                        TyArena::STRING,
                     ),
                     span,
                 });
@@ -825,7 +833,7 @@ impl InferCtx<'_> {
                     ty: expr_ty,
                     class: BuiltinClass::Parameterized(
                         BuiltinClassTag::Into,
-                        Ty::Json,
+                        TyArena::JSON,
                     ),
                     span,
                 });
@@ -838,7 +846,10 @@ impl InferCtx<'_> {
             OutputTarget::File(path_expr) => {
                 // Path must be FilePath or String
                 let path_ty = self.expr(path_expr);
-                let union_ty = Ty::Union(vec![Ty::FilePath, Ty::String]);
+                let union_ty = self.ty_arena.alloc(Ty::Union(smallvec![
+                    TyArena::FILEPATH,
+                    TyArena::STRING,
+                ]));
                 self.unify(path_ty, union_ty, span);
             }
         }
@@ -889,7 +900,7 @@ impl InferCtx<'_> {
                 .map(|(name, _)| {
                     let id = self.env.intern(name);
                     let tv = self.fresh_var();
-                    (id, Ty::Var(tv))
+                    (id, self.ty_arena.alloc(Ty::Var(tv)))
                 })
                 .collect()
         } else {
@@ -898,7 +909,7 @@ impl InferCtx<'_> {
                 .map(|tp| {
                     let id = self.env.intern(&tp.name);
                     let tv = self.fresh_var();
-                    (id, Ty::Var(tv))
+                    (id, self.ty_arena.alloc(Ty::Var(tv)))
                 })
                 .collect()
         };
@@ -908,10 +919,10 @@ impl InferCtx<'_> {
 
         // 3. Resolve for_type and get its TypeId
         let for_ty = self.ast_type_to_ty(for_type, &type_param_subst);
-        let type_id = self.extract_type_id(&for_ty);
+        let type_id = self.extract_type_id(for_ty);
 
-        // 4. Convert class args to Ty (needed for builtin check)
-        let class_arg_tys: SmallVec<[Ty; 2]> = class_args
+        // 4. Convert class args to `TyId` (needed for builtin check)
+        let class_arg_tys: SmallVec<[TyId; 2]> = class_args
             .iter()
             .map(|id| self.ast_type_to_ty(*id, &type_param_subst))
             .collect();
@@ -929,7 +940,7 @@ impl InferCtx<'_> {
         if let Some(tid) = type_id {
             if self.is_builtin_type(tid) {
                 let all_args_builtin = class_arg_tys.is_empty()
-                    || class_arg_tys.iter().all(|ty| self.is_builtin_ty(ty));
+                    || class_arg_tys.iter().all(|&ty| self.is_builtin_ty(ty));
                 if all_args_builtin {
                     self.error(TypeError::BuiltinInstanceForbidden {
                         class,
@@ -941,18 +952,18 @@ impl InferCtx<'_> {
         }
 
         // 6. Process WHERE constraints
-        let mut scheme_constraints: SmallVec<[(TyVar, BuiltinClass<Ty>); 2]> =
+        let mut scheme_constraints: SmallVec<[(TyVar, BuiltinClass<TyId>); 2]> =
             SmallVec::new();
         constraints
             .iter()
             .for_each(|(param_name, param_constraints)| {
                 let param_id = self.env.intern(param_name);
-                let ty = type_param_subst
+                let ty_id = type_param_subst
                     .get(&param_id)
-                    .cloned()
-                    .unwrap_or(Ty::Unknown);
-                let tv = match ty {
-                    Ty::Var(v) => v,
+                    .copied()
+                    .unwrap_or(TyArena::UNKNOWN);
+                let tv = match self.ty_arena.get(ty_id) {
+                    Ty::Var(v) => *v,
                     _ => self.fresh_var(),
                 };
                 param_constraints.iter().for_each(|c| {
@@ -1019,7 +1030,7 @@ impl InferCtx<'_> {
         methods.iter().for_each(|m| {
             self.instance_method(InstanceMethodInput {
                 class,
-                for_ty: &for_ty,
+                for_ty,
                 class_arg_tys: &class_arg_tys,
                 type_param_subst: &type_param_subst,
                 method: m,
@@ -1048,7 +1059,7 @@ impl InferCtx<'_> {
 
             let type_var_params: SmallVec<[TyVar; 2]> = type_param_subst
                 .values()
-                .filter_map(|ty| match ty {
+                .filter_map(|&id| match self.ty_arena.get(id) {
                     Ty::Var(v) => Some(*v),
                     _ => None,
                 })
@@ -1064,8 +1075,8 @@ impl InferCtx<'_> {
                             let name_id = self.env.intern(&def.name);
                             let ty = assoc_type_map
                                 .get(&name_id)
-                                .cloned()
-                                .unwrap_or(Ty::Unknown);
+                                .copied()
+                                .unwrap_or(TyArena::UNKNOWN);
                             let constraints = def
                                 .constraint
                                 .as_ref()
@@ -1128,8 +1139,8 @@ impl InferCtx<'_> {
             .cloned();
 
         // Handle unknown method error
-        let (expected_param_tys, expected_ret_ty) = expected
-            .map(|spec| {
+        let (expected_param_tys, expected_ret_ty) = match expected {
+            Ok(spec) => {
                 let scheme = spec.scheme();
                 // The first quantified var represents `Self` in class methods.
                 // Subsequent vars represent class type parameters (e.g., `U` in
@@ -1138,33 +1149,33 @@ impl InferCtx<'_> {
                 let class_arg_vars: Vec<_> =
                     scheme.vars.iter().skip(1).copied().collect();
                 // Extract param and return types, substituting vars
-                match &scheme.ty {
+                let shape = self.ty_arena.get(scheme.ty).clone();
+                match shape {
                     Ty::Fn(params, ret) => {
-                        let subst = |ty: &Ty| {
-                            let mut result =
-                                self.subst_self_type(ty, self_var, for_ty);
-                            // Substitute class arg type vars
+                        let subst_id = |ctx: &mut Self, ty: TyId| -> TyId {
+                            let mut r =
+                                ctx.subst_self_type(ty, self_var, for_ty);
                             class_arg_vars
                                 .iter()
                                 .zip(class_arg_tys.iter())
-                                .for_each(|(var, arg_ty)| {
-                                    result =
-                                        self.subst_tyvar(&result, *var, arg_ty);
+                                .for_each(|(&var, &arg_ty)| {
+                                    r = ctx.subst_tyvar(r, var, arg_ty);
                                 });
-                            result
+                            r
                         };
-                        (
-                            params.iter().map(subst).collect::<Vec<_>>(),
-                            subst(ret),
-                        )
+                        let ps: Vec<_> =
+                            params.iter().map(|&p| subst_id(self, p)).collect();
+                        let r = subst_id(self, ret);
+                        (ps, r)
                     }
-                    _ => (vec![], Ty::Unknown),
+                    _ => (vec![], TyArena::UNKNOWN),
                 }
-            })
-            .unwrap_or_else(|e| {
+            }
+            Err(e) => {
                 self.error(e);
-                (vec![], Ty::Unknown)
-            });
+                (vec![], TyArena::UNKNOWN)
+            }
+        };
 
         // Check arity
         if method.params.len() != expected_param_tys.len() {
@@ -1186,8 +1197,8 @@ impl InferCtx<'_> {
 
         // Unify user param types with expected param types
         param_tys.iter().zip(expected_param_tys.iter()).for_each(
-            |(user_ty, exp_ty)| {
-                self.unify(user_ty.clone(), exp_ty.clone(), m_span);
+            |(&user_ty, &exp_ty)| {
+                self.unify(user_ty, exp_ty, m_span);
             },
         );
 
@@ -1200,26 +1211,25 @@ impl InferCtx<'_> {
         let ret_ty = method
             .ret
             .map(|ret_id| self.ast_type_to_ty(ret_id, type_param_subst))
-            .unwrap_or_else(|| expected_ret_ty.clone());
+            .unwrap_or(expected_ret_ty);
 
         // Unify body with return type
-        self.unify(body_ty.clone(), ret_ty.clone(), m_span);
+        self.unify(body_ty, ret_ty, m_span);
 
         // Also unify with class's expected return type (catches wrong annotation)
-        if !matches!(expected_ret_ty, Ty::Unknown) {
+        if expected_ret_ty != TyArena::UNKNOWN {
             self.unify(ret_ty, expected_ret_ty, inst_span);
         }
 
         self.env.pop_scope();
     }
 
-    /// Extract a `TypeId` from a `Ty`, if it represents a named/aliased type.
-    fn extract_type_id(&self, ty: &Ty) -> Option<TypeId> {
-        match ty {
-            Ty::Named(id, _) => Some(*id),
+    /// Extract a `TypeId` from a `TyId`, if it represents a named/aliased type.
+    fn extract_type_id(&self, id: TyId) -> Option<TypeId> {
+        match self.ty_arena.get(id) {
+            Ty::Named(tid, _) => Some(*tid),
             Ty::Unknown | Ty::Error => None,
-            // For primitive types, look up by name
-            _ => self.primitive_type_id(ty),
+            ty => self.primitive_type_id(ty),
         }
     }
 
@@ -1250,8 +1260,8 @@ impl InferCtx<'_> {
     /// Returns `true` for primitive types (`Int`, `String`, etc.) and for
     /// `Ty::Named` referencing a builtin. Returns `false` for user-defined
     /// types and type variables.
-    pub(super) fn is_builtin_ty(&self, ty: &Ty) -> bool {
-        match ty {
+    pub(super) fn is_builtin_ty(&self, id: TyId) -> bool {
+        match self.ty_arena.get(id) {
             // Primitives are builtin
             Ty::Bool
             | Ty::Int
@@ -1277,7 +1287,7 @@ impl InferCtx<'_> {
             | Ty::Option(_)
             | Ty::Result(_, _) => true,
             // Named: check registry
-            Ty::Named(id, _) => self.is_builtin_type(*id),
+            Ty::Named(tid, _) => self.is_builtin_type(*tid),
             // Everything else (Var, Fn, Object, Union, Unknown, Error)
             _ => false,
         }
@@ -1313,56 +1323,20 @@ impl InferCtx<'_> {
     /// where `T` represents the implementing type. When checking an instance, we substitute
     /// this type var with the actual `for_ty`.
     fn subst_self_type(
-        &self,
-        ty: &Ty,
+        &mut self,
+        ty: TyId,
         self_var: Option<TyVar>,
-        for_ty: &Ty,
-    ) -> Ty {
-        self_var
-            .map_or_else(|| ty.clone(), |sv| self.subst_tyvar(ty, sv, for_ty))
+        for_ty: TyId,
+    ) -> TyId {
+        self_var.map_or(ty, |sv| self.subst_tyvar(ty, sv, for_ty))
     }
 
     /// Recursively substitute a type variable with a concrete type.
-    fn subst_tyvar(&self, ty: &Ty, var: TyVar, replacement: &Ty) -> Ty {
-        match ty {
-            Ty::Var(v) if *v == var => replacement.clone(),
-            Ty::Var(_) => ty.clone(),
-            Ty::Fn(params, ret) => Ty::Fn(
-                params
-                    .iter()
-                    .map(|p| self.subst_tyvar(p, var, replacement))
-                    .collect(),
-                Box::new(self.subst_tyvar(ret, var, replacement)),
-            ),
-            Ty::Array(elem) => {
-                Ty::Array(Box::new(self.subst_tyvar(elem, var, replacement)))
-            }
-            Ty::Map(k, v) => Ty::Map(
-                Box::new(self.subst_tyvar(k, var, replacement)),
-                Box::new(self.subst_tyvar(v, var, replacement)),
-            ),
-            Ty::Tuple(elems) => Ty::Tuple(
-                elems
-                    .iter()
-                    .map(|e| self.subst_tyvar(e, var, replacement))
-                    .collect(),
-            ),
-            Ty::Option(inner) => {
-                Ty::Option(Box::new(self.subst_tyvar(inner, var, replacement)))
-            }
-            Ty::Result(ok, err) => Ty::Result(
-                Box::new(self.subst_tyvar(ok, var, replacement)),
-                Box::new(self.subst_tyvar(err, var, replacement)),
-            ),
-            Ty::Named(id, args) => Ty::Named(
-                *id,
-                args.iter()
-                    .map(|a| self.subst_tyvar(a, var, replacement))
-                    .collect(),
-            ),
-            // Primitives and other non-parametric types pass through
-            _ => ty.clone(),
-        }
+    ///
+    /// Delegates to `TyArena::apply` with a singleton substitution.
+    fn subst_tyvar(&mut self, ty: TyId, var: TyVar, replacement: TyId) -> TyId {
+        let subst = Subst::singleton(var, replacement);
+        self.ty_arena.apply(ty, &subst)
     }
 
     /// Build a type parameter substitution map from a list of `TypeParam`s.
@@ -1371,11 +1345,12 @@ impl InferCtx<'_> {
     fn type_param_subst(
         &mut self,
         tps: &[TypeParam],
-    ) -> IndexMap<StringId, Ty> {
+    ) -> IndexMap<StringId, TyId> {
         tps.iter()
             .map(|tp| {
                 let id = self.env.intern(&tp.name);
-                (id, Ty::Var(self.fresh_var()))
+                let tv = self.fresh_var();
+                (id, self.ty_arena.alloc(Ty::Var(tv)))
             })
             .collect()
     }

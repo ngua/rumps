@@ -7,13 +7,15 @@
 use std::collections::HashMap;
 
 use indexmap::IndexMap;
-use smallvec::SmallVec;
+use smallvec::{smallvec, SmallVec};
 
 use super::{ClassInstanceInput, InferCtx};
 use crate::ast::{AstTypeExprId, BindingPattern, Stmt, StmtId, TypeParam};
 use crate::typecheck::error::TypeError;
 use crate::typecheck::instance::Instance;
-use crate::typecheck::ty::{BuiltinClass, BuiltinClassTag, Scheme, Ty, TyVar};
+use crate::typecheck::ty::{
+    BuiltinClass, BuiltinClassTag, Scheme, Ty, TyArena, TyId, TyVar,
+};
 use crate::Span;
 
 impl InferCtx<'_> {
@@ -123,12 +125,13 @@ impl InferCtx<'_> {
             .iter()
             .map(|(tp, tv)| {
                 let id = self.env.intern(&tp.name);
-                (id, Ty::Var(*tv))
+                let ty_id = self.ty_arena.alloc(Ty::Var(*tv));
+                (id, ty_id)
             })
             .collect();
 
         // Process type parameter constraints
-        let mut scheme_constraints: SmallVec<[(TyVar, BuiltinClass<Ty>); 2]> =
+        let mut scheme_constraints: SmallVec<[(TyVar, BuiltinClass<TyId>); 2]> =
             SmallVec::new();
         type_param_vars.iter().for_each(|(tp, tv)| {
             tp.constraints.iter().for_each(|c| {
@@ -138,7 +141,13 @@ impl InferCtx<'_> {
         });
 
         // Infer parameter types (using type param substitution)
-        let param_tys = self.param_tys_with_subst(params, &type_param_subst);
+        let param_tys: SmallVec<[TyId; 4]> = params
+            .iter()
+            .map(|(_, ann)| match ann {
+                Some(id) => self.ast_type_to_ty(*id, &type_param_subst),
+                None => self.fresh(),
+            })
+            .collect();
 
         // Return type: use annotation if present, else fresh var
         let ret_ty = match ret {
@@ -147,20 +156,20 @@ impl InferCtx<'_> {
         };
 
         // Build function type
-        let fn_ty = Ty::Fn(param_tys, Box::new(ret_ty));
+        let fn_ty = self.ty_arena.func(param_tys, ret_ty);
 
         // Generalize over ALL free type variables in both the function type
         // and the constraints. This includes:
         // - Explicit type parameters (e.g., `T` in `FUN f[T](x: T) -> T`)
         // - Inferred type variables from unannotated params/returns (e.g., `FUN id(x) { x }`)
         // - Type variables that only appear in constraints (e.g., `T` in `FUN f[T, F: Fallible[T]](x: F)`)
-        let outer_free = self.env.free_vars();
-        let mut fn_free = fn_ty.free_vars();
+        let outer_free = self.env.free_vars(&self.ty_arena);
+        let mut fn_free = self.ty_arena.free_vars(fn_ty);
 
         // Add free variables from constraints
         scheme_constraints.iter().for_each(|(tv, class)| {
             fn_free.insert(*tv);
-            fn_free.extend(class.free_vars());
+            fn_free.extend(class.free_vars(&self.ty_arena));
         });
 
         let vars: Vec<_> = fn_free
@@ -210,7 +219,7 @@ impl InferCtx<'_> {
                 | Some(Stmt::Union { ref name, vis, .. })
                 | Some(Stmt::NewType { ref name, vis, .. }) => {
                     // Check for shadowing of builtin types
-                    if self.named_type_to_ty(name) != Ty::Unknown {
+                    if self.named_type_to_ty(name) != TyArena::UNKNOWN {
                         self.error(TypeError::Custom {
                             msg: format!(
                                 "type `{}` shadows a builtin type",
@@ -367,7 +376,8 @@ impl InferCtx<'_> {
                     .map(|(name, _)| {
                         let id = self.env.intern(name);
                         let tv = self.fresh_var();
-                        (id, Ty::Var(tv))
+                        let ty_id = self.ty_arena.alloc(Ty::Var(tv));
+                        (id, ty_id)
                     })
                     .collect()
             } else {
@@ -376,7 +386,8 @@ impl InferCtx<'_> {
                     .map(|tp| {
                         let id = self.env.intern(&tp.name);
                         let tv = self.fresh_var();
-                        (id, Ty::Var(tv))
+                        let ty_id = self.ty_arena.alloc(Ty::Var(tv));
+                        (id, ty_id)
                     })
                     .collect()
             };
@@ -389,8 +400,8 @@ impl InferCtx<'_> {
 
             // Fallback for module-scoped unqualified type names: if `for_ty` is
             // `Unknown` and we're inside a module, try the qualified name.
-            let for_ty = match (&for_ty, module) {
-                (Ty::Unknown, Some(mod_id)) => {
+            let for_ty = if for_ty == TyArena::UNKNOWN {
+                if let Some(mod_id) = module {
                     let raw_name = self.extract_type_name_from_ast(for_type);
                     if raw_name.contains('.') {
                         for_ty // Already qualified
@@ -403,25 +414,31 @@ impl InferCtx<'_> {
                                 let qname_id = self.env.intern(&qname);
                                 self.registry
                                     .lookup(qname_id)
-                                    .map(|tid| Ty::Named(tid, Vec::new()))
-                                    .unwrap_or(for_ty.clone())
+                                    .map(|tid| {
+                                        self.ty_arena.named(tid, smallvec![])
+                                    })
+                                    .unwrap_or(for_ty)
                             })
                             .unwrap_or(for_ty)
                     }
+                } else {
+                    for_ty
                 }
-                _ => for_ty,
+            } else {
+                for_ty
             };
 
             // Convert class args (needed for builtin check)
-            let class_arg_tys: SmallVec<[Ty; 2]> = class_args
+            let class_arg_tys: SmallVec<[TyId; 2]> = class_args
                 .iter()
                 .map(|id| self.ast_type_to_ty(*id, &type_param_subst))
                 .collect();
 
-            // Extract TypeId; for primitives, use primitive_type_id
-            let type_id_opt = match &for_ty {
+            // Extract TypeId; for primitives, use `primitive_type_id`
+            let for_ty_ref = self.ty_arena.get(for_ty).clone();
+            let type_id_opt = match &for_ty_ref {
                 Ty::Named(id, _) => Some(*id),
-                _ => self.primitive_type_id(&for_ty),
+                _ => self.primitive_type_id(&for_ty_ref),
             };
 
             if let Some(type_id) = type_id_opt {
@@ -431,22 +448,22 @@ impl InferCtx<'_> {
                     && (class_arg_tys.is_empty()
                         || class_arg_tys
                             .iter()
-                            .all(|ty| self.is_builtin_ty(ty)));
+                            .all(|&ty_id| self.is_builtin_ty(ty_id)));
 
                 if !is_forbidden_builtin {
                     // Process constraints
                     let mut scheme_constraints: SmallVec<
-                        [(TyVar, BuiltinClass<Ty>); 2],
+                        [(TyVar, BuiltinClass<TyId>); 2],
                     > = SmallVec::new();
                     constraints.iter().for_each(
                         |(param_name, param_constraints)| {
                             let param_id = self.env.intern(param_name);
-                            let ty = type_param_subst
+                            let ty_id = type_param_subst
                                 .get(&param_id)
-                                .cloned()
-                                .unwrap_or(Ty::Unknown);
-                            let tv = match ty {
-                                Ty::Var(v) => v,
+                                .copied()
+                                .unwrap_or(TyArena::UNKNOWN);
+                            let tv = match self.ty_arena.get(ty_id) {
+                                Ty::Var(v) => *v,
                                 _ => self.fresh_var(),
                             };
                             param_constraints.iter().for_each(|c| {
@@ -463,23 +480,24 @@ impl InferCtx<'_> {
 
                     // Build method map (empty for hoisting; filled in Pass 2)
                     // Use qualified type name for function name generation to avoid collisions.
-                    let type_name_for_fn = match (&for_ty, module) {
-                        (Ty::Named(_, _), Some(mod_id)) => {
-                            let raw_name =
-                                self.extract_type_name_from_ast(for_type);
-                            if raw_name.contains('.') {
-                                raw_name
-                            } else {
-                                self.env
-                                    .get_str(mod_id)
-                                    .map(|mod_path| {
-                                        format!("{}.{}", mod_path, raw_name)
-                                    })
-                                    .unwrap_or(raw_name)
+                    let type_name_for_fn =
+                        match (self.ty_arena.get(for_ty), module) {
+                            (Ty::Named(_, _), Some(mod_id)) => {
+                                let raw_name =
+                                    self.extract_type_name_from_ast(for_type);
+                                if raw_name.contains('.') {
+                                    raw_name
+                                } else {
+                                    self.env
+                                        .get_str(mod_id)
+                                        .map(|mod_path| {
+                                            format!("{}.{}", mod_path, raw_name)
+                                        })
+                                        .unwrap_or(raw_name)
+                                }
                             }
-                        }
-                        _ => self.extract_type_name_from_ast(for_type),
-                    };
+                            _ => self.extract_type_name_from_ast(for_type),
+                        };
                     let method_map: HashMap<_, _> = methods
                         .iter()
                         .map(|m| {
@@ -495,13 +513,15 @@ impl InferCtx<'_> {
                         })
                         .collect();
 
-                    // Extract type params as TyVars
+                    // Extract type params as `TyVar`s
                     let type_var_params: SmallVec<[TyVar; 2]> =
                         type_param_subst
                             .values()
-                            .filter_map(|ty| match ty {
-                                Ty::Var(v) => Some(*v),
-                                _ => None,
+                            .filter_map(|&ty_id| {
+                                match self.ty_arena.get(ty_id) {
+                                    Ty::Var(v) => Some(*v),
+                                    _ => None,
+                                }
                             })
                             .collect();
 

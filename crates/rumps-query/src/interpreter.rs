@@ -180,28 +180,32 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
     /// Mapping from regex expression IDs to cache indices.
     regex_indices: HashMap<ExprId, u32>,
 
+    /// Type arena from typechecking; owns all interned `Ty` values referenced
+    /// by `TyId` handles in the maps below.
+    ty_arena: crate::typecheck::TyArena,
+
     /// Mapping from mempty expression IDs to their resolved types.
     ///
     /// Populated during typechecking; used to produce the correct empty value.
-    mempty_types: HashMap<ExprId, crate::typecheck::Ty>,
+    mempty_types: HashMap<ExprId, crate::typecheck::TyId>,
 
     /// Mapping from numeric literal expression IDs to their resolved types.
     ///
     /// Populated during typechecking; used to convert polymorphic numeric
     /// literals to the correct runtime type (`Int`, `Word`, or `Float`).
-    numeric_types: HashMap<ExprId, crate::typecheck::Ty>,
+    numeric_types: HashMap<ExprId, crate::typecheck::TyId>,
 
     /// Mapping from conversion expression IDs to their target types.
     ///
     /// Populated during typechecking; used to dispatch `Into::into` and
     /// `TryInto::try_into` methods with the correct target type.
-    convert_targets: HashMap<ExprId, crate::typecheck::Ty>,
+    convert_targets: HashMap<ExprId, crate::typecheck::TyId>,
 
     /// Mapping from wrap expression IDs to their target `Fallible` types.
     ///
     /// Populated during typechecking; used by the `?` prefix operator to
     /// produce `Option.Some` or `Result.Ok` depending on context.
-    wrap_types: HashMap<ExprId, crate::typecheck::Ty>,
+    wrap_types: HashMap<ExprId, crate::typecheck::TyId>,
 
     /// Registry of class methods for dispatch.
     class_methods: class::ClassMethods,
@@ -285,6 +289,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             registry,
             regex_cache: tc.regex_cache,
             regex_indices: tc.regex_indices,
+            ty_arena: tc.ty_arena,
             mempty_types: tc.mempty_types,
             numeric_types: tc.numeric_types,
             convert_targets: tc.convert_targets,
@@ -424,6 +429,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             registry,
             regex_cache: Vec::new(),
             regex_indices: HashMap::new(),
+            ty_arena: crate::typecheck::TyArena::new(),
             mempty_types: HashMap::new(),
             numeric_types: HashMap::new(),
             convert_targets: HashMap::new(),
@@ -1263,7 +1269,10 @@ impl<I: IoContext> Interpreter<'_, I> {
             Literal::Bool(b) => Value::Bool(*b),
             Literal::Numeric(n) => {
                 // Look up the resolved type from typechecking
-                let ty = self.numeric_types.get(&id);
+                let ty = self
+                    .numeric_types
+                    .get(&id)
+                    .map(|&tid| self.ty_arena.get(tid));
                 match (n, ty) {
                     // Integer literals are polymorphic over Int/Word/Float
                     (NumericLit::Int(v), Some(crate::typecheck::Ty::Int)) => {
