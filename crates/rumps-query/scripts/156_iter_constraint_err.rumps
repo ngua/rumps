@@ -1,10 +1,10 @@
 ; Iterable constraint rejects Range for String (Range is Iterable over Int only)
 
-FUN main() {
+fun main() {
   ; This should fail: Range is Iterable over Int, not String
-  WRITE process-strings(1 .. 10)
+  write process-strings(1 .. 10)
 }
 
-FUN process-strings[I: Iterable](i: I[String]) -> Int {
+fun process-strings[I: Iterable](i: I[String]) -> Int {
   Iterable:length(i)
 }

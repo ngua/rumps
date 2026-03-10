@@ -1,95 +1,95 @@
-; Test: @QUERY primitive
+; Test: @query primitive
 ; Returns full key path to the next node with a value
-; NOTE: Uses locals only; globals require TRANSACTION blocks
+; NOTE: Uses locals only; globals require transaction blocks
 
-FUN main() {
+fun main() {
   ; Set up single-level test data
-  @SET items{1} "one"
-  @SET items{2} "two"
-  @SET items{10} "ten"
+  @set items{1} "one"
+  @set items{2} "two"
+  @set items{10} "ten"
 
   ; First key path (no after position, use {} for root)
-  LET first = @QUERY items{}
-  WRITE first
+  let first = @query items{}
+  write first
 
   ; Next key path after {1}
-  LET after-1 = @QUERY items{1}
-  WRITE after-1
+  let after-1 = @query items{1}
+  write after-1
 
   ; Next key path after {2}
-  LET after-2 = @QUERY items{2}
-  WRITE after-2
+  let after-2 = @query items{2}
+  write after-2
 
   ; Past the last key
-  LET after-10 = @QUERY items{10}
-  WRITE after-10
+  let after-10 = @query items{10}
+  write after-10
 
-  ; @QUERY on non-existent variable (use {} for root)
-  LET no-keys = @QUERY empty{}
-  WRITE no-keys
+  ; @query on non-existent variable (use {} for root)
+  let no-keys = @query empty{}
+  write no-keys
 
   ; Type annotation
-  LET typed: Option[Array[Subscript]] = @QUERY items{}
-  WRITE typed
+  let typed: Option[Array[Subscript]] = @query items{}
+  write typed
 
-  ; Use with MATCH
-  LET msg = MATCH @QUERY items{} {
+  ; Use with match
+  let msg = match @query items{} {
     Option.Some(path) => { "found path of length: {Iterable:length(path)}" }
     Option.None => { "no nodes" }
   }
-  WRITE msg
+  write msg
 
   ; Use with coalesce
-  LET path = @QUERY items{} ?? []
-  WRITE path
+  let path = @query items{} ?? []
+  write path
 
   ; Using unwrap on result
-  LET path2 = (@QUERY items{1})!
-  WRITE path2
+  let path2 = (@query items{1})!
+  write path2
 
   ; Spread syntax to continue iteration
-  @SET data{1} "a"
-  @SET data{2} "b"
-  @SET data{3} "c"
+  @set data{1} "a"
+  @set data{2} "b"
+  @set data{3} "c"
 
-  LET k1 = @QUERY data{} ?? []
-  WRITE k1
-  LET k2 = @QUERY data{...k1} ?? []
-  WRITE k2
-  LET k3 = @QUERY data{...k2} ?? []
-  WRITE k3
-  LET k4 = @QUERY data{...k3}
-  WRITE k4
+  let k1 = @query data{} ?? []
+  write k1
+  let k2 = @query data{...k1} ?? []
+  write k2
+  let k3 = @query data{...k2} ?? []
+  write k3
+  let k4 = @query data{...k3}
+  write k4
 
   ; === Nested data tests ===
-  ; @QUERY should skip intermediate nodes (ancestors with no value)
+  ; @query should skip intermediate nodes (ancestors with no value)
 
-  @SET patients{1, "age"} 30
-  @SET patients{1, "name"} "Alice"
-  @SET patients{2, "name"} "Bob"
+  @set patients{1, "age"} 30
+  @set patients{1, "name"} "Alice"
+  @set patients{2, "name"} "Bob"
 
   ; First key should be [1, "age"], not [1]
-  LET p1 = @QUERY patients{} ?? []
-  WRITE p1
+  let p1 = @query patients{} ?? []
+  write p1
 
   ; After [1, "age"] should be [1, "name"], not [1] or [2]
-  LET p2 = @QUERY patients{1, "age"} ?? []
-  WRITE p2
+  let p2 = @query patients{1, "age"} ?? []
+  write p2
 
   ; After [1, "name"] should be [2, "name"], skipping intermediate [2]
-  LET p3 = @QUERY patients{1, "name"} ?? []
-  WRITE p3
+  let p3 = @query patients{1, "name"} ?? []
+  write p3
 
   ; After [2, "name"] should be None
-  LET p4 = @QUERY patients{2, "name"}
-  WRITE p4
+  let p4 = @query patients{2, "name"}
+  write p4
 
   ; Deep nesting test
-  @SET deep{1, 2, 3, "leaf"} "value"
+  @set deep{1, 2, 3, "leaf"} "value"
 
   ; Should return [1, 2, 3, "leaf"], skipping [1], [1, 2], [1, 2, 3]
-  LET d1 = @QUERY deep{} ?? []
-  WRITE d1
+  let d1 = @query deep{} ?? []
+  write d1
 
-  WRITE "@QUERY test complete"
+  write "@query test complete"
 }

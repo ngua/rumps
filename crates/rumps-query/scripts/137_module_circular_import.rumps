@@ -1,6 +1,6 @@
 ; Error test: circular module imports
 
-MODULE Circular FROM "../modules/lib/circular-a.rumps"
+module Circular from "../modules/lib/circular-a.rumps"
 
-FUN main() {
+fun main() {
 }

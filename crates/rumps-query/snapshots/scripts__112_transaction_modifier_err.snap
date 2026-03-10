@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: duplicate/out-of-order transaction modifiers produce parse errors\n\nFUN main() {\n  ; Duplicate ON CONFLICT should fail\n  LET r = TRANSACTION {\n    @SET ^data{1} \"one\"\n  } ON CONFLICT ABORT ON CONFLICT SKIP\n}\n"
+description: "; Test: duplicate/out-of-order transaction modifiers produce parse errors\n\nfun main() {\n  ; Duplicate on conflict should fail\n  let r = transaction {\n    @set ^data{1} \"one\"\n  } on conflict abort on conflict SKIP\n}\n"
 ---
-ERROR: parse error at 196..198: unexpected `ON` (expected: :, AND, <=, *, !, ++, OR, /, <<, >>, newline, |>, indent, ||, IS, dedent, AS, +, **, [, -, <, |, %, .., ?[, &, READ, .., >=, }, !=, &&, MATCHES, ..=, ->, //, >, ==, (, CATCH, ->>, ,, ??, ?., .)
+ERROR: parse error at 196..198: unexpected `on` (expected: :, and, <=, *, !, ++, or, /, <<, >>, newline, |>, indent, ||, is, dedent, as, +, **, [, -, <, |, %, .., ?[, &, read, .., >=, }, !=, &&, matches, ..=, ->, //, >, ==, (, catch, ->>, ,, ??, ?., .)

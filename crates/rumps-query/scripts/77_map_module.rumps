@@ -4,156 +4,156 @@
 ;
 ; Note: `{}` is ambiguous and parsed as an empty object. Use Map.empty() for empty maps.
 
-FUN main() {
+fun main() {
   ; ============ Map literals ============
 
-  LET m = { 1 => "one", 2 => "two", 3 => "three" }
-  WRITE m
+  let m = { 1 => "one", 2 => "two", 3 => "three" }
+  write m
 
-  LET str-keys = { "a" => 1, "b" => 2 }
-  WRITE str-keys
+  let str-keys = { "a" => 1, "b" => 2 }
+  write str-keys
 
   ; ============ Map.empty ============
 
-  LET e = Map.empty()
-  WRITE e
-  WRITE Map.length(e)  ; 0
+  let e = Map.empty()
+  write e
+  write Map.length(e)  ; 0
 
   ; ============ Map.length ============
 
-  WRITE Map.length(m)  ; 3
-  WRITE Map.length(str-keys)  ; 2
+  write Map.length(m)  ; 3
+  write Map.length(str-keys)  ; 2
 
   ; ============ Map.keys ============
 
-  LET keys1 = Map.keys(m)
-  WRITE keys1  ; [1, 2, 3]
+  let keys1 = Map.keys(m)
+  write keys1  ; [1, 2, 3]
 
-  LET keys2 = Map.keys(str-keys)
-  WRITE keys2  ; ["a", "b"]
+  let keys2 = Map.keys(str-keys)
+  write keys2  ; ["a", "b"]
 
-  LET keys3 = Map.keys(e)
-  WRITE keys3  ; []
+  let keys3 = Map.keys(e)
+  write keys3  ; []
 
   ; ============ Map.values ============
 
-  LET vals1 = Map.values(m)
-  WRITE vals1  ; ["one", "two", "three"]
+  let vals1 = Map.values(m)
+  write vals1  ; ["one", "two", "three"]
 
-  LET vals2 = Map.values(str-keys)
-  WRITE vals2  ; [1, 2]
+  let vals2 = Map.values(str-keys)
+  write vals2  ; [1, 2]
 
-  LET vals3 = Map.values(e)
-  WRITE vals3  ; []
+  let vals3 = Map.values(e)
+  write vals3  ; []
 
   ; ============ Map.entries ============
 
-  LET ent1 = Map.entries(m)
-  WRITE ent1  ; [(1, "one"), (2, "two"), (3, "three")]
+  let ent1 = Map.entries(m)
+  write ent1  ; [(1, "one"), (2, "two"), (3, "three")]
 
-  LET ent2 = Map.entries(str-keys)
-  WRITE ent2  ; [("a", 1), ("b", 2)]
+  let ent2 = Map.entries(str-keys)
+  write ent2  ; [("a", 1), ("b", 2)]
 
   ; ============ Map.has ============
 
-  WRITE Map.has(m, 1)  ; true
-  WRITE Map.has(m, 2)  ; true
-  WRITE Map.has(m, 4)  ; false
-  WRITE Map.has(e, 1)  ; false
+  write Map.has(m, 1)  ; true
+  write Map.has(m, 2)  ; true
+  write Map.has(m, 4)  ; false
+  write Map.has(e, 1)  ; false
 
-  WRITE Map.has(str-keys, "a")  ; true
-  WRITE Map.has(str-keys, "c")  ; false
+  write Map.has(str-keys, "a")  ; true
+  write Map.has(str-keys, "c")  ; false
 
   ; ============ Map.lookup ============
 
-  WRITE Map.lookup(m, 1)  ; Some("one")
-  WRITE Map.lookup(m, 2)  ; Some("two")
-  WRITE Map.lookup(m, 4)  ; None
-  WRITE Map.lookup(e, 1)  ; None
+  write Map.lookup(m, 1)  ; Some("one")
+  write Map.lookup(m, 2)  ; Some("two")
+  write Map.lookup(m, 4)  ; None
+  write Map.lookup(e, 1)  ; None
 
-  WRITE Map.lookup(str-keys, "a")  ; Some(1)
-  WRITE Map.lookup(str-keys, "z")  ; None
+  write Map.lookup(str-keys, "a")  ; Some(1)
+  write Map.lookup(str-keys, "z")  ; None
 
   ; ============ Map.insert ============
 
-  LET m2 = Map.insert(m, 4, "four")
-  WRITE Map.length(m2)  ; 4
-  WRITE Map.lookup(m2, 4)  ; Some("four")
+  let m2 = Map.insert(m, 4, "four")
+  write Map.length(m2)  ; 4
+  write Map.lookup(m2, 4)  ; Some("four")
 
   ; Original unchanged
-  WRITE Map.length(m)  ; 3
+  write Map.length(m)  ; 3
 
   ; Overwrite existing key
-  LET m3 = Map.insert(m, 1, "ONE")
-  WRITE Map.lookup(m3, 1)  ; Some("ONE")
+  let m3 = Map.insert(m, 1, "ONE")
+  write Map.lookup(m3, 1)  ; Some("ONE")
 
   ; ============ Map.remove ============
 
-  LET m4 = Map.remove(m, 2)
-  WRITE Map.length(m4)  ; 2
-  WRITE Map.has(m4, 2)  ; false
-  WRITE Map.has(m4, 1)  ; true
-  WRITE Map.has(m4, 3)  ; true
+  let m4 = Map.remove(m, 2)
+  write Map.length(m4)  ; 2
+  write Map.has(m4, 2)  ; false
+  write Map.has(m4, 1)  ; true
+  write Map.has(m4, 3)  ; true
 
   ; Remove non-existent key (no-op)
-  LET m5 = Map.remove(m, 999)
-  WRITE Map.length(m5)  ; 3
+  let m5 = Map.remove(m, 999)
+  write Map.length(m5)  ; 3
 
   ; ============ Map.merge ============
 
-  LET ma = { 1 => "a", 2 => "b" }
-  LET mb = { 2 => "B", 3 => "c" }
-  LET merged = Map.merge(ma, mb)
-  WRITE Map.length(merged)  ; 3
-  WRITE Map.lookup(merged, 1)  ; Some("a")
-  WRITE Map.lookup(merged, 2)  ; Some("B") (second overwrites)
-  WRITE Map.lookup(merged, 3)  ; Some("c")
+  let ma = { 1 => "a", 2 => "b" }
+  let mb = { 2 => "B", 3 => "c" }
+  let merged = Map.merge(ma, mb)
+  write Map.length(merged)  ; 3
+  write Map.lookup(merged, 1)  ; Some("a")
+  write Map.lookup(merged, 2)  ; Some("B") (second overwrites)
+  write Map.lookup(merged, 3)  ; Some("c")
 
   ; ============ Map.from-entries ============
 
-  LET arr = [(1, "x"), (2, "y"), (3, "z")]
-  LET from-arr = Map.from-entries(arr)
-  WRITE Map.length(from-arr)  ; 3
-  WRITE Map.lookup(from-arr, 1)  ; Some("x")
-  WRITE Map.lookup(from-arr, 2)  ; Some("y")
-  WRITE Map.lookup(from-arr, 3)  ; Some("z")
+  let arr = [(1, "x"), (2, "y"), (3, "z")]
+  let from-arr = Map.from-entries(arr)
+  write Map.length(from-arr)  ; 3
+  write Map.lookup(from-arr, 1)  ; Some("x")
+  write Map.lookup(from-arr, 2)  ; Some("y")
+  write Map.lookup(from-arr, 3)  ; Some("z")
 
   ; ============ Chaining operations ============
 
-  LET chain = { 1 => 10, 2 => 20, 3 => 30 }
-  LET chain2 = Map.insert(chain, 4, 40)
-  LET chain3 = Map.remove(chain2, 1)
-  WRITE Map.length(chain3)  ; 3
-  WRITE Map.keys(chain3)  ; [2, 3, 4]
+  let chain = { 1 => 10, 2 => 20, 3 => 30 }
+  let chain2 = Map.insert(chain, 4, 40)
+  let chain3 = Map.remove(chain2, 1)
+  write Map.length(chain3)  ; 3
+  write Map.keys(chain3)  ; [2, 3, 4]
 
   ; ============ Float keys ============
 
-  LET float-map = { 1.5 => "half", 2.5 => "two-half" }
-  WRITE Map.has(float-map, 1.5)  ; true
-  WRITE Map.lookup(float-map, 2.5)  ; Some("two-half")
+  let float-map = { 1.5 => "half", 2.5 => "two-half" }
+  write Map.has(float-map, 1.5)  ; true
+  write Map.lookup(float-map, 2.5)  ; Some("two-half")
 
   ; ============ Boolean keys ============
 
-  LET bool-map = { true => "yes", false => "no" }
-  WRITE Map.lookup(bool-map, true)  ; Some("yes")
-  WRITE Map.lookup(bool-map, false)  ; Some("no")
+  let bool-map = { true => "yes", false => "no" }
+  write Map.lookup(bool-map, true)  ; Some("yes")
+  write Map.lookup(bool-map, false)  ; Some("no")
 
   ; ============ Index syntax (direct access) ============
 
-  WRITE m[1]  ; "one"
-  WRITE m[2]  ; "two"
+  write m[1]  ; "one"
+  write m[2]  ; "two"
 
-  WRITE str-keys["a"]  ; 1
+  write str-keys["a"]  ; 1
 
   ; ============ Optional index syntax (returns Option) ============
 
-  WRITE m?[1]  ; Some("one")
-  WRITE m?[99]  ; None (key not found)
+  write m?[1]  ; Some("one")
+  write m?[99]  ; None (key not found)
 
-  WRITE str-keys?["a"]  ; Some(1)
-  WRITE str-keys?["missing"]  ; None
+  write str-keys?["a"]  ; Some(1)
+  write str-keys?["missing"]  ; None
 
   ; Chaining with optional unwrap
-  WRITE m?[1] ?? "default"  ; "one"
-  WRITE m?[99] ?? "default"  ; "default"
+  write m?[1] ?? "default"  ; "one"
+  write m?[99] ?? "default"  ; "default"
 }

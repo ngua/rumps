@@ -1,7 +1,7 @@
 ; Test: Expression annotation type mismatch error
 ; Annotating an Int as String should fail
 
-FUN main() {
-  LET x = (42) : String
-  WRITE x
+fun main() {
+  let x = (42) : String
+  write x
 }

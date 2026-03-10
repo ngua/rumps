@@ -1,64 +1,64 @@
 ; Test constrained type parameters
 ; Syntax: [T: Constraint1 + Constraint2]
 
-FUN main() {
-  WRITE add-numeric(1, 2)       ; 3
-  WRITE add-numeric(1.5, 2.5)   ; 4.0
+fun main() {
+  write add-numeric(1, 2)       ; 3
+  write add-numeric(1.5, 2.5)   ; 4.0
 
-  WRITE to-str(42)        ; "42"
-  WRITE to-str(true)      ; "true"
+  write to-str(42)        ; "42"
+  write to-str(true)      ; "true"
 
-  WRITE to-json({a: 1, b: 2}) AS String   ; {"a":1,"b":2}
+  write to-json({a: 1, b: 2}) as String   ; {"a":1,"b":2}
 
   ; ============================================================================
   ; Multiple constraints
   ; ============================================================================
 
-  WRITE numeric-to-str(21)    ; "42"
-  WRITE numeric-to-str(1.5)   ; "3"
+  write numeric-to-str(21)    ; "42"
+  write numeric-to-str(1.5)   ; "3"
 
   ; ============================================================================
   ; Mixed constrained and unconstrained
   ; ============================================================================
 
-  LET (n, s) = pair-numeric(21, "hello")
-  WRITE n    ; 42
-  WRITE s    ; "hello"
+  let (n, s) = pair-numeric(21, "hello")
+  write n    ; 42
+  write s    ; "hello"
 
   ; ============================================================================
   ; Closures with constraints
   ; ============================================================================
 
   ; Closure with constrained type parameter; works with ANY Numeric type
-  LET double = [T: Numeric](x: T) -> T => x + x
+  let double = [T: Numeric](x: T) -> T => x + x
 
-  WRITE double(10)    ; 20
-  WRITE double(1.5)   ; 3.0
+  write double(10)    ; 20
+  write double(1.5)   ; 3.0
 
-  WRITE apply-numeric(double, 5)   ; 10
+  write apply-numeric(double, 5)   ; 10
 
   ; ============================================================================
   ; Into[Subscript] constraint
   ; ============================================================================
 
-  WRITE format-key(42)        ; "42"
-  WRITE format-key("foo")     ; "foo"
-  WRITE format-key(true)      ; "true"
+  write format-key(42)        ; "42"
+  write format-key("foo")     ; "foo"
+  write format-key(true)      ; "true"
 
   ; ============================================================================
   ; Into[Storable] constraint
   ; ============================================================================
 
-  WRITE identity-storable(42)       ; 42
-  WRITE identity-storable("hello")  ; "hello"
-  WRITE identity-storable(true)     ; true
+  write identity-storable(42)       ; 42
+  write identity-storable("hello")  ; "hello"
+  write identity-storable(true)     ; true
 
   ; ============================================================================
   ; Iterable constraint with element type
   ; ============================================================================
 
-  WRITE sum-all([1, 2, 3, 4, 5])     ; 15
-  WRITE sum-all(1 .. 4)             ; 6 (1+2+3)
+  write sum-all([1, 2, 3, 4, 5])     ; 15
+  write sum-all(1 .. 4)             ; 6 (1+2+3)
 }
 
 ; ============================================================================
@@ -66,46 +66,46 @@ FUN main() {
 ; ============================================================================
 
 ; Numeric constraint: `T` must be `Int` or `Float`
-FUN add-numeric[T: Numeric](a: T, b: T) -> T {
+fun add-numeric[T: Numeric](a: T, b: T) -> T {
   a + b
 }
 
 ; Into constraint: `T` can be converted to `String`
-FUN to-str[T: Into[String]](x: T) -> String {
-  x AS String
+fun to-str[T: Into[String]](x: T) -> String {
+  x as String
 }
 
 ; Into constraint: `T` can be serialized to `Json`
-FUN to-json[T: Into[Json]](x: T) -> Json {
-  x AS Json
+fun to-json[T: Into[Json]](x: T) -> Json {
+  x as Json
 }
 
 ; Multiple constraints with `+`
-FUN numeric-to-str[T: Numeric + Into[String]](x: T) -> String {
-  (x + x) AS String
+fun numeric-to-str[T: Numeric + Into[String]](x: T) -> String {
+  (x + x) as String
 }
 
 ; Mix of constrained and unconstrained type parameters
-FUN pair-numeric[T: Numeric, U](x: T, y: U) -> (T, U) {
+fun pair-numeric[T: Numeric, U](x: T, y: U) -> (T, U) {
   (x + x, y)
 }
 
 ; Higher-order function taking a constrained closure
-FUN apply-numeric[T: Numeric](f: (T) -> T, x: T) -> T {
+fun apply-numeric[T: Numeric](f: (T) -> T, x: T) -> T {
   f(x)
 }
 
 ; Into[Subscript]: type can be used as a DB subscript key
-FUN format-key[K: Into[Subscript]](k: K) -> String {
-  k AS String
+fun format-key[K: Into[Subscript]](k: K) -> String {
+  k as String
 }
 
 ; Into[Storable]: type can be stored in the database
-FUN identity-storable[V: Into[Storable]](v: V) -> V {
+fun identity-storable[V: Into[Storable]](v: V) -> V {
   v
 }
 
 ; Iterable: type must be Array or Range (HKT constraint)
-FUN sum-all[T: Numeric, C: Iterable](coll: C[T]) -> T {
+fun sum-all[T: Numeric, C: Iterable](coll: C[T]) -> T {
   Foldable:reduce((acc, x) => acc + x, 0, coll)
 }

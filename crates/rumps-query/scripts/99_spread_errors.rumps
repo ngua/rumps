@@ -1,12 +1,12 @@
 ; Test spread operator type errors
 ; Section 8 of phase-4c.md
 
-FUN main() {
+fun main() {
   ; Spread non-array in array literal
-  LET x = 42
-  LET arr = [...x]
+  let x = 42
+  let arr = [...x]
 
   ; Spread non-object in object literal
-  LET y = "hello"
-  LET obj = { ...y }
+  let y = "hello"
+  let obj = { ...y }
 }

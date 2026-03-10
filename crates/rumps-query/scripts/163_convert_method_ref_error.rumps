@@ -1,6 +1,6 @@
 ; Convert method references require type parameters
 
-FUN main() {
+fun main() {
   ; This should error: Fallible:wrap without type parameter
-  LET _ = Fallible:wrap
+  let _ = Fallible:wrap
 }

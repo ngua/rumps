@@ -4,7 +4,7 @@
 //! They are implemented as associated functions on module types ([`Array`],
 //! [`Str`], etc.), returning a future that resolves to a `ValueId`. Unlike
 //! keywords (GET, SET, KILL), primitives use standard function call syntax
-//! and are case-insensitive.
+//! and are case-sensitive.
 //!
 //! # Module Organization
 //!

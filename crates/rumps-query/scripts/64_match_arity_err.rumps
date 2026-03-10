@@ -1,13 +1,13 @@
 ; Pattern arity mismatch error
 
-FUN main() {
-  LET opt = Option.Some(42)
+fun main() {
+  let opt = Option.Some(42)
 
   ; This should fail because Option.Some has 1 payload, not 2
-  LET result = MATCH opt {
+  let result = match opt {
     Option.Some(a, b) => { a + b }
     Option.None => { 0 }
   }
 
-  WRITE result
+  write result
 }

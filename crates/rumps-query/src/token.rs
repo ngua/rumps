@@ -149,63 +149,56 @@ pub(crate) enum Token {
 impl Token {
     /// Returns the keyword token for a given identifier, if it matches.
     ///
-    /// Keywords are case-insensitive (e.g., `LET`, `let`, `Let`).
-    /// Exception: `null` is case-sensitive (JSON literal).
+    /// Keywords are lowercase-only (e.g., `let`, `if`, `else`).
+    /// Exception: `null` is a JSON literal and also lowercase.
     ///
-    /// Note: DB intrinsics (`@SET`, `@GET`, etc.) are handled by
+    /// Note: DB intrinsics (`@set`, `@get`, etc.) are handled by
     /// [`Token::intrinsic`] instead.
     pub(crate) fn keyword(s: &str) -> Option<Self> {
-        // `null` is case-sensitive (JSON requires lowercase)
-        if s == "null" {
-            Some(Self::Null)
-        } else {
-            // All other keywords are case-insensitive
-            match s.to_ascii_uppercase().as_str() {
-                "LET" => Some(Self::Let),
-                "IF" => Some(Self::If),
-                "ELSE" => Some(Self::Else),
-                "IS" => Some(Self::Is),
-                "AS" => Some(Self::As),
-                "READ" => Some(Self::Read),
-                "AND" => Some(Self::And),
-                "OR" => Some(Self::Or),
-                "NOT" => Some(Self::Not),
-                "TRUE" => Some(Self::True),
-                "FALSE" => Some(Self::False),
-                "FUN" => Some(Self::Fun),
-                "TYPE" => Some(Self::Type),
-                "NEWTYPE" => Some(Self::NewType),
-                "MATCH" => Some(Self::Match),
-                "MATCHES" => Some(Self::Matches),
-                "UNION" => Some(Self::Union),
-                "MODULE" => Some(Self::Module),
-                "CLASS" => Some(Self::Class),
-                "FOREVER" => Some(Self::Forever),
-                "TRANSACTION" => Some(Self::Transaction),
-                "FROM" => Some(Self::From),
-                "WRITE" => Some(Self::Write),
-                "RAISE" => Some(Self::Raise),
-                "CATCH" => Some(Self::Catch),
-                "IMPORT" => Some(Self::Import),
-                // `null` is case-sensitive; other casings are identifiers
-                "NULL" => None,
-                _ => None,
-            }
+        match s {
+            "null" => Some(Self::Null),
+            "let" => Some(Self::Let),
+            "if" => Some(Self::If),
+            "else" => Some(Self::Else),
+            "is" => Some(Self::Is),
+            "as" => Some(Self::As),
+            "read" => Some(Self::Read),
+            "and" => Some(Self::And),
+            "or" => Some(Self::Or),
+            "not" => Some(Self::Not),
+            "true" => Some(Self::True),
+            "false" => Some(Self::False),
+            "fun" => Some(Self::Fun),
+            "type" => Some(Self::Type),
+            "newtype" => Some(Self::NewType),
+            "match" => Some(Self::Match),
+            "matches" => Some(Self::Matches),
+            "union" => Some(Self::Union),
+            "module" => Some(Self::Module),
+            "class" => Some(Self::Class),
+            "forever" => Some(Self::Forever),
+            "transaction" => Some(Self::Transaction),
+            "from" => Some(Self::From),
+            "write" => Some(Self::Write),
+            "raise" => Some(Self::Raise),
+            "catch" => Some(Self::Catch),
+            "import" => Some(Self::Import),
+            _ => None,
         }
     }
 
     /// Returns the token for a DB intrinsic (prefixed with `@`).
     ///
-    /// Case-insensitive (e.g., `@SET`, `@set`, `@Set` all work).
+    /// Lowercase-only (e.g., `@set`, `@get`, `@kill`).
     /// The `@` prefix is already stripped by the lexer.
     pub(crate) fn intrinsic(s: &str) -> Option<Self> {
-        match s.to_ascii_uppercase().as_str() {
-            "SET" => Some(Self::Set),
-            "GET" => Some(Self::Get),
-            "KILL" => Some(Self::Kill),
-            "DATA" => Some(Self::Data),
-            "ORDER" => Some(Self::Order),
-            "QUERY" => Some(Self::Query),
+        match s {
+            "set" => Some(Self::Set),
+            "get" => Some(Self::Get),
+            "kill" => Some(Self::Kill),
+            "data" => Some(Self::Data),
+            "order" => Some(Self::Order),
+            "query" => Some(Self::Query),
             _ => None,
         }
     }
@@ -253,39 +246,39 @@ impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             // Keywords
-            Self::Let => write!(f, "LET"),
-            Self::If => write!(f, "IF"),
-            Self::Else => write!(f, "ELSE"),
-            Self::Is => write!(f, "IS"),
-            Self::As => write!(f, "AS"),
-            Self::Read => write!(f, "READ"),
-            Self::And => write!(f, "AND"),
-            Self::Or => write!(f, "OR"),
-            Self::Not => write!(f, "NOT"),
-            Self::True => write!(f, "TRUE"),
-            Self::False => write!(f, "FALSE"),
-            Self::Fun => write!(f, "FUN"),
-            Self::Type => write!(f, "TYPE"),
-            Self::NewType => write!(f, "NEWTYPE"),
-            Self::Match => write!(f, "MATCH"),
-            Self::Matches => write!(f, "MATCHES"),
-            Self::Union => write!(f, "UNION"),
-            Self::Module => write!(f, "MODULE"),
-            Self::Class => write!(f, "CLASS"),
-            Self::Forever => write!(f, "FOREVER"),
-            Self::Transaction => write!(f, "TRANSACTION"),
-            Self::From => write!(f, "FROM"),
-            Self::Write => write!(f, "WRITE"),
-            Self::Raise => write!(f, "RAISE"),
-            Self::Catch => write!(f, "CATCH"),
-            Self::Import => write!(f, "IMPORT"),
+            Self::Let => write!(f, "let"),
+            Self::If => write!(f, "if"),
+            Self::Else => write!(f, "else"),
+            Self::Is => write!(f, "is"),
+            Self::As => write!(f, "as"),
+            Self::Read => write!(f, "read"),
+            Self::And => write!(f, "and"),
+            Self::Or => write!(f, "or"),
+            Self::Not => write!(f, "not"),
+            Self::True => write!(f, "true"),
+            Self::False => write!(f, "false"),
+            Self::Fun => write!(f, "fun"),
+            Self::Type => write!(f, "type"),
+            Self::NewType => write!(f, "newtype"),
+            Self::Match => write!(f, "match"),
+            Self::Matches => write!(f, "matches"),
+            Self::Union => write!(f, "union"),
+            Self::Module => write!(f, "module"),
+            Self::Class => write!(f, "class"),
+            Self::Forever => write!(f, "forever"),
+            Self::Transaction => write!(f, "transaction"),
+            Self::From => write!(f, "from"),
+            Self::Write => write!(f, "write"),
+            Self::Raise => write!(f, "raise"),
+            Self::Catch => write!(f, "catch"),
+            Self::Import => write!(f, "import"),
             // DB intrinsics (prefixed with `@`)
-            Self::Set => write!(f, "@SET"),
-            Self::Get => write!(f, "@GET"),
-            Self::Kill => write!(f, "@KILL"),
-            Self::Data => write!(f, "@DATA"),
-            Self::Order => write!(f, "@ORDER"),
-            Self::Query => write!(f, "@QUERY"),
+            Self::Set => write!(f, "@set"),
+            Self::Get => write!(f, "@get"),
+            Self::Kill => write!(f, "@kill"),
+            Self::Data => write!(f, "@data"),
+            Self::Order => write!(f, "@order"),
+            Self::Query => write!(f, "@query"),
             Self::Int(n) => write!(f, "{n}"),
             Self::Float(n) => write!(f, "{}", n.0),
             Self::Char(c) => write!(f, "'{c}'"),

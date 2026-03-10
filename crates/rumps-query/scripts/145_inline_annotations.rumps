@@ -1,140 +1,140 @@
 ; Test: Inline type annotations
 ; Tests `expr: Type` syntax for inline type annotations without requiring parens
 
-FUN main() {
+fun main() {
   ; === Basic scalar annotations (no parens required) ===
 
-  WRITE 42: Int
-  WRITE "hello": String
-  WRITE TRUE: Bool
-  WRITE 3.14: Float
+  write 42: Int
+  write "hello": String
+  write true: Bool
+  write 3.14: Float
 
-  ; With LET bindings
-  LET x = 10: Int
-  WRITE x
+  ; With let bindings
+  let x = 10: Int
+  write x
 
-  LET s = "world": String
-  WRITE s
+  let s = "world": String
+  write s
 
   ; === Annotation with various whitespace ===
 
   ; No space
-  LET a = 1:Int
-  WRITE a
+  let a = 1:Int
+  write a
 
   ; Spaces around colon
-  LET b = 2 : Int
-  WRITE b
+  let b = 2 : Int
+  write b
 
   ; Space only before
-  LET c = 3 :Int
-  WRITE c
+  let c = 3 :Int
+  write c
 
   ; === Annotation inside parentheses ===
 
   ; Single expression with annotation inside parens
-  LET y = (100: Int)
-  WRITE y
+  let y = (100: Int)
+  write y
 
   ; Nested parens
-  LET z = ((200: Int))
-  WRITE z
+  let z = ((200: Int))
+  write z
 
   ; === Old syntax still works: `(expr): Type` ===
 
-  LET old = (300): Int
-  WRITE old
+  let old = (300): Int
+  write old
 
   ; === Postfix operators then annotation ===
 
   ; Field access then annotation
-  LET obj = { a: { b: 10 } }
-  WRITE obj.a.b: Int
+  let obj = { a: { b: 10 } }
+  write obj.a.b: Int
 
   ; Index then annotation
-  LET arr = [1, 2, 3]
-  WRITE arr[0]: Int
+  let arr = [1, 2, 3]
+  write arr[0]: Int
 
   ; Unwrap then annotation
-  LET opt = Option.Some(42)
-  WRITE opt!: Int
+  let opt = Option.Some(42)
+  write opt!: Int
 
   ; === DB intrinsics with annotation ===
 
   ; Setup a local db
-  LET d = {}
-  @SET d{"key"} 123
+  let d = {}
+  @set d{"key"} 123
 
-  ; @GET with annotation
-  LET val = @GET d{"key"}: Option[Storable]
-  WRITE val
+  ; @get with annotation
+  let val = @get d{"key"}: Option[Storable]
+  write val
 
-  ; @GET with unwrap then annotation
-  LET unwrapped = @GET d{"key"}!: Storable
-  WRITE unwrapped
+  ; @get with unwrap then annotation
+  let unwrapped = @get d{"key"}!: Storable
+  write unwrapped
 
-  ; @DATA with annotation
-  LET status = @DATA d{"key"}: DataStatus
-  WRITE status
+  ; @data with annotation
+  let status = @data d{"key"}: DataStatus
+  write status
 
-  ; @ORDER with annotation
-  LET ord = @ORDER d{""}: Option[Subscript]
-  WRITE ord
+  ; @order with annotation
+  let ord = @order d{""}: Option[Subscript]
+  write ord
 
-  ; === WRITE with annotated operand ===
+  ; === write with annotated operand ===
 
-  WRITE 999: Int
-  WRITE "test": String
-  WRITE obj.a.b: Int
+  write 999: Int
+  write "test": String
+  write obj.a.b: Int
 
   ; === Tuple annotation ===
 
   ; Tuple with annotation (parens around tuple + annotation)
-  LET tup = (1, 2): (Int, Int)
-  WRITE tup
+  let tup = (1, 2): (Int, Int)
+  write tup
 
   ; Tuple annotation inside parens
-  LET tup2 = ((3, 4): (Int, Int))
-  WRITE tup2
+  let tup2 = ((3, 4): (Int, Int))
+  write tup2
 
   ; Access tuple element with annotation
-  WRITE tup.0: Int
+  write tup.0: Int
 
   ; === Parameterized type annotations ===
 
-  LET some = Option.Some(10): Option[Int]
-  WRITE some
+  let some = Option.Some(10): Option[Int]
+  write some
 
-  LET none = Option.None: Option[String]
-  WRITE none
+  let none = Option.None: Option[String]
+  write none
 
-  LET ok = Result.Ok(42): Result[Int, String]
-  WRITE ok
+  let ok = Result.Ok(42): Result[Int, String]
+  write ok
 
-  LET err = Result.Err("oops"): Result[Int, String]
-  WRITE err
+  let err = Result.Err("oops"): Result[Int, String]
+  write err
 
   ; === Array annotations ===
 
-  LET nums = [1, 2, 3]: Array[Int]
-  WRITE nums
+  let nums = [1, 2, 3]: Array[Int]
+  write nums
 
   ; === Complex expressions ===
 
   ; Arithmetic then annotation (annotation binds to `2` not to `1 + 2`)
   ; So we need parens for the whole thing
-  LET sum = (1 + 2: Int)
-  WRITE sum
+  let sum = (1 + 2: Int)
+  write sum
 
   ; Chained postfix then annotation
-  LET nested = { x: Option.Some({ y: 5 }) }
-  WRITE nested.x!.y: Int
+  let nested = { x: Option.Some({ y: 5 }) }
+  write nested.x!.y: Int
 
   ; === Function return type inference with annotation ===
 
-  WRITE double(5): Int
+  write double(5): Int
 
-  WRITE "Inline annotation test complete"
+  write "Inline annotation test complete"
 }
 
-FUN double(n: Int) -> Int { n * 2 }
+fun double(n: Int) -> Int { n * 2 }

@@ -1,38 +1,38 @@
 ; Module-level mutual recursion: functions within a module calling each other
 
-FUN main() {
+fun main() {
   ; Test mutual recursion via module path
-  WRITE Parity.is-even(0)
-  WRITE Parity.is-even(4)
-  WRITE Parity.is-even(7)
-  WRITE Parity.is-odd(0)
-  WRITE Parity.is-odd(3)
-  WRITE Parity.is-odd(6)
+  write Parity.is-even(0)
+  write Parity.is-even(4)
+  write Parity.is-even(7)
+  write Parity.is-odd(0)
+  write Parity.is-odd(3)
+  write Parity.is-odd(6)
 
-  WRITE Math.Fibonacci.fib(0)
-  WRITE Math.Fibonacci.fib(1)
-  WRITE Math.Fibonacci.fib(10)
+  write Math.Fibonacci.fib(0)
+  write Math.Fibonacci.fib(1)
+  write Math.Fibonacci.fib(10)
 }
 
-MODULE Parity {
-    +FUN is-even(n: Int) -> Bool {
-        IF n == 0 { true } ELSE { is-odd(n - 1) }
+module Parity {
+    +fun is-even(n: Int) -> Bool {
+        if n == 0 { true } else { is-odd(n - 1) }
     }
 
-    +FUN is-odd(n: Int) -> Bool {
-        IF n == 0 { false } ELSE { is-even(n - 1) }
+    +fun is-odd(n: Int) -> Bool {
+        if n == 0 { false } else { is-even(n - 1) }
     }
 }
 
 ; Nested module with mutual recursion
-MODULE Math {
-    MODULE Fibonacci {
+module Math {
+    module Fibonacci {
         ; Mutually recursive helper functions
-        +FUN fib(n: Int) -> Int {
-            IF n <= 1 { n } ELSE { fib-sum(n) }
+        +fun fib(n: Int) -> Int {
+            if n <= 1 { n } else { fib-sum(n) }
         }
 
-        FUN fib-sum(n: Int) -> Int {
+        fun fib-sum(n: Int) -> Int {
             fib(n - 1) + fib(n - 2)
         }
     }

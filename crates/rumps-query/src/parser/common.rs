@@ -75,14 +75,14 @@ impl Parser {
         })
     }
 
-    /// Parse a contextual identifier (case-insensitive match).
+    /// Parse a contextual identifier (exact lowercase match).
     ///
-    /// Used for OUTPUT modifiers (`JSON`, `TO`, `ERROR`, `FILE`) which are not
-    /// keywords but recognized contextually after `OUTPUT expr`.
+    /// Used for output modifiers (`json`, `to`, `error`, `file`) which are not
+    /// keywords but recognized contextually after `write expr`.
     pub(super) fn ctx_ident(
         expected: &'static str,
     ) -> impl chumsky::Parser<Token, (), Error = ParseErr> + Clone {
-        select! { Token::Ident(s) if s.eq_ignore_ascii_case(expected) => () }
+        select! { Token::Ident(s) if s == expected => () }
     }
 
     /// Parse a global variable name.

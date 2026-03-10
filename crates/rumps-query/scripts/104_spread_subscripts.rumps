@@ -1,76 +1,76 @@
 ; Test: Spread subscripts in local/global variables
 ; Allows spreading an Array[Subscript] into subscript position
-; Useful for @QUERY iteration where keys are returned as arrays
+; Useful for @query iteration where keys are returned as arrays
 
-FUN main() {
+fun main() {
   ; Set up test data
-  @SET data{1, "a"} "first"
-  @SET data{1, "b"} "second"
-  @SET data{2, "x"} "third"
-  @SET data{2, "y"} "fourth"
+  @set data{1, "a"} "first"
+  @set data{1, "b"} "second"
+  @set data{2, "x"} "third"
+  @set data{2, "y"} "fourth"
 
   ; Regular subscripts (existing behavior)
-  LET v1 = @GET data{1, "a"}
-  WRITE v1
+  let v1 = @get data{1, "a"}
+  write v1
 
   ; Spread an empty array: equivalent to data{}
-  LET empty: Array[Subscript] = []
-  LET root = @GET data{...empty}
-  WRITE root
+  let empty: Array[Subscript] = []
+  let root = @get data{...empty}
+  write root
 
   ; Spread a single-element array
-  LET k1: Array[Subscript] = [1]
-  LET partial = @GET data{...k1, "a"}
-  WRITE partial
+  let k1: Array[Subscript] = [1]
+  let partial = @get data{...k1, "a"}
+  write partial
 
   ; Spread a full key path
-  LET key: Array[Subscript] = [1, "b"]
-  LET v2 = @GET data{...key}
-  WRITE v2
+  let key: Array[Subscript] = [1, "b"]
+  let v2 = @get data{...key}
+  write v2
 
   ; Mix regular and spread subscripts
-  LET suffix: Array[Subscript] = ["x"]
-  LET v3 = @GET data{2, ...suffix}
-  WRITE v3
+  let suffix: Array[Subscript] = ["x"]
+  let v3 = @get data{2, ...suffix}
+  write v3
 
-  ; Spread with @SET
-  LET set-key: Array[Subscript] = [3, "z"]
-  @SET data{...set-key} "spread-set"
-  LET v4 = @GET data{3, "z"}
-  WRITE v4
+  ; Spread with @set
+  let set-key: Array[Subscript] = [3, "z"]
+  @set data{...set-key} "spread-set"
+  let v4 = @get data{3, "z"}
+  write v4
 
-  ; Spread with @KILL
-  @SET data{99, "del"} "to-delete"
-  LET kill-key: Array[Subscript] = [99, "del"]
-  @KILL data{...kill-key}
-  LET deleted = @GET data{99, "del"}
-  WRITE deleted
+  ; Spread with @kill
+  @set data{99, "del"} "to-delete"
+  let kill-key: Array[Subscript] = [99, "del"]
+  @kill data{...kill-key}
+  let deleted = @get data{99, "del"}
+  write deleted
 
-  ; Spread with @DATA
-  LET data-key: Array[Subscript] = [1, "a"]
-  LET status = @DATA data{...data-key}
-  WRITE status
+  ; Spread with @data
+  let data-key: Array[Subscript] = [1, "a"]
+  let status = @data data{...data-key}
+  write status
 
-  ; Spread with @ORDER
-  @SET items{1} "one"
-  @SET items{2} "two"
-  @SET items{10} "ten"
-  LET prefix: Array[Subscript] = [1]
-  LET next = @ORDER items{...prefix}
-  WRITE next
+  ; Spread with @order
+  @set items{1} "one"
+  @set items{2} "two"
+  @set items{10} "ten"
+  let prefix: Array[Subscript] = [1]
+  let next = @order items{...prefix}
+  write next
 
   ; Multiple spreads (concatenation)
-  LET part1: Array[Subscript] = [1]
-  LET part2: Array[Subscript] = ["a"]
-  LET combined = @GET data{...part1, ...part2}
-  WRITE combined
+  let part1: Array[Subscript] = [1]
+  let part2: Array[Subscript] = ["a"]
+  let combined = @get data{...part1, ...part2}
+  write combined
 
   ; Spread with dynamic subscript values
-  LET n = 2
-  LET s = "y"
-  LET dyn-key: Array[Subscript] = [n, s]
-  LET v5 = @GET data{...dyn-key}
-  WRITE v5
+  let n = 2
+  let s = "y"
+  let dyn-key: Array[Subscript] = [n, s]
+  let v5 = @get data{...dyn-key}
+  write v5
 
-  WRITE "spread subscript test complete"
+  write "spread subscript test complete"
 }

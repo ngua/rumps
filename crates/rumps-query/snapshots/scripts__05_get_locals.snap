@@ -1,6 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: @GET locals\n; Tests retrieving values from local B-tree variables\n\n; Set up test data\n@SET x = 42\n@SET items(1) = \"first\"\n@SET items(2) = \"second\"\n@SET patient(123, \"name\") = \"John\"\n@SET patient(123, \"age\") = 30\n\n; @GET simple local\nLET val = @GET x\n@OUTPUT val\n; Expected: 42 (or Option.Some(42))\n\n; @GET with subscript\nLET d1 = @GET items(1)\n@OUTPUT d1\n; Expected: first\n\nLET d2 = @GET items(2)\n@OUTPUT d2\n; Expected: second\n\n; @GET with multiple subscripts\nLET name = @GET patient(123, \"name\")\n@OUTPUT name\n; Expected: John\n\nLET age = @GET patient(123, \"age\")\n@OUTPUT age\n; Expected: 30\n\n; @GET non-existent key (should return Option.None)\nLET missing = @GET items(999)\n@OUTPUT missing\n; Expected: Option.None (or similar)\n\nLET missing2 = @GET nonexistent\n@OUTPUT missing2\n; Expected: Option.None\n\n; @GET after overwrite\n@SET x = 100\nLET newval = @GET x\n@OUTPUT newval\n; Expected: 100\n\n@OUTPUT \"@GET locals test complete\"\n"
+description: "; Test: @get locals\n; Tests retrieving values from local B-tree variables\n\nfun main() {\n  ; Set up test data\n  @set x{} 42\n  @set items{1} \"first\"\n  @set items{2} \"second\"\n  @set patient{123, \"name\"} \"John\"\n  @set patient{123, \"age\"} 30\n\n  ; @get simple local (use {} for root ref)\n  let val = @get x{}\n  write val\n  ; Expected: 42 (or Option.Some(42))\n\n  ; @get with subscript\n  let d1 = @get items{1}\n  write d1\n  ; Expected: first\n\n  let d2 = @get items{2}\n  write d2\n  ; Expected: second\n\n  ; @get with multiple subscripts\n  let name = @get patient{123, \"name\"}\n  write name\n  ; Expected: John\n\n  let age = @get patient{123, \"age\"}\n  write age\n  ; Expected: 30\n\n  ; @get non-existent key (should return Option.None)\n  let missing = @get items{999}\n  write missing\n  ; Expected: Option.None (or similar)\n\n  let missing2 = @get nonexistent{}\n  write missing2\n  ; Expected: Option.None\n\n  ; @get after overwrite\n  @set x{} 100\n  let newval = @get x{}\n  write newval\n  ; Expected: 100\n\n  write \"@get locals test complete\"\n}\n"
 ---
 Option.Some(42)
 Option.Some("first")
@@ -10,4 +10,4 @@ Option.Some(30)
 Option.None
 Option.None
 Option.Some(100)
-"@GET locals test complete"
+"@get locals test complete"

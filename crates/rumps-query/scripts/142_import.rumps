@@ -1,102 +1,102 @@
-; Test: IMPORT statement
+; Test: import statement
 ; Tests importing module members into local scope
 
 ; All top-level imports must appear first
-IMPORT Math.{ floor, ceil, sqrt AS root, pi, e }
-IMPORT Math.Trig.{ sin AS sine, cos AS cosine }
-IMPORT Array.{ head, tail }
-IMPORT Counter.{ new, inc }
-IMPORT Forward.{ id, val }
+import Math.{ floor, ceil, sqrt as root, pi, e }
+import Math.Trig.{ sin as sine, cos as cosine }
+import Array.{ head, tail }
+import Counter.{ new, inc }
+import Forward.{ id, val }
 
-FUN main() {
+fun main() {
   ; Basic named import
-  WRITE floor(3.7)
+  write floor(3.7)
   ; Expected: 3
 
   ; Multiple named imports
-  WRITE head([1, 2, 3])
+  write head([1, 2, 3])
   ; Expected: Some(1)
-  WRITE tail([1, 2, 3])
+  write tail([1, 2, 3])
   ; Expected: [ 2, 3 ]
 
   ; Wildcard import in nested scope (at top of scope)
   {
-    IMPORT String.{ ... }
-    WRITE length("hello")
+    import String.{ ... }
+    write length("hello")
     ; Expected: 5
   }
 
   ; User module import
-  LET c = new()
-  WRITE c
+  let c = new()
+  write c
   ; Expected: 0
-  WRITE inc(c)
+  write inc(c)
   ; Expected: 1
 
   ; Wildcard with exclusion in nested scope
   {
-    IMPORT Math.{ ..., -floor }
-    WRITE ceil(1.1)
+    import Math.{ ..., -floor }
+    write ceil(1.1)
     ; Expected: 2
   }
 
   ; Import in nested scope does not leak
-  LET x = 100
+  let x = 100
   {
-    IMPORT Math.{ floor }
-    WRITE floor(2.9)
+    import Math.{ floor }
+    write floor(2.9)
     ; Expected: 2
   }
-  WRITE x
+  write x
   ; Expected: 100
 
   ; ceil and floor from top-level imports
-  WRITE ceil(4.1)
+  write ceil(4.1)
   ; Expected: 5
-  WRITE floor(4.9)
+  write floor(4.9)
   ; Expected: 4
 
-  WRITE test()
+  write test()
   ; Expected: 42
 
-  ; AS alias from top-level import
-  WRITE root(16.0)
+  ; as alias from top-level import
+  write root(16.0)
   ; Expected: 4.0
 
   ; Multiple aliases from top-level import
-  WRITE sine(0.0)
+  write sine(0.0)
   ; Expected: 0.0
-  WRITE cosine(0.0)
+  write cosine(0.0)
   ; Expected: 1.0
 
   ; Import from hoisted module
-  WRITE id("hoisted")
+  write id("hoisted")
   ; Expected: "hoisted"
-  WRITE val
+  write val
   ; Expected: 42
 
   ; Import builtin module constants
-  WRITE pi
+  write pi
   ; Expected: 3.141592653589793
-  WRITE e
+  write e
   ; Expected: 2.718281828459045
 }
 
 ; User module (defined after import due to hoisting)
-MODULE Counter {
-  LET start = 0
-  +FUN new() -> Int { start }
-  +FUN inc(n: Int) -> Int { n + 1 }
+module Counter {
+  let start = 0
+  +fun new() -> Int { start }
+  +fun inc(n: Int) -> Int { n + 1 }
 }
 
 ; Hoisted module (defined after import)
-MODULE Forward {
-  +LET val: Int = 42
-  +FUN id[T](x: T) -> T { x }
+module Forward {
+  +let val: Int = 42
+  +fun id[T](x: T) -> T { x }
 }
 
 ; Import inside function body (at top of function scope)
-FUN test() -> Int {
-  IMPORT Math.{ abs }
+fun test() -> Int {
+  import Math.{ abs }
   abs(-42)
 }

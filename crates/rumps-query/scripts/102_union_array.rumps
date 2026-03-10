@@ -1,93 +1,93 @@
 ; Union-typed array tests
 ;
 ; Tests for bidirectional type checking of array literals with union element types.
-; When an array literal has an annotation like `Array[Subscript]`, it should NOT
-; fall back to JSON for heterogeneous elements; instead, each element is checked
+; When an array literal has an annotation like `Array[Subscript]`, it should not
+; fall back to json for heterogeneous elements; instead, each element is checked
 ; against the union type.
 
-FUN main() {
+fun main() {
   ; === Comparison: without vs with annotation ===
 
   ; WITHOUT annotation: heterogeneous array becomes Json
-  LET json-arr = [1, "a", true]
-  WRITE json-arr IS Json
+  let json-arr = [1, "a", true]
+  write json-arr is Json
 
-  ; WITH annotation: stays as native Array (not Json)
-  LET sub-arr: Array[Subscript] = [1, "a", true]
-  WRITE sub-arr IS Json
-  WRITE Iterable:length(sub-arr)
+  ; with annotation: stays as native Array (not Json)
+  let sub-arr: Array[Subscript] = [1, "a", true]
+  write sub-arr is Json
+  write Iterable:length(sub-arr)
 
   ; === Named union: Subscript ===
 
-  LET subscript-arr: Array[Subscript] = [42, "hello", 3.14, 'x', true]
-  WRITE Iterable:length(subscript-arr)
+  let subscript-arr: Array[Subscript] = [42, "hello", 3.14, 'x', true]
+  write Iterable:length(subscript-arr)
 
   ; === Named union: Storable ===
 
-  LET storable-arr: Array[Storable] = [true, 42, 3.14, 'x', "str"]
-  WRITE Iterable:length(storable-arr)
+  let storable-arr: Array[Storable] = [true, 42, 3.14, 'x', "str"]
+  write Iterable:length(storable-arr)
 
   ; === Named union: Scalar ===
 
-  LET scalar-arr: Array[Scalar] = [true, 42, 3.14, "str"]
-  WRITE Iterable:length(scalar-arr)
+  let scalar-arr: Array[Scalar] = [true, 42, 3.14, "str"]
+  write Iterable:length(scalar-arr)
 
   ; === Anonymous union ===
 
-  LET anon-arr: Array[Int | String] = [42, "hello", 99, "world"]
-  WRITE Iterable:length(anon-arr)
+  let anon-arr: Array[Int | String] = [42, "hello", 99, "world"]
+  write Iterable:length(anon-arr)
 
   ; === User-defined union ===
 
-  LET ids: Array[Id] = [1, "abc", 2, "def"]
-  WRITE Iterable:length(ids)
+  let ids: Array[Id] = [1, "abc", 2, "def"]
+  write Iterable:length(ids)
 
   ; === Empty array with union element type ===
 
-  LET empty: Array[Int | String] = []
-  WRITE Iterable:length(empty)
+  let empty: Array[Int | String] = []
+  write Iterable:length(empty)
 
   ; === Spread in union arrays ===
 
-  LET ints = [1, 2, 3]
-  LET strs: Array[String] = ["a", "b"]
+  let ints = [1, 2, 3]
+  let strs: Array[String] = ["a", "b"]
 
   ; Spread homogeneous arrays into union array
-  LET combined: Array[Int | String] = [...ints, "x", ...strs, 4]
-  WRITE Iterable:length(combined)
+  let combined: Array[Int | String] = [...ints, "x", ...strs, 4]
+  write Iterable:length(combined)
 
   ; === Iteration over union array ===
 
-  LET arr: Array[Int | String] = [1, "two", 3, "four"]
+  let arr: Array[Int | String] = [1, "two", 3, "four"]
 
   ; Iterable:foreach works on union arrays
   Iterable:foreach(x => {
-    MATCH x {
-      n IS Int => { WRITE "int: {n}" }
-      s IS String => { WRITE "str: {s}" }
-      _ => { WRITE "other" }
+    match x {
+      n is Int => { write "int: {n}" }
+      s is String => { write "str: {s}" }
+      _ => { write "other" }
     }
   }, arr)
 
   ; Mappable:map with union elements
-  LET mapped = Mappable:map(x => {
-    MATCH x {
-      n IS Int => { n * 2 }
-      s IS String => { String.length(s) }
+  let mapped = Mappable:map(x => {
+    match x {
+      n is Int => { n * 2 }
+      s is String => { String.length(s) }
       _ => { 0 }
     }
   }, arr)
-  WRITE mapped
+  write mapped
 
   ; === Verify elements preserve their concrete types ===
 
   ; Use Filterable:filter to extract Int elements
-  LET ints-only = Filterable:filter(x => x IS Int, arr)
-  WRITE Iterable:length(ints-only)
+  let ints-only = Filterable:filter(x => x is Int, arr)
+  write Iterable:length(ints-only)
 
   ; Use Filterable:filter to extract String elements
-  LET strs-only = Filterable:filter(x => x IS String, arr)
-  WRITE Iterable:length(strs-only)
+  let strs-only = Filterable:filter(x => x is String, arr)
+  write Iterable:length(strs-only)
 }
 
-UNION Id = Int | String
+union Id = Int | String

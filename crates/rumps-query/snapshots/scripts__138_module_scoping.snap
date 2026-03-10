@@ -1,15 +1,15 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Module scoping test\n; Tests that functions can reference sibling constants and functions\n; in both inline and file-imported modules\n\n; ============ Inline module with sibling references ============\n\nMODULE Geometry {\n  +LET pi = 3.14159\n  +LET tau = 6.28318\n\n  ; Function referencing sibling constant\n  +FUN circle-area(r: Float) -> Float { pi * r * r }\n\n  ; Function referencing sibling constant\n  +FUN circle-circumference(r: Float) -> Float { tau * r }\n\n  ; Function referencing sibling function (mutual recursion base case)\n  +FUN double-area(r: Float) -> Float { 2.0 * circle-area(r) }\n}\n\nWRITE Geometry.pi > 3.0  ; true\nWRITE Geometry.circle-area(1.0) > 3.0  ; true (pi * 1 * 1 = pi)\nWRITE Geometry.circle-circumference(1.0) > 6.0  ; true (tau * 1 = tau)\nWRITE Geometry.double-area(1.0) > 6.0  ; true (2 * pi)\n\n; ============ File-imported module with sibling references ============\n\nMODULE MyMath FROM \"../modules/lib/mymath.rumps\"\n\nWRITE MyMath.pi > 3.0  ; true\nWRITE MyMath.area(1.0) > 3.0  ; true (pi * 1 * 1 = pi)\nWRITE MyMath.area(2.0) > 12.0  ; true (pi * 4 = ~12.56)\n\n; ============ Both inline and imported in same script ============\n\nLET inline-area = Geometry.circle-area(2.0)\nLET file-area = MyMath.area(2.0)\n\n; Both should compute pi * 4 = ~12.56636\nWRITE inline-area > 12.0\nWRITE file-area > 12.0\n\n; They should be equal (both use pi * r * r)\nLET diff = inline-area - file-area\nWRITE diff < 0.0001\nWRITE diff > -0.0001\n"
+description: "; Module scoping test\n; Tests that functions can reference sibling constants and functions\n; in both inline and file-imported modules\n\n; Import module from file (path relative to script directory)\nmodule MyMath from \"../modules/lib/mymath.rumps\"\n\nfun main() {\n  write Geometry.pi > 3.0  ; true\n  write Geometry.circle-area(1.0) > 3.0  ; true (pi * 1 * 1 = pi)\n  write Geometry.circle-circumference(1.0) > 6.0  ; true (tau * 1 = tau)\n  write Geometry.double-area(1.0) > 6.0  ; true (2 * pi)\n\n  ; ============ File-imported module with sibling references ============\n\n  write MyMath.pi > 3.0  ; true\n  write MyMath.area(1.0) > 3.0  ; true (pi * 1 * 1 = pi)\n  write MyMath.area(2.0) > 12.0  ; true (pi * 4 = ~12.56)\n\n  ; ============ Both inline and imported in same script ============\n\n  let inline-area = Geometry.circle-area(2.0)\n  let file-area = MyMath.area(2.0)\n\n  ; Both should compute pi * 4 = ~12.56636\n  write inline-area > 12.0\n  write file-area > 12.0\n\n  ; They should be equal (both use pi * r * r)\n  let diff = inline-area - file-area\n  write diff < 0.0001\n  write diff > -0.0001\n}\n\n; ============ Inline module with sibling references ============\n\nmodule Geometry {\n  +let pi = 3.14159\n  +let tau = 6.28318\n\n  ; Function referencing sibling constant\n  +fun circle-area(r: Float) -> Float { pi * r * r }\n\n  ; Function referencing sibling constant\n  +fun circle-circumference(r: Float) -> Float { tau * r }\n\n  ; Function referencing sibling function (mutual recursion base case)\n  +fun double-area(r: Float) -> Float { 2.0 * circle-area(r) }\n}\n"
 ---
-TRUE
-TRUE
-TRUE
-TRUE
-TRUE
-TRUE
-TRUE
-TRUE
-TRUE
-TRUE
-TRUE
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true

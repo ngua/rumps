@@ -3,179 +3,179 @@
 ; Math.round, Math.sqrt, Math.log
 ; Also tests Math.Trig submodule: sin, cos, tan, asin, acos, atan, atan2
 
-FUN main() {
+fun main() {
   ; ============ Math.abs ============
 
-  WRITE Math.abs(-5.0)   ; 5.0
-  WRITE Math.abs(5.0)    ; 5.0
-  WRITE Math.abs(0.0)    ; 0.0
+  write Math.abs(-5.0)   ; 5.0
+  write Math.abs(5.0)    ; 5.0
+  write Math.abs(0.0)    ; 0.0
 
-  LET neg-float = -42.0
-  WRITE Math.abs(neg-float)  ; 42.0
+  let neg-float = -42.0
+  write Math.abs(neg-float)  ; 42.0
 
-  WRITE Math.abs(-3.5)  ; 3.5
-  WRITE Math.abs(3.5)   ; 3.5
+  write Math.abs(-3.5)  ; 3.5
+  write Math.abs(3.5)   ; 3.5
 
-  LET neg-float2 = -2.718
-  WRITE Math.abs(neg-float2)  ; 2.718
+  let neg-float2 = -2.718
+  write Math.abs(neg-float2)  ; 2.718
 
   ; ============ Math.min ============
 
-  WRITE Math.min(3.0, 7.0)   ; 3.0
-  WRITE Math.min(7.0, 3.0)   ; 3.0
-  WRITE Math.min(5.0, 5.0)   ; 5.0
+  write Math.min(3.0, 7.0)   ; 3.0
+  write Math.min(7.0, 3.0)   ; 3.0
+  write Math.min(5.0, 5.0)   ; 5.0
 
-  LET min-a = 10.0
-  LET min-b = 20.0
-  WRITE Math.min(min-a, min-b)  ; 10.0
+  let min-a = 10.0
+  let min-b = 20.0
+  write Math.min(min-a, min-b)  ; 10.0
 
-  WRITE Math.min(-5.0, -3.0)  ; -5.0
-  WRITE Math.min(-5.0, 3.0)   ; -5.0
+  write Math.min(-5.0, -3.0)  ; -5.0
+  write Math.min(-5.0, 3.0)   ; -5.0
 
   ; Float min
-  WRITE Math.min(2.5, 7.3)  ; 2.5
-  WRITE Math.min(7.3, 2.5)  ; 2.5
+  write Math.min(2.5, 7.3)  ; 2.5
+  write Math.min(7.3, 2.5)  ; 2.5
 
-  WRITE Math.min(3.0, 2.5)  ; 2.5
-  WRITE Math.min(2.5, 3.0)  ; 2.5
+  write Math.min(3.0, 2.5)  ; 2.5
+  write Math.min(2.5, 3.0)  ; 2.5
 
   ; ============ Math.max ============
 
-  WRITE Math.max(3.0, 7.0)   ; 7.0
-  WRITE Math.max(7.0, 3.0)   ; 7.0
-  WRITE Math.max(5.0, 5.0)   ; 5.0
+  write Math.max(3.0, 7.0)   ; 7.0
+  write Math.max(7.0, 3.0)   ; 7.0
+  write Math.max(5.0, 5.0)   ; 5.0
 
-  LET max-a = 10.0
-  LET max-b = 20.0
-  WRITE Math.max(max-a, max-b)  ; 20.0
+  let max-a = 10.0
+  let max-b = 20.0
+  write Math.max(max-a, max-b)  ; 20.0
 
-  WRITE Math.max(-5.0, -3.0)  ; -3.0
-  WRITE Math.max(-5.0, 3.0)   ; 3.0
+  write Math.max(-5.0, -3.0)  ; -3.0
+  write Math.max(-5.0, 3.0)   ; 3.0
 
   ; Float max
-  WRITE Math.max(2.5, 7.3)  ; 7.3
-  WRITE Math.max(7.3, 2.5)  ; 7.3
+  write Math.max(2.5, 7.3)  ; 7.3
+  write Math.max(7.3, 2.5)  ; 7.3
 
-  WRITE Math.max(3.0, 7.5)  ; 7.5
-  WRITE Math.max(7.5, 3.0)  ; 7.5
+  write Math.max(3.0, 7.5)  ; 7.5
+  write Math.max(7.5, 3.0)  ; 7.5
 
   ; ============ Math.floor ============
 
-  WRITE Math.floor(3.7)   ; 3
-  WRITE Math.floor(3.2)   ; 3
-  WRITE Math.floor(3.0)   ; 3
-  WRITE Math.floor(-3.2)  ; -4
-  WRITE Math.floor(-3.7)  ; -4
+  write Math.floor(3.7)   ; 3
+  write Math.floor(3.2)   ; 3
+  write Math.floor(3.0)   ; 3
+  write Math.floor(-3.2)  ; -4
+  write Math.floor(-3.7)  ; -4
 
-  LET floor-val = 5.9
-  WRITE Math.floor(floor-val)  ; 5
+  let floor-val = 5.9
+  write Math.floor(floor-val)  ; 5
 
   ; ============ Math.ceil ============
 
-  WRITE Math.ceil(3.2)   ; 4
-  WRITE Math.ceil(3.7)   ; 4
-  WRITE Math.ceil(3.0)   ; 3
-  WRITE Math.ceil(-3.2)  ; -3
-  WRITE Math.ceil(-3.7)  ; -3
+  write Math.ceil(3.2)   ; 4
+  write Math.ceil(3.7)   ; 4
+  write Math.ceil(3.0)   ; 3
+  write Math.ceil(-3.2)  ; -3
+  write Math.ceil(-3.7)  ; -3
 
-  LET ceil-val = 5.1
-  WRITE Math.ceil(ceil-val)  ; 6
+  let ceil-val = 5.1
+  write Math.ceil(ceil-val)  ; 6
 
   ; ============ Math.round ============
 
-  WRITE Math.round(3.4)   ; 3
-  WRITE Math.round(3.5)   ; 4
-  WRITE Math.round(3.6)   ; 4
-  WRITE Math.round(-3.4)  ; -3
-  WRITE Math.round(-3.5)  ; -4
+  write Math.round(3.4)   ; 3
+  write Math.round(3.5)   ; 4
+  write Math.round(3.6)   ; 4
+  write Math.round(-3.4)  ; -3
+  write Math.round(-3.5)  ; -4
 
-  LET round-val = 2.7
-  WRITE Math.round(round-val)  ; 3
+  let round-val = 2.7
+  write Math.round(round-val)  ; 3
 
   ; ============ Math.sqrt ============
 
-  WRITE Math.sqrt(16.0)   ; 4.0
-  WRITE Math.sqrt(25.0)   ; 5.0
-  WRITE Math.sqrt(2.0)    ; ~1.414...
-  WRITE Math.sqrt(0.0)    ; 0.0
-  WRITE Math.sqrt(1.0)    ; 1.0
+  write Math.sqrt(16.0)   ; 4.0
+  write Math.sqrt(25.0)   ; 5.0
+  write Math.sqrt(2.0)    ; ~1.414...
+  write Math.sqrt(0.0)    ; 0.0
+  write Math.sqrt(1.0)    ; 1.0
 
-  LET sqrt-val = 9.0
-  WRITE Math.sqrt(sqrt-val)  ; 3.0
+  let sqrt-val = 9.0
+  write Math.sqrt(sqrt-val)  ; 3.0
 
-  WRITE Math.sqrt(2.25)  ; 1.5
+  write Math.sqrt(2.25)  ; 1.5
 
   ; ============ Math.log ============
 
-  WRITE Math.log(1.0)      ; 0.0
-  WRITE Math.log(2.718281828)  ; ~1.0
+  write Math.log(1.0)      ; 0.0
+  write Math.log(2.718281828)  ; ~1.0
 
-  LET log-e = 2.718281828
-  LET log-result = Math.log(log-e)
-  WRITE Math.round(log-result)  ; 1 (close to 1.0)
+  let log-e = 2.718281828
+  let log-result = Math.log(log-e)
+  write Math.round(log-result)  ; 1 (close to 1.0)
 
   ; ============ Math.Trig.sin ============
 
-  WRITE Math.Trig.sin(0.0)  ; 0.0
+  write Math.Trig.sin(0.0)  ; 0.0
 
-  LET sin-zero = 0.0
-  WRITE Math.Trig.sin(sin-zero)  ; 0.0
+  let sin-zero = 0.0
+  write Math.Trig.sin(sin-zero)  ; 0.0
 
   ; ============ Math.Trig.cos ============
 
-  WRITE Math.Trig.cos(0.0)  ; 1.0
+  write Math.Trig.cos(0.0)  ; 1.0
 
-  LET cos-zero = 0.0
-  WRITE Math.Trig.cos(cos-zero)  ; 1.0
+  let cos-zero = 0.0
+  write Math.Trig.cos(cos-zero)  ; 1.0
 
   ; ============ Math.Trig.tan ============
 
-  WRITE Math.Trig.tan(0.0)  ; 0.0
+  write Math.Trig.tan(0.0)  ; 0.0
 
   ; ============ Math.Trig.asin ============
 
-  WRITE Math.Trig.asin(0.0)  ; 0.0
-  WRITE Math.Trig.asin(1.0)  ; ~1.5707... (pi/2)
+  write Math.Trig.asin(0.0)  ; 0.0
+  write Math.Trig.asin(1.0)  ; ~1.5707... (pi/2)
 
   ; ============ Math.Trig.acos ============
 
-  WRITE Math.Trig.acos(1.0)  ; 0.0
-  WRITE Math.Trig.acos(0.0)  ; ~1.5707... (pi/2)
+  write Math.Trig.acos(1.0)  ; 0.0
+  write Math.Trig.acos(0.0)  ; ~1.5707... (pi/2)
 
   ; ============ Math.Trig.atan ============
 
-  WRITE Math.Trig.atan(0.0)  ; 0.0
-  WRITE Math.Trig.atan(1.0)  ; ~0.7853... (pi/4)
+  write Math.Trig.atan(0.0)  ; 0.0
+  write Math.Trig.atan(1.0)  ; ~0.7853... (pi/4)
 
   ; ============ Math.Trig.atan2 ============
 
-  WRITE Math.Trig.atan2(0.0, 1.0)  ; 0.0
-  WRITE Math.Trig.atan2(1.0, 1.0)  ; ~0.7853... (pi/4)
-  WRITE Math.Trig.atan2(1.0, 0.0)  ; ~1.5707... (pi/2)
+  write Math.Trig.atan2(0.0, 1.0)  ; 0.0
+  write Math.Trig.atan2(1.0, 1.0)  ; ~0.7853... (pi/4)
+  write Math.Trig.atan2(1.0, 0.0)  ; ~1.5707... (pi/2)
 
   ; ============ Chaining operations ============
 
   ; abs of min
-  LET chain-a = -5.0
-  LET chain-b = -3.0
-  WRITE Math.abs(Math.min(chain-a, chain-b))  ; 5.0
+  let chain-a = -5.0
+  let chain-b = -3.0
+  write Math.abs(Math.min(chain-a, chain-b))  ; 5.0
 
   ; floor of sqrt
-  WRITE Math.floor(Math.sqrt(10.0))  ; 3
+  write Math.floor(Math.sqrt(10.0))  ; 3
 
   ; ceil of log
-  WRITE Math.ceil(Math.log(10.0))  ; 3
+  write Math.ceil(Math.log(10.0))  ; 3
 
   ; ============ Pipeline usage ============
 
-  LET pipe-val = -16.0
-  LET pipe-result = pipe-val
+  let pipe-val = -16.0
+  let pipe-result = pipe-val
     |> Math.abs
     |> Math.sqrt
-  WRITE pipe-result  ; 4.0
+  write pipe-result  ; 4.0
 
-  LET pipe-float = 7.8
-  LET pipe-rounded = pipe-float
+  let pipe-float = 7.8
+  let pipe-rounded = pipe-float
     |> Math.round
-  WRITE pipe-rounded  ; 8
+  write pipe-rounded  ; 8
 }

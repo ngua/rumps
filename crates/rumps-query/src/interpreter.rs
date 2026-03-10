@@ -12,12 +12,12 @@
 //! ## String Coercion
 //!
 //! String coercion (via [`Interpreter::display`]) converts any value to a
-//! human-readable string. Used for `WRITE` statements and string concatenation
+//! human-readable string. Used for `write` statements and string concatenation
 //! or interpolation.
 //!
 //! | *Type*   | *Result*                                              |
 //! |----------|-------------------------------------------------------|
-//! | `Bool`   | `"TRUE"` or `"FALSE"`                                 |
+//! | `Bool`   | `"true"` or `"false"`                                 |
 //! | `Int`    | Decimal representation (e.g., `"42"`)                 |
 //! | `Float`  | Decimal representation (e.g., `"3.14"`)               |
 //! | `String` | The string itself                                     |

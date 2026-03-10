@@ -1,20 +1,20 @@
-; Duplicate CLASS instance across modules; should error
+; Duplicate class instance across modules; should error
 
-FUN main() { }
+fun main() { }
 
-MODULE A {
-  +TYPE MyInt = MyInt(Int)
+module A {
+  +type MyInt = MyInt(Int)
 }
 
-MODULE B {
-  CLASS Display FOR A.MyInt {
-    FUN display(x: A.MyInt) -> String { "B" }
+module B {
+  class Display for A.MyInt {
+    fun display(x: A.MyInt) -> String { "B" }
   }
 }
 
-MODULE C {
+module C {
   ; Duplicate instance for same type
-  CLASS Display FOR A.MyInt {
-    FUN display(x: A.MyInt) -> String { "C" }
+  class Display for A.MyInt {
+    fun display(x: A.MyInt) -> String { "C" }
   }
 }

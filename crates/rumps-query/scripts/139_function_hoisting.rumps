@@ -1,42 +1,42 @@
 ; Function hoisting: forward references and mutual recursion
 
-FUN main() {
+fun main() {
   ; Forward reference to function defined later
-  WRITE add-one(5)
+  write add-one(5)
 
   ; Mutual recursion
-  WRITE is-even(4)
-  WRITE is-even(7)
-  WRITE is-odd(3)
+  write is-even(4)
+  write is-even(7)
+  write is-odd(3)
 
   ; Generic forward reference
-  WRITE identity("hello")
-  WRITE identity(42)
+  write identity("hello")
+  write identity(42)
 
   ; Inference without return annotation
-  WRITE double-it(10)
+  write double-it(10)
 
   ; Block-local function hoisting
-  LET result = {
-    LET x = local-fn(5)
-    FUN local-fn(n: Int) -> Int { n * 3 }
+  let result = {
+    let x = local-fn(5)
+    fun local-fn(n: Int) -> Int { n * 3 }
     x
   }
-  WRITE result
+  write result
 }
 
 ; Definitions
 
-FUN add-one(x: Int) -> Int { x + 1 }
+fun add-one(x: Int) -> Int { x + 1 }
 
-FUN is-even(n: Int) -> Bool {
-  IF n == 0 { true } ELSE { is-odd(n - 1) }
+fun is-even(n: Int) -> Bool {
+  if n == 0 { true } else { is-odd(n - 1) }
 }
 
-FUN is-odd(n: Int) -> Bool {
-  IF n == 0 { false } ELSE { is-even(n - 1) }
+fun is-odd(n: Int) -> Bool {
+  if n == 0 { false } else { is-even(n - 1) }
 }
 
-FUN identity[T](x: T) -> T { x }
+fun identity[T](x: T) -> T { x }
 
-FUN double-it(n: Int) { n * 2 }
+fun double-it(n: Int) { n * 2 }

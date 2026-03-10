@@ -3,10 +3,10 @@
 ; Builtin types already have class implementations, so user cannot
 ; override them.
 
-FUN main() { }
+fun main() { }
 
-CLASS Display FOR Int {
-  FUN display(n: Int) -> String {
+class Display for Int {
+  fun display(n: Int) -> String {
     "custom: {n}"
   }
 }

@@ -1,82 +1,82 @@
-; Test: TRANSACTION expression
+; Test: transaction expression
 ; Transactions wrap global writes and return Result[T, String]
 
-FUN main() {
+fun main() {
   ; Basic transaction with global write
-  LET write-result = TRANSACTION {
-    @SET ^TEST{1, "name"} "Alice"
-    @SET ^TEST{1, "age"} 30
-    @GET ^TEST{1, "name"}
+  let write-result = transaction {
+    @set ^TEST{1, "name"} "Alice"
+    @set ^TEST{1, "age"} 30
+    @get ^TEST{1, "name"}
   }
-  WRITE write-result
+  write write-result
 
   ; Verify write persisted
-  WRITE @GET ^TEST{1, "age"}
+  write @get ^TEST{1, "age"}
 
   ; Transaction returning unit (write-only)
-  LET unit-result = TRANSACTION {
-    LET _ = @SET ^TEST{2, "status"} "active"
+  let unit-result = transaction {
+    let _ = @set ^TEST{2, "status"} "active"
   }
-  WRITE unit-result
-  WRITE @GET ^TEST{2, "status"}
+  write unit-result
+  write @get ^TEST{2, "status"}
 
   ; Transaction with multiple statements and computation
-  LET multi = TRANSACTION {
-    LET a = 10
-    LET b = 20
-    @SET ^TEST{4, "sum"} a + b
+  let multi = transaction {
+    let a = 10
+    let b = 20
+    @set ^TEST{4, "sum"} a + b
     a + b
   }
-  WRITE multi
-  WRITE @GET ^TEST{4, "sum"}
+  write multi
+  write @get ^TEST{4, "sum"}
 
   ; Accessing outer scope from transaction
-  LET x = 100
-  LET access-outer = TRANSACTION {
-    @SET ^TEST{5, "val"} x + 1
+  let x = 100
+  let access-outer = transaction {
+    @set ^TEST{5, "val"} x + 1
     x + 1
   }
-  WRITE access-outer
+  write access-outer
 
   ; Transaction result matching
-  LET txn-result = TRANSACTION {
-    @SET ^TEST{6, "m"} "success"
+  let txn-result = transaction {
+    @set ^TEST{6, "m"} "success"
     "success"
   }
-  LET matched = MATCH txn-result {
+  let matched = match txn-result {
     Result.Ok(s) => { "got: {s}" }
     Result.Err(e) => { "error: {e}" }
   }
-  WRITE matched
+  write matched
 
   ; Rollback on error: write then fail, verify write is not persisted
-  LET rollback-test = TRANSACTION {
-    @SET ^ROLLBACK{"key"} "should not persist"
-    LET x = Option.None!
+  let rollback-test = transaction {
+    @set ^ROLLBACK{"key"} "should not persist"
+    let x = Option.None!
     "unreachable"
   }
-  WRITE rollback-test
-  WRITE @GET ^ROLLBACK{"key"}
+  write rollback-test
+  write @get ^ROLLBACK{"key"}
 
-  ; Bulk write/read test using FOREVER inside transaction
-  LET bulk-result = TRANSACTION {
+  ; Bulk write/read test using forever inside transaction
+  let bulk-result = transaction {
     ; Write 100 values to ^BULK{0} through ^BULK{99}
-    FOREVER 0 (n, cont) => {
-      IF n >= 100 {
+    forever 0 (n, cont) => {
+      if n >= 100 {
         n
-      } ELSE {
-        @SET ^BULK{n} n * 2
+      } else {
+        @set ^BULK{n} n * 2
         cont(n + 1)
       }
     }
 
     ; Read them back and count how many exist
-    LET count = FOREVER { i: 0, found: 0 } (state, cont) => {
-      IF state.i >= 100 {
+    let count = forever { i: 0, found: 0 } (state, cont) => {
+      if state.i >= 100 {
         state.found
-      } ELSE {
-        LET val = @GET ^BULK{state.i}
-        LET inc = MATCH val {
+      } else {
+        let val = @get ^BULK{state.i}
+        let inc = match val {
           Option.Some(_) => { 1 }
           Option.None => { 0 }
         }
@@ -85,7 +85,7 @@ FUN main() {
     }
     count
   }
-  WRITE bulk-result
+  write bulk-result
 
-  WRITE "TRANSACTION test complete"
+  write "transaction test complete"
 }

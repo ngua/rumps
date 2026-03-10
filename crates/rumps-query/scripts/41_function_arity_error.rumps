@@ -1,11 +1,11 @@
 ; Test: Function Arity Error
 ; Calling a function with wrong number of arguments.
 
-FUN add (a: Int, b: Int) -> Int {
+fun add (a: Int, b: Int) -> Int {
   a + b
 }
 
-FUN main() {
+fun main() {
   ; Too few arguments
-  WRITE add(5)
+  write add(5)
 }

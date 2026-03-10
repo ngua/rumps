@@ -1,48 +1,48 @@
 ; Test: Subscript type as subscript key
 ; The `Subscript` union type can be used directly as a subscript key,
-; enabling seamless piping of `@ORDER` results into `@GET` without coercions.
+; enabling seamless piping of `@order` results into `@get` without coercions.
 
-FUN main() {
+fun main() {
   ; Set up test data with mixed subscript types
-  @SET data{1} "one"
-  @SET data{2} "two"
-  @SET data{3} "three"
-  @SET data{"a"} "alpha"
-  @SET data{"b"} "beta"
+  @set data{1} "one"
+  @set data{2} "two"
+  @set data{3} "three"
+  @set data{"a"} "alpha"
+  @set data{"b"} "beta"
 
-  ; Use @ORDER result directly as subscript (no READ coercion needed)
-  LET first : Subscript = @ORDER data{}!
-  WRITE first
-  WRITE @GET data{first}!
+  ; Use @order result directly as subscript (no read coercion needed)
+  let first : Subscript = @order data{}!
+  write first
+  write @get data{first}!
 
-  ; Chain through all keys using FOREVER
-  LET vals = FOREVER { key: @ORDER data{}, acc: [] } (st, cont) => {
-    MATCH st.key {
+  ; Chain through all keys using forever
+  let vals = forever { key: @order data{}, acc: [] } (st, cont) => {
+    match st.key {
       Option.None => st.acc
       Option.Some(k) => {
-        ; k is Subscript; use directly in @GET and @ORDER
-        LET v = @GET data{k}!
+        ; k is Subscript; use directly in @get and @order
+        let v = @get data{k}!
         cont({
-          key: @ORDER data{k},
+          key: @order data{k},
           acc: Array.concat(st.acc, [v])
         })
       }
     }
   }
-  WRITE vals
+  write vals
 
   ; Explicit Subscript annotation works
-  LET sub : Subscript = 42
-  @SET x{sub} "works"
-  WRITE @GET x{sub}!
+  let sub : Subscript = 42
+  @set x{sub} "works"
+  write @get x{sub}!
 
-  WRITE lookup(1)
-  WRITE lookup("a")
+  write lookup(1)
+  write lookup("a")
 
-  WRITE "Subscript type test complete"
+  write "Subscript type test complete"
 }
 
 ; Function that takes Subscript parameter
-FUN lookup (key: Subscript) -> Option[Storable] {
-  @GET data{key}
+fun lookup (key: Subscript) -> Option[Storable] {
+  @get data{key}
 }

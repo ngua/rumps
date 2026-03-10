@@ -5,84 +5,84 @@
 ;
 ; Also tests that imported types work in function signatures.
 
-IMPORT Outer.{ Id }
-IMPORT Outer.Inner.{ }
+import Outer.{ Id }
+import Outer.Inner.{ }
 
-FUN main() {
+fun main() {
   ; ============ Child module accesses parent module types ============
 
-  LET id: Outer.Id = Outer.Inner.make-id(42)
-  WRITE Outer.Inner.id-value(id)
+  let id: Outer.Id = Outer.Inner.make-id(42)
+  write Outer.Inner.id-value(id)
 
   ; ============ Imported type in function signature ============
 
-  WRITE double-id(21)
+  write double-id(21)
 
   ; ============ Deeply nested modules ============
 
-  LET s1 = A.Status.Active
-  WRITE A.B.is-active(s1)
-  LET s2 = A.B.C.toggle(s1)
-  WRITE A.B.is-active(s2)
+  let s1 = A.Status.Active
+  write A.B.is-active(s1)
+  let s2 = A.B.C.toggle(s1)
+  write A.B.is-active(s2)
 
-  ; ============ NEWTYPE lookup through module chain ============
+  ; ============ newtype lookup through module chain ============
 
-  LET score: Root.Score = 100
-  LET mult: Root.Level1.Multiplier = 1.5
-  WRITE Root.Level1.Level2.compute(score, mult)
+  let score: Root.Score = 100
+  let mult: Root.Level1.Multiplier = 1.5
+  write Root.Level1.Level2.compute(score, mult)
 
-  ; ============ UNION lookup through module chain ============
+  ; ============ union lookup through module chain ============
 
-  LET v1: Config.Value = 42
-  LET v2: Config.Value = "hello"
-  WRITE Config.Parser.is-int(v1)
-  WRITE Config.Parser.is-int(v2)
+  let v1: Config.Value = 42
+  let v2: Config.Value = "hello"
+  write Config.Parser.is-int(v1)
+  write Config.Parser.is-int(v2)
 
-  ; ============ TYPE with variants in nested module ============
+  ; ============ type with variants in nested module ============
 
-  LET box1 = Container.Box.Full(10)
-  LET box2: Container.Box[Int] = Container.Box.Empty
-  WRITE Container.Ops.is-full(box1)
-  WRITE Container.Ops.is-full(box2)
-  LET mapped = Container.Ops.map(box1, (x: Int) => x * 2)
-  WRITE mapped
+  let box1 = Container.Box.Full(10)
+  let box2: Container.Box[Int] = Container.Box.Empty
+  write Container.Ops.is-full(box1)
+  write Container.Ops.is-full(box2)
+  let mapped = Container.Ops.map(box1, (x: Int) => x * 2)
+  write mapped
 
   ; ============ Multiple types at different levels ============
 
-  LET a: Multi.A = 123
-  LET b: Multi.Sub1.B = "test"
-  WRITE Multi.Sub1.Sub2.combine(a, b)
+  let a: Multi.A = 123
+  let b: Multi.Sub1.B = "test"
+  write Multi.Sub1.Sub2.combine(a, b)
 }
 
-MODULE Outer {
-  +NEWTYPE Id = Int
+module Outer {
+  +newtype Id = Int
 
   ; Inner module can use `Id` without `Outer.` prefix
-  MODULE Inner {
-    +FUN make-id(n: Int) -> Id { n }
-    +FUN id-value(i: Id) -> Int { i }
+  module Inner {
+    +fun make-id(n: Int) -> Id { n }
+    +fun id-value(i: Id) -> Int { i }
   }
 }
 
 ; Function using imported type `Id` (imported from Outer.{ Id })
-FUN double-id(i: Id) -> Id { i * 2 }
+fun double-id(i: Id) -> Id { i * 2 }
 
-MODULE A {
-  +TYPE Status = Active | Inactive
+module A {
+  +type Status = Active | Inactive
 
-  MODULE B {
+  module B {
     ; Can access A.Status as just `Status`
-    +FUN is-active(s: Status) -> Bool {
-      MATCH s {
-        Status.Active => { TRUE }
-        Status.Inactive => { FALSE }
+    +fun is-active(s: Status) -> Bool {
+      match s {
+        Status.Active => { true }
+        Status.Inactive => { false }
       }
     }
 
-    MODULE C {
+    module C {
       ; Can still access A.Status as just `Status`
-      +FUN toggle(s: Status) -> Status {
-        MATCH s {
+      +fun toggle(s: Status) -> Status {
+        match s {
           Status.Active => { Status.Inactive }
           Status.Inactive => { Status.Active }
         }
@@ -91,46 +91,46 @@ MODULE A {
   }
 }
 
-MODULE Root {
-  +NEWTYPE Score = Int
+module Root {
+  +newtype Score = Int
 
-  MODULE Level1 {
-    +NEWTYPE Multiplier = Float
+  module Level1 {
+    +newtype Multiplier = Float
 
-    MODULE Level2 {
+    module Level2 {
       ; Can access both Score and Multiplier without full qualification
       ; Newtypes are the underlying type, so direct arithmetic works
-      +FUN compute(s: Score, m: Multiplier) -> Float {
+      +fun compute(s: Score, m: Multiplier) -> Float {
         (s: Int as Float) * m
       }
     }
   }
 }
 
-MODULE Config {
-  +UNION Value = Int | String | Bool
+module Config {
+  +union Value = Int | String | Bool
 
-  MODULE Parser {
-    +FUN is-int(v: Value) -> Bool {
-      v IS Int
+  module Parser {
+    +fun is-int(v: Value) -> Bool {
+      v is Int
     }
   }
 }
 
-MODULE Container {
-  +TYPE Box[T] = Full(T) | Empty
+module Container {
+  +type Box[T] = Full(T) | Empty
 
-  MODULE Ops {
+  module Ops {
     ; Can use `Box` without `Container.` prefix
-    +FUN is-full[T](b: Box[T]) -> Bool {
-      MATCH b {
-        Box.Full(_) => { TRUE }
-        Box.Empty => { FALSE }
+    +fun is-full[T](b: Box[T]) -> Bool {
+      match b {
+        Box.Full(_) => { true }
+        Box.Empty => { false }
       }
     }
 
-    +FUN map[A, B](b: Box[A], f: (A) -> B) -> Box[B] {
-      MATCH b {
+    +fun map[A, B](b: Box[A], f: (A) -> B) -> Box[B] {
+      match b {
         Box.Full(v) => { Box.Full(f(v)) }
         Box.Empty => { Box.Empty }
       }
@@ -138,15 +138,15 @@ MODULE Container {
   }
 }
 
-MODULE Multi {
-  +NEWTYPE A = Int
+module Multi {
+  +newtype A = Int
 
-  MODULE Sub1 {
-    +NEWTYPE B = String
+  module Sub1 {
+    +newtype B = String
 
-    MODULE Sub2 {
+    module Sub2 {
       ; Can access both A and B
-      +FUN combine(a: A, b: B) -> String {
+      +fun combine(a: A, b: B) -> String {
         "{a}: {b}"
       }
     }

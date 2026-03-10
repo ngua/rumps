@@ -1,47 +1,47 @@
 ; User-defined Indexable class with associated type Index
 ;
-; Tests implementing Indexable for user types with NEWTYPE Index = ...
+; Tests implementing Indexable for user types with newtype Index = ...
 ; to define the associated index type.
 
-FUN main() {
+fun main() {
   ; === Usage (hoisted) ===
 
-  ; StringMap uses String as index type (via NEWTYPE Index = String)
-  LET sm = StringMap.StringMap({ "a" => 1, "b" => 2, "c" => 3 })
+  ; StringMap uses String as index type (via newtype Index = String)
+  let sm = StringMap.StringMap({ "a" => 1, "b" => 2, "c" => 3 })
 
   ; Direct class method calls
-  WRITE Indexable:index(sm, "a")
-  WRITE Indexable:get(sm, "b")
+  write Indexable:index(sm, "a")
+  write Indexable:get(sm, "b")
 
   ; Subscript syntax dispatches to user Indexable instance
-  WRITE sm["a"]
-  WRITE sm["c"]
+  write sm["a"]
+  write sm["c"]
 
   ; Safe subscript (uses `get` method)
-  WRITE sm?["b"]
-  WRITE sm?["missing"]
+  write sm?["b"]
+  write sm?["missing"]
 
-  LET im = ({ 1 => "one", 2 => "two" } : IntMap)
-  WRITE im[1]
-  WRITE im[2]
-  WRITE im?[3]
+  let im = ({ 1 => "one", 2 => "two" } : IntMap)
+  write im[1]
+  write im[2]
+  write im?[3]
 }
 
 ; === Type and Class Definitions ===
 
-TYPE StringMap = StringMap(Map[String, Int])
+type StringMap = StringMap(Map[String, Int])
 
-CLASS Indexable[Int] FOR StringMap {
-  NEWTYPE Index = String
+class Indexable[Int] for StringMap {
+  newtype Index = String
 
-  FUN index(sm: StringMap, i: :Index) -> Int {
-    MATCH sm {
+  fun index(sm: StringMap, i: :Index) -> Int {
+    match sm {
       StringMap.StringMap(m) => m[i]
     }
   }
 
-  FUN get(sm: StringMap, i: :Index) -> Option[Int] {
-    MATCH sm {
+  fun get(sm: StringMap, i: :Index) -> Option[Int] {
+    match sm {
       StringMap.StringMap(m) => m?[i]
     }
   }
@@ -52,17 +52,17 @@ CLASS Indexable[Int] FOR StringMap {
 ; Associated types can also be referenced with the qualified form
 ; `ClassName:AssocType` instead of the shorthand `:AssocType`.
 
-NEWTYPE IntMap = Map[Int, String]
+newtype IntMap = Map[Int, String]
 
-CLASS Indexable[String] FOR IntMap {
-  NEWTYPE Index = Int
+class Indexable[String] for IntMap {
+  newtype Index = Int
 
   ; Uses qualified `Indexable:Index` instead of shorthand `:Index`
-  FUN index(im: IntMap, i: Indexable:Index) -> String {
+  fun index(im: IntMap, i: Indexable:Index) -> String {
     im[i]
   }
 
-  FUN get(im: IntMap, i: Indexable:Index) -> Option[String] {
+  fun get(im: IntMap, i: Indexable:Index) -> Option[String] {
     im?[i]
   }
 }

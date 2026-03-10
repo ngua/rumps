@@ -1,5 +1,5 @@
 ; Object missing field
 
-FUN main() {
-  LET { name, missing } = { name: "Alice" }
+fun main() {
+  let { name, missing } = { name: "Alice" }
 }

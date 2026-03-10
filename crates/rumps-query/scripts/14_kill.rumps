@@ -1,54 +1,54 @@
-; Test: @KILL statement
+; Test: @kill statement
 ; Tests deletion of variables and subtrees
 
-FUN main() {
+fun main() {
   ; Set up test data
-  @SET items{1} "one"
-  @SET items{2} "two"
-  @SET items{3} "three"
-  @SET items{1, "a"} "nested a"
-  @SET items{1, "b"} "nested b"
+  @set items{1} "one"
+  @set items{2} "two"
+  @set items{3} "three"
+  @set items{1, "a"} "nested a"
+  @set items{1, "b"} "nested b"
 
   ; Verify items exists
-  LET v1 = @GET items{1}
-  WRITE v1
+  let v1 = @get items{1}
+  write v1
   ; Expected: one
 
-  ; @KILL single node
-  @KILL items{2}
+  ; @kill single node
+  @kill items{2}
 
   ; Verify deleted
-  LET v2 = @GET items{2}
-  WRITE v2
+  let v2 = @get items{2}
+  write v2
   ; Expected: Option.None
 
-  ; @KILL subtree
-  @KILL items{1}
+  ; @kill subtree
+  @kill items{1}
 
   ; Verify subtree deleted
-  LET v3 = @GET items{1}
-  WRITE v3
+  let v3 = @get items{1}
+  write v3
   ; Expected: Option.None
 
-  LET v4 = @GET items{1, "a"}
-  WRITE v4
+  let v4 = @get items{1, "a"}
+  write v4
   ; Expected: Option.None
 
   ; items{3} should still exist
-  LET v5 = @GET items{3}
-  WRITE v5
+  let v5 = @get items{3}
+  write v5
   ; Expected: three
 
-  ; @KILL entire variable
-  @SET temp{} 999
-  LET before = @GET temp{}
-  WRITE before
+  ; @kill entire variable
+  @set temp{} 999
+  let before = @get temp{}
+  write before
   ; Expected: 999
 
-  @KILL temp{}
-  LET after = @GET temp{}
-  WRITE after
+  @kill temp{}
+  let after = @get temp{}
+  write after
   ; Expected: Option.None
 
-  WRITE "@KILL test complete"
+  write "@kill test complete"
 }

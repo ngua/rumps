@@ -1,31 +1,31 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Type check operator (IS) tests\n; `IS` performs runtime type checking and variant matching\n\n; === Simple type checks ===\n\nLET n = 42\n@OUTPUT n IS Int\n; Expected: TRUE\n\n@OUTPUT n IS String\n; Expected: FALSE\n\nLET s = \"hello\"\n@OUTPUT s IS String\n; Expected: TRUE\n\n@OUTPUT s IS Int\n; Expected: FALSE\n\nLET b = TRUE\n@OUTPUT b IS Bool\n; Expected: TRUE\n\nLET f = 3.14\n@OUTPUT f IS Float\n; Expected: TRUE\n\n; === Variant checks ===\n\n; Option.None (zero-arity: no parens needed)\nLET none = Option.None\n@OUTPUT none IS Option.None\n; Expected: TRUE\n\n; Variants with payloads require (_) or (name)\n@OUTPUT none IS Option.Some(_)\n; Expected: FALSE\n\n; Option.Some\nLET some = Option.Some(42)\n@OUTPUT some IS Option.Some(_)\n; Expected: TRUE\n\n@OUTPUT some IS Option.None\n; Expected: FALSE\n\n; Result variants\nLET ok = Result.Ok(\"success\")\n@OUTPUT ok IS Result.Ok(_)\n; Expected: TRUE\n\n@OUTPUT ok IS Result.Err(_)\n; Expected: FALSE\n\nLET err = Result.Err(\"failed\")\n@OUTPUT err IS Result.Err(_)\n; Expected: TRUE\n\n@OUTPUT err IS Result.Ok(_)\n; Expected: FALSE\n\n; === Wildcard variant checks ===\n\n@OUTPUT Option.Some(99) IS Option.Some(_)\n; Expected: TRUE\n\n@OUTPUT Option.None IS Option.Some(_)\n; Expected: FALSE\n\n@OUTPUT Result.Ok(1) IS Result.Ok(_)\n; Expected: TRUE\n\n; === Pattern binding in IF ===\n\n; Binding extracts the payload\nLET x = Option.Some(123)\nIF x IS Option.Some(val) {\n  @OUTPUT val\n} ELSE {\n  @OUTPUT \"none\"\n}\n; Expected: 123\n\n; Binding not used when no match\nLET y = Option.None\nIF y IS Option.Some(val) {\n  @OUTPUT val\n} ELSE {\n  @OUTPUT \"none\"\n}\n; Expected: none\n\n; Result binding\nLET r = Result.Ok(999)\nIF r IS Result.Ok(data) {\n  @OUTPUT data\n} ELSE {\n  @OUTPUT \"error\"\n}\n; Expected: 999\n\nLET r2 = Result.Err(\"oops\")\nIF r2 IS Result.Err(e) {\n  @OUTPUT e\n} ELSE {\n  @OUTPUT \"ok\"\n}\n; Expected: oops\n\n; === Binding scope isolation ===\n\n; Binding should not leak to outer scope\nLET outer = Option.Some(50)\nIF outer IS Option.Some(inner) {\n  @OUTPUT inner\n}\n; Expected: 50\n\n; inner should not be accessible here\n; (This would be an error if we tried: @OUTPUT inner)\n\n; === Combining with other operators ===\n\n; `IS` in boolean expressions (must use wildcard for variants with payload)\nLET val = Option.Some(10)\n@OUTPUT val IS Option.Some(_) AND TRUE\n; Expected: TRUE\n\n@OUTPUT Option.None IS Option.Some(_) OR FALSE\n; Expected: FALSE\n\n; Using coalesced value for type check\nLET maybe = Option.Some(42)\nLET unwrapped = maybe ?? 0\n@OUTPUT unwrapped IS Int\n; Expected: TRUE\n\n; === Nested IF with bindings ===\n\nLET outer2 = Option.Some(Option.Some(77))\nIF outer2 IS Option.Some(inner2) {\n  IF inner2 IS Option.Some(deepval) {\n    @OUTPUT deepval\n  } ELSE {\n    @OUTPUT \"inner none\"\n  }\n} ELSE {\n  @OUTPUT \"outer none\"\n}\n; Expected: 77\n\n@OUTPUT \"IS operator tests complete\"\n"
+description: "; Type check operator (is) tests\n; `is` performs runtime type checking and variant matching\n\nfun main() {\n  ; === Simple type checks ===\n\n  let n = 42\n  write n is Int\n  ; Expected: true\n\n  write n is String\n  ; Expected: false\n\n  let s = \"hello\"\n  write s is String\n  ; Expected: true\n\n  write s is Int\n  ; Expected: false\n\n  let b = true\n  write b is Bool\n  ; Expected: true\n\n  let f = 3.14\n  write f is Float\n  ; Expected: true\n\n  ; === Variant checks ===\n\n  ; Option.None (zero-arity: no parens needed)\n  let none = Option.None\n  write none is Option.None\n  ; Expected: true\n\n  ; Variants with payloads require (_) or (name)\n  write none is Option.Some(_)\n  ; Expected: false\n\n  ; Option.Some\n  let some = Option.Some(42)\n  write some is Option.Some(_)\n  ; Expected: true\n\n  write some is Option.None\n  ; Expected: false\n\n  ; Result variants\n  let ok = Result.Ok(\"success\")\n  write ok is Result.Ok(_)\n  ; Expected: true\n\n  write ok is Result.Err(_)\n  ; Expected: false\n\n  let err = Result.Err(\"failed\")\n  write err is Result.Err(_)\n  ; Expected: true\n\n  write err is Result.Ok(_)\n  ; Expected: false\n\n  ; === Wildcard variant checks ===\n\n  write Option.Some(99) is Option.Some(_)\n  ; Expected: true\n\n  write Option.None is Option.Some(_)\n  ; Expected: false\n\n  write Result.Ok(1) is Result.Ok(_)\n  ; Expected: true\n\n  ; === Pattern binding in if ===\n\n  ; Binding extracts the payload\n  let x = Option.Some(123)\n  if x is Option.Some(val) {\n    write val\n  } else {\n    write \"none\"\n  }\n  ; Expected: 123\n\n  ; Binding not used when no match\n  let y = Option.None\n  if y is Option.Some(val) {\n    write val\n  } else {\n    write \"none\"\n  }\n  ; Expected: none\n\n  ; Result binding\n  let r = Result.Ok(999)\n  if r is Result.Ok(data) {\n    write data\n  } else {\n    write \"error\"\n  }\n  ; Expected: 999\n\n  let r2 = Result.Err(\"oops\")\n  if r2 is Result.Err(e) {\n    write e\n  } else {\n    write \"ok\"\n  }\n  ; Expected: oops\n\n  ; === Binding scope isolation ===\n\n  ; Binding should not leak to outer scope\n  let outer = Option.Some(50)\n  if outer is Option.Some(inner) {\n    write inner\n  }\n  ; Expected: 50\n\n  ; inner should not be accessible here\n  ; (This would be an error if we tried: write inner)\n\n  ; === Combining with other operators ===\n\n  ; `is` in boolean expressions (must use wildcard for variants with payload)\n  let val = Option.Some(10)\n  write val is Option.Some(_) and true\n  ; Expected: true\n\n  write Option.None is Option.Some(_) or false\n  ; Expected: false\n\n  ; Using coalesced value for type check\n  let maybe = Option.Some(42)\n  let unwrapped = maybe ?? 0\n  write unwrapped is Int\n  ; Expected: true\n\n  ; === Nested if with bindings ===\n\n  let outer2 = Option.Some(Option.Some(77))\n  if outer2 is Option.Some(inner2) {\n    if inner2 is Option.Some(deepval) {\n      write deepval\n    } else {\n      write \"inner none\"\n    }\n  } else {\n    write \"outer none\"\n  }\n  ; Expected: 77\n\n  write \"is operator tests complete\"\n}\n"
 ---
-TRUE
-FALSE
-TRUE
-FALSE
-TRUE
-TRUE
-TRUE
-FALSE
-TRUE
-FALSE
-TRUE
-FALSE
-TRUE
-FALSE
-TRUE
-FALSE
-TRUE
+true
+false
+true
+false
+true
+true
+true
+false
+true
+false
+true
+false
+true
+false
+true
+false
+true
 123
 "none"
 999
 "oops"
 50
-TRUE
-FALSE
-TRUE
+true
+false
+true
 77
-"IS operator tests complete"
+"is operator tests complete"

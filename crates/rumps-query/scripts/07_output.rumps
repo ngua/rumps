@@ -1,61 +1,61 @@
-; Test: WRITE statement
-; Tests various WRITE scenarios
+; Test: write statement
+; Tests various write scenarios
 
-FUN main() {
+fun main() {
   ; Output literal integer
-  WRITE 42
+  write 42
   ; Expected: 42
 
   ; Output literal float
-  WRITE 3.14159
+  write 3.14159
   ; Expected: 3.14159
 
   ; Output literal string
-  WRITE "Hello, World!"
+  write "Hello, World!"
   ; Expected: Hello, World!
 
   ; Output literal boolean
-  WRITE TRUE
-  WRITE FALSE
+  write true
+  write false
   ; Expected: true, false
 
   ; Output variable
-  LET x = 123
-  WRITE x
+  let x = 123
+  write x
   ; Expected: 123
 
   ; Output expression result
-  WRITE 10 + 20 * 3
+  write 10 + 20 * 3
   ; Expected: 70
 
   ; Output string interpolation
-  WRITE "{"Hello"} {"RUMPS"}"
+  write "{"Hello"} {"RUMPS"}"
   ; Expected: Hello RUMPS
 
   ; Output comparison result
-  WRITE 5 < 10
+  write 5 < 10
   ; Expected: true
 
   ; Output logical result
-  WRITE TRUE AND FALSE
+  write true and false
   ; Expected: false
 
-  WRITE NOT FALSE
+  write not false
   ; Expected: true
 
   ; Output from block result
-  LET result = {
-    LET a = 5
-    LET b = 10
+  let result = {
+    let a = 5
+    let b = 10
     a + b
   }
-  WRITE result
+  write result
   ; Expected: 15
 
   ; Multiple outputs in sequence
-  WRITE "Line 1"
-  WRITE "Line 2"
-  WRITE "Line 3"
+  write "Line 1"
+  write "Line 2"
+  write "Line 3"
 
-  WRITE "WRITE test complete"
+  write "write test complete"
 }

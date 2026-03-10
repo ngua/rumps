@@ -1,7 +1,7 @@
 ; Test: Word with negative literal (type error)
 ; This should produce a type error at compile time
 
-FUN main() {
-  LET x: Word = -42
-  WRITE x
+fun main() {
+  let x: Word = -42
+  write x
 }

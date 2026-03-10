@@ -1,28 +1,28 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: Polymorphic inference and generalization\n; Tests that the type checker correctly handles polymorphic functions\n\n; === Identity function at multiple types ===\n\nFUN identity(x) { x }\n\n; Use at Int\nLET int-result = identity(42)\nOUTPUT int-result  ; 42\n\n; Use at String\nLET str-result = identity(\"hello\")\nOUTPUT str-result  ; hello\n\n; Use at Bool\nLET bool-result = identity(TRUE)\nOUTPUT bool-result  ; true\n\n; Use at Array[Int]\nLET arr-result = identity([1, 2, 3])\nOUTPUT arr-result  ; [1, 2, 3]\n\n; === Const function at multiple types ===\n\nFUN const(a, b) { a }\n\nOUTPUT const(1, \"ignored\")  ; 1\nOUTPUT const(\"kept\", 999)   ; kept\n\n; === Flip function ===\n\nFUN flip(pair) { (pair.1, pair.0) }\n\nLET flipped-int-str = flip((1, \"hello\"))\nOUTPUT flipped-int-str  ; (\"hello\", 1)\n\nLET flipped-bool-float = flip((TRUE, 3.14))\nOUTPUT flipped-bool-float  ; (3.14, true)\n\n; === Generic higher-order function ===\n\nFUN apply-twice(f, x) {\n  f(f(x))\n}\n\nFUN inc(n: Int) -> Int { n + 1 }\nFUN double-str(s: String) -> String { s ++ s }\n\nOUTPUT apply-twice(inc, 0)           ; 2\nOUTPUT apply-twice(double-str, \"a\")  ; aaaa\n\n; === Compose functions ===\n\nFUN compose(f, g) {\n  x => f(g(x))\n}\n\nFUN negate(n: Int) -> Int { 0 - n }\nFUN triple(n: Int) -> Int { n * 3 }\n\nLET neg-triple = compose(negate, triple)\nOUTPUT neg-triple(5)  ; -15\n\n; === Polymorphic with Option ===\n\nFUN wrap-some(x) {\n  Option.Some(x)\n}\n\nOUTPUT wrap-some(42)       ; Option.Some(42)\nOUTPUT wrap-some(\"hello\")  ; Option.Some(\"hello\")\nOUTPUT wrap-some(TRUE)     ; Option.Some(true)\n\n; === Polymorphic with Array.map ===\n\n; Same closure structure, different element types\nLET nums = [1, 2, 3]\nLET strs = [\"a\", \"b\", \"c\"]\n\nLET mapped-nums = Array.map(x => identity(x), nums)\nOUTPUT mapped-nums  ; [1, 2, 3]\n\nLET mapped-strs = Array.map(x => identity(x), strs)\nOUTPUT mapped-strs  ; [a, b, c]\n\n; === Generic function returning different types ===\n\nFUN pair-with-zero(x) {\n  (x, 0)\n}\n\nOUTPUT pair-with-zero(\"hello\")  ; (\"hello\", 0)\nOUTPUT pair-with-zero(TRUE)     ; (true, 0)\n\n; === Polymorphic empty array ===\n\nLET empty-int: Array[Int] = []\nLET empty-str: Array[String] = []\n\nOUTPUT empty-int   ; []\nOUTPUT empty-str   ; []\n\n; === Test generalization: same fn, multiple instantiations in sequence ===\n\nFUN make-pair(a, b) { (a, b) }\n\nLET p1 = make-pair(1, 2)\nLET p2 = make-pair(\"x\", \"y\")\nLET p3 = make-pair(TRUE, 3.14)\n\nOUTPUT p1  ; (1, 2)\nOUTPUT p2  ; (\"x\", \"y\")\nOUTPUT p3  ; (true, 3.14)\n\nOUTPUT \"Polymorphic inference test complete\"\n"
+description: "; Test: Polymorphic inference and generalization\n; Tests that the type checker correctly handles polymorphic functions\n\nfun main() {\n  ; Use at Int\n  let int-result = identity(42)\n  write int-result  ; 42\n\n  ; Use at String\n  let str-result = identity(\"hello\")\n  write str-result  ; hello\n\n  ; Use at Bool\n  let bool-result = identity(true)\n  write bool-result  ; true\n\n  ; Use at Array[Int]\n  let arr-result = identity([1, 2, 3])\n  write arr-result  ; [1, 2, 3]\n\n  write const(1, \"ignored\")  ; 1\n  write const(\"kept\", 999)   ; kept\n\n  let flipped-int-str = flip((1, \"hello\"))\n  write flipped-int-str  ; (\"hello\", 1)\n\n  let flipped-bool-float = flip((true, 3.14))\n  write flipped-bool-float  ; (3.14, true)\n\n  write apply-twice(inc, 0)           ; 2\n  write apply-twice(double-str, \"a\")  ; aaaa\n\n  let neg-triple = compose(negate, triple)\n  write neg-triple(5)  ; -15\n\n  write wrap-some(42)       ; Option.Some(42)\n  write wrap-some(\"hello\")  ; Option.Some(\"hello\")\n  write wrap-some(true)     ; Option.Some(true)\n\n  ; === Polymorphic with Mappable:map ===\n\n  ; Same closure structure, different element types\n  let nums = [1, 2, 3]\n  let strs = [\"a\", \"b\", \"c\"]\n\n  let mapped-nums = Mappable:map(x => identity(x), nums)\n  write mapped-nums  ; [1, 2, 3]\n\n  let mapped-strs = Mappable:map(x => identity(x), strs)\n  write mapped-strs  ; [a, b, c]\n\n  write pair-with-zero(\"hello\")  ; (\"hello\", 0)\n  write pair-with-zero(true)     ; (true, 0)\n\n  ; === Polymorphic empty array ===\n\n  let empty-int: Array[Int] = []\n  let empty-str: Array[String] = []\n\n  write empty-int   ; []\n  write empty-str   ; []\n\n  let p1 = make-pair(1, 2)\n  let p2 = make-pair(\"x\", \"y\")\n  let p3 = make-pair(true, 3.14)\n\n  write p1  ; (1, 2)\n  write p2  ; (\"x\", \"y\")\n  write p3  ; (true, 3.14)\n\n  write \"Polymorphic inference test complete\"\n}\n\n; === Identity function at multiple types ===\n\nfun identity(x) { x }\n\n; === Const function at multiple types ===\n\nfun const(a, b) { a }\n\n; === Flip function ===\n\nfun flip(pair) { (pair.1, pair.0) }\n\n; === Generic higher-order function ===\n\nfun apply-twice(f, x) {\n  f(f(x))\n}\n\nfun inc(n: Int) -> Int { n + 1 }\nfun double-str(s: String) -> String { \"{s}{s}\" }\n\n; === Compose functions ===\n\nfun compose(f, g) {\n  x => f(g(x))\n}\n\nfun negate(n: Int) -> Int { 0 - n }\nfun triple(n: Int) -> Int { n * 3 }\n\n; === Polymorphic with Option ===\n\nfun wrap-some(x) {\n  Option.Some(x)\n}\n\n; === Generic function returning different types ===\n\nfun pair-with-zero(x) {\n  (x, 0)\n}\n\n; === Test generalization: same fn, multiple instantiations in sequence ===\n\nfun make-pair(a, b) { (a, b) }\n"
 ---
 42
 "hello"
-TRUE
+true
 [ 1, 2, 3 ]
 1
 "kept"
 ("hello", 1)
-(3.14, TRUE)
+(3.14, true)
 2
 "aaaa"
 -15
 Option.Some(42)
 Option.Some("hello")
-Option.Some(TRUE)
+Option.Some(true)
 [ 1, 2, 3 ]
 [ "a", "b", "c" ]
 ("hello", 0)
-(TRUE, 0)
+(true, 0)
 [  ]
 [  ]
 (1, 2)
 ("x", "y")
-(TRUE, 3.14)
+(true, 3.14)
 "Polymorphic inference test complete"

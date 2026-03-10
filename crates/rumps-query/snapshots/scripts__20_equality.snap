@@ -1,25 +1,25 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: equality for complex types\n; Tests structural equality for arrays, objects, and tagged values\n\n; === Array Equality ===\n\nLET a1 = [1, 2, 3]\nLET a2 = [1, 2, 3]\nLET a3 = [1, 2, 4]\nLET a4 = [1, 2]\n\nWRITE a1 == a2\n; Expected: true (same elements)\n\nWRITE a1 == a3\n; Expected: false (different last element)\n\nWRITE a1 == a4\n; Expected: false (different length)\n\nWRITE a1 != a3\n; Expected: true\n\n; Empty arrays\nLET empty1 = []\nLET empty2 = []\nWRITE empty1 == empty2\n; Expected: true\n\n; Nested arrays\nLET nested1 = [[1, 2], [3, 4]]\nLET nested2 = [[1, 2], [3, 4]]\nLET nested3 = [[1, 2], [3, 5]]\n\nWRITE nested1 == nested2\n; Expected: true\n\nWRITE nested1 == nested3\n; Expected: false\n\n; === Object Equality ===\n\nLET o1 = { a: 1, b: 2 }\nLET o2 = { a: 1, b: 2 }\nLET o3 = { a: 1, b: 3 }\nLET o4 = { a: 1 }\n\nWRITE o1 == o2\n; Expected: true (same keys and values)\n\nWRITE o1 == o3\n; Expected: false (different value)\n\nWRITE o1 == o4\n; Expected: false (different keys)\n\nWRITE o1 != o3\n; Expected: true\n\n; Empty objects\nLET empty-obj-a = {}\nLET empty-obj-b = {}\nWRITE empty-obj-a == empty-obj-b\n; Expected: true\n\n; Nested objects\nLET no1 = { outer: { inner: 42 } }\nLET no2 = { outer: { inner: 42 } }\nLET no3 = { outer: { inner: 99 } }\n\nWRITE no1 == no2\n; Expected: true\n\nWRITE no1 == no3\n; Expected: false\n\n; Objects with arrays\nLET oa1 = { items: [1, 2, 3] }\nLET oa2 = { items: [1, 2, 3] }\nLET oa3 = { items: [1, 2, 4] }\n\nWRITE oa1 == oa2\n; Expected: true\n\nWRITE oa1 == oa3\n; Expected: false\n\n; === Same-type Equality ===\n\nWRITE 5 == 5\n; Expected: true (same type comparison)\n\nWRITE 5.0 == 5.0\n; Expected: true (same type comparison)\n\nWRITE [1, 2, 3] == [1, 2, 3]\n; Expected: true\n\nWRITE { x: 5 } == { x: 5 }\n; Expected: true\n\nWRITE \"Equality test complete\"\n"
+description: "; Test: equality for complex types\n; Tests structural equality for arrays, objects, and tagged values\n\nfun main() {\n  ; === Array Equality ===\n\n  let a1 = [1, 2, 3]\n  let a2 = [1, 2, 3]\n  let a3 = [1, 2, 4]\n  let a4 = [1, 2]\n\n  write a1 == a2\n  ; Expected: true (same elements)\n\n  write a1 == a3\n  ; Expected: false (different last element)\n\n  write a1 == a4\n  ; Expected: false (different length)\n\n  write a1 != a3\n  ; Expected: true\n\n  ; Empty arrays\n  let empty1 = []\n  let empty2 = []\n  write empty1 == empty2\n  ; Expected: true\n\n  ; Nested arrays\n  let nested1 = [[1, 2], [3, 4]]\n  let nested2 = [[1, 2], [3, 4]]\n  let nested3 = [[1, 2], [3, 5]]\n\n  write nested1 == nested2\n  ; Expected: true\n\n  write nested1 == nested3\n  ; Expected: false\n\n  ; === Object Equality ===\n\n  let o1 = { a: 1, b: 2 }\n  let o2 = { a: 1, b: 2 }\n  let o3 = { a: 1, b: 3 }\n  let o4 = { a: 1 }\n\n  write o1 == o2\n  ; Expected: true (same keys and values)\n\n  write o1 == o3\n  ; Expected: false (different value)\n\n  write o1 == o4\n  ; Expected: false (different keys)\n\n  write o1 != o3\n  ; Expected: true\n\n  ; Empty objects\n  let empty-obj-a = {}\n  let empty-obj-b = {}\n  write empty-obj-a == empty-obj-b\n  ; Expected: true\n\n  ; Nested objects\n  let no1 = { outer: { inner: 42 } }\n  let no2 = { outer: { inner: 42 } }\n  let no3 = { outer: { inner: 99 } }\n\n  write no1 == no2\n  ; Expected: true\n\n  write no1 == no3\n  ; Expected: false\n\n  ; Objects with arrays\n  let oa1 = { items: [1, 2, 3] }\n  let oa2 = { items: [1, 2, 3] }\n  let oa3 = { items: [1, 2, 4] }\n\n  write oa1 == oa2\n  ; Expected: true\n\n  write oa1 == oa3\n  ; Expected: false\n\n  ; === Same-type Equality ===\n\n  write 5 == 5\n  ; Expected: true (same type comparison)\n\n  write 5.0 == 5.0\n  ; Expected: true (same type comparison)\n\n  write [1, 2, 3] == [1, 2, 3]\n  ; Expected: true\n\n  write { x: 5 } == { x: 5 }\n  ; Expected: true\n\n  write \"Equality test complete\"\n}\n"
 ---
-TRUE
-FALSE
-FALSE
-TRUE
-TRUE
-TRUE
-FALSE
-TRUE
-FALSE
-FALSE
-TRUE
-TRUE
-TRUE
-FALSE
-TRUE
-FALSE
-TRUE
-TRUE
-TRUE
-TRUE
+true
+false
+false
+true
+true
+true
+false
+true
+false
+false
+true
+true
+true
+false
+true
+false
+true
+true
+true
+true
 "Equality test complete"

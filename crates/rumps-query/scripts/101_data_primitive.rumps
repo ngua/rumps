@@ -1,88 +1,88 @@
-; @DATA primitive tests
-; NOTE: Uses locals only; globals require TRANSACTION blocks
+; @data primitive tests
+; NOTE: Uses locals only; globals require transaction blocks
 
-FUN main() {
+fun main() {
   ; === Setup: create test data ===
 
-  @SET vars{1} "value at 1"
-  @SET vars{1, "A"} "value at 1,A"
-  @SET vars{2, "B", "C"} "deep value"
+  @set vars{1} "value at 1"
+  @set vars{1, "A"} "value at 1,A"
+  @set vars{2, "B", "C"} "deep value"
 
-  ; === @DATA on non-existent key ===
+  ; === @data on non-existent key ===
 
-  LET status0 = @DATA vars{999}
-  WRITE status0
+  let status0 = @data vars{999}
+  write status0
 
-  ; === @DATA on key with value only ===
+  ; === @data on key with value only ===
 
   ; Key {1, "A"} has value but no descendants
-  LET status1 = @DATA vars{1, "A"}
-  WRITE status1
+  let status1 = @data vars{1, "A"}
+  write status1
 
-  ; === @DATA on key with descendants only ===
+  ; === @data on key with descendants only ===
 
   ; Key {2} has no value but has descendants at {2, "B", ...}
-  LET status2 = @DATA vars{2}
-  WRITE status2
+  let status2 = @data vars{2}
+  write status2
 
-  ; === @DATA on key with both value and descendants ===
+  ; === @data on key with both value and descendants ===
 
-  ; Key {1} has value AND descendants at {1, "A"}
-  LET status3 = @DATA vars{1}
-  WRITE status3
+  ; Key {1} has value and descendants at {1, "A"}
+  let status3 = @data vars{1}
+  write status3
 
   ; === Pattern matching on DataStatus ===
 
-  WRITE describe(@DATA vars{999})
-  WRITE describe(@DATA vars{1, "A"})
-  WRITE describe(@DATA vars{2})
-  WRITE describe(@DATA vars{1})
+  write describe(@data vars{999})
+  write describe(@data vars{1, "A"})
+  write describe(@data vars{2})
+  write describe(@data vars{1})
 
-  ; === AS Int coercion (MUMPS $@DATA values) ===
+  ; === as Int coercion (MUMPS $@data values) ===
 
-  WRITE (@DATA vars{999}) AS Int
-  WRITE (@DATA vars{1, "A"}) AS Int
-  WRITE (@DATA vars{2}) AS Int
-  WRITE (@DATA vars{1}) AS Int
+  write (@data vars{999}) as Int
+  write (@data vars{1, "A"}) as Int
+  write (@data vars{2}) as Int
+  write (@data vars{1}) as Int
 
   ; === DataStatus in expressions ===
 
-  WRITE has-data(@DATA vars{999})
-  WRITE has-data(@DATA vars{1})
+  write has-data(@data vars{999})
+  write has-data(@data vars{1})
 
   ; === Type annotation ===
 
-  LET typed: DataStatus = @DATA vars{1}
-  WRITE typed
+  let typed: DataStatus = @data vars{1}
+  write typed
 
   ; === DataStatus in arrays ===
 
-  LET statuses: Array[DataStatus] = [
-    @DATA vars{999},
-    @DATA vars{1, "A"},
-    @DATA vars{2},
-    @DATA vars{1}
+  let statuses: Array[DataStatus] = [
+    @data vars{999},
+    @data vars{1, "A"},
+    @data vars{2},
+    @data vars{1}
   ]
-  WRITE Iterable:length(statuses)
-  WRITE Mappable:map(describe, statuses)
+  write Iterable:length(statuses)
+  write Mappable:map(describe, statuses)
 
-  ; === READ DataStatus from Int ===
+  ; === read DataStatus from Int ===
 
-  LET from0 = 0 READ DataStatus
-  LET from1 = 1 READ DataStatus
-  LET from10 = 10 READ DataStatus
-  LET from11 = 11 READ DataStatus
-  LET invalid = 5 READ DataStatus
+  let from0 = 0 read DataStatus
+  let from1 = 1 read DataStatus
+  let from10 = 10 read DataStatus
+  let from11 = 11 read DataStatus
+  let invalid = 5 read DataStatus
 
-  WRITE from0
-  WRITE from1
-  WRITE from10
-  WRITE from11
-  WRITE invalid
+  write from0
+  write from1
+  write from10
+  write from11
+  write invalid
 }
 
-FUN describe(s: DataStatus) -> String {
-  MATCH s {
+fun describe(s: DataStatus) -> String {
+  match s {
     DataStatus.NoData => { "no data" }
     DataStatus.HasValue => { "has value" }
     DataStatus.HasDescendants => { "has descendants" }
@@ -90,6 +90,6 @@ FUN describe(s: DataStatus) -> String {
   }
 }
 
-FUN has-data(s: DataStatus) -> Bool {
-  (s AS Int) > 0
+fun has-data(s: DataStatus) -> Bool {
+  (s as Int) > 0
 }

@@ -1,6 +1,6 @@
-; Test RAISE with a string message
+; Test raise with a string message
 
-FUN main() {
-  RAISE "something went wrong"
+fun main() {
+  raise "something went wrong"
   Unit
 }

@@ -1,17 +1,17 @@
 ; Test catch without parens
 
-FUN main() {
-  WRITE RAISE "x" CATCH e => "caught"
+fun main() {
+  write raise "x" catch e => "caught"
 
   ; Catch with success (no error)
-  WRITE 42 CATCH e => 0
+  write 42 catch e => 0
 
   ; Catch division by zero
-  WRITE (1 // 0) CATCH e => -1
+  write (1 // 0) catch e => -1
 
   ; Pattern match on error type (Raise)
-  WRITE RAISE "error msg" CATCH e => {
-    MATCH e {
+  write raise "error msg" catch e => {
+    match e {
       Error.Raise(msg) => { "raised: {msg}" }
       Error.Runtime(msg) => { "runtime: {msg}" }
       _ => { "other" }
@@ -19,16 +19,16 @@ FUN main() {
   }
 
   ; Division by zero is Runtime; must return Int to match
-  WRITE (1 // 0) CATCH e => {
-    MATCH e {
+  write (1 // 0) catch e => {
+    match e {
       Error.Runtime(msg) => { -1 }
       _ => { -2 }
     }
   }
 
   ; String expression with Runtime error match
-  WRITE "{"test"}{RAISE "oops"}" CATCH e => {
-    MATCH e {
+  write "{"test"}{raise "oops"}" catch e => {
+    match e {
       Error.Raise(msg) => { "caught raise: {msg}" }
       _ => { "other error" }
     }

@@ -1,140 +1,140 @@
 ; Test: Ord instances for container types
 ; Arrays, tuples, Options, and Results should be comparable when elements are Ord
 
-FUN main() {
+fun main() {
   ; === Array comparisons (lexicographic) ===
 
-  WRITE [1, 2, 3] < [1, 2, 4]
+  write [1, 2, 3] < [1, 2, 4]
   ; Expected: true (element-wise, `3 < 4`)
 
-  WRITE [1, 2, 3] < [1, 2, 3]
+  write [1, 2, 3] < [1, 2, 3]
   ; Expected: false (equal)
 
-  WRITE [1, 2, 3] > [1, 2, 2]
+  write [1, 2, 3] > [1, 2, 2]
   ; Expected: true
 
-  WRITE [1, 2] < [1, 2, 3]
+  write [1, 2] < [1, 2, 3]
   ; Expected: true (shorter prefix)
 
-  WRITE [1, 2, 3] < [1, 2]
+  write [1, 2, 3] < [1, 2]
   ; Expected: false (longer)
 
-  WRITE ["a", "b"] < ["a", "c"]
+  write ["a", "b"] < ["a", "c"]
   ; Expected: true
 
-  WRITE [TRUE, FALSE] < [TRUE, TRUE]
-  ; Expected: true (`FALSE < TRUE`)
+  write [true, false] < [true, true]
+  ; Expected: true (`false < true`)
 
   ; === Tuple comparisons (lexicographic) ===
 
-  WRITE (1, 2) < (1, 3)
+  write (1, 2) < (1, 3)
   ; Expected: true
 
-  WRITE (1, 2) < (2, 0)
+  write (1, 2) < (2, 0)
   ; Expected: true (first element decides)
 
-  WRITE ("a", 1) < ("a", 2)
+  write ("a", 1) < ("a", 2)
   ; Expected: true
 
-  WRITE ("a", 1) < ("b", 0)
+  write ("a", 1) < ("b", 0)
   ; Expected: true (first element decides)
 
   ; === Option comparisons (None < Some) ===
 
-  LET none: Option[Int] = Option.None
-  LET some1 = Option.Some(1)
-  LET some2 = Option.Some(2)
+  let none: Option[Int] = Option.None
+  let some1 = Option.Some(1)
+  let some2 = Option.Some(2)
 
-  WRITE none < some1
+  write none < some1
   ; Expected: true (`None < Some`)
 
-  WRITE some1 < some2
+  write some1 < some2
   ; Expected: true (`1 < 2`)
 
-  WRITE some2 < some1
+  write some2 < some1
   ; Expected: false
 
-  WRITE none < none
+  write none < none
   ; Expected: false (equal)
 
   ; === Result comparisons (Err < Ok) ===
 
-  LET err1: Result[Int, String] = Result.Err("a")
-  LET err2: Result[Int, String] = Result.Err("b")
-  LET ok1: Result[Int, String] = Result.Ok(1)
-  LET ok2: Result[Int, String] = Result.Ok(2)
+  let err1: Result[Int, String] = Result.Err("a")
+  let err2: Result[Int, String] = Result.Err("b")
+  let ok1: Result[Int, String] = Result.Ok(1)
+  let ok2: Result[Int, String] = Result.Ok(2)
 
-  WRITE err1 < ok1
+  write err1 < ok1
   ; Expected: true (`Err < Ok`)
 
-  WRITE err1 < err2
+  write err1 < err2
   ; Expected: true (`"a" < "b"`)
 
-  WRITE ok1 < ok2
+  write ok1 < ok2
   ; Expected: true (`1 < 2`)
 
-  WRITE ok2 < err1
+  write ok2 < err1
   ; Expected: false (`Ok > Err`)
 
   ; === Ordering comparisons (Lt < Eq < Gt) ===
 
-  WRITE Ordering.Lt < Ordering.Eq
+  write Ordering.Lt < Ordering.Eq
   ; Expected: true
 
-  WRITE Ordering.Eq < Ordering.Gt
+  write Ordering.Eq < Ordering.Gt
   ; Expected: true
 
-  WRITE Ordering.Lt < Ordering.Gt
+  write Ordering.Lt < Ordering.Gt
   ; Expected: true
 
-  WRITE Ordering.Gt < Ordering.Lt
+  write Ordering.Gt < Ordering.Lt
   ; Expected: false
 
-  WRITE Ordering.Eq <= Ordering.Eq
+  write Ordering.Eq <= Ordering.Eq
   ; Expected: true
 
   ; === Map comparisons (sorted by key, then lexicographic) ===
 
-  LET m1 = Map.from-entries([("a", 1), ("b", 2)])
-  LET m2 = Map.from-entries([("a", 1), ("b", 3)])
-  LET m3 = Map.from-entries([("a", 1), ("c", 2)])
+  let m1 = Map.from-entries([("a", 1), ("b", 2)])
+  let m2 = Map.from-entries([("a", 1), ("b", 3)])
+  let m3 = Map.from-entries([("a", 1), ("c", 2)])
 
-  WRITE m1 < m2
+  write m1 < m2
   ; Expected: true (same keys, `2 < 3`)
 
-  WRITE m1 < m3
+  write m1 < m3
   ; Expected: true (`"b" < "c"`)
 
   ; Maps with same entries in different insertion order should be equal
-  LET m4 = Map.from-entries([("b", 2), ("a", 1)])
-  WRITE m1 <= m4
+  let m4 = Map.from-entries([("b", 2), ("a", 1)])
+  write m1 <= m4
   ; Expected: true (equal after sorting by key)
 
-  WRITE m1 >= m4
+  write m1 >= m4
   ; Expected: true (equal after sorting by key)
 
   ; === Time comparisons ===
 
-  LET epoch = Time.epoch()
-  LET t1 = Time.add-seconds(epoch, 1000)
-  LET t2 = Time.add-seconds(epoch, 2000)
+  let epoch = Time.epoch()
+  let t1 = Time.add-seconds(epoch, 1000)
+  let t2 = Time.add-seconds(epoch, 2000)
 
-  WRITE t1 < t2
+  write t1 < t2
   ; Expected: true
 
-  WRITE t2 > t1
+  write t2 > t1
   ; Expected: true
 
-  WRITE t1 < t1
+  write t1 < t1
   ; Expected: false (equal)
 
   ; === Nested containers ===
 
-  WRITE [[1, 2], [3, 4]] < [[1, 2], [3, 5]]
+  write [[1, 2], [3, 4]] < [[1, 2], [3, 5]]
   ; Expected: true
 
-  WRITE [(1, "a"), (2, "b")] < [(1, "a"), (2, "c")]
+  write [(1, "a"), (2, "b")] < [(1, "a"), (2, "c")]
   ; Expected: true
 
-  WRITE "Container Ord test complete"
+  write "Container Ord test complete"
 }

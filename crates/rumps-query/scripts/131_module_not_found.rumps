@@ -1,6 +1,6 @@
 ; Test: Module member not found error
 ; Should report clear error for non-existent module function
 
-FUN main() {
-  WRITE Array.len([1, 2, 3])
+fun main() {
+  write Array.len([1, 2, 3])
 }

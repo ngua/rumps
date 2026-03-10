@@ -1,118 +1,118 @@
 ; Test: Polymorphic inference and generalization
 ; Tests that the type checker correctly handles polymorphic functions
 
-FUN main() {
+fun main() {
   ; Use at Int
-  LET int-result = identity(42)
-  WRITE int-result  ; 42
+  let int-result = identity(42)
+  write int-result  ; 42
 
   ; Use at String
-  LET str-result = identity("hello")
-  WRITE str-result  ; hello
+  let str-result = identity("hello")
+  write str-result  ; hello
 
   ; Use at Bool
-  LET bool-result = identity(TRUE)
-  WRITE bool-result  ; true
+  let bool-result = identity(true)
+  write bool-result  ; true
 
   ; Use at Array[Int]
-  LET arr-result = identity([1, 2, 3])
-  WRITE arr-result  ; [1, 2, 3]
+  let arr-result = identity([1, 2, 3])
+  write arr-result  ; [1, 2, 3]
 
-  WRITE const(1, "ignored")  ; 1
-  WRITE const("kept", 999)   ; kept
+  write const(1, "ignored")  ; 1
+  write const("kept", 999)   ; kept
 
-  LET flipped-int-str = flip((1, "hello"))
-  WRITE flipped-int-str  ; ("hello", 1)
+  let flipped-int-str = flip((1, "hello"))
+  write flipped-int-str  ; ("hello", 1)
 
-  LET flipped-bool-float = flip((TRUE, 3.14))
-  WRITE flipped-bool-float  ; (3.14, true)
+  let flipped-bool-float = flip((true, 3.14))
+  write flipped-bool-float  ; (3.14, true)
 
-  WRITE apply-twice(inc, 0)           ; 2
-  WRITE apply-twice(double-str, "a")  ; aaaa
+  write apply-twice(inc, 0)           ; 2
+  write apply-twice(double-str, "a")  ; aaaa
 
-  LET neg-triple = compose(negate, triple)
-  WRITE neg-triple(5)  ; -15
+  let neg-triple = compose(negate, triple)
+  write neg-triple(5)  ; -15
 
-  WRITE wrap-some(42)       ; Option.Some(42)
-  WRITE wrap-some("hello")  ; Option.Some("hello")
-  WRITE wrap-some(TRUE)     ; Option.Some(true)
+  write wrap-some(42)       ; Option.Some(42)
+  write wrap-some("hello")  ; Option.Some("hello")
+  write wrap-some(true)     ; Option.Some(true)
 
   ; === Polymorphic with Mappable:map ===
 
   ; Same closure structure, different element types
-  LET nums = [1, 2, 3]
-  LET strs = ["a", "b", "c"]
+  let nums = [1, 2, 3]
+  let strs = ["a", "b", "c"]
 
-  LET mapped-nums = Mappable:map(x => identity(x), nums)
-  WRITE mapped-nums  ; [1, 2, 3]
+  let mapped-nums = Mappable:map(x => identity(x), nums)
+  write mapped-nums  ; [1, 2, 3]
 
-  LET mapped-strs = Mappable:map(x => identity(x), strs)
-  WRITE mapped-strs  ; [a, b, c]
+  let mapped-strs = Mappable:map(x => identity(x), strs)
+  write mapped-strs  ; [a, b, c]
 
-  WRITE pair-with-zero("hello")  ; ("hello", 0)
-  WRITE pair-with-zero(TRUE)     ; (true, 0)
+  write pair-with-zero("hello")  ; ("hello", 0)
+  write pair-with-zero(true)     ; (true, 0)
 
   ; === Polymorphic empty array ===
 
-  LET empty-int: Array[Int] = []
-  LET empty-str: Array[String] = []
+  let empty-int: Array[Int] = []
+  let empty-str: Array[String] = []
 
-  WRITE empty-int   ; []
-  WRITE empty-str   ; []
+  write empty-int   ; []
+  write empty-str   ; []
 
-  LET p1 = make-pair(1, 2)
-  LET p2 = make-pair("x", "y")
-  LET p3 = make-pair(TRUE, 3.14)
+  let p1 = make-pair(1, 2)
+  let p2 = make-pair("x", "y")
+  let p3 = make-pair(true, 3.14)
 
-  WRITE p1  ; (1, 2)
-  WRITE p2  ; ("x", "y")
-  WRITE p3  ; (true, 3.14)
+  write p1  ; (1, 2)
+  write p2  ; ("x", "y")
+  write p3  ; (true, 3.14)
 
-  WRITE "Polymorphic inference test complete"
+  write "Polymorphic inference test complete"
 }
 
 ; === Identity function at multiple types ===
 
-FUN identity(x) { x }
+fun identity(x) { x }
 
 ; === Const function at multiple types ===
 
-FUN const(a, b) { a }
+fun const(a, b) { a }
 
 ; === Flip function ===
 
-FUN flip(pair) { (pair.1, pair.0) }
+fun flip(pair) { (pair.1, pair.0) }
 
 ; === Generic higher-order function ===
 
-FUN apply-twice(f, x) {
+fun apply-twice(f, x) {
   f(f(x))
 }
 
-FUN inc(n: Int) -> Int { n + 1 }
-FUN double-str(s: String) -> String { "{s}{s}" }
+fun inc(n: Int) -> Int { n + 1 }
+fun double-str(s: String) -> String { "{s}{s}" }
 
 ; === Compose functions ===
 
-FUN compose(f, g) {
+fun compose(f, g) {
   x => f(g(x))
 }
 
-FUN negate(n: Int) -> Int { 0 - n }
-FUN triple(n: Int) -> Int { n * 3 }
+fun negate(n: Int) -> Int { 0 - n }
+fun triple(n: Int) -> Int { n * 3 }
 
 ; === Polymorphic with Option ===
 
-FUN wrap-some(x) {
+fun wrap-some(x) {
   Option.Some(x)
 }
 
 ; === Generic function returning different types ===
 
-FUN pair-with-zero(x) {
+fun pair-with-zero(x) {
   (x, 0)
 }
 
 ; === Test generalization: same fn, multiple instantiations in sequence ===
 
-FUN make-pair(a, b) { (a, b) }
+fun make-pair(a, b) { (a, b) }

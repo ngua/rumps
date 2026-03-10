@@ -1,13 +1,13 @@
 ; Unknown variant in pattern error
 
-FUN main() {
-  LET opt = Option.Some(42)
+fun main() {
+  let opt = Option.Some(42)
 
   ; This should fail because Option.Unknown doesn't exist
-  LET result = MATCH opt {
+  let result = match opt {
     Option.Unknown(v) => { v }
     Option.None => { 0 }
   }
 
-  WRITE result
+  write result
 }

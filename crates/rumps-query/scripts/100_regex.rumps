@@ -1,114 +1,108 @@
 ; Regex pattern matching
-; Tests regex literals and MATCHES operator
+; Tests regex literals and matches operator
 
-FUN main() {
+fun main() {
   ; ============ Basic matching ============
 
   ; Simple pattern
-  WRITE "hello" MATCHES /hello/  ; true
-  WRITE "world" MATCHES /hello/  ; false
+  write "hello" matches /hello/  ; true
+  write "world" matches /hello/  ; false
 
   ; Partial match (regex finds pattern anywhere)
-  WRITE "hello world" MATCHES /world/  ; true
-  WRITE "say hello" MATCHES /hello/  ; true
+  write "hello world" matches /world/  ; true
+  write "say hello" matches /hello/  ; true
 
   ; ============ Character classes ============
 
   ; Digit matching
-  WRITE "abc123" MATCHES /\d+/  ; true
-  WRITE "abc" MATCHES /\d+/  ; false
+  write "abc123" matches /\d+/  ; true
+  write "abc" matches /\d+/  ; false
 
   ; Word characters
-  WRITE "hello_world" MATCHES /\w+/  ; true
+  write "hello_world" matches /\w+/  ; true
 
   ; Whitespace
-  WRITE "hello world" MATCHES /\s/  ; true
-  WRITE "helloworld" MATCHES /\s/  ; false
+  write "hello world" matches /\s/  ; true
+  write "helloworld" matches /\s/  ; false
 
   ; ============ Anchors ============
 
   ; Start anchor
-  WRITE "hello world" MATCHES /^hello/  ; true
-  WRITE "say hello" MATCHES /^hello/  ; false
+  write "hello world" matches /^hello/  ; true
+  write "say hello" matches /^hello/  ; false
 
   ; End anchor
-  WRITE "hello world" MATCHES /world$/  ; true
-  WRITE "worldly" MATCHES /world$/  ; false
+  write "hello world" matches /world$/  ; true
+  write "worldly" matches /world$/  ; false
 
   ; Full match with both anchors
-  WRITE "hello" MATCHES /^hello$/  ; true
-  WRITE "hello world" MATCHES /^hello$/  ; false
+  write "hello" matches /^hello$/  ; true
+  write "hello world" matches /^hello$/  ; false
 
   ; ============ Quantifiers ============
 
   ; Zero or more
-  WRITE "goood" MATCHES /go*d/  ; true
-  WRITE "gd" MATCHES /go*d/  ; true
+  write "goood" matches /go*d/  ; true
+  write "gd" matches /go*d/  ; true
 
   ; One or more
-  WRITE "goood" MATCHES /go+d/  ; true
-  WRITE "gd" MATCHES /go+d/  ; false
+  write "goood" matches /go+d/  ; true
+  write "gd" matches /go+d/  ; false
 
   ; Optional
-  WRITE "color" MATCHES /colou?r/  ; true
-  WRITE "colour" MATCHES /colou?r/  ; true
+  write "color" matches /colou?r/  ; true
+  write "colour" matches /colou?r/  ; true
 
   ; ============ Alternation ============
 
-  WRITE "cat" MATCHES /cat|dog/  ; true
-  WRITE "dog" MATCHES /cat|dog/  ; true
-  WRITE "bird" MATCHES /cat|dog/  ; false
+  write "cat" matches /cat|dog/  ; true
+  write "dog" matches /cat|dog/  ; true
+  write "bird" matches /cat|dog/  ; false
 
   ; ============ Groups ============
 
-  WRITE "abab" MATCHES /(ab)+/  ; true
-  WRITE "ab" MATCHES /(ab)+/  ; true
+  write "abab" matches /(ab)+/  ; true
+  write "ab" matches /(ab)+/  ; true
 
   ; ============ Stringable operand ============
 
   ; Integer (converts to string)
-  WRITE 123 MATCHES /\d+/  ; true
-  WRITE 123 MATCHES /^123$/  ; true
+  write 123 matches /\d+/  ; true
+  write 123 matches /^123$/  ; true
 
   ; Float
-  WRITE 3.14 MATCHES /3\.14/  ; true
+  write 3.14 matches /3\.14/  ; true
 
   ; Boolean
-  WRITE true MATCHES /true/  ; true
-  WRITE false MATCHES /false/  ; true
+  write true matches /true/  ; true
+  write false matches /false/  ; true
 
   ; ============ Variables ============
 
-  LET text = "The quick brown fox"
-  LET pat = /quick/
-  WRITE text MATCHES pat  ; true
+  let text = "The quick brown fox"
+  let pat = /quick/
+  write text matches pat  ; true
 
-  LET email-pattern = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/
-  WRITE "test@example.com" MATCHES email-pattern  ; true
-  WRITE "invalid-email" MATCHES email-pattern  ; false
+  let email-pattern = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/
+  write "test@example.com" matches email-pattern  ; true
+  write "invalid-email" matches email-pattern  ; false
 
   ; ============ Case sensitivity ============
 
   ; Regex is case-sensitive by default
-  WRITE "Hello" MATCHES /hello/  ; false
-  WRITE "Hello" MATCHES /Hello/  ; true
+  write "Hello" matches /hello/  ; false
+  write "Hello" matches /Hello/  ; true
 
   ; ============ Special characters ============
 
   ; Escaped special chars
-  WRITE "a.b" MATCHES /a\.b/  ; true
-  WRITE "a*b" MATCHES /a\*b/  ; true
-  WRITE "a+b" MATCHES /a\+b/  ; true
-
-  ; ============ Keyword case insensitivity ============
-
-  ; MATCHES keyword is case-insensitive
-  WRITE "hello" matches /hello/  ; true
-  WRITE "hello" Matches /hello/  ; true
+  write "a.b" matches /a\.b/  ; true
+  write "a*b" matches /a\*b/  ; true
+  write "a+b" matches /a\+b/  ; true
 
   ; ============ Precedence ============
 
-  ; MATCHES has lower precedence than comparison
-  LET x = 5
-  WRITE (x > 3) AND ("test" MATCHES /test/)  ; true
+  ; matches has lower precedence than comparison
+  let x = 5
+  write (x > 3) and ("test" matches /test/)  ; true
 }

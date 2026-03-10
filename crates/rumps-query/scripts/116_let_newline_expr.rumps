@@ -1,28 +1,28 @@
-; LET with expression on next line (after `=`)
+; let with expression on next line (after `=`)
 
-FUN main() {
-  LET x =
-    MATCH Unit {
+fun main() {
+  let x =
+    match Unit {
       Unit => Unit
     }
 
-  WRITE x
+  write x
 
   ; Also test with other expressions
-  LET y =
+  let y =
     1
     + 2
     + 3
 
-  WRITE y
+  write y
 
   ; Nested
-  LET z =
-    IF true {
+  let z =
+    if true {
       "yes"
-    } ELSE {
+    } else {
       "no"
     }
 
-  WRITE z
+  write z
 }

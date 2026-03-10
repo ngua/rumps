@@ -1,49 +1,49 @@
 ; Test: lex simple expressions
 ; Tests basic tokenization of literals, identifiers, and operators
 
-FUN main() {
+fun main() {
   ; Integer literals
-  LET a = 42
-  LET b = 0
-  LET c = -123
+  let a = 42
+  let b = 0
+  let c = -123
 
   ; Float literals
-  LET d = 3.14
-  LET e = 0.5
-  LET f = -2.718
+  let d = 3.14
+  let e = 0.5
+  let f = -2.718
 
   ; String literals
-  LET s1 = "hello"
-  LET s2 = "world with spaces"
-  LET s3 = ""
+  let s1 = "hello"
+  let s2 = "world with spaces"
+  let s3 = ""
 
   ; Boolean keywords
-  LET t = TRUE
-  LET f = FALSE
+  let t = true
+  let f = false
 
   ; Train-case identifier
-  LET my-var = 100
+  let my-var = 100
 
   ; All operators in one place
-  LET x = 1 + 2 - 3 * 4 // 5 % 6
-  LET cmp = 1 < 2
-  LET eq = 3 == 3
-  LET neq = 4 != 5
-  LET ge = 10 >= 5
-  LET le = 5 <= 10
-  LET gt = 10 > 5
-  LET lt = 5 < 10
+  let x = 1 + 2 - 3 * 4 // 5 % 6
+  let cmp = 1 < 2
+  let eq = 3 == 3
+  let neq = 4 != 5
+  let ge = 10 >= 5
+  let le = 5 <= 10
+  let gt = 10 > 5
+  let lt = 5 < 10
 
   ; Logical operators
-  LET and1 = TRUE AND FALSE
-  LET or1 = TRUE OR FALSE
-  LET not1 = NOT TRUE
-  LET and2 = TRUE && FALSE
-  LET or2 = TRUE || FALSE
-  LET not2 = !FALSE
+  let and1 = true and false
+  let or1 = true or false
+  let not1 = not true
+  let and2 = true && false
+  let or2 = true || false
+  let not2 = !false
 
   ; String interpolation (replaces concat)
-  LET concat = "{"hello"} {"world"}"
+  let concat = "{"hello"} {"world"}"
 
-  WRITE "Lexer test complete"
+  write "Lexer test complete"
 }

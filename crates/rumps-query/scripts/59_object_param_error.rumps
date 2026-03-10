@@ -1,12 +1,12 @@
 ; Error: passing object missing required fields to function
 
-NEWTYPE Person = { name: String, age: Int }
+newtype Person = { name: String, age: Int }
 
-FUN greet(p: Person) -> String {
+fun greet(p: Person) -> String {
   "Hello, {p.name}!"
 }
 
-FUN main() {
+fun main() {
   ; Missing `age` field
-  WRITE greet({ name: "Alice" })
+  write greet({ name: "Alice" })
 }

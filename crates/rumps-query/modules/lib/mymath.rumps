@@ -1,13 +1,13 @@
 ; Math module for testing file imports
 ; This file contains functions and constants to be imported via MODULE M FROM "path"
 
-+LET pi = 3.14159
-+LET e = 2.71828
++let pi = 3.14159
++let e = 2.71828
 
-+FUN square(x: Int) -> Int { x * x }
++fun square(x: Int) -> Int { x * x }
 
-+FUN double(x: Int) -> Int { x * 2 }
++fun double(x: Int) -> Int { x * 2 }
 
-+FUN is-positive(n: Int) -> Bool { n > 0 }
++fun is-positive(n: Int) -> Bool { n > 0 }
 
-+FUN area(r: Float) -> Float { pi * r * r }
++fun area(r: Float) -> Float { pi * r * r }

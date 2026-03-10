@@ -1,13 +1,13 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Module file imports\n; Tests importing modules from files using `MODULE Name FROM \"path\"` syntax\n\n; Import module from file (path relative to script directory)\nMODULE MyMath FROM \"../modules/lib/mymath.rumps\"\n\n; ============ Test constants from imported module ============\n\nWRITE MyMath.pi > 3.0  ; true\nWRITE MyMath.e > 2.0  ; true\n\n; ============ Test functions from imported module ============\n\nWRITE MyMath.square(5)  ; 25\nWRITE MyMath.double(7)  ; 14\nWRITE MyMath.is-positive(10)  ; true\nWRITE MyMath.is-positive(-5)  ; false\n\n; ============ Use imported functions in expressions ============\n\nLET sq = MyMath.square(4)\nLET dbl = MyMath.double(sq)\nWRITE dbl  ; 32\n\n; ============ Pass imported function as value ============\n\nLET f = MyMath.double\nWRITE f(100)  ; 200\n\n; ============ Test function referencing sibling constant ============\n\nWRITE MyMath.area(2.0)  ; pi * 4 = 12.56636\n"
+description: "; Module file imports\n; Tests importing modules from files using `module Name from \"path\"` syntax\n\n; Import module from file (path relative to script directory)\nmodule MyMath from \"../modules/lib/mymath.rumps\"\n\nfun main() {\n  ; ============ Test constants from imported module ============\n\n  write MyMath.pi > 3.0  ; true\n  write MyMath.e > 2.0  ; true\n\n  ; ============ Test functions from imported module ============\n\n  write MyMath.square(5)  ; 25\n  write MyMath.double(7)  ; 14\n  write MyMath.is-positive(10)  ; true\n  write MyMath.is-positive(-5)  ; false\n\n  ; ============ Use imported functions in expressions ============\n\n  let sq = MyMath.square(4)\n  let dbl = MyMath.double(sq)\n  write dbl  ; 32\n\n  ; ============ Pass imported function as value ============\n\n  let f = MyMath.double\n  write f(100)  ; 200\n\n  ; ============ Test function referencing sibling constant ============\n\n  write MyMath.area(2.0)  ; pi * 4 = 12.56636\n}\n"
 ---
-TRUE
-TRUE
+true
+true
 25
 14
-TRUE
-FALSE
+true
+false
 32
 200
 12.56636

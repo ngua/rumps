@@ -1,6 +1,6 @@
 ; Error test: module file not found
 
-MODULE Missing FROM "../nonexistent/path/to/module.rumps"
+module Missing from "../nonexistent/path/to/module.rumps"
 
-FUN main() {
+fun main() {
 }

@@ -1,80 +1,80 @@
 ; Test: Power operator (**)
 ; Tests exponentiation with right-associativity
 
-FUN main() {
+fun main() {
   ; === Int ** Int ===
 
-  LET sq = 2 ** 10
-  WRITE sq
+  let sq = 2 ** 10
+  write sq
   ; Expected: 1024
 
-  LET cube = 3 ** 3
-  WRITE cube
+  let cube = 3 ** 3
+  write cube
   ; Expected: 27
 
-  LET zero-pow = 5 ** 0
-  WRITE zero-pow
+  let zero-pow = 5 ** 0
+  write zero-pow
   ; Expected: 1
 
-  LET one-pow = 7 ** 1
-  WRITE one-pow
+  let one-pow = 7 ** 1
+  write one-pow
   ; Expected: 7
 
   ; === Float ** Float ===
 
-  LET sqrt2 = 2.0 ** 0.5
-  WRITE sqrt2
+  let sqrt2 = 2.0 ** 0.5
+  write sqrt2
   ; Expected: 1.4142135623730951 (approximately)
 
-  LET cubert = 8.0 ** (1.0 / 3.0)
-  WRITE cubert
+  let cubert = 8.0 ** (1.0 / 3.0)
+  write cubert
   ; Expected: 2.0
 
   ; === Negative exponent (Int -> Float) ===
 
-  LET half = 2 ** -1
-  WRITE half
+  let half = 2 ** -1
+  write half
   ; Expected: 0.5
 
-  LET quarter = 2 ** -2
-  WRITE quarter
+  let quarter = 2 ** -2
+  write quarter
   ; Expected: 0.25
 
   ; === Mixed Int/Float ===
 
-  LET mixed1 = 4 ** 0.5
-  WRITE mixed1
+  let mixed1 = 4 ** 0.5
+  write mixed1
   ; Expected: 2
 
-  LET mixed2 = 2.0 ** 3
-  WRITE mixed2
+  let mixed2 = 2.0 ** 3
+  write mixed2
   ; Expected: 8
 
   ; === Right-associativity ===
   ; 2 ** 3 ** 2 should be 2 ** (3 ** 2) = 2 ** 9 = 512
-  ; NOT (2 ** 3) ** 2 = 8 ** 2 = 64
+  ; not (2 ** 3) ** 2 = 8 ** 2 = 64
 
-  LET right-assoc = 2 ** 3 ** 2
-  WRITE right-assoc
+  let right-assoc = 2 ** 3 ** 2
+  write right-assoc
   ; Expected: 512
 
   ; === Precedence: higher than multiplication ===
   ; 2 * 3 ** 2 should be 2 * (3 ** 2) = 2 * 9 = 18
-  ; NOT (2 * 3) ** 2 = 6 ** 2 = 36
+  ; not (2 * 3) ** 2 = 6 ** 2 = 36
 
-  LET prec = 2 * 3 ** 2
-  WRITE prec
+  let prec = 2 * 3 ** 2
+  write prec
   ; Expected: 18
 
   ; === Combinations ===
 
-  LET combo = 10 ** 2 + 5
-  WRITE combo
+  let combo = 10 ** 2 + 5
+  write combo
   ; Expected: 105
 
-  LET combo2 = (2 + 3) ** 2
-  WRITE combo2
+  let combo2 = (2 + 3) ** 2
+  write combo2
   ; Expected: 25
 
-  WRITE "Power test complete"
+  write "Power test complete"
 }

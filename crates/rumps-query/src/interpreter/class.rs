@@ -2029,7 +2029,7 @@ impl Display {
     /// Format a value as valid RUMPS syntax (strings quoted).
     ///
     /// Unlike `Into[String]` which produces raw string content, this produces
-    /// output suitable for display (e.g., `WRITE` statements) where strings
+    /// output suitable for display (e.g., `write` statements) where strings
     /// are quoted and complex types are formatted for readability.
     pub(crate) fn display(ctx: &mut ClassCtx<'_>, v: &Value) -> Result<Value> {
         let s = Self::format(ctx, v);
@@ -2044,7 +2044,7 @@ impl Display {
     pub(crate) fn format(ctx: &ClassCtx<'_>, v: &Value) -> String {
         match v {
             Value::Unit => "Unit".into(),
-            Value::Bool(b) => b.to_string().to_uppercase(),
+            Value::Bool(b) => b.to_string(),
             Value::Int(n) => n.to_string(),
             Value::Word(n) => n.to_string(),
             Value::Float(f) => {
@@ -2201,7 +2201,7 @@ impl Display {
     fn format_map_key(ctx: &ClassCtx<'_>, k: &crate::value::MapKey) -> String {
         use crate::value::MapKey;
         match k {
-            MapKey::Bool(b) => b.to_string().to_uppercase(),
+            MapKey::Bool(b) => b.to_string(),
             MapKey::Int(n) => n.to_string(),
             MapKey::Float(f) => f.to_string(),
             MapKey::Char(c) => format!("'{c}'"),

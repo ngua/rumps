@@ -1,104 +1,104 @@
-; CLASS implementations inside MODULE blocks
+; class implementations inside module blocks
 ;
-; Tests CLASS ... FOR ... syntax within user-defined modules.
+; Tests class ... for ... syntax within user-defined modules.
 ; Instances become available after importing the module.
 
 ; All imports at top
-IMPORT Shapes.{ ... }
-IMPORT Prio.{ ... }
-IMPORT Nums.{ ... }
-IMPORT Container.{ ... }
-IMPORT Collections.{ ... }
+import Shapes.{ ... }
+import Prio.{ ... }
+import Nums.{ ... }
+import Container.{ ... }
+import Collections.{ ... }
 ; Instances are also brought into scope by empty import
-IMPORT EmptyImport.{ }
+import EmptyImport.{ }
 
-FUN main() {
-  ; ============ Display CLASS in MODULE ============
+fun main() {
+  ; ============ Display class in module ============
 
-  LET c = Shapes.Circle.Circle(3.14)
-  WRITE Display:display(c)
+  let c = Shapes.Circle.Circle(3.14)
+  write Display:display(c)
 
-  ; ============ Ord CLASS in MODULE ============
+  ; ============ Ord class in module ============
 
-  LET low: Prio.Priority = 10
-  LET high: Prio.Priority = 1
-  WRITE Ord:compare(low, high)
-  WRITE Ord:compare(high, low)
-  WRITE Ord:compare(low, low)
+  let low: Prio.Priority = 10
+  let high: Prio.Priority = 1
+  write Ord:compare(low, high)
+  write Ord:compare(high, low)
+  write Ord:compare(low, low)
 
-  ; ============ Numeric CLASS in MODULE ============
+  ; ============ Numeric class in module ============
 
-  LET a: Nums.MyInt = 10
-  LET b: Nums.MyInt = 3
-  WRITE Numeric:add(a, b)
-  WRITE Numeric:mul(a, b)
+  let a: Nums.MyInt = 10
+  let b: Nums.MyInt = 3
+  write Numeric:add(a, b)
+  write Numeric:mul(a, b)
 
-  ; ============ Constrained type params in MODULE ============
+  ; ============ Constrained type params in module ============
 
-  LET p1 = Container.Pair.Pair(1, 2)
-  LET p2 = Container.Pair.Pair("hello", "world")
-  WRITE Display:display(p1)
-  WRITE Display:display(p2)
+  let p1 = Container.Pair.Pair(1, 2)
+  let p2 = Container.Pair.Pair("hello", "world")
+  write Display:display(p1)
+  write Display:display(p2)
 
-  ; ============ Indexable with associated type in MODULE ============
+  ; ============ Indexable with associated type in module ============
 
-  LET arr = Collections.IntArray.IntArray([10, 20, 30])
-  WRITE Indexable:get(arr, 1)
-  WRITE Indexable:index(arr, 2)
+  let arr = Collections.IntArray.IntArray([10, 20, 30])
+  write Indexable:get(arr, 1)
+  write Indexable:index(arr, 2)
 
   ; ============ Empty import brings instance into scope ============
 
-  LET thing = EmptyImport.Thing.Thing(42)
-  WRITE Display:display(thing)
+  let thing = EmptyImport.Thing.Thing(42)
+  write Display:display(thing)
 }
 
-MODULE Shapes {
-  +TYPE Circle = Circle(Float)
+module Shapes {
+  +type Circle = Circle(Float)
 
-  CLASS Display FOR Shapes.Circle {
-    FUN display(c: Shapes.Circle) -> String {
-      MATCH c {
+  class Display for Shapes.Circle {
+    fun display(c: Shapes.Circle) -> String {
+      match c {
         Shapes.Circle.Circle(r) => { "Circle(r={r})" }
       }
     }
   }
 }
 
-MODULE Prio {
-  +NEWTYPE Priority = Int
+module Prio {
+  +newtype Priority = Int
 
   ; Reversed ordering: higher number = lower priority
-  CLASS Ord FOR Prio.Priority {
-    FUN compare(a: Prio.Priority, b: Prio.Priority) -> Ordering {
-      IF a > b { Ordering.Lt } ELSE {
-        IF a == b { Ordering.Eq } ELSE { Ordering.Gt }
+  class Ord for Prio.Priority {
+    fun compare(a: Prio.Priority, b: Prio.Priority) -> Ordering {
+      if a > b { Ordering.Lt } else {
+        if a == b { Ordering.Eq } else { Ordering.Gt }
       }
     }
   }
 }
 
-MODULE Nums {
-  +NEWTYPE MyInt = Int
+module Nums {
+  +newtype MyInt = Int
 
-  CLASS Numeric FOR Nums.MyInt {
-    FUN add(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a + b }
-    FUN sub(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a - b }
-    FUN mul(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a * b }
-    FUN floor-div(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a // b }
-    FUN mod(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a % b }
-    FUN pow(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a ** b }
+  class Numeric for Nums.MyInt {
+    fun add(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a + b }
+    fun sub(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a - b }
+    fun mul(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a * b }
+    fun floor-div(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a // b }
+    fun mod(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a % b }
+    fun pow(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a ** b }
   }
 }
 
-MODULE Container {
-  +TYPE Pair[L, R] = Pair(L, R)
+module Container {
+  +type Pair[L, R] = Pair(L, R)
 
-  CLASS Display FOR Container.Pair[L, R] WHERE L: Display, R: Display {
-    FUN display(p: Container.Pair[L, R]) -> String {
-      MATCH p {
+  class Display for Container.Pair[L, R] where L: Display, R: Display {
+    fun display(p: Container.Pair[L, R]) -> String {
+      match p {
         Container.Pair.Pair(l, r) => {
-          LET ls = Display:display(l)
-          LET rs = Display:display(r)
+          let ls = Display:display(l)
+          let rs = Display:display(r)
           "Pair({ls}, {rs})"
         }
       }
@@ -106,32 +106,32 @@ MODULE Container {
   }
 }
 
-MODULE Collections {
-  +TYPE IntArray = IntArray(Array[Int])
+module Collections {
+  +type IntArray = IntArray(Array[Int])
 
-  CLASS Indexable[Int] FOR Collections.IntArray {
-    NEWTYPE Index = Int
+  class Indexable[Int] for Collections.IntArray {
+    newtype Index = Int
 
-    FUN index(arr: Collections.IntArray, i: Int) -> Int {
-      MATCH arr {
+    fun index(arr: Collections.IntArray, i: Int) -> Int {
+      match arr {
         Collections.IntArray.IntArray(inner) => inner[i]
       }
     }
 
-    FUN get(arr: Collections.IntArray, i: Int) -> Option[Int] {
-      MATCH arr {
+    fun get(arr: Collections.IntArray, i: Int) -> Option[Int] {
+      match arr {
         Collections.IntArray.IntArray(inner) => inner?[i]
       }
     }
   }
 }
 
-MODULE EmptyImport {
-  +TYPE Thing = Thing(Int)
+module EmptyImport {
+  +type Thing = Thing(Int)
 
-  CLASS Display FOR EmptyImport.Thing {
-    FUN display(t: EmptyImport.Thing) -> String {
-      MATCH t {
+  class Display for EmptyImport.Thing {
+    fun display(t: EmptyImport.Thing) -> String {
+      match t {
         EmptyImport.Thing.Thing(n) => { "Thing({n})" }
       }
     }

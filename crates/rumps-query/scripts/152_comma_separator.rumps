@@ -1,52 +1,52 @@
 ; Test comma as separator for statements and match arms
 
-FUN main() {
+fun main() {
   ; Comma-separated statements on single line
-  LET a = 1, LET b = 2, LET c = 3
-  WRITE a + b + c
+  let a = 1, let b = 2, let c = 3
+  write a + b + c
 
   ; Mixed: comma and newlines
-  LET x = 10, LET y = 20
-  LET z = x + y
-  WRITE z
+  let x = 10, let y = 20
+  let z = x + y
+  write z
 
-  WRITE color-name(Color.Red)
-  WRITE color-name(Color.Green)
-  WRITE color-name(Color.Blue)
+  write color-name(Color.Red)
+  write color-name(Color.Green)
+  write color-name(Color.Blue)
 
-  WRITE describe(Color.Red)
-  WRITE describe(Color.Blue)
-  WRITE describe(Color.Green)
+  write describe(Color.Red)
+  write describe(Color.Blue)
+  write describe(Color.Green)
 
   ; Inline match inside string interpolation
-  LET val: Option[Int] = ?42
-  WRITE "The value is: {MATCH val { Option.None => "nothing", Option.Some(x) => "{x}" }}"
+  let val: Option[Int] = ?42
+  write "The value is: {match val { Option.None => "nothing", Option.Some(x) => "{x}" }}"
 
-  LET empty: Option[Int] = Option.None
-  WRITE "Empty is: {MATCH empty { Option.None => "N/A", Option.Some(x) => "{x}" }}"
+  let empty: Option[Int] = Option.None
+  write "Empty is: {match empty { Option.None => "N/A", Option.Some(x) => "{x}" }}"
 
   ; Block with comma-separated statements
-  LET result = {
-    LET p = 5, LET q = 6
+  let result = {
+    let p = 5, let q = 6
     p * q
   }
-  WRITE result
+  write result
 
   ; Trailing comma allowed
-  LET t1 = 1, LET t2 = 2,
-  WRITE t1 + t2
+  let t1 = 1, let t2 = 2,
+  write t1 + t2
 }
 
 ; Comma-separated match arms (inline)
-TYPE Color = Red | Green | Blue
+type Color = Red | Green | Blue
 
-FUN color-name(c: Color) -> String {
-  MATCH c { Color.Red => "red", Color.Green => "green", Color.Blue => "blue" }
+fun color-name(c: Color) -> String {
+  match c { Color.Red => "red", Color.Green => "green", Color.Blue => "blue" }
 }
 
 ; Mixed comma and newline in match
-FUN describe(c: Color) -> String {
-  MATCH c {
+fun describe(c: Color) -> String {
+  match c {
     Color.Red => "primary", Color.Blue => "primary"
     Color.Green => "secondary"
   }

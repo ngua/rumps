@@ -1,63 +1,63 @@
 ; Destructuring bindings
 
-FUN main() {
+fun main() {
   ; === Tuple destructuring ===
 
-  LET pair = (1, 2)
-  LET (a, b) = pair
-  WRITE a
-  WRITE b
+  let pair = (1, 2)
+  let (a, b) = pair
+  write a
+  write b
 
   ; Nested tuple
-  LET nested = ((1, 2), (3, 4))
-  LET ((x1, y1), (x2, y2)) = nested
-  WRITE x1
-  WRITE y1
-  WRITE x2
-  WRITE y2
+  let nested = ((1, 2), (3, 4))
+  let ((x1, y1), (x2, y2)) = nested
+  write x1
+  write y1
+  write x2
+  write y2
 
   ; === Object destructuring ===
 
-  LET person = { name: "Alice", age: 30 }
-  LET { name, age } = person
-  WRITE name
-  WRITE age
+  let person = { name: "Alice", age: 30 }
+  let { name, age } = person
+  write name
+  write age
 
   ; Object with rename
-  LET point = { x: 10, y: 20 }
-  LET { x: px, y: py } = point
-  WRITE px
-  WRITE py
+  let point = { x: 10, y: 20 }
+  let { x: px, y: py } = point
+  write px
+  write py
 
-  ; NOTE: Array destructuring is only supported in MATCH expressions, not in LET bindings.
+  ; NOTE: Array destructuring is only supported in match expressions, not in let bindings.
   ; See 62_match.rumps for array pattern matching examples.
 
   ; === Wildcard ===
 
-  LET triple = (100, 200, 300)
-  LET (keep, _, last) = triple
-  WRITE keep
-  WRITE last
+  let triple = (100, 200, 300)
+  let (keep, _, last) = triple
+  write keep
+  write last
 
   ; Wildcard discards entire value
-  LET _ = "discarded"
-  WRITE "wildcard works"
+  let _ = "discarded"
+  write "wildcard works"
 
   ; === Mixed nesting ===
 
-  LET data = { coords: (10, 20), name: "origin" }
-  LET { coords: (cx, cy), name: label } = data
-  WRITE cx
-  WRITE cy
-  WRITE label
+  let data = { coords: (10, 20), name: "origin" }
+  let { coords: (cx, cy), name: label } = data
+  write cx
+  write cy
+  write label
 
   ; === In expressions ===
 
-  LET result = {
-    LET (x, y) = (5, 10)
+  let result = {
+    let (x, y) = (5, 10)
     x + y
   }
-  WRITE result
+  write result
 
-  WRITE "Destructuring test complete"
+  write "Destructuring test complete"
 }

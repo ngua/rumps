@@ -1,41 +1,41 @@
 ; Class method references with type arguments (turbofish syntax)
 
-FUN main() {
+fun main() {
   ; Monoid:identity with type parameter
-  LET id-opt = Monoid[Option[Int]]:identity
-  WRITE "id-opt() = {id-opt()}"
-  WRITE "direct call = {Monoid[Option[Int]]:identity()}"
+  let id-opt = Monoid[Option[Int]]:identity
+  write "id-opt() = {id-opt()}"
+  write "direct call = {Monoid[Option[Int]]:identity()}"
 
   ; Monoid:identity reference without type arg (inferred from context)
-  LET id-inferred = Monoid:identity
-  WRITE "inferred = {id-inferred() : Option[Int]}"
+  let id-inferred = Monoid:identity
+  write "inferred = {id-inferred() : Option[Int]}"
 
   ; Numeric with type parameter
-  LET add-int = Numeric[Int]:add
-  WRITE "add-int(1, 2) = {add-int(1, 2)}"
-  WRITE "direct = {Numeric[Float]:add(1.5, 2.5)}"
+  let add-int = Numeric[Int]:add
+  write "add-int(1, 2) = {add-int(1, 2)}"
+  write "direct = {Numeric[Float]:add(1.5, 2.5)}"
 
   ; Fallible:wrap with type parameter
-  LET wrap-opt = Fallible[Option[Int]]:wrap
-  WRITE "wrap-opt(42) = {wrap-opt(42)}"
+  let wrap-opt = Fallible[Option[Int]]:wrap
+  write "wrap-opt(42) = {wrap-opt(42)}"
 
-  LET wrap-res = Fallible[Result[Int, String]]:wrap
-  WRITE "wrap-res(99) = {wrap-res(99)}"
+  let wrap-res = Fallible[Result[Int, String]]:wrap
+  write "wrap-res(99) = {wrap-res(99)}"
 
   ; Use in higher-order functions
-  LET nums = [1, 2, 3]
-  LET opts = Mappable:map(wrap-opt, nums)
-  WRITE "mapped: {opts}"
+  let nums = [1, 2, 3]
+  let opts = Mappable:map(wrap-opt, nums)
+  write "mapped: {opts}"
 
   ; Into:into with type parameter
-  LET to-string = Into[String]:into
-  WRITE "to-string(123) = {to-string(123)}"
-  WRITE "to-string(3.14) = {to-string(3.14)}"
+  let to-string = Into[String]:into
+  write "to-string(123) = {to-string(123)}"
+  write "to-string(3.14) = {to-string(3.14)}"
 
   ; TryInto:try-into with type parameter
-  LET try-int = TryInto[Int]:try-into
-  LET good = "42"
-  LET bad = "bad"
-  WRITE "try-int(good) = {try-int(good)}"
-  WRITE "try-int(bad) = {try-int(bad)}"
+  let try-int = TryInto[Int]:try-into
+  let good = "42"
+  let bad = "bad"
+  write "try-int(good) = {try-int(good)}"
+  write "try-int(bad) = {try-int(bad)}"
 }

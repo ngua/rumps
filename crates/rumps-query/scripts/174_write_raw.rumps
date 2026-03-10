@@ -1,101 +1,93 @@
-; Test WRITE RAW modifier
-; RAW preserves escape sequences instead of rendering them
+; Test write raw modifier
+; raw preserves escape sequences instead of rendering them
 
-FUN main() {
+fun main() {
   ; =============================================================================
   ; Newline escaping
   ; =============================================================================
 
   ; Default: renders actual newline
-  WRITE "line1\nline2"
+  write "line1\nline2"
 
-  ; RAW: shows escape sequence
-  WRITE "line1\nline2" RAW
+  ; raw: shows escape sequence
+  write "line1\nline2" raw
 
   ; =============================================================================
   ; Tab escaping
   ; =============================================================================
 
   ; Default: renders actual tab
-  WRITE "col1\tcol2"
+  write "col1\tcol2"
 
-  ; RAW: shows escape sequence
-  WRITE "col1\tcol2" RAW
+  ; raw: shows escape sequence
+  write "col1\tcol2" raw
 
   ; =============================================================================
   ; Quote escaping
   ; =============================================================================
 
   ; Default: renders literal quotes (invalid RUMPS syntax)
-  WRITE "He said \"Hello\""
+  write "He said \"Hello\""
 
-  ; RAW: shows escape sequence (valid RUMPS syntax)
-  WRITE "He said \"Hello\"" RAW
+  ; raw: shows escape sequence (valid RUMPS syntax)
+  write "He said \"Hello\"" raw
 
   ; =============================================================================
   ; Backslash escaping
   ; =============================================================================
 
   ; Default: renders single backslash
-  WRITE "path\\to\\file"
+  write "path\\to\\file"
 
-  ; RAW: shows escaped backslash
-  WRITE "path\\to\\file" RAW
+  ; raw: shows escaped backslash
+  write "path\\to\\file" raw
 
   ; =============================================================================
   ; Multiple escapes
   ; =============================================================================
 
-  WRITE "line1\nline2\nline3" RAW
-  WRITE "a\tb\tc" RAW
+  write "line1\nline2\nline3" raw
+  write "a\tb\tc" raw
 
   ; =============================================================================
-  ; Case-insensitive
+  ; Char escaping in raw mode
   ; =============================================================================
 
-  WRITE "test\n" raw
-  WRITE "test\n" Raw
-  WRITE "test\n" RAW
-
-  ; =============================================================================
-  ; Char escaping in RAW mode
-  ; =============================================================================
-
-  WRITE '\n' RAW
-  WRITE '\t' RAW
-  WRITE '\\' RAW
+  write '\n' raw
+  write '\t' raw
+  write '\\' raw
 
   ; =============================================================================
   ; Arrays with strings
   ; =============================================================================
 
-  WRITE ["a\nb", "c\td"] RAW
+  write ["a\nb", "c\td"] raw
 
   ; =============================================================================
   ; Objects with strings
   ; =============================================================================
 
-  WRITE {name: "foo\nbar", value: "x\ty"} RAW
+  write {name: "foo\nbar", value: "x\ty"} raw
 
   ; =============================================================================
   ; Tuples with strings
   ; =============================================================================
 
-  WRITE ("a\nb", "c\td") RAW
+  write ("a\nb", "c\td") raw
 
   ; =============================================================================
   ; Options with strings
   ; =============================================================================
 
-  WRITE Option.Some("foo\nbar") RAW
+  write Option.Some("foo\nbar") raw
 
   ; =============================================================================
   ; String.escape function
   ; =============================================================================
 
   ; Direct use of String.escape
-  WRITE String.escape("foo\tbar")
+  write String.escape("foo\tbar")
 
   ; Mixed: escaped via function + non-escaped in same interpolation
-  WRITE "{String.escape("foo\tbar")} {"foo\tbar"}"
+  write "{String.escape("foo\tbar")} {"foo\tbar"}"
 }

@@ -1,94 +1,94 @@
 ; Test: safe indexing with `?[]` syntax
 ; Tests optional index access that returns `Option` instead of panicking
 
-FUN main() {
+fun main() {
   ; Array safe indexing
-  LET arr = [10, 20, 30]
+  let arr = [10, 20, 30]
 
   ; Valid indices return Some
-  WRITE arr?[0]
+  write arr?[0]
   ; Expected: Option.Some(10)
 
-  WRITE arr?[1]
+  write arr?[1]
   ; Expected: Option.Some(20)
 
-  WRITE arr?[2]
+  write arr?[2]
   ; Expected: Option.Some(30)
 
   ; Negative indices
-  WRITE arr?[-1]
+  write arr?[-1]
   ; Expected: Option.Some(30)
 
-  WRITE arr?[-2]
+  write arr?[-2]
   ; Expected: Option.Some(20)
 
   ; Out of bounds returns None
-  WRITE arr?[3]
+  write arr?[3]
   ; Expected: Option.None
 
-  WRITE arr?[100]
+  write arr?[100]
   ; Expected: Option.None
 
-  WRITE arr?[-4]
+  write arr?[-4]
   ; Expected: Option.None
 
-  WRITE arr?[-100]
+  write arr?[-100]
   ; Expected: Option.None
 
   ; String safe indexing
-  LET s = "hello"
+  let s = "hello"
 
-  WRITE s?[0]
+  write s?[0]
   ; Expected: Option.Some('h')
 
-  WRITE s?[4]
+  write s?[4]
   ; Expected: Option.Some('o')
 
-  WRITE s?[-1]
+  write s?[-1]
   ; Expected: Option.Some('o')
 
-  WRITE s?[5]
+  write s?[5]
   ; Expected: Option.None
 
-  WRITE s?[-6]
+  write s?[-6]
   ; Expected: Option.None
 
   ; Empty collections
-  LET empty: Array[Int] = []
-  WRITE empty?[0]
+  let empty: Array[Int] = []
+  write empty?[0]
   ; Expected: Option.None
 
-  LET empty-str = ""
-  WRITE empty-str?[0]
+  let empty-str = ""
+  write empty-str?[0]
   ; Expected: Option.None
 
   ; Map safe indexing (same as regular indexing since maps already return Option)
-  LET m = { "a" => 1, "b" => 2 }
-  WRITE m?["a"]
+  let m = { "a" => 1, "b" => 2 }
+  write m?["a"]
   ; Expected: Option.Some(1)
 
-  WRITE m?["z"]
+  write m?["z"]
   ; Expected: Option.None
 
   ; Chain with unwrap or coalesce
-  WRITE arr?[0] ?? -1
+  write arr?[0] ?? -1
   ; Expected: 10
 
-  WRITE arr?[100] ?? -1
+  write arr?[100] ?? -1
   ; Expected: -1
 
   ; Use with pattern matching
-  MATCH arr?[0] {
-    Option.Some(x) => WRITE "Got: {x}"
-    Option.None => WRITE "Nothing"
+  match arr?[0] {
+    Option.Some(x) => write "Got: {x}"
+    Option.None => write "Nothing"
   }
   ; Expected: Got: 10
 
-  MATCH arr?[999] {
-    Option.Some(x) => WRITE "Got: {x}"
-    Option.None => WRITE "Nothing"
+  match arr?[999] {
+    Option.Some(x) => write "Got: {x}"
+    Option.None => write "Nothing"
   }
   ; Expected: Nothing
 
-  WRITE "Safe indexing test complete"
+  write "Safe indexing test complete"
 }

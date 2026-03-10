@@ -1,11 +1,11 @@
 ; Error: wrong field type in nested object alias
 
-NEWTYPE Address = { street: String, city: String, zip: String }
-NEWTYPE Patient = { id: Int, name: String, address: Address }
+newtype Address = { street: String, city: String, zip: String }
+newtype Patient = { id: Int, name: String, address: Address }
 
-FUN main() {
+fun main() {
   ; address.zip should be String, not Int
-  LET p: Patient = {
+  let p: Patient = {
     id: 1,
     name: "Alice",
     address: { street: "123 Main", city: "NYC", zip: 10001 }

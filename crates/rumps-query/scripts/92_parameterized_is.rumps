@@ -1,121 +1,121 @@
-; IS operator with parameterized types (Array[T], Map[K, V])
+; is operator with parameterized types (Array[T], Map[K, V])
 ; Tests that element/key/value types are checked, not just the container type
 
-FUN main() {
+fun main() {
   ; === Array element type checks ===
 
-  LET floats = [1.0, 2.0, 3.0]
-  WRITE floats IS Array[Float]
-  ; TRUE
+  let floats = [1.0, 2.0, 3.0]
+  write floats is Array[Float]
+  ; true
 
-  WRITE floats IS Array[Int]
-  ; FALSE - floats are not ints
+  write floats is Array[Int]
+  ; false - floats are not ints
 
-  WRITE floats IS Array[Char]
-  ; FALSE
+  write floats is Array[Char]
+  ; false
 
-  LET ints = [1, 2, 3]
-  WRITE ints IS Array[Int]
-  ; TRUE
+  let ints = [1, 2, 3]
+  write ints is Array[Int]
+  ; true
 
-  WRITE ints IS Array[Float]
-  ; FALSE
+  write ints is Array[Float]
+  ; false
 
-  WRITE ints IS Array[String]
-  ; FALSE
+  write ints is Array[String]
+  ; false
 
   ; === Empty array with annotation ===
 
   ; Empty array without annotation is polymorphic (UNKNOWN element type)
-  LET empty = []
-  WRITE empty IS Array[Int]
-  ; TRUE - UNKNOWN matches anything
+  let empty = []
+  write empty is Array[Int]
+  ; true - UNKNOWN matches anything
 
-  WRITE empty IS Array[String]
-  ; TRUE - UNKNOWN matches anything
+  write empty is Array[String]
+  ; true - UNKNOWN matches anything
 
-  ; Empty array WITH annotation has concrete element type
-  LET empty-bool: Array[Bool] = []
-  WRITE empty-bool IS Array[Bool]
-  ; TRUE
+  ; Empty array with annotation has concrete element type
+  let empty-bool: Array[Bool] = []
+  write empty-bool is Array[Bool]
+  ; true
 
-  WRITE empty-bool IS Array[Int]
-  ; FALSE - annotated as Bool, not Int
+  write empty-bool is Array[Int]
+  ; false - annotated as Bool, not Int
 
-  WRITE empty-bool IS Array[String]
-  ; FALSE
+  write empty-bool is Array[String]
+  ; false
 
   ; === Map key/value type checks ===
 
-  LET str-to-int = { "a" => 1, "b" => 2 }
-  WRITE str-to-int IS Map[String, Int]
-  ; TRUE
+  let str-to-int = { "a" => 1, "b" => 2 }
+  write str-to-int is Map[String, Int]
+  ; true
 
-  WRITE str-to-int IS Map[String, String]
-  ; FALSE - values are Int, not String
+  write str-to-int is Map[String, String]
+  ; false - values are Int, not String
 
-  WRITE str-to-int IS Map[Int, Int]
-  ; FALSE - keys are String, not Int
+  write str-to-int is Map[Int, Int]
+  ; false - keys are String, not Int
 
   ; Empty map with annotation
-  LET empty-map: Map[Int, Bool] = Map.empty()
-  WRITE empty-map IS Map[Int, Bool]
-  ; TRUE
+  let empty-map: Map[Int, Bool] = Map.empty()
+  write empty-map is Map[Int, Bool]
+  ; true
 
-  WRITE empty-map IS Map[String, Int]
-  ; FALSE - annotated as Map[Int, Bool]
+  write empty-map is Map[String, Int]
+  ; false - annotated as Map[Int, Bool]
 
   ; === Inline annotation syntax ===
 
   ; Verify inline annotations also refine types
-  LET inline-arr = ([]) : Array[Char]
-  WRITE inline-arr IS Array[Char]
-  ; TRUE
+  let inline-arr = ([]) : Array[Char]
+  write inline-arr is Array[Char]
+  ; true
 
-  WRITE inline-arr IS Array[Int]
-  ; FALSE - inline annotation makes it concrete
+  write inline-arr is Array[Int]
+  ; false - inline annotation makes it concrete
 
-  LET box-int = { inner: 42 }
-  WRITE box-int IS Box[Int]
-  ; TRUE
+  let box-int = { inner: 42 }
+  write box-int is Box[Int]
+  ; true
 
-  WRITE box-int IS Box[String]
-  ; FALSE
+  write box-int is Box[String]
+  ; false
 
-  WRITE box-int IS Box[Float]
-  ; FALSE
+  write box-int is Box[Float]
+  ; false
 
   ; === Tuple type checks ===
 
-  WRITE (1, 'a') IS (Int, Char)
-  ; TRUE
+  write (1, 'a') is (Int, Char)
+  ; true
 
-  WRITE (1, 'a') IS (Char, Int)
-  ; FALSE - order matters
+  write (1, 'a') is (Char, Int)
+  ; false - order matters
 
-  WRITE (1, 2) IS (Int, Int)
-  ; TRUE
+  write (1, 2) is (Int, Int)
+  ; true
 
-  WRITE (1, 2, 3) IS (Int, Int, Int)
-  ; TRUE
+  write (1, 2, 3) is (Int, Int, Int)
+  ; true
 
   ; Single-element tuples
-  LET single: (Int,) = (42,)
-  WRITE single IS (Int,)
-  ; TRUE
+  let single: (Int,) = (42,)
+  write single is (Int,)
+  ; true
 
   ; Single-element tuple in closure annotations
-  LET f = (x: (Int,)) -> (Int,) => x
-  WRITE f((1,))
+  let f = (x: (Int,)) -> (Int,) => x
+  write f((1,))
   ; (1,)
 
   ; Empty tuple
-  WRITE () IS ()
-  ; TRUE
+  write () is ()
+  ; true
 
-  WRITE "parameterized IS tests complete"
+  write "parameterized is tests complete"
 }
 
 ; === User-defined parameterized types ===
 
-NEWTYPE Box[T] = { inner: T }
+newtype Box[T] = { inner: T }

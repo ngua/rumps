@@ -2,7 +2,6 @@
 //!
 //! Converts source text into a stream of tokens with spans. Handles:
 //! - Train-case identifiers (`my-var`) vs spaced subtraction (`a - b`)
-//! - Case-insensitive keywords
 //! - Comments (`;` to end of line)
 //! - Indentation tracking (`Indent`/`Dedent` tokens)
 //! - String literals with escape sequences
@@ -349,9 +348,7 @@ impl Lexer<'_> {
         ))
     }
 
-    /// DB intrinsic: `@SET`, `@GET`, `@KILL`, `@DATA`, `@ORDER`, `@QUERY`.
-    ///
-    /// Case-insensitive (e.g., `@set`, `@SET`, `@Set` all work).
+    /// DB intrinsic: `@set`, `@get`, `@kill`, `@data`, `@order`, `@query`.
     fn intrinsic() -> impl Parser<char, Spanned, Error = LexErr> + Clone {
         just('@').ignore_then(Self::ident_chars()).map_with_span(
             |name, span| {

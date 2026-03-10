@@ -1,8 +1,8 @@
 ; Regex error handling
 ; Tests invalid regex patterns produce type errors
 
-FUN main() {
+fun main() {
   ; Invalid regex pattern (unclosed group)
-  LET r = /(abc/
-  WRITE "test" MATCHES r
+  let r = /(abc/
+  write "test" matches r
 }

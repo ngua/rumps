@@ -1,80 +1,80 @@
 ; Optional chaining operator (?.) tests
 ; `?.` short-circuits to Option.None if base is None, otherwise wraps result in Some
 
-FUN main() {
+fun main() {
   ; === Basic optional chaining on objects ===
 
   ; Regular object: wrap result in Some, then coalesce to unwrap
-  LET obj = { name: "Alice", age: 30 }
-  WRITE obj?.name ?? "N/A"
+  let obj = { name: "Alice", age: 30 }
+  write obj?.name ?? "N/A"
   ; Expected: Alice
 
-  WRITE obj?.age ?? 0
+  write obj?.age ?? 0
   ; Expected: 30
 
   ; === Optional chaining on Option.None ===
 
   ; None short-circuits; field access is never attempted
-  LET none = Option.None
-  WRITE none?.name ?? "fallback"
+  let none = Option.None
+  write none?.name ?? "fallback"
   ; Expected: fallback
 
-  WRITE none?.anything ?? "default"
+  write none?.anything ?? "default"
   ; Expected: default
 
   ; === Optional chaining on Option.Some ===
 
   ; Some unwraps, accesses field, re-wraps in Some
-  LET some = Option.Some({ x: 42, y: 99 })
-  WRITE some?.x ?? 0
+  let some = Option.Some({ x: 42, y: 99 })
+  write some?.x ?? 0
   ; Expected: 42
 
-  WRITE some?.y ?? 0
+  write some?.y ?? 0
   ; Expected: 99
 
   ; === Chained optional access ===
 
   ; Multiple ?. in sequence
-  LET nested = { inner: { value: 123 } }
-  WRITE nested?.inner?.value ?? -1
+  let nested = { inner: { value: 123 } }
+  write nested?.inner?.value ?? -1
   ; Expected: 123
 
   ; Chain through None
-  LET outer = Option.None
-  WRITE outer?.inner?.value ?? -1
+  let outer = Option.None
+  write outer?.inner?.value ?? -1
   ; Expected: -1
 
   ; Mixed regular and optional access
-  LET obj2 = { data: { num: 55 } }
-  WRITE obj2.data?.num ?? 0
+  let obj2 = { data: { num: 55 } }
+  write obj2.data?.num ?? 0
   ; Expected: 55
 
   ; === Combining with coalesce ===
 
   ; Optional chaining always returns Option, coalesce unwraps
-  LET person = { city: "NYC" }
-  LET city = person?.city ?? "Unknown"
-  WRITE city
+  let person = { city: "NYC" }
+  let city = person?.city ?? "Unknown"
+  write city
   ; Expected: NYC
 
   ; Missing field with coalesce fallback
-  LET empty = Option.None
-  LET missing = empty?.nonexistent ?? "not found"
-  WRITE missing
+  let empty = Option.None
+  let missing = empty?.nonexistent ?? "not found"
+  write missing
   ; Expected: not found
 
   ; === Optional chaining result is always Option ===
 
   ; Without coalesce, result is Option.Some
-  LET result = { value: 10 }?.value
-  ; result is Option.Some(10); check with IS
-  WRITE IF result IS Option.Some(_) { "has value" } ELSE { "no value" }
+  let result = { value: 10 }?.value
+  ; result is Option.Some(10); check with is
+  write if result is Option.Some(_) { "has value" } else { "no value" }
   ; Expected: has value
 
   ; None result
-  LET result2 = Option.None?.value
-  WRITE IF result2 IS Option.Some(_) { "has value" } ELSE { "no value" }
+  let result2 = Option.None?.value
+  write if result2 is Option.Some(_) { "has value" } else { "no value" }
   ; Expected: no value
 
-  WRITE "Optional chaining tests complete"
+  write "Optional chaining tests complete"
 }

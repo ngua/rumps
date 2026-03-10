@@ -1,16 +1,16 @@
-; Error: unknown type variable in CLASS body
+; Error: unknown type variable in class body
 ;
 ; Only type variables from the `for_type` expression are in scope.
 ; Using a different type variable `U` (not declared in `X[T]`)
 ; should produce an "unknown type" error.
 
-FUN main() {
-  WRITE "should not reach"
+fun main() {
+  write "should not reach"
 }
 
-NEWTYPE X[T] = Int
+newtype X[T] = Int
 
 ; `U` is not declared anywhere; should fail
-CLASS Eq FOR X[T] {
-  FUN eq(a: X[U], b: X[U]) -> Bool { false }
+class Eq for X[T] {
+  fun eq(a: X[U], b: X[U]) -> Bool { false }
 }

@@ -1,93 +1,93 @@
-; Test: Fallible type conversion operator (READ)
+; Test: Fallible type conversion operator (read)
 ; Tests fallible conversions that return `Result[T, String]`
 
-FUN main() {
+fun main() {
   ; === String -> Int ===
 
   ; Success case
-  LET s1 = "42"
-  LET r1 = s1 READ Int
-  WRITE r1
+  let s1 = "42"
+  let r1 = s1 read Int
+  write r1
   ; Expected: Result.Ok(42)
 
   ; Negative number
-  LET s2 = "-123"
-  LET r2 = s2 READ Int
-  WRITE r2
+  let s2 = "-123"
+  let r2 = s2 read Int
+  write r2
   ; Expected: Result.Ok(-123)
 
   ; Failure case (not a valid int)
-  LET s3 = "hello"
-  LET r3 = s3 READ Int
-  WRITE r3
+  let s3 = "hello"
+  let r3 = s3 read Int
+  write r3
   ; Expected: Result.Err(...)
 
   ; Failure case (float string -> int)
-  LET s4 = "3.14"
-  LET r4 = s4 READ Int
-  WRITE r4
+  let s4 = "3.14"
+  let r4 = s4 read Int
+  write r4
   ; Expected: Result.Err(...)
 
   ; === String -> Float ===
 
   ; Success case
-  LET f1 = "3.14"
-  LET rf1 = f1 READ Float
-  WRITE rf1
+  let f1 = "3.14"
+  let rf1 = f1 read Float
+  write rf1
   ; Expected: Result.Ok(3.14)
 
   ; Integer string to float
-  LET f2 = "42"
-  LET rf2 = f2 READ Float
-  WRITE rf2
+  let f2 = "42"
+  let rf2 = f2 read Float
+  write rf2
   ; Expected: Result.Ok(42)
 
   ; Negative float
-  LET f3 = "-2.5"
-  LET rf3 = f3 READ Float
-  WRITE rf3
+  let f3 = "-2.5"
+  let rf3 = f3 read Float
+  write rf3
   ; Expected: Result.Ok(-2.5)
 
   ; Failure case
-  LET f4 = "not-a-number"
-  LET rf4 = f4 READ Float
-  WRITE rf4
+  let f4 = "not-a-number"
+  let rf4 = f4 read Float
+  write rf4
   ; Expected: Result.Err(...)
 
   ; === Int -> Bool ===
 
   ; Zero -> false
-  LET b1 = 0 READ Bool
-  WRITE b1
-  ; Expected: Result.Ok(FALSE)
+  let b1 = 0 read Bool
+  write b1
+  ; Expected: Result.Ok(false)
 
   ; One -> true
-  LET b2 = 1 READ Bool
-  WRITE b2
-  ; Expected: Result.Ok(TRUE)
+  let b2 = 1 read Bool
+  write b2
+  ; Expected: Result.Ok(true)
 
   ; Invalid int (not 0 or 1)
-  LET b3 = 42 READ Bool
-  WRITE b3
+  let b3 = 42 read Bool
+  write b3
   ; Expected: Result.Err(...)
 
-  LET b4 = -1 READ Bool
-  WRITE b4
+  let b4 = -1 read Bool
+  write b4
   ; Expected: Result.Err(...)
 
   ; === Chained operations ===
 
   ; Chain read with as
-  LET chain = ("42" READ Int) AS String
-  WRITE chain
+  let chain = ("42" read Int) as String
+  write chain
   ; Expected: Result.Ok(42)
 
   ; === Read with expressions ===
 
-  LET concat = "{"1"}{"23"}"
-  LET parsed = concat READ Int
-  WRITE parsed
+  let concat = "{"1"}{"23"}"
+  let parsed = concat read Int
+  write parsed
   ; Expected: Result.Ok(123)
 
-  WRITE "Fallible read test complete"
+  write "Fallible read test complete"
 }

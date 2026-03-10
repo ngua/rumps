@@ -2,22 +2,22 @@
 ;
 ; Only one instance of a class is allowed per type.
 
-FUN main() { }
+fun main() { }
 
-TYPE Point = Point(Int, Int)
+type Point = Point(Int, Int)
 
-CLASS Display FOR Point {
-  FUN display(p: Point) -> String {
-    MATCH p {
+class Display for Point {
+  fun display(p: Point) -> String {
+    match p {
       Point.Point(x, y) => { "({x}, {y})" }
     }
   }
 }
 
 ; Duplicate instance - should error
-CLASS Display FOR Point {
-  FUN display(p: Point) -> String {
-    MATCH p {
+class Display for Point {
+  fun display(p: Point) -> String {
+    match p {
       Point.Point(x, y) => { "Point[{x},{y}]" }
     }
   }

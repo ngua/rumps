@@ -3,47 +3,47 @@
 ; in both inline and file-imported modules
 
 ; Import module from file (path relative to script directory)
-MODULE MyMath FROM "../modules/lib/mymath.rumps"
+module MyMath from "../modules/lib/mymath.rumps"
 
-FUN main() {
-  WRITE Geometry.pi > 3.0  ; true
-  WRITE Geometry.circle-area(1.0) > 3.0  ; true (pi * 1 * 1 = pi)
-  WRITE Geometry.circle-circumference(1.0) > 6.0  ; true (tau * 1 = tau)
-  WRITE Geometry.double-area(1.0) > 6.0  ; true (2 * pi)
+fun main() {
+  write Geometry.pi > 3.0  ; true
+  write Geometry.circle-area(1.0) > 3.0  ; true (pi * 1 * 1 = pi)
+  write Geometry.circle-circumference(1.0) > 6.0  ; true (tau * 1 = tau)
+  write Geometry.double-area(1.0) > 6.0  ; true (2 * pi)
 
   ; ============ File-imported module with sibling references ============
 
-  WRITE MyMath.pi > 3.0  ; true
-  WRITE MyMath.area(1.0) > 3.0  ; true (pi * 1 * 1 = pi)
-  WRITE MyMath.area(2.0) > 12.0  ; true (pi * 4 = ~12.56)
+  write MyMath.pi > 3.0  ; true
+  write MyMath.area(1.0) > 3.0  ; true (pi * 1 * 1 = pi)
+  write MyMath.area(2.0) > 12.0  ; true (pi * 4 = ~12.56)
 
   ; ============ Both inline and imported in same script ============
 
-  LET inline-area = Geometry.circle-area(2.0)
-  LET file-area = MyMath.area(2.0)
+  let inline-area = Geometry.circle-area(2.0)
+  let file-area = MyMath.area(2.0)
 
   ; Both should compute pi * 4 = ~12.56636
-  WRITE inline-area > 12.0
-  WRITE file-area > 12.0
+  write inline-area > 12.0
+  write file-area > 12.0
 
   ; They should be equal (both use pi * r * r)
-  LET diff = inline-area - file-area
-  WRITE diff < 0.0001
-  WRITE diff > -0.0001
+  let diff = inline-area - file-area
+  write diff < 0.0001
+  write diff > -0.0001
 }
 
 ; ============ Inline module with sibling references ============
 
-MODULE Geometry {
-  +LET pi = 3.14159
-  +LET tau = 6.28318
+module Geometry {
+  +let pi = 3.14159
+  +let tau = 6.28318
 
   ; Function referencing sibling constant
-  +FUN circle-area(r: Float) -> Float { pi * r * r }
+  +fun circle-area(r: Float) -> Float { pi * r * r }
 
   ; Function referencing sibling constant
-  +FUN circle-circumference(r: Float) -> Float { tau * r }
+  +fun circle-circumference(r: Float) -> Float { tau * r }
 
   ; Function referencing sibling function (mutual recursion base case)
-  +FUN double-area(r: Float) -> Float { 2.0 * circle-area(r) }
+  +fun double-area(r: Float) -> Float { 2.0 * circle-area(r) }
 }

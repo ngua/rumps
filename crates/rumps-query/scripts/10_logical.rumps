@@ -1,99 +1,99 @@
 ; Test: logical operators
-; Tests AND, OR, NOT with both keyword and symbol forms
+; Tests and, or, not with both keyword and symbol forms
 
-FUN main() {
-  ; AND operator (keyword)
-  WRITE TRUE AND TRUE
+fun main() {
+  ; and operator (keyword)
+  write true and true
   ; Expected: true
 
-  WRITE TRUE AND FALSE
+  write true and false
   ; Expected: false
 
-  WRITE FALSE AND TRUE
+  write false and true
   ; Expected: false
 
-  WRITE FALSE AND FALSE
+  write false and false
   ; Expected: false
 
-  ; AND operator (symbol)
-  WRITE TRUE && TRUE
+  ; and operator (symbol)
+  write true && true
   ; Expected: true
 
-  WRITE TRUE && FALSE
+  write true && false
   ; Expected: false
 
-  ; OR operator (keyword)
-  WRITE TRUE OR TRUE
+  ; or operator (keyword)
+  write true or true
   ; Expected: true
 
-  WRITE TRUE OR FALSE
+  write true or false
   ; Expected: true
 
-  WRITE FALSE OR TRUE
+  write false or true
   ; Expected: true
 
-  WRITE FALSE OR FALSE
+  write false or false
   ; Expected: false
 
-  ; OR operator (symbol)
-  WRITE TRUE || FALSE
+  ; or operator (symbol)
+  write true || false
   ; Expected: true
 
-  WRITE FALSE || FALSE
+  write false || false
   ; Expected: false
 
-  ; NOT operator (keyword)
-  WRITE NOT TRUE
+  ; not operator (keyword)
+  write not true
   ; Expected: false
 
-  WRITE NOT FALSE
+  write not false
   ; Expected: true
 
-  ; NOT operator (symbol)
-  WRITE !TRUE
+  ; not operator (symbol)
+  write !true
   ; Expected: false
 
-  WRITE !FALSE
+  write !false
   ; Expected: true
 
-  ; Precedence: NOT before AND before OR
-  WRITE NOT FALSE AND TRUE
-  ; Expected: true (NOT binds tighter)
+  ; Precedence: not before and before or
+  write not false and true
+  ; Expected: true (not binds tighter)
 
-  WRITE TRUE OR FALSE AND FALSE
-  ; Expected: true (AND binds tighter than OR)
+  write true or false and false
+  ; Expected: true (and binds tighter than or)
 
-  WRITE FALSE OR TRUE AND TRUE
+  write false or true and true
   ; Expected: true
 
   ; Parentheses override precedence
-  WRITE (TRUE OR FALSE) AND FALSE
+  write (true or false) and false
   ; Expected: false
 
-  WRITE NOT (TRUE AND FALSE)
+  write not (true and false)
   ; Expected: true
 
   ; Complex expressions
-  WRITE (TRUE AND FALSE) OR (FALSE OR TRUE)
+  write (true and false) or (false or true)
   ; Expected: true
 
-  WRITE NOT (FALSE OR FALSE)
+  write not (false or false)
   ; Expected: true
 
-  WRITE (NOT FALSE) AND (NOT FALSE)
+  write (not false) and (not false)
   ; Expected: true
 
   ; With variables
-  LET a = TRUE
-  LET b = FALSE
-  WRITE a AND NOT b
+  let a = true
+  let b = false
+  write a and not b
   ; Expected: true
 
-  WRITE NOT a OR b
+  write not a or b
   ; Expected: false
 
-  WRITE (a OR b) AND (NOT b)
+  write (a or b) and (not b)
   ; Expected: true
 
-  WRITE "Logical operators test complete"
+  write "Logical operators test complete"
 }

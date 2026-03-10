@@ -1,10 +1,10 @@
 ; Test: comments
 ; This entire line is a comment
 
-FUN main() {
+fun main() {
   ; Comments should be ignored by the lexer
-  LET x = 42 ; inline comment after code
-  WRITE x
+  let x = 42 ; inline comment after code
+  write x
   ; Expected: 42
 
   ; Multiple comment lines
@@ -12,14 +12,14 @@ FUN main() {
   ; Line 2
   ; Line 3
 
-  LET y = 10 ; first inline
-  LET z = 20 ; second inline
+  let y = 10 ; first inline
+  let z = 20 ; second inline
 
   ; Comment with special characters: !@#$%^&*()
   ; Comment with "quotes" and 'apostrophes'
   ; Comment with numbers 12345
 
-  WRITE y + z ; should output 30
+  write y + z ; should output 30
   ; Expected: 30
 
   ; Empty comment
@@ -28,6 +28,6 @@ FUN main() {
   ;;; Triple semicolon
 
   ; Comment at end of file
-  WRITE "Comment test complete"
+  write "Comment test complete"
   ; final comment
 }

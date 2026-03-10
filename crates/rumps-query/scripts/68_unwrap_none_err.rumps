@@ -1,6 +1,6 @@
 ; Unwrap Option.None should error
 
-FUN main() {
-  LET none-val = Option.None
-  WRITE none-val!
+fun main() {
+  let none-val = Option.None
+  write none-val!
 }

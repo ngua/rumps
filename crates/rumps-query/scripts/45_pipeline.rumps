@@ -3,133 +3,133 @@
 
 ; === Pipeline with named function ===
 
-FUN double (x) { x * 2 }
-FUN square (x) { x * x }
-FUN inc (x) { x + 1 }
+fun double (x) { x * 2 }
+fun square (x) { x * x }
+fun inc (x) { x + 1 }
 
 ; === Pipeline with typed functions ===
 
-FUN typed-double (x: Int) -> Int { x * 2 }
-FUN typed-inc (x: Int) -> Int { x + 1 }
+fun typed-double (x: Int) -> Int { x * 2 }
+fun typed-inc (x: Int) -> Int { x + 1 }
 
 ; === Higher-order with typed parameters ===
 
-FUN apply-twice (f, x) {
+fun apply-twice (f, x) {
   f(f(x))
 }
 
-FUN negate (x) { 0 - x }
+fun negate (x) { 0 - x }
 
-FUN add-10 (x) { x + 10 }
-FUN half (x) { x // 2 }
+fun add-10 (x) { x + 10 }
+fun half (x) { x // 2 }
 
-FUN add (x, y) { x + y }
-FUN mul (a, b, c) { a * b * c }
+fun add (x, y) { x + y }
+fun mul (a, b, c) { a * b * c }
 
-FUN main() {
+fun main() {
   ; === Basic pipeline with closure ===
 
-  WRITE 5 |> (x => x * 2)
+  write 5 |> (x => x * 2)
   ; Expected: 10
 
-  WRITE 10 |> (x => x + 5)
+  write 10 |> (x => x + 5)
   ; Expected: 15
 
-  WRITE 5 |> double
+  write 5 |> double
   ; Expected: 10
 
-  WRITE 5 |> square
+  write 5 |> square
   ; Expected: 25
 
   ; === Pipeline chain (left-associative) ===
 
-  WRITE 5 |> double |> square
+  write 5 |> double |> square
   ; Expected: 100 (double(5)=10, square(10)=100)
 
-  WRITE 5 |> square |> double
+  write 5 |> square |> double
   ; Expected: 50 (square(5)=25, double(25)=50)
 
-  WRITE 5 |> inc |> double |> square
+  write 5 |> inc |> double |> square
   ; Expected: 144 (inc(5)=6, double(6)=12, square(12)=144)
 
   ; === Pipeline with inline closures ===
 
-  WRITE 10 |> (x => x + 1) |> (x => x * 2)
+  write 10 |> (x => x + 1) |> (x => x * 2)
   ; Expected: 22 (10+1=11, 11*2=22)
 
-  WRITE 3 |> (x => x * x) |> (x => x + 1)
+  write 3 |> (x => x * x) |> (x => x + 1)
   ; Expected: 10 (3*3=9, 9+1=10)
 
   ; === Pipeline precedence (lower than all other ops) ===
 
-  WRITE 1 + 2 |> double
+  write 1 + 2 |> double
   ; Expected: 6 (1+2=3, double(3)=6)
 
-  WRITE 10 - 4 |> square
+  write 10 - 4 |> square
   ; Expected: 36 ((10-4)=6, square(6)=36)
 
-  WRITE 2 * 3 |> inc
+  write 2 * 3 |> inc
   ; Expected: 7 (2*3=6, inc(6)=7)
 
-  WRITE 5 |> typed-double
+  write 5 |> typed-double
   ; Expected: 10
 
-  WRITE 5 |> typed-double |> typed-inc
+  write 5 |> typed-double |> typed-inc
   ; Expected: 11
 
   ; === Pipeline with closures capturing variables ===
 
-  LET factor = 3
-  LET scale = x => x * factor
+  let factor = 3
+  let scale = x => x * factor
 
-  WRITE 10 |> scale
+  write 10 |> scale
   ; Expected: 30
 
-  LET offset = 100
-  LET shift = x => x + offset
+  let offset = 100
+  let shift = x => x + offset
 
-  WRITE 5 |> double |> shift
+  write 5 |> double |> shift
   ; Expected: 110 (double(5)=10, shift(10)=110)
 
-  LET quad = x => apply-twice(double, x)
+  let quad = x => apply-twice(double, x)
 
-  WRITE 3 |> quad
+  write 3 |> quad
   ; Expected: 12 (3*2=6, 6*2=12)
 
   ; === Chained pipelines with various transforms ===
 
-  WRITE 5 |> double |> negate
+  write 5 |> double |> negate
   ; Expected: -10
 
-  WRITE 5 |> negate |> double
+  write 5 |> negate |> double
   ; Expected: -10
 
   ; === Complex pipeline expression ===
 
-  WRITE 4 |> square |> add-10 |> half
+  write 4 |> square |> add-10 |> half
   ; Expected: 13 (square(4)=16, add-10(16)=26, half(26)=13)
 
   ; === Pipeline with `.` placeholder (multi-arg functions) ===
 
-  WRITE 5 |> add(10, .)
+  write 5 |> add(10, .)
   ; Expected: 15 (add(10, 5)=15)
 
-  WRITE 3 |> add(., 7)
+  write 3 |> add(., 7)
   ; Expected: 10 (add(3, 7)=10)
 
-  WRITE 2 |> mul(., 3, .)
+  write 2 |> mul(., 3, .)
   ; Expected: 12 (mul(2, 3, 2)=12)
 
   ; === Chained pipelines with `.` placeholder ===
 
-  WRITE 1 |> add(., 2) |> mul(., 3, 4)
+  write 1 |> add(., 2) |> mul(., 3, 4)
   ; Expected: 36 (add(1, 2)=3, mul(3, 3, 4)=36)
 
   ; === Pipeline placeholder with built-in functions ===
 
-  LET arr = [1, 2, 3, 4, 5]
-  WRITE arr |> Array.slice(., 1, 3)
+  let arr = [1, 2, 3, 4, 5]
+  write arr |> Array.slice(., 1, 3)
   ; Expected: [2, 3]
 
-  WRITE "Pipeline test complete"
+  write "Pipeline test complete"
 }

@@ -1,6 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: type conversions\n; Tests explicit type conversion with AS and string interpolation\n\n; === Explicit Type Conversion with AS ===\n\n; Addition with explicit conversion to Float\nLET a = (10 AS Float) + 3.5\nWRITE a\n; Expected: 13.5 (Float)\n\nLET b = 3.5 + (10 AS Float)\nWRITE b\n; Expected: 13.5 (Float)\n\n; Subtraction with explicit conversion\nLET c = (10 AS Float) - 2.5\nWRITE c\n; Expected: 7.5 (Float)\n\nLET d = 10.5 - (3 AS Float)\nWRITE d\n; Expected: 7.5 (Float)\n\n; Multiplication with explicit conversion\nLET e = (5 AS Float) * 2.5\nWRITE e\n; Expected: 12.5 (Float)\n\nLET f = 2.5 * (4 AS Float)\nWRITE f\n; Expected: 10.0 (Float)\n\n; Division (requires Float operands)\nLET g = (10 AS Float) / 4.0\nWRITE g\n; Expected: 2.5 (Float)\n\nLET h = 10.0 / (4 AS Float)\nWRITE h\n; Expected: 2.5 (Float)\n\n; Float division\nLET i = 10.0 / 5.0\nWRITE i\n; Expected: 2.0 (Float)\n\n; Floor division (same-type operands)\nLET j = 10.0 // 3.0\nWRITE j\n; Expected: 3.0 (Float)\n\nLET k = 10 // 3\nWRITE k\n; Expected: 3 (Int)\n\n; Modulo (same-type operands)\nLET l = 10.0 % 3.5\nWRITE l\n; Expected: 3.0 (Float; 10.0 % 3.5 = 3.0)\n\nLET m = 10.5 % 3.0\nWRITE m\n; Expected: 1.5 (Float; 10.5 % 3.0 = 1.5)\n\n; === String Conversion (via interpolation) ===\n\n; Int to string\nWRITE \"Number: {42}\"\n; Expected: Number: 42\n\n; Float to string\nWRITE \"Pi: {3.14159}\"\n; Expected: Pi: 3.14159\n\n; Bool to string\nWRITE \"Flag: {TRUE}\"\n; Expected: Flag: true\n\nWRITE \"Flag: {FALSE}\"\n; Expected: Flag: false\n\n; === Same-type Numeric Comparison ===\n\nWRITE 5 == 5\n; Expected: true\n\nWRITE 5.0 == 5.0\n; Expected: true\n\nWRITE 10 < 11\n; Expected: true\n\nWRITE 10.5 > 10.0\n; Expected: true\n\nWRITE 3 >= 3\n; Expected: true\n\nWRITE 3.0 <= 3.0\n; Expected: true\n\nWRITE \"Type conversion test complete\"\n"
+description: "; Test: type conversions\n; Tests explicit type conversion with as and string interpolation\n\nfun main() {\n  ; === Explicit Type Conversion with as ===\n\n  ; Addition with explicit conversion to Float\n  let a = (10 as Float) + 3.5\n  write a\n  ; Expected: 13.5 (Float)\n\n  let b = 3.5 + (10 as Float)\n  write b\n  ; Expected: 13.5 (Float)\n\n  ; Subtraction with explicit conversion\n  let c = (10 as Float) - 2.5\n  write c\n  ; Expected: 7.5 (Float)\n\n  let d = 10.5 - (3 as Float)\n  write d\n  ; Expected: 7.5 (Float)\n\n  ; Multiplication with explicit conversion\n  let e = (5 as Float) * 2.5\n  write e\n  ; Expected: 12.5 (Float)\n\n  let f = 2.5 * (4 as Float)\n  write f\n  ; Expected: 10.0 (Float)\n\n  ; Division (requires Float operands)\n  let g = (10 as Float) / 4.0\n  write g\n  ; Expected: 2.5 (Float)\n\n  let h = 10.0 / (4 as Float)\n  write h\n  ; Expected: 2.5 (Float)\n\n  ; Float division\n  let i = 10.0 / 5.0\n  write i\n  ; Expected: 2.0 (Float)\n\n  ; Floor division (same-type operands)\n  let j = 10.0 // 3.0\n  write j\n  ; Expected: 3.0 (Float)\n\n  let k = 10 // 3\n  write k\n  ; Expected: 3 (Int)\n\n  ; Modulo (same-type operands)\n  let l = 10.0 % 3.5\n  write l\n  ; Expected: 3.0 (Float; 10.0 % 3.5 = 3.0)\n\n  let m = 10.5 % 3.0\n  write m\n  ; Expected: 1.5 (Float; 10.5 % 3.0 = 1.5)\n\n  ; === String Conversion (via interpolation) ===\n\n  ; Int to string\n  write \"Number: {42}\"\n  ; Expected: Number: 42\n\n  ; Float to string\n  write \"Pi: {3.14159}\"\n  ; Expected: Pi: 3.14159\n\n  ; Bool to string\n  write \"Flag: {true}\"\n  ; Expected: Flag: true\n\n  write \"Flag: {false}\"\n  ; Expected: Flag: false\n\n  ; === Same-type Numeric Comparison ===\n\n  write 5 == 5\n  ; Expected: true\n\n  write 5.0 == 5.0\n  ; Expected: true\n\n  write 10 < 11\n  ; Expected: true\n\n  write 10.5 > 10.0\n  ; Expected: true\n\n  write 3 >= 3\n  ; Expected: true\n\n  write 3.0 <= 3.0\n  ; Expected: true\n\n  write \"Type conversion test complete\"\n}\n"
 ---
 13.5
 13.5
@@ -17,12 +17,12 @@ description: "; Test: type conversions\n; Tests explicit type conversion with AS
 1.5
 "Number: 42"
 "Pi: 3.14159"
-"Flag: TRUE"
-"Flag: FALSE"
-TRUE
-TRUE
-TRUE
-TRUE
-TRUE
-TRUE
+"Flag: true"
+"Flag: false"
+true
+true
+true
+true
+true
+true
 "Type conversion test complete"

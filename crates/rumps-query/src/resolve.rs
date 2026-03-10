@@ -414,7 +414,7 @@ mod tests {
 
     #[test]
     fn resolve_option_none() {
-        let ast = parse_and_resolve("LET x = Option.None");
+        let ast = parse_and_resolve("let x = Option.None");
         let has_variant = ast.expr_ids().any(|id| {
             matches!(
                 ast.get_expr(id),
@@ -430,7 +430,7 @@ mod tests {
 
     #[test]
     fn resolve_option_some_becomes_variant() {
-        let ast = parse_and_resolve("LET x = Option.Some(42)");
+        let ast = parse_and_resolve("let x = Option.Some(42)");
         let has_variant = ast.expr_ids().any(|id| {
             matches!(
                 ast.get_expr(id),
@@ -442,7 +442,7 @@ mod tests {
 
     #[test]
     fn resolve_result_ok_becomes_variant() {
-        let ast = parse_and_resolve("LET x = Result.Ok(42)");
+        let ast = parse_and_resolve("let x = Result.Ok(42)");
         let has_variant = ast.expr_ids().any(|id| {
             matches!(
                 ast.get_expr(id),
@@ -454,7 +454,7 @@ mod tests {
 
     #[test]
     fn resolve_result_err_becomes_variant() {
-        let ast = parse_and_resolve("LET x = Result.Err(\"oops\")");
+        let ast = parse_and_resolve("let x = Result.Err(\"oops\")");
         let has_variant = ast.expr_ids().any(|id| {
             matches!(
                 ast.get_expr(id),
@@ -466,7 +466,7 @@ mod tests {
 
     #[test]
     fn resolve_field_access_not_converted() {
-        let ast = parse_and_resolve("LET obj = { x: 1 }\nLET y = obj.x");
+        let ast = parse_and_resolve("let obj = { x: 1 }\nlet y = obj.x");
         // obj.x should remain as Field, not become Variant
         let has_variant_obj_x = ast.expr_ids().any(|id| {
             matches!(
@@ -479,7 +479,7 @@ mod tests {
 
     #[test]
     fn resolve_unknown_type_not_converted() {
-        let ast = parse_and_resolve("LET x = Unknown.Foo");
+        let ast = parse_and_resolve("let x = Unknown.Foo");
         // Unknown.Foo should remain as Field since Unknown is not a registered type
         let has_variant = ast.expr_ids().any(|id| {
             matches!(
@@ -492,7 +492,7 @@ mod tests {
 
     #[test]
     fn resolve_array_push_becomes_path() {
-        let ast = parse_and_resolve("LET r = Array.push([1, 2], 3)");
+        let ast = parse_and_resolve("let r = Array.push([1, 2], 3)");
         let has_path = ast.expr_ids().any(|id| {
             matches!(
                 ast.get_expr(id),
@@ -505,7 +505,7 @@ mod tests {
     #[test]
     fn resolve_module_fn_without_call() {
         // Module function used as value (e.g., for pipeline)
-        let ast = parse_and_resolve("LET f = String.length");
+        let ast = parse_and_resolve("let f = String.length");
         let has_path = ast.expr_ids().any(|id| {
             matches!(
                 ast.get_expr(id),
@@ -517,7 +517,7 @@ mod tests {
 
     #[test]
     fn resolve_unknown_module_not_converted() {
-        let ast = parse_and_resolve("LET x = Foo.bar(1)");
+        let ast = parse_and_resolve("let x = Foo.bar(1)");
         // Foo.bar should remain as Field since Foo is not a known module
         let has_path = ast.expr_ids().any(|id| {
             matches!(

@@ -1,250 +1,250 @@
 ; Option and Result module primitives
 ; Tests Option.unwrap-or, Option.map, Result.unwrap-or, Result.map, Result.map-err
 
-FUN safe-div(n, d) {
-  IF d == 0 { Option.None } ELSE { Option.Some(n // d) }
+fun safe-div(n, d) {
+  if d == 0 { Option.None } else { Option.Some(n // d) }
 }
 
-FUN parse-positive(x) {
-  IF x > 0 { Option.Some(x) } ELSE { Option.None }
+fun parse-positive(x) {
+  if x > 0 { Option.Some(x) } else { Option.None }
 }
 
-FUN halve(x) {
-  IF x % 2 == 0 { Option.Some(x // 2) } ELSE { Option.None }
+fun halve(x) {
+  if x % 2 == 0 { Option.Some(x // 2) } else { Option.None }
 }
 
-FUN safe-div-res(n, d) {
-  IF d == 0 { Result.Err("div by zero") } ELSE { Result.Ok(n // d) }
+fun safe-div-res(n, d) {
+  if d == 0 { Result.Err("div by zero") } else { Result.Ok(n // d) }
 }
 
-FUN validate(x) {
-  IF x >= 0 { Result.Ok(x) } ELSE { Result.Err("negative") }
+fun validate(x) {
+  if x >= 0 { Result.Ok(x) } else { Result.Err("negative") }
 }
 
-FUN halve-res(x) {
-  IF x % 2 == 0 { Result.Ok(x // 2) } ELSE { Result.Err("odd") }
+fun halve-res(x) {
+  if x % 2 == 0 { Result.Ok(x // 2) } else { Result.Err("odd") }
 }
 
-FUN try-parse(s) {
-  IF s == "42" { Result.Ok(42) } ELSE { Result.Err("parse failed") }
+fun try-parse(s) {
+  if s == "42" { Result.Ok(42) } else { Result.Err("parse failed") }
 }
 
-FUN main() {
+fun main() {
   ; ============ Option.unwrap-or ============
 
-  LET some-val = Option.Some(42)
-  LET none-val = Option.None
+  let some-val = Option.Some(42)
+  let none-val = Option.None
 
-  WRITE Option.unwrap-or(some-val, 0)  ; 42
-  WRITE Option.unwrap-or(none-val, 0)  ; 0
-  WRITE Option.unwrap-or(Option.Some("hello"), "default")  ; "hello"
-  WRITE Option.unwrap-or(Option.None, "default")  ; "default"
+  write Option.unwrap-or(some-val, 0)  ; 42
+  write Option.unwrap-or(none-val, 0)  ; 0
+  write Option.unwrap-or(Option.Some("hello"), "default")  ; "hello"
+  write Option.unwrap-or(Option.None, "default")  ; "default"
 
   ; ============ Option.map ============
 
-  LET double = x => x * 2
-  LET to-upper = s => String.upper(s)
+  let double = x => x * 2
+  let to-upper = s => String.upper(s)
 
-  WRITE Option.map(Option.Some(21), double)  ; Some(42)
-  WRITE Option.map(Option.None, double)  ; None
-  WRITE Option.map(Option.Some("hello"), to-upper)  ; Some("HELLO")
-  WRITE Option.map(Option.None, to-upper)  ; None
+  write Option.map(Option.Some(21), double)  ; Some(42)
+  write Option.map(Option.None, double)  ; None
+  write Option.map(Option.Some("hello"), to-upper)  ; Some("HELLO")
+  write Option.map(Option.None, to-upper)  ; None
 
   ; Inline closure
-  WRITE Option.map(Option.Some(5), x => x + 1)  ; Some(6)
+  write Option.map(Option.Some(5), x => x + 1)  ; Some(6)
 
   ; Chaining map
-  LET opt = Option.Some(10)
-  LET mapped = Option.map(opt, x => x * 2)
-  WRITE mapped  ; Some(20)
-  WRITE Option.map(mapped, x => x + 5)  ; Some(25)
+  let opt = Option.Some(10)
+  let mapped = Option.map(opt, x => x * 2)
+  write mapped  ; Some(20)
+  write Option.map(mapped, x => x + 5)  ; Some(25)
 
   ; ============ Result.unwrap-or ============
 
-  LET ok-val = Result.Ok(100)
-  LET err-val = Result.Err("something went wrong")
+  let ok-val = Result.Ok(100)
+  let err-val = Result.Err("something went wrong")
 
-  WRITE Result.unwrap-or(ok-val, 0)  ; 100
-  WRITE Result.unwrap-or(err-val, 0)  ; 0
-  WRITE Result.unwrap-or(Result.Ok("success"), "fallback")  ; "success"
-  WRITE Result.unwrap-or(Result.Err("fail"), "fallback")  ; "fallback"
+  write Result.unwrap-or(ok-val, 0)  ; 100
+  write Result.unwrap-or(err-val, 0)  ; 0
+  write Result.unwrap-or(Result.Ok("success"), "fallback")  ; "success"
+  write Result.unwrap-or(Result.Err("fail"), "fallback")  ; "fallback"
 
   ; ============ Result.map ============
 
-  WRITE Result.map(Result.Ok(21), double)  ; Ok(42)
-  WRITE Result.map(Result.Err("err"), double)  ; Err("err")
-  WRITE Result.map(Result.Ok("hello"), to-upper)  ; Ok("HELLO")
-  WRITE Result.map(Result.Err("err"), to-upper)  ; Err("err")
+  write Result.map(Result.Ok(21), double)  ; Ok(42)
+  write Result.map(Result.Err("err"), double)  ; Err("err")
+  write Result.map(Result.Ok("hello"), to-upper)  ; Ok("HELLO")
+  write Result.map(Result.Err("err"), to-upper)  ; Err("err")
 
   ; Inline closure
-  WRITE Result.map(Result.Ok(5), x => x + 1)  ; Ok(6)
+  write Result.map(Result.Ok(5), x => x + 1)  ; Ok(6)
 
   ; ============ Result.map-err ============
 
-  LET add-prefix = e => "Error: {e}"
+  let add-prefix = e => "Error: {e}"
 
-  WRITE Result.map-err(Result.Err("failed"), add-prefix)  ; Err("Error: failed")
-  WRITE Result.map-err(Result.Ok(42), add-prefix)  ; Ok(42)
-  WRITE Result.map-err(Result.Err("oops"), e => String.upper(e))  ; Err("OOPS")
-  WRITE Result.map-err(Result.Ok("ok"), e => String.upper(e))  ; Ok("ok")
+  write Result.map-err(Result.Err("failed"), add-prefix)  ; Err("Error: failed")
+  write Result.map-err(Result.Ok(42), add-prefix)  ; Ok(42)
+  write Result.map-err(Result.Err("oops"), e => String.upper(e))  ; Err("OOPS")
+  write Result.map-err(Result.Ok("ok"), e => String.upper(e))  ; Ok("ok")
 
   ; ============ Combining operations ============
 
   ; Option.map then unwrap-or
-  LET maybe-num = Option.Some(10)
-  LET doubled-or-zero = Option.unwrap-or(Option.map(maybe-num, x => x * 2), 0)
-  WRITE doubled-or-zero  ; 20
+  let maybe-num = Option.Some(10)
+  let doubled-or-zero = Option.unwrap-or(Option.map(maybe-num, x => x * 2), 0)
+  write doubled-or-zero  ; 20
 
-  LET no-num = Option.None
-  LET doubled-or-zero-none = Option.unwrap-or(Option.map(no-num, x => x * 2), 0)
-  WRITE doubled-or-zero-none  ; 0
+  let no-num = Option.None
+  let doubled-or-zero-none = Option.unwrap-or(Option.map(no-num, x => x * 2), 0)
+  write doubled-or-zero-none  ; 0
 
   ; Result.map then unwrap-or
-  LET res-ok = Result.Ok(5)
-  LET res-mapped = Result.unwrap-or(Result.map(res-ok, x => x * 3), 0)
-  WRITE res-mapped  ; 15
+  let res-ok = Result.Ok(5)
+  let res-mapped = Result.unwrap-or(Result.map(res-ok, x => x * 3), 0)
+  write res-mapped  ; 15
 
-  LET res-err = Result.Err("bad")
-  LET res-err-mapped = Result.unwrap-or(Result.map(res-err, x => x * 3), 0)
-  WRITE res-err-mapped  ; 0
+  let res-err = Result.Err("bad")
+  let res-err-mapped = Result.unwrap-or(Result.map(res-err, x => x * 3), 0)
+  write res-err-mapped  ; 0
 
   ; ============ Type variants still work ============
 
   ; Ensure Option.None and Result.Ok etc. still work as type constructors
-  LET opt-none = Option.None
-  LET opt-some = Option.Some(1)
-  WRITE opt-none IS Option.None  ; true
-  WRITE opt-some IS Option.Some(_)  ; true
+  let opt-none = Option.None
+  let opt-some = Option.Some(1)
+  write opt-none is Option.None  ; true
+  write opt-some is Option.Some(_)  ; true
 
-  LET res-ok-check = Result.Ok(1)
-  LET res-err-check = Result.Err("x")
-  WRITE res-ok-check IS Result.Ok(_)  ; true
-  WRITE res-err-check IS Result.Err(_)  ; true
+  let res-ok-check = Result.Ok(1)
+  let res-err-check = Result.Err("x")
+  write res-ok-check is Result.Ok(_)  ; true
+  write res-err-check is Result.Err(_)  ; true
 
   ; ============ Fallible:flat-map (Option) ============
 
   ; Returns the inner Option when Some
-  WRITE Fallible:flat-map(Option.Some(10), x => safe-div(x, 2))  ; Some(5)
-  WRITE Fallible:flat-map(Option.Some(10), x => safe-div(x, 0))  ; None
-  WRITE Fallible:flat-map(Option.None, x => safe-div(x, 2))  ; None
+  write Fallible:flat-map(Option.Some(10), x => safe-div(x, 2))  ; Some(5)
+  write Fallible:flat-map(Option.Some(10), x => safe-div(x, 0))  ; None
+  write Fallible:flat-map(Option.None, x => safe-div(x, 2))  ; None
 
   ; Chaining flat-map
-  WRITE Fallible:flat-map(Fallible:flat-map(Option.Some(8), parse-positive), halve)  ; Some(4)
-  WRITE Fallible:flat-map(Fallible:flat-map(Option.Some(-1), parse-positive), halve)  ; None
-  WRITE Fallible:flat-map(Fallible:flat-map(Option.Some(7), parse-positive), halve)  ; None (7 is odd)
+  write Fallible:flat-map(Fallible:flat-map(Option.Some(8), parse-positive), halve)  ; Some(4)
+  write Fallible:flat-map(Fallible:flat-map(Option.Some(-1), parse-positive), halve)  ; None
+  write Fallible:flat-map(Fallible:flat-map(Option.Some(7), parse-positive), halve)  ; None (7 is odd)
 
   ; ============ Fallible:flat-map (Result) ============
 
   ; Returns the inner Result when Ok
-  WRITE Fallible:flat-map(Result.Ok(10), x => safe-div-res(x, 2))  ; Ok(5)
-  WRITE Fallible:flat-map(Result.Ok(10), x => safe-div-res(x, 0))  ; Err("div by zero")
-  WRITE Fallible:flat-map(Result.Err("bad input"), x => safe-div-res(x, 2))  ; Err("bad input")
+  write Fallible:flat-map(Result.Ok(10), x => safe-div-res(x, 2))  ; Ok(5)
+  write Fallible:flat-map(Result.Ok(10), x => safe-div-res(x, 0))  ; Err("div by zero")
+  write Fallible:flat-map(Result.Err("bad input"), x => safe-div-res(x, 2))  ; Err("bad input")
 
   ; Chaining flat-map
-  WRITE Fallible:flat-map(Fallible:flat-map(Result.Ok(8), validate), halve-res)  ; Ok(4)
-  WRITE Fallible:flat-map(Fallible:flat-map(Result.Ok(-1), validate), halve-res)  ; Err("negative")
-  WRITE Fallible:flat-map(Fallible:flat-map(Result.Ok(7), validate), halve-res)  ; Err("odd")
+  write Fallible:flat-map(Fallible:flat-map(Result.Ok(8), validate), halve-res)  ; Ok(4)
+  write Fallible:flat-map(Fallible:flat-map(Result.Ok(-1), validate), halve-res)  ; Err("negative")
+  write Fallible:flat-map(Fallible:flat-map(Result.Ok(7), validate), halve-res)  ; Err("odd")
 
   ; ============ Option.flatten ============
 
   ; Some(Some(v)) -> Some(v)
-  WRITE Option.flatten(Option.Some(Option.Some(42)))  ; Some(42)
-  WRITE Option.flatten(Option.Some(Option.Some("hello")))  ; Some("hello")
+  write Option.flatten(Option.Some(Option.Some(42)))  ; Some(42)
+  write Option.flatten(Option.Some(Option.Some("hello")))  ; Some("hello")
 
   ; Some(None) -> None
-  WRITE Option.flatten(Option.Some(Option.None))  ; None
+  write Option.flatten(Option.Some(Option.None))  ; None
 
   ; None -> None
-  WRITE Option.flatten(Option.None)  ; None
+  write Option.flatten(Option.None)  ; None
 
   ; Practical: flatten after map that returns Option
-  LET maybe-find = arr => Array.head(arr)
-  LET nested = Option.map(Option.Some([1, 2, 3]), maybe-find)
-  WRITE nested  ; Some(Some(1))
-  WRITE Option.flatten(nested)  ; Some(1)
+  let maybe-find = arr => Array.head(arr)
+  let nested = Option.map(Option.Some([1, 2, 3]), maybe-find)
+  write nested  ; Some(Some(1))
+  write Option.flatten(nested)  ; Some(1)
 
-  LET empty-nested = Option.map(Option.Some([]), maybe-find)
-  WRITE empty-nested  ; Some(None)
-  WRITE Option.flatten(empty-nested)  ; None
+  let empty-nested = Option.map(Option.Some([]), maybe-find)
+  write empty-nested  ; Some(None)
+  write Option.flatten(empty-nested)  ; None
 
   ; ============ Result.flatten ============
 
   ; Ok(Ok(v)) -> Ok(v)
-  WRITE Result.flatten(Result.Ok(Result.Ok(42)))  ; Ok(42)
-  WRITE Result.flatten(Result.Ok(Result.Ok("success")))  ; Ok("success")
+  write Result.flatten(Result.Ok(Result.Ok(42)))  ; Ok(42)
+  write Result.flatten(Result.Ok(Result.Ok("success")))  ; Ok("success")
 
   ; Ok(Err(e)) -> Err(e)
-  WRITE Result.flatten(Result.Ok(Result.Err("inner error")))  ; Err("inner error")
+  write Result.flatten(Result.Ok(Result.Err("inner error")))  ; Err("inner error")
 
   ; Err(e) -> Err(e)
-  WRITE Result.flatten(Result.Err("outer error"))  ; Err("outer error")
+  write Result.flatten(Result.Err("outer error"))  ; Err("outer error")
 
   ; Practical: flatten after map that returns Result
-  LET nested-res = Result.map(Result.Ok("42"), try-parse)
-  WRITE nested-res  ; Ok(Ok(42))
-  WRITE Result.flatten(nested-res)  ; Ok(42)
+  let nested-res = Result.map(Result.Ok("42"), try-parse)
+  write nested-res  ; Ok(Ok(42))
+  write Result.flatten(nested-res)  ; Ok(42)
 
-  LET nested-err = Result.map(Result.Ok("bad"), try-parse)
-  WRITE nested-err  ; Ok(Err("parse failed"))
-  WRITE Result.flatten(nested-err)  ; Err("parse failed")
+  let nested-err = Result.map(Result.Ok("bad"), try-parse)
+  write nested-err  ; Ok(Err("parse failed"))
+  write Result.flatten(nested-err)  ; Err("parse failed")
 
   ; ============ Result.hush ============
 
   ; Ok(v) -> Some(v)
-  WRITE Result.hush(Result.Ok(42))  ; Some(42)
-  WRITE Result.hush(Result.Ok("hello"))  ; Some("hello")
+  write Result.hush(Result.Ok(42))  ; Some(42)
+  write Result.hush(Result.Ok("hello"))  ; Some("hello")
 
   ; Err(e) -> None (discards error)
-  WRITE Result.hush(Result.Err("oops"))  ; None
-  WRITE Result.hush(Result.Err(123))  ; None
+  write Result.hush(Result.Err("oops"))  ; None
+  write Result.hush(Result.Err(123))  ; None
 
   ; Practical: convert fallible operation to optional
-  LET res: Result[Int, String] = Result.Ok(100)
-  LET opt2 = Result.hush(res)
-  WRITE opt2  ; Some(100)
+  let res: Result[Int, String] = Result.Ok(100)
+  let opt2 = Result.hush(res)
+  write opt2  ; Some(100)
 
-  LET bad-res: Result[Int, String] = Result.Err("failed")
-  WRITE Result.hush(bad-res)  ; None
+  let bad-res: Result[Int, String] = Result.Err("failed")
+  write Result.hush(bad-res)  ; None
 
   ; ============ Option.note ============
 
   ; Some(v) -> Ok(v)
-  WRITE Option.note("not found", Option.Some(42))  ; Ok(42)
-  WRITE Option.note("missing", Option.Some("hello"))  ; Ok("hello")
+  write Option.note("not found", Option.Some(42))  ; Ok(42)
+  write Option.note("missing", Option.Some("hello"))  ; Ok("hello")
 
   ; None -> Err(e) (using provided error)
-  WRITE Option.note("not found", Option.None)  ; Err("not found")
-  WRITE Option.note(404, Option.None)  ; Err(404)
+  write Option.note("not found", Option.None)  ; Err("not found")
+  write Option.note(404, Option.None)  ; Err(404)
 
   ; Practical: convert optional lookup to result
-  LET maybe: Option[Int] = Option.Some(999)
-  LET noted: Result[Int, String] = Option.note("value missing", maybe)
-  WRITE noted  ; Ok(999)
+  let maybe: Option[Int] = Option.Some(999)
+  let noted: Result[Int, String] = Option.note("value missing", maybe)
+  write noted  ; Ok(999)
 
-  LET empty: Option[Int] = Option.None
-  WRITE Option.note("value missing", empty)  ; Err("value missing")
+  let empty: Option[Int] = Option.None
+  write Option.note("value missing", empty)  ; Err("value missing")
 
   ; ============ hush/note roundtrips ============
 
   ; Ok -> hush -> note (preserves value)
-  LET start = Result.Ok(123)
-  LET hushed = Result.hush(start)
-  LET back: Result[Int, String] = Option.note("lost", hushed)
-  WRITE back  ; Ok(123)
+  let start = Result.Ok(123)
+  let hushed = Result.hush(start)
+  let back: Result[Int, String] = Option.note("lost", hushed)
+  write back  ; Ok(123)
 
   ; Some -> note -> hush (preserves value)
-  LET s = Option.Some(456)
-  LET noted2: Result[Int, String] = Option.note("err", s)
-  LET h = Result.hush(noted2)
-  WRITE h  ; Some(456)
+  let s = Option.Some(456)
+  let noted2: Result[Int, String] = Option.note("err", s)
+  let h = Result.hush(noted2)
+  write h  ; Some(456)
 
   ; Err -> hush loses information
-  LET e = Result.Err("important error")
-  LET lost = Result.hush(e)
-  WRITE lost  ; None
+  let e = Result.Err("important error")
+  let lost = Result.hush(e)
+  write lost  ; None
 
   ; None -> note adds error
-  LET n = Option.None
-  LET gained: Result[Int, String] = Option.note("added error", n)
-  WRITE gained  ; Err("added error")
+  let n = Option.None
+  let gained: Result[Int, String] = Option.note("added error", n)
+  write gained  ; Err("added error")
 }

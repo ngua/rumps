@@ -1,35 +1,35 @@
 ; Test: expression statements
 ; Tests using expressions as statements (evaluated for side effects)
 
-FUN main() {
-  ; IF as statement (not capturing result)
-  LET x = 10
+fun main() {
+  ; if as statement (not capturing result)
+  let x = 10
 
-  IF x > 5 {
-    WRITE "x is big"
+  if x > 5 {
+    write "x is big"
   }
   ; Expected: x is big
 
-  IF x < 5 {
-    WRITE "x is small"
+  if x < 5 {
+    write "x is small"
   }
   ; Expected: (no output; condition false)
 
   ; Block as statement
   {
-    WRITE "Inside block"
-    LET temp = 42
-    WRITE temp
+    write "Inside block"
+    let temp = 42
+    write temp
   }
   ; Expected: Inside block, 42
 
-  ; Nested IF statements
-  LET a = TRUE
-  LET b = FALSE
+  ; Nested if statements
+  let a = true
+  let b = false
 
-  IF a {
-    IF NOT b {
-      WRITE "a is true and b is false"
+  if a {
+    if not b {
+      write "a is true and b is false"
     }
   }
   ; Expected: a is true and b is false
@@ -39,32 +39,32 @@ FUN main() {
   ; Evaluated but result discarded
   "hello"
   ; Evaluated but result discarded
-  TRUE AND FALSE
+  true and false
   ; Evaluated but result discarded
 
-  WRITE "Made it past expression statements"
+  write "Made it past expression statements"
 
-  ; IF/ELSE as statement
-  LET mode = "debug"
+  ; if/else as statement
+  let mode = "debug"
 
-  IF mode == "debug" {
-    WRITE "Debug mode enabled"
-  } ELSE {
-    WRITE "Production mode"
+  if mode == "debug" {
+    write "Debug mode enabled"
+  } else {
+    write "Production mode"
   }
   ; Expected: Debug mode enabled
 
-  ; Block with @SET side effects
+  ; Block with @set side effects
   {
-    @SET items{1} "first"
-    @SET items{2} "second"
+    @set items{1} "first"
+    @set items{2} "second"
   }
 
-  WRITE @GET items{1}
+  write @get items{1}
   ; Expected: first
 
-  WRITE @GET items{2}
+  write @get items{2}
   ; Expected: second
 
-  WRITE "Expression statements test complete"
+  write "Expression statements test complete"
 }

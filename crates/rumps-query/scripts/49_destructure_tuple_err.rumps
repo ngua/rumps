@@ -1,5 +1,5 @@
 ; Tuple size mismatch
 
-FUN main() {
-  LET (a, b, c) = (1, 2)
+fun main() {
+  let (a, b, c) = (1, 2)
 }

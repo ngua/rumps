@@ -68,18 +68,18 @@ impl Parser {
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
-        let format = Self::ctx_ident("JSON")
+        let format = Self::ctx_ident("json")
             .to(cst::OutputFormat::Json)
-            .or(Self::ctx_ident("RAW").to(cst::OutputFormat::Raw))
+            .or(Self::ctx_ident("raw").to(cst::OutputFormat::Raw))
             .or_not()
             .map(|f| f.unwrap_or_default());
 
-        let to_error = Self::ctx_ident("TO")
-            .ignore_then(Self::ctx_ident("ERROR"))
+        let to_error = Self::ctx_ident("to")
+            .ignore_then(Self::ctx_ident("error"))
             .to(cst::OutputTarget::Stderr);
 
-        let to_file = Self::ctx_ident("TO")
-            .ignore_then(Self::ctx_ident("FILE"))
+        let to_file = Self::ctx_ident("to")
+            .ignore_then(Self::ctx_ident("file"))
             .ignore_then(Self::expr(stmt.clone()))
             .map(|e| cst::OutputTarget::File(Box::new(e)));
 
@@ -338,7 +338,7 @@ impl Parser {
             );
 
         // Optional WHERE clause: `WHERE A: Display, B: Display`
-        let where_clause = Self::ctx_ident("WHERE")
+        let where_clause = Self::ctx_ident("where")
             .ignore_then(Self::opt_newlines())
             .ignore_then(
                 where_constraint
@@ -454,7 +454,7 @@ impl Parser {
             .ignore_then(Self::ident())
             .then(class_args)
             .then_ignore(Self::opt_newlines())
-            .then_ignore(Self::ctx_ident("FOR"))
+            .then_ignore(Self::ctx_ident("for"))
             .then_ignore(Self::opt_newlines())
             .then(Self::type_expr())
             .then_ignore(Self::opt_newlines())

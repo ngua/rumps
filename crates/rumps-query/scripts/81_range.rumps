@@ -2,65 +2,65 @@
 ; Tests exclusive (`..`) and inclusive (`..=`) ranges
 ; NOTE: Range operators require spaces around `..` and `..=`
 
-FUN double(n: Int) -> Int { n * 2 }
+fun double(n: Int) -> Int { n * 2 }
 
-FUN main() {
+fun main() {
   ; Basic exclusive range display
-  LET r1 = 1 .. 5
-  WRITE r1  ; 1..5
+  let r1 = 1 .. 5
+  write r1  ; 1..5
 
   ; Basic inclusive range display
-  LET r2 = 1 ..= 5
-  WRITE r2  ; 1..=5
+  let r2 = 1 ..= 5
+  write r2  ; 1..=5
 
   ; Range with expressions: binds looser than additive
   ; So `1 .. n + 1` parses as `1..(n + 1)`, not `(1..n) + 1`
-  LET n = 3
-  LET r3 = 0 .. n + 1
-  WRITE r3  ; 0..4
+  let n = 3
+  let r3 = 0 .. n + 1
+  write r3  ; 0..4
 
   ; Collect range to array then map (Range is not Mappable)
-  LET squares = Mappable:map(x => x * x, Iterable:collect(1 .. 4))
-  WRITE squares  ; [1, 4, 9]
+  let squares = Mappable:map(x => x * x, Iterable:collect(1 .. 4))
+  write squares  ; [1, 4, 9]
 
   ; Collect inclusive range to array then map
-  LET cubes = Mappable:map(x => x * x * x, Iterable:collect(1 ..= 3))
-  WRITE cubes  ; [1, 8, 27]
+  let cubes = Mappable:map(x => x * x * x, Iterable:collect(1 ..= 3))
+  write cubes  ; [1, 8, 27]
 
   ; Filterable:filter with range
-  LET evens = Filterable:filter(x => x % 2 == 0, 1 .. 10)
-  WRITE evens  ; [2, 4, 6, 8]
+  let evens = Filterable:filter(x => x % 2 == 0, 1 .. 10)
+  write evens  ; [2, 4, 6, 8]
 
   ; Filterable:filter with inclusive range
-  LET odd = Filterable:filter(x => x % 2 != 0, 1 ..= 5)
-  WRITE odd  ; [1, 3, 5]
+  let odd = Filterable:filter(x => x % 2 != 0, 1 ..= 5)
+  write odd  ; [1, 3, 5]
 
   ; Foldable:reduce with range (sum 1..5 = 1+2+3+4 = 10)
-  LET sum1 = Foldable:reduce((acc, x) => acc + x, 0, 1 .. 5)
-  WRITE sum1  ; 10
+  let sum1 = Foldable:reduce((acc, x) => acc + x, 0, 1 .. 5)
+  write sum1  ; 10
 
   ; Foldable:reduce with inclusive range (sum 1..=5 = 1+2+3+4+5 = 15)
-  LET sum2 = Foldable:reduce((acc, x) => acc + x, 0, 1 ..= 5)
-  WRITE sum2  ; 15
+  let sum2 = Foldable:reduce((acc, x) => acc + x, 0, 1 ..= 5)
+  write sum2  ; 15
 
   ; Factorial using range and reduce
-  LET fact5 = Foldable:reduce((acc, x) => acc * x, 1, 1 ..= 5)
-  WRITE fact5  ; 120
+  let fact5 = Foldable:reduce((acc, x) => acc * x, 1, 1 ..= 5)
+  write fact5  ; 120
 
   ; Chaining operations with ranges
-  LET filtered = Filterable:filter(x => x > 2, 1 ..= 5)
-  LET result = Mappable:map(x => x * 10, filtered)
-  WRITE result  ; [30, 40, 50]
+  let filtered = Filterable:filter(x => x > 2, 1 ..= 5)
+  let result = Mappable:map(x => x * 10, filtered)
+  write result  ; [30, 40, 50]
 
   ; Empty range (start >= end for exclusive)
-  LET empty = Iterable:collect(5 .. 5)
-  WRITE empty  ; []
+  let empty = Iterable:collect(5 .. 5)
+  write empty  ; []
 
   ; Negative ranges
-  LET negatives = Iterable:collect(-3 .. 1)
-  WRITE negatives  ; [-3, -2, -1, 0]
+  let negatives = Iterable:collect(-3 .. 1)
+  write negatives  ; [-3, -2, -1, 0]
 
   ; Range with named function (collect first)
-  LET doubles = Mappable:map(double, Iterable:collect(1 .. 5))
-  WRITE doubles  ; [2, 4, 6, 8]
+  let doubles = Mappable:map(double, Iterable:collect(1 .. 5))
+  write doubles  ; [2, 4, 6, 8]
 }

@@ -1,93 +1,93 @@
 ; Test spread operators for arrays and objects
 ; Section 8 of phase-4c.md
 
-FUN main() {
+fun main() {
   ; ====== Array Spread ======
 
   ; Basic array spread
-  LET arr1 = [1, 2, 3]
-  LET arr2 = [4, 5, 6]
-  LET combined = [...arr1, ...arr2]
-  WRITE combined
+  let arr1 = [1, 2, 3]
+  let arr2 = [4, 5, 6]
+  let combined = [...arr1, ...arr2]
+  write combined
 
   ; Prepend/append with spread
-  LET with-zero = [0, ...arr1]
-  WRITE with-zero
+  let with-zero = [0, ...arr1]
+  write with-zero
 
-  LET with-four = [...arr1, 4]
-  WRITE with-four
+  let with-four = [...arr1, 4]
+  write with-four
 
   ; Mixed elements and spreads
-  LET mixed = [0, ...arr1, 4, 5]
-  WRITE mixed
+  let mixed = [0, ...arr1, 4, 5]
+  write mixed
 
   ; Empty array spread
-  LET empty: Array[Int] = []
-  LET spread-empty = [...empty, 1, 2]
-  WRITE spread-empty
+  let empty: Array[Int] = []
+  let spread-empty = [...empty, 1, 2]
+  write spread-empty
 
   ; Spread with single element array
-  LET single = [42]
-  LET spread-single = [...single, ...single]
-  WRITE spread-single
+  let single = [42]
+  let spread-single = [...single, ...single]
+  write spread-single
 
   ; ====== Object Spread ======
 
   ; Basic object spread
-  LET base = { name: "Alice", age: 30 }
-  LET updated = { ...base, age: 31 }
-  WRITE updated.name
-  WRITE updated.age
+  let base = { name: "Alice", age: 30 }
+  let updated = { ...base, age: 31 }
+  write updated.name
+  write updated.age
 
   ; Merge multiple objects
-  LET defaults = { color: "red", size: "medium" }
-  LET user-prefs = { size: "large" }
-  LET config = { ...defaults, ...user-prefs }
-  WRITE config.color
-  WRITE config.size
+  let defaults = { color: "red", size: "medium" }
+  let user-prefs = { size: "large" }
+  let config = { ...defaults, ...user-prefs }
+  write config.color
+  write config.size
 
   ; Add new fields
-  LET extended = { ...base, city: "NYC" }
-  WRITE extended.name
-  WRITE extended.city
+  let extended = { ...base, city: "NYC" }
+  write extended.name
+  write extended.city
 
   ; Empty object spread
-  LET empty-obj = { }
-  LET spread-empty-obj = { ...empty-obj, x: 1 }
-  WRITE spread-empty-obj.x
+  let empty-obj = { }
+  let spread-empty-obj = { ...empty-obj, x: 1 }
+  write spread-empty-obj.x
 
   ; ====== Struct Spread with Preservation ======
 
   ; Spread a struct value (should preserve type)
-  LET alice: Person = { name: "Alice", age: 30 }
-  LET alice-older: Person = { ...alice, age: 31 }
-  WRITE alice-older.name
-  WRITE alice-older.age
+  let alice: Person = { name: "Alice", age: 30 }
+  let alice-older: Person = { ...alice, age: 31 }
+  write alice-older.name
+  write alice-older.age
 
   ; Adding fields to a struct (extensible record semantics)
-  LET alice-with-city = { ...alice, city: "NYC" }
-  WRITE alice-with-city.city
+  let alice-with-city = { ...alice, city: "NYC" }
+  write alice-with-city.city
 
   ; ====== Nested Spreads ======
 
   ; Spread of spreads
-  LET a = [1, 2]
-  LET b = [3, 4]
-  LET c = [5, 6]
-  LET all = [...a, ...b, ...c]
-  WRITE all
+  let a = [1, 2]
+  let b = [3, 4]
+  let c = [5, 6]
+  let all = [...a, ...b, ...c]
+  write all
 
   ; Nested object spreads
-  LET o1 = { x: 1 }
-  LET o2 = { y: 2 }
-  LET o3 = { z: 3 }
-  LET merged = { ...o1, ...o2, ...o3 }
-  WRITE merged.x
-  WRITE merged.y
-  WRITE merged.z
+  let o1 = { x: 1 }
+  let o2 = { y: 2 }
+  let o3 = { z: 3 }
+  let merged = { ...o1, ...o2, ...o3 }
+  write merged.x
+  write merged.y
+  write merged.z
 
-  WRITE "--- TESTS PASSED ---"
+  write "--- TESTS PASSED ---"
 }
 
 ; Define a struct
-NEWTYPE Person = { name: String, age: Int }
+newtype Person = { name: String, age: Int }

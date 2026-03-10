@@ -1,6 +1,6 @@
 ; Error test: Local/Global type mismatch
 
-FUN main() {
+fun main() {
   ; Assigning a Global ref to Local type should error
-  LET x: Local = ^global{}
+  let x: Local = ^global{}
 }

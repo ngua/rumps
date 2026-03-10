@@ -1,34 +1,34 @@
 ; Module file imports
-; Tests importing modules from files using `MODULE Name FROM "path"` syntax
+; Tests importing modules from files using `module Name from "path"` syntax
 
 ; Import module from file (path relative to script directory)
-MODULE MyMath FROM "../modules/lib/mymath.rumps"
+module MyMath from "../modules/lib/mymath.rumps"
 
-FUN main() {
+fun main() {
   ; ============ Test constants from imported module ============
 
-  WRITE MyMath.pi > 3.0  ; true
-  WRITE MyMath.e > 2.0  ; true
+  write MyMath.pi > 3.0  ; true
+  write MyMath.e > 2.0  ; true
 
   ; ============ Test functions from imported module ============
 
-  WRITE MyMath.square(5)  ; 25
-  WRITE MyMath.double(7)  ; 14
-  WRITE MyMath.is-positive(10)  ; true
-  WRITE MyMath.is-positive(-5)  ; false
+  write MyMath.square(5)  ; 25
+  write MyMath.double(7)  ; 14
+  write MyMath.is-positive(10)  ; true
+  write MyMath.is-positive(-5)  ; false
 
   ; ============ Use imported functions in expressions ============
 
-  LET sq = MyMath.square(4)
-  LET dbl = MyMath.double(sq)
-  WRITE dbl  ; 32
+  let sq = MyMath.square(4)
+  let dbl = MyMath.double(sq)
+  write dbl  ; 32
 
   ; ============ Pass imported function as value ============
 
-  LET f = MyMath.double
-  WRITE f(100)  ; 200
+  let f = MyMath.double
+  write f(100)  ; 200
 
   ; ============ Test function referencing sibling constant ============
 
-  WRITE MyMath.area(2.0)  ; pi * 4 = 12.56636
+  write MyMath.area(2.0)  ; pi * 4 = 12.56636
 }

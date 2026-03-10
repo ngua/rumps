@@ -1,10 +1,10 @@
 ; Test: Type mismatch error detection
 ; This script should produce a type error
 
-FUN main() {
+fun main() {
   ; Annotating Int but assigning String
-  LET x: Int = "hello"
+  let x: Int = "hello"
 
   ; This line should not be reached
-  WRITE "Should not reach here"
+  write "Should not reach here"
 }

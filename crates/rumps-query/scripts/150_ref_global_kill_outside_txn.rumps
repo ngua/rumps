@@ -1,9 +1,9 @@
-; Error test: @KILL on global ref outside transaction
+; Error test: @kill on global ref outside transaction
 
-FUN main() {
+fun main() {
   ; Even with Ref annotation, concrete type is preserved
-  LET x: Ref = ^global{}
+  let x: Ref = ^global{}
 
   ; This should fail: global writes require transaction
-  LET _ = @KILL x
+  let _ = @kill x
 }

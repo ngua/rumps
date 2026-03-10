@@ -1,13 +1,13 @@
 ; Test that omitting required associated type produces a type error
 ;
-; Indexable requires NEWTYPE Index = ... to be defined
+; Indexable requires newtype Index = ... to be defined
 
-FUN main() { }
+fun main() { }
 
-TYPE MyList = MyList(Array[Int])
+type MyList = MyList(Array[Int])
 
-; Missing NEWTYPE Index = ... declaration; should error
-CLASS Indexable[Int] FOR MyList {
-  FUN index(xs: MyList, i: Int) -> Int { 0 }
-  FUN get(xs: MyList, i: Int) -> Option[Int] { Option.None }
+; Missing newtype Index = ... declaration; should error
+class Indexable[Int] for MyList {
+  fun index(xs: MyList, i: Int) -> Int { 0 }
+  fun get(xs: MyList, i: Int) -> Option[Int] { Option.None }
 }

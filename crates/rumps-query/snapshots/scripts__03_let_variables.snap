@@ -1,13 +1,13 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: LET and variable lookup\n; Tests lexical scoping with LET bindings\n\n; Simple binding\nLET x = 42\nOUTPUT x\n; Expected: 42\n\n; Binding using another variable\nLET y = x + 8\nOUTPUT y\n; Expected: 50\n\n; Multiple bindings\nLET a = 1\nLET b = 2\nLET c = 3\nLET sum = a + b + c\nOUTPUT sum\n; Expected: 6\n\n; Shadowing in same scope\nLET val = 10\nLET val = 20\nOUTPUT val\n; Expected: 20\n\n; String variables\nLET name = \"Alice\"\nOUTPUT name\n; Expected: Alice\n\n; Boolean variables\nLET flag = TRUE\nOUTPUT flag\n; Expected: true (or TRUE)\n\n; Using variables in expressions\nLET base = 100\nLET offset = 25\nLET result = base - offset * 2\nOUTPUT result\n; Expected: 50\n\n; Chained variable references\nLET v1 = 5\nLET v2 = v1 * 2\nLET v3 = v2 + v1\nOUTPUT v3\n; Expected: 15\n\nOUTPUT \"LET variable test complete\"\n"
+description: "; Test: let and variable lookup\n; Tests lexical scoping with let bindings\n\nfun main() {\n  ; Simple binding\n  let x = 42\n  write x\n  ; Expected: 42\n\n  ; Binding using another variable\n  let y = x + 8\n  write y\n  ; Expected: 50\n\n  ; Multiple bindings\n  let a = 1\n  let b = 2\n  let c = 3\n  let sum = a + b + c\n  write sum\n  ; Expected: 6\n\n  ; Shadowing in same scope\n  let val = 10\n  let val = 20\n  write val\n  ; Expected: 20\n\n  ; String variables\n  let name = \"Alice\"\n  write name\n  ; Expected: Alice\n\n  ; Boolean variables\n  let flag = true\n  write flag\n  ; Expected: true (or true)\n\n  ; Using variables in expressions\n  let base = 100\n  let offset = 25\n  let result = base - offset * 2\n  write result\n  ; Expected: 50\n\n  ; Chained variable references\n  let v1 = 5\n  let v2 = v1 * 2\n  let v3 = v2 + v1\n  write v3\n  ; Expected: 15\n\n  write \"let variable test complete\"\n}\n"
 ---
 42
 50
 6
 20
 "Alice"
-TRUE
+true
 50
 15
-"LET variable test complete"
+"let variable test complete"

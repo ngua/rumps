@@ -1,47 +1,47 @@
-; Test: @SET locals (B-tree variables)
-; Tests @SET for local variables with subscripts
+; Test: @set locals (B-tree variables)
+; Tests @set for local variables with subscripts
 
-FUN main() {
-  ; Simple @SET without subscripts (use {} for root ref)
-  @SET x{} 100
-  WRITE @GET x{}
+fun main() {
+  ; Simple @set without subscripts (use {} for root ref)
+  @set x{} 100
+  write @get x{}
   ; Expected: 100
 
-  @SET x{} 200
-  WRITE @GET x{}
+  @set x{} 200
+  write @get x{}
   ; Expected: 200
 
-  ; @SET with single subscript
-  @SET items{1} "first"
-  @SET items{2} "second"
-  @SET items{3} "third"
+  ; @set with single subscript
+  @set items{1} "first"
+  @set items{2} "second"
+  @set items{3} "third"
 
-  ; @SET with multiple subscripts
-  @SET patient{123, "name"} "John Doe"
-  @SET patient{123, "age"} 45
-  @SET patient{123, "active"} TRUE
+  ; @set with multiple subscripts
+  @set patient{123, "name"} "John Doe"
+  @set patient{123, "age"} 45
+  @set patient{123, "active"} true
 
-  @SET patient{456, "name"} "Jane Smith"
-  @SET patient{456, "age"} 32
-  @SET patient{456, "active"} FALSE
+  @set patient{456, "name"} "Jane Smith"
+  @set patient{456, "age"} 32
+  @set patient{456, "active"} false
 
   ; Nested subscripts
-  @SET tree{1, 2, 3} "deep"
-  @SET tree{1, 2, 4} "also deep"
+  @set tree{1, 2, 3} "deep"
+  @set tree{1, 2, 4} "also deep"
 
   ; Mixed subscript types
-  @SET mixed{"key", 42, TRUE} "mixed types"
+  @set mixed{"key", 42, true} "mixed types"
 
   ; Numeric subscripts
-  @SET arr{0} "zero"
-  @SET arr{1} "one"
-  @SET arr{10} "ten"
-  @SET arr{100} "hundred"
+  @set arr{0} "zero"
+  @set arr{1} "one"
+  @set arr{10} "ten"
+  @set arr{100} "hundred"
 
   ; String subscripts
-  @SET dict{"alpha"} 1
-  @SET dict{"beta"} 2
-  @SET dict{"gamma"} 3
+  @set dict{"alpha"} 1
+  @set dict{"beta"} 2
+  @set dict{"gamma"} 3
 
-  WRITE "@SET locals test complete"
+  write "@set locals test complete"
 }

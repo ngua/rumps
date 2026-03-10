@@ -1,81 +1,81 @@
 ; Test: array indexing (including negative)
 ; Tests array index access with positive and negative indices
 
-FUN main() {
-  LET arr = [10, 20, 30, 40, 50]
+fun main() {
+  let arr = [10, 20, 30, 40, 50]
 
   ; Positive indexing (0-based)
-  WRITE arr[0]
+  write arr[0]
   ; Expected: 10
 
-  WRITE arr[1]
+  write arr[1]
   ; Expected: 20
 
-  WRITE arr[2]
+  write arr[2]
   ; Expected: 30
 
-  WRITE arr[3]
+  write arr[3]
   ; Expected: 40
 
-  WRITE arr[4]
+  write arr[4]
   ; Expected: 50
 
   ; Negative indexing (from end)
-  WRITE arr[-1]
+  write arr[-1]
   ; Expected: 50 (last element)
 
-  WRITE arr[-2]
+  write arr[-2]
   ; Expected: 40 (second to last)
 
-  WRITE arr[-3]
+  write arr[-3]
   ; Expected: 30
 
-  WRITE arr[-4]
+  write arr[-4]
   ; Expected: 20
 
-  WRITE arr[-5]
+  write arr[-5]
   ; Expected: 10 (first element via negative)
 
   ; Index with expression
-  LET idx = 2
-  WRITE arr[idx]
+  let idx = 2
+  write arr[idx]
   ; Expected: 30
 
-  LET neg-idx = -1
-  WRITE arr[neg-idx]
+  let neg-idx = -1
+  write arr[neg-idx]
   ; Expected: 50
 
   ; Index with arithmetic
-  WRITE arr[1 + 1]
+  write arr[1 + 1]
   ; Expected: 30 (arr[2])
 
-  WRITE arr[5 - 3]
+  write arr[5 - 3]
   ; Expected: 30 (arr[2])
 
   ; Nested array indexing
-  LET matrix = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
-  WRITE matrix[0][0]
+  let matrix = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+  write matrix[0][0]
   ; Expected: 1
 
-  WRITE matrix[1][1]
+  write matrix[1][1]
   ; Expected: 5
 
-  WRITE matrix[2][2]
+  write matrix[2][2]
   ; Expected: 9
 
-  WRITE matrix[-1][-1]
+  write matrix[-1][-1]
   ; Expected: 9 (last row, last col)
 
-  WRITE matrix[0][-1]
+  write matrix[0][-1]
   ; Expected: 3 (first row, last col)
 
   ; Single element array
-  LET single = [42]
-  WRITE single[0]
+  let single = [42]
+  write single[0]
   ; Expected: 42
 
-  WRITE single[-1]
+  write single[-1]
   ; Expected: 42
 
-  WRITE "Array indexing test complete"
+  write "Array indexing test complete"
 }

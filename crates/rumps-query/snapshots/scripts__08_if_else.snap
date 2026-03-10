@@ -1,14 +1,14 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: IF/ELSE branches\n; Tests conditional expressions and statements\n\n; Simple IF with true condition\nIF TRUE {\n  OUTPUT \"TRUE branch taken\"\n}\n\n; Simple IF with false condition (no output)\nIF FALSE {\n  OUTPUT \"This should not print\"\n}\n\n; IF/ELSE with true condition\nIF TRUE {\n  OUTPUT \"IF branch\"\n} ELSE {\n  OUTPUT \"ELSE branch\"\n}\n; Expected: IF branch\n\n; IF/ELSE with false condition\nIF FALSE {\n  OUTPUT \"IF branch\"\n} ELSE {\n  OUTPUT \"ELSE branch\"\n}\n; Expected: ELSE branch\n\n; IF with comparison\nLET x = 10\nIF x > 5 {\n  OUTPUT \"x is greater than 5\"\n} ELSE {\n  OUTPUT \"x is not greater than 5\"\n}\n; Expected: x is greater than 5\n\n; IF with equality\nLET name = \"Alice\"\nIF name == \"Alice\" {\n  OUTPUT \"Hello, Alice!\"\n} ELSE {\n  OUTPUT \"You are not Alice\"\n}\n; Expected: Hello, Alice!\n\n; IF as expression\nLET result = IF 10 > 5 { \"big\" } ELSE { \"small\" }\nOUTPUT result\n; Expected: big\n\n; Nested IF\nLET score = 85\nIF score >= 90 {\n  OUTPUT \"A\"\n} ELSE {\n  IF score >= 80 {\n    OUTPUT \"B\"\n  } ELSE {\n    IF score >= 70 {\n      OUTPUT \"C\"\n    } ELSE {\n      OUTPUT \"F\"\n    }\n  }\n}\n; Expected: B\n\n; IF with logical operators\nLET a = TRUE\nLET b = FALSE\nIF a AND NOT b {\n  OUTPUT \"a is true and b is false\"\n}\n; Expected: a is true and b is false\n\n; IF with complex condition\nLET age = 25\nLET has-license = TRUE\nIF age >= 18 AND has-license {\n  OUTPUT \"Can drive\"\n} ELSE {\n  OUTPUT \"Cannot drive\"\n}\n; Expected: Can drive\n\nOUTPUT \"IF/ELSE test complete\"\n"
+description: "; Test: if/else branches\n; Tests conditional expressions and statements\n\nfun main() {\n  ; Simple if with true condition\n  if true {\n    write \"true branch taken\"\n  }\n\n  ; Simple if with false condition (no output)\n  if false {\n    write \"This should not print\"\n  }\n\n  ; if/else with true condition\n  if true {\n    write \"if branch\"\n  } else {\n    write \"else branch\"\n  }\n  ; Expected: if branch\n\n  ; if/else with false condition\n  if false {\n    write \"if branch\"\n  } else {\n    write \"else branch\"\n  }\n  ; Expected: else branch\n\n  ; if with comparison\n  let x = 10\n  if x > 5 {\n    write \"x is greater than 5\"\n  } else {\n    write \"x is not greater than 5\"\n  }\n  ; Expected: x is greater than 5\n\n  ; if with equality\n  let name = \"Alice\"\n  if name == \"Alice\" {\n    write \"Hello, Alice!\"\n  } else {\n    write \"You are not Alice\"\n  }\n  ; Expected: Hello, Alice!\n\n  ; if as expression\n  let result = if 10 > 5 { \"big\" } else { \"small\" }\n  write result\n  ; Expected: big\n\n  ; Nested if\n  let score = 85\n  if score >= 90 {\n    write \"A\"\n  } else {\n    if score >= 80 {\n      write \"B\"\n    } else {\n      if score >= 70 {\n        write \"C\"\n      } else {\n        write \"F\"\n      }\n    }\n  }\n  ; Expected: B\n\n  ; if with logical operators\n  let a = true\n  let b = false\n  if a and not b {\n    write \"a is true and b is false\"\n  }\n  ; Expected: a is true and b is false\n\n  ; if with complex condition\n  let age = 25\n  let has-license = true\n  if age >= 18 and has-license {\n    write \"Can drive\"\n  } else {\n    write \"Cannot drive\"\n  }\n  ; Expected: Can drive\n\n  write \"if/else test complete\"\n}\n"
 ---
-"TRUE branch taken"
-"IF branch"
-"ELSE branch"
+"true branch taken"
+"if branch"
+"else branch"
 "x is greater than 5"
 "Hello, Alice!"
 "big"
 "B"
 "a is true and b is false"
 "Can drive"
-"IF/ELSE test complete"
+"if/else test complete"

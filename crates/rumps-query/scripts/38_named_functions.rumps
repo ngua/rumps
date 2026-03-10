@@ -1,142 +1,142 @@
-; Test: Named Functions (FUN)
+; Test: Named Functions (fun)
 ; Tests function definition, calls, recursion, and first-class functions
 
 ; === Simple untyped function ===
 
-FUN double (x) {
+fun double (x) {
   x * 2
 }
 
 ; === Function with multiple parameters ===
 
-FUN add (a, b) {
+fun add (a, b) {
   a + b
 }
 
 ; === Typed function ===
 
-FUN square (x: Int) -> Int {
+fun square (x: Int) -> Int {
   x * x
 }
 
 ; === Nullary function ===
 
-FUN greeting () {
+fun greeting () {
   "Hello, World!"
 }
 
 ; === Function returning computed value ===
 
-FUN hypotenuse (a: Int, b: Int) -> Float {
+fun hypotenuse (a: Int, b: Int) -> Float {
   (a ** 2 + b ** 2) ** 0.5
 }
 
 ; === Recursive function ===
 
-FUN factorial (n) {
-  IF n <= 1 { 1 } ELSE { n * factorial(n - 1) }
+fun factorial (n) {
+  if n <= 1 { 1 } else { n * factorial(n - 1) }
 }
 
 ; === Recursive Fibonacci ===
 
-FUN fib (n) {
-  IF n <= 1 { n } ELSE { fib(n - 1) + fib(n - 2) }
+fun fib (n) {
+  if n <= 1 { n } else { fib(n - 1) + fib(n - 2) }
 }
 
 ; === Function as first-class value ===
 
-FUN triple (x) {
+fun triple (x) {
   x * 3
 }
 
 ; === Multiple functions ===
 
-FUN inc (x) { x + 1 }
-FUN dec (x) { x - 1 }
+fun inc (x) { x + 1 }
+fun dec (x) { x - 1 }
 
 ; === Function with local state ===
 
-FUN compute (a, b, c) {
-  LET temp = a + b
+fun compute (a, b, c) {
+  let temp = a + b
   temp * c
 }
 
 ; === Function shadowing parameter ===
 
-FUN shadow-test (x) {
-  LET x = 100
+fun shadow-test (x) {
+  let x = 100
   x
 }
 
-FUN main() {
-  WRITE double(21)
+fun main() {
+  write double(21)
   ; Expected: 42
 
-  WRITE double(0)
+  write double(0)
   ; Expected: 0
 
-  WRITE add(10, 32)
+  write add(10, 32)
   ; Expected: 42
 
-  WRITE square(7)
+  write square(7)
   ; Expected: 49
 
-  WRITE square(0)
+  write square(0)
   ; Expected: 0
 
-  WRITE greeting()
+  write greeting()
   ; Expected: Hello, World!
 
-  WRITE hypotenuse(3, 4)
+  write hypotenuse(3, 4)
   ; Expected: 5
 
-  WRITE factorial(0)
+  write factorial(0)
   ; Expected: 1
 
-  WRITE factorial(1)
+  write factorial(1)
   ; Expected: 1
 
-  WRITE factorial(5)
+  write factorial(5)
   ; Expected: 120
 
-  WRITE factorial(10)
+  write factorial(10)
   ; Expected: 3628800
 
-  WRITE fib(0)
+  write fib(0)
   ; Expected: 0
 
-  WRITE fib(1)
+  write fib(1)
   ; Expected: 1
 
-  WRITE fib(10)
+  write fib(10)
   ; Expected: 55
 
-  LET f = triple
-  WRITE f(14)
+  let f = triple
+  write f(14)
   ; Expected: 42
 
-  WRITE inc(5)
+  write inc(5)
   ; Expected: 6
 
-  WRITE dec(5)
+  write dec(5)
   ; Expected: 4
 
-  WRITE compute(2, 3, 4)
+  write compute(2, 3, 4)
   ; Expected: 20
 
   ; === Nested function calls ===
 
-  WRITE square(double(3))
+  write square(double(3))
   ; Expected: 36 (double(3)=6, square(6)=36)
 
-  WRITE double(square(3))
+  write double(square(3))
   ; Expected: 18 (square(3)=9, double(9)=18)
 
-  WRITE add(double(5), triple(3))
+  write add(double(5), triple(3))
   ; Expected: 19 (double(5)=10, triple(3)=9)
 
-  WRITE shadow-test(42)
+  write shadow-test(42)
   ; Expected: 100
 
-  WRITE "Named functions test complete"
+  write "Named functions test complete"
 }

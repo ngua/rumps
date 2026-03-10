@@ -1,5 +1,5 @@
 ; Circular import test: A imports B
 
-MODULE B FROM "circular-b.rumps"
+module B from "circular-b.rumps"
 
-+LET a-val = 1
++let a-val = 1

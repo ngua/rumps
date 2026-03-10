@@ -2,199 +2,199 @@
 ; Tests String.length, String.upper, String.lower, String.trim,
 ; String.split, String.join, String.slice, String.contains, String.replace
 
-FUN main() {
+fun main() {
   ; ============ String.length ============
 
-  WRITE String.length("hello")  ; 5
+  write String.length("hello")  ; 5
 
-  LET empty-str = ""
-  WRITE String.length(empty-str)  ; 0
+  let empty-str = ""
+  write String.length(empty-str)  ; 0
 
-  LET single-char = "x"
-  WRITE String.length(single-char)  ; 1
+  let single-char = "x"
+  write String.length(single-char)  ; 1
 
-  LET with-spaces = "hello world"
-  WRITE String.length(with-spaces)  ; 11
+  let with-spaces = "hello world"
+  write String.length(with-spaces)  ; 11
 
   ; ============ String.upper ============
 
-  WRITE String.upper("hello")  ; "HELLO"
+  write String.upper("hello")  ; "HELLO"
 
-  LET mixed-case = "Hello World"
-  WRITE String.upper(mixed-case)  ; "HELLO WORLD"
+  let mixed-case = "Hello World"
+  write String.upper(mixed-case)  ; "HELLO WORLD"
 
-  WRITE String.upper("ALREADY UPPER")  ; "ALREADY UPPER"
+  write String.upper("ALREADY UPPER")  ; "ALREADY UPPER"
 
-  WRITE String.upper("")  ; ""
+  write String.upper("")  ; ""
 
-  LET with-nums = "abc123"
-  WRITE String.upper(with-nums)  ; "ABC123"
+  let with-nums = "abc123"
+  write String.upper(with-nums)  ; "ABC123"
 
   ; ============ String.lower ============
 
-  WRITE String.lower("HELLO")  ; "hello"
+  write String.lower("HELLO")  ; "hello"
 
-  LET upper-mixed = "Hello World"
-  WRITE String.lower(upper-mixed)  ; "hello world"
+  let upper-mixed = "Hello World"
+  write String.lower(upper-mixed)  ; "hello world"
 
-  WRITE String.lower("already lower")  ; "already lower"
+  write String.lower("already lower")  ; "already lower"
 
-  WRITE String.lower("")  ; ""
+  write String.lower("")  ; ""
 
-  LET lower-nums = "ABC123"
-  WRITE String.lower(lower-nums)  ; "abc123"
+  let lower-nums = "ABC123"
+  write String.lower(lower-nums)  ; "abc123"
 
   ; ============ String.trim ============
 
-  WRITE String.trim("  hello  ")  ; "hello"
+  write String.trim("  hello  ")  ; "hello"
 
-  LET leading-space = "   world"
-  WRITE String.trim(leading-space)  ; "world"
+  let leading-space = "   world"
+  write String.trim(leading-space)  ; "world"
 
-  LET trailing-space = "hello   "
-  WRITE String.trim(trailing-space)  ; "hello"
+  let trailing-space = "hello   "
+  write String.trim(trailing-space)  ; "hello"
 
-  WRITE String.trim("no spaces")  ; "no spaces"
+  write String.trim("no spaces")  ; "no spaces"
 
-  WRITE String.trim("")  ; ""
+  write String.trim("")  ; ""
 
-  LET only-spaces = "     "
-  WRITE String.trim(only-spaces)  ; ""
+  let only-spaces = "     "
+  write String.trim(only-spaces)  ; ""
 
   ; ============ String.split ============
 
-  LET csv = "a,b,c"
-  LET parts = String.split(csv, ",")
-  WRITE parts  ; ["a", "b", "c"]
+  let csv = "a,b,c"
+  let parts = String.split(csv, ",")
+  write parts  ; ["a", "b", "c"]
 
   ; Split on space
-  LET sentence = "hello world foo"
-  LET words = String.split(sentence, " ")
-  WRITE words  ; ["hello", "world", "foo"]
+  let sentence = "hello world foo"
+  let words = String.split(sentence, " ")
+  write words  ; ["hello", "world", "foo"]
 
   ; Split on multi-char delimiter
-  LET multi-delim = "foo::bar::baz"
-  LET multi-parts = String.split(multi-delim, "::")
-  WRITE multi-parts  ; ["foo", "bar", "baz"]
+  let multi-delim = "foo::bar::baz"
+  let multi-parts = String.split(multi-delim, "::")
+  write multi-parts  ; ["foo", "bar", "baz"]
 
   ; Split with no delimiter found
-  LET no-match = String.split("hello", ",")
-  WRITE no-match  ; ["hello"]
+  let no-match = String.split("hello", ",")
+  write no-match  ; ["hello"]
 
   ; Split empty string
-  LET split-empty = String.split("", ",")
-  WRITE split-empty  ; [""]
+  let split-empty = String.split("", ",")
+  write split-empty  ; [""]
 
   ; Split on empty delimiter (splits every char)
-  LET split-chars = String.split("abc", "")
-  WRITE split-chars  ; ["", "a", "b", "c", ""]
+  let split-chars = String.split("abc", "")
+  write split-chars  ; ["", "a", "b", "c", ""]
 
   ; ============ String.join ============
 
-  LET join-arr = ["a", "b", "c"]
-  LET joined = String.join(join-arr, ",")
-  WRITE joined  ; "a,b,c"
+  let join-arr = ["a", "b", "c"]
+  let joined = String.join(join-arr, ",")
+  write joined  ; "a,b,c"
 
   ; Join with space
-  LET join-words = ["hello", "world"]
-  LET joined-words = String.join(join-words, " ")
-  WRITE joined-words  ; "hello world"
+  let join-words = ["hello", "world"]
+  let joined-words = String.join(join-words, " ")
+  write joined-words  ; "hello world"
 
   ; Join with empty delimiter
-  LET join-no-sep = String.join(["a", "b", "c"], "")
-  WRITE join-no-sep  ; "abc"
+  let join-no-sep = String.join(["a", "b", "c"], "")
+  write join-no-sep  ; "abc"
 
   ; Join single element
-  LET join-single = String.join(["alone"], ",")
-  WRITE join-single  ; "alone"
+  let join-single = String.join(["alone"], ",")
+  write join-single  ; "alone"
 
   ; Join empty array
-  LET join-empty = String.join([], ",")
-  WRITE join-empty  ; ""
+  let join-empty = String.join([], ",")
+  write join-empty  ; ""
 
   ; ============ String.slice ============
 
-  LET slice-str = "hello world"
-  WRITE String.slice(slice-str, 0, 5)  ; "hello"
-  WRITE String.slice(slice-str, 6, 11)  ; "world"
+  let slice-str = "hello world"
+  write String.slice(slice-str, 0, 5)  ; "hello"
+  write String.slice(slice-str, 6, 11)  ; "world"
 
   ; Slice middle
-  WRITE String.slice(slice-str, 3, 8)  ; "lo wo"
+  write String.slice(slice-str, 3, 8)  ; "lo wo"
 
   ; Slice empty range
-  WRITE String.slice(slice-str, 5, 5)  ; ""
+  write String.slice(slice-str, 5, 5)  ; ""
 
   ; Slice with clamped bounds
-  WRITE String.slice("abc", 0, 100)  ; "abc"
-  WRITE String.slice("abc", -5, 2)  ; "ab"
+  write String.slice("abc", 0, 100)  ; "abc"
+  write String.slice("abc", -5, 2)  ; "ab"
 
   ; Slice from start
-  WRITE String.slice("hello", 0, 3)  ; "hel"
+  write String.slice("hello", 0, 3)  ; "hel"
 
   ; ============ String.contains ============
 
-  LET haystack = "hello world"
-  WRITE String.contains(haystack, "wor")  ; true
-  WRITE String.contains(haystack, "xyz")  ; false
-  WRITE String.contains(haystack, "hello")  ; true
-  WRITE String.contains(haystack, "world")  ; true
+  let haystack = "hello world"
+  write String.contains(haystack, "wor")  ; true
+  write String.contains(haystack, "xyz")  ; false
+  write String.contains(haystack, "hello")  ; true
+  write String.contains(haystack, "world")  ; true
 
   ; Contains empty string (always true)
-  WRITE String.contains("hello", "")  ; true
+  write String.contains("hello", "")  ; true
 
   ; Contains itself
-  WRITE String.contains("abc", "abc")  ; true
+  write String.contains("abc", "abc")  ; true
 
   ; Contains in empty string
-  WRITE String.contains("", "x")  ; false
-  WRITE String.contains("", "")  ; true
+  write String.contains("", "x")  ; false
+  write String.contains("", "")  ; true
 
   ; ============ String.replace ============
 
-  WRITE String.replace("foo", "o", "a")  ; "faa"
+  write String.replace("foo", "o", "a")  ; "faa"
 
-  LET banana = "banana"
-  WRITE String.replace(banana, "a", "o")  ; "bonono"
+  let banana = "banana"
+  write String.replace(banana, "a", "o")  ; "bonono"
 
   ; Replace substring
-  LET greeting = "hello world"
-  WRITE String.replace(greeting, "world", "there")  ; "hello there"
+  let greeting = "hello world"
+  write String.replace(greeting, "world", "there")  ; "hello there"
 
   ; Replace not found
-  WRITE String.replace("hello", "x", "y")  ; "hello"
+  write String.replace("hello", "x", "y")  ; "hello"
 
   ; Replace with empty
-  WRITE String.replace("hello", "l", "")  ; "heo"
+  write String.replace("hello", "l", "")  ; "heo"
 
   ; Replace empty pattern (inserts between chars)
-  WRITE String.replace("ab", "", "-")  ; "-a-b-"
+  write String.replace("ab", "", "-")  ; "-a-b-"
 
   ; ============ Chaining operations ============
 
   ; Upper then slice
-  LET chain-str = "hello world"
-  LET chain-upper = String.slice(String.upper(chain-str), 0, 5)
-  WRITE chain-upper  ; "HELLO"
+  let chain-str = "hello world"
+  let chain-upper = String.slice(String.upper(chain-str), 0, 5)
+  write chain-upper  ; "HELLO"
 
   ; Trim then split
-  LET messy = "  a,b,c  "
-  LET clean-parts = String.split(String.trim(messy), ",")
-  WRITE clean-parts  ; ["a", "b", "c"]
+  let messy = "  a,b,c  "
+  let clean-parts = String.split(String.trim(messy), ",")
+  write clean-parts  ; ["a", "b", "c"]
 
   ; Split then join with different separator
-  LET csv-to-tabs = String.join(String.split("a,b,c", ","), "\t")
-  WRITE csv-to-tabs  ; "a	b	c"
+  let csv-to-tabs = String.join(String.split("a,b,c", ","), "\t")
+  write csv-to-tabs  ; "a	b	c"
 
   ; ============ Pipeline usage ============
 
-  LET pipeline-str = "  HELLO WORLD  "
-  LET pipeline-result = pipeline-str
+  let pipeline-str = "  HELLO WORLD  "
+  let pipeline-result = pipeline-str
     |> String.trim
     |> String.lower
-  WRITE pipeline-result  ; "hello world"
+  write pipeline-result  ; "hello world"
 
-  LET pipeline-words = "apple,banana,cherry"
+  let pipeline-words = "apple,banana,cherry"
     |> (s => String.split(s, ","))
     |> (arr => String.join(arr, " - "))
-  WRITE pipeline-words  ; "apple - banana - cherry"
+  write pipeline-words  ; "apple - banana - cherry"
 }

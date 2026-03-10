@@ -1,6 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test Ref as first-class type\n\nFUN main() {\n  ; Create refs to locals and globals\n  LET local-ref = data{1, 2}\n  LET global-ref = ^info{\"key\"}\n\n  WRITE local-ref\n  WRITE global-ref\n\n  ; Set up some data\n  @SET data{1, 2} \"nested\"\n  @SET data{42} \"found\"\n  TRANSACTION {\n    @SET ^info{\"key\"} \"global value\"\n  }\n\n  ; Use refs with functions\n  WRITE get-or-default(local-ref, \"missing\")\n  WRITE get-or-default(global-ref, \"missing\")\n  WRITE get-or-default(data{999}, \"not found\")\n\n  ; Direct ref usage\n  LET r = data{42}\n  WRITE r\n  WRITE @GET r\n\n  ; Refs in collections\n  LET refs = [data{1}, data{2}, data{3}]\n  WRITE refs\n\n  ; Ref with spread subscripts\n  LET keys = [1, 2]\n  LET spread-ref = data{...keys}\n  WRITE spread-ref\n  @SET data{1, 2} \"via spread\"\n  WRITE @GET spread-ref\n\n  LET returned = make-ref(42)\n  WRITE returned\n  WRITE @GET returned\n\n  ; @SET and @KILL with local Ref variable (no transaction needed)\n  LET set-ref = data{100}\n  @SET set-ref \"via ref\"\n  WRITE @GET set-ref\n\n  ; KILL local ref via variable (no transaction needed)\n  LET kill-ref = data{100}\n  @KILL kill-ref\n  WRITE @GET kill-ref ?? \"killed\"\n\n  ; Global ref via variable (requires transaction)\n  TRANSACTION {\n    LET g-ref = ^info{\"txn-key\"}\n    @SET g-ref \"set via ref\"\n    WRITE @GET g-ref\n    @KILL g-ref\n    WRITE @GET g-ref ?? \"global killed\"\n  }\n\n  ; Ref equality comparison\n  LET ref1 = data{1, 2}\n  LET ref2 = data{1, 2}\n  LET ref3 = data{1, 3}\n  LET ref4 = ^info{\"key\"}\n\n  WRITE ref1 == ref2\n  WRITE ref1 == ref3\n  WRITE ref1 == ref4\n  WRITE ref1 != ref3\n}\n\n; Function that takes a Ref\nFUN get-or-default(r: Ref, default: Storable) -> Storable {\n  @GET r ?? default\n}\n\n; Function that returns a Ref\nFUN make-ref(key: Int) -> Ref {\n  data{key}\n}\n"
+description: "; Test Ref as first-class type\n\nfun main() {\n  ; Create refs to locals and globals\n  let local-ref = data{1, 2}\n  let global-ref = ^info{\"key\"}\n\n  write local-ref\n  write global-ref\n\n  ; Set up some data\n  @set data{1, 2} \"nested\"\n  @set data{42} \"found\"\n  transaction {\n    @set ^info{\"key\"} \"global value\"\n  }\n\n  ; Use refs with functions\n  write get-or-default(local-ref, \"missing\")\n  write get-or-default(global-ref, \"missing\")\n  write get-or-default(data{999}, \"not found\")\n\n  ; Direct ref usage\n  let r = data{42}\n  write r\n  write @get r\n\n  ; Refs in collections\n  let refs = [data{1}, data{2}, data{3}]\n  write refs\n\n  ; Ref with spread subscripts\n  let keys = [1, 2]\n  let spread-ref = data{...keys}\n  write spread-ref\n  @set data{1, 2} \"via spread\"\n  write @get spread-ref\n\n  let returned = make-ref(42)\n  write returned\n  write @get returned\n\n  ; @set and @kill with local Ref variable (no transaction needed)\n  let set-ref = data{100}\n  @set set-ref \"via ref\"\n  write @get set-ref\n\n  ; KILL local ref via variable (no transaction needed)\n  let kill-ref = data{100}\n  @kill kill-ref\n  write @get kill-ref ?? \"killed\"\n\n  ; Global ref via variable (requires transaction)\n  transaction {\n    let g-ref = ^info{\"txn-key\"}\n    @set g-ref \"set via ref\"\n    write @get g-ref\n    @kill g-ref\n    write @get g-ref ?? \"global killed\"\n  }\n\n  ; Ref equality comparison\n  let ref1 = data{1, 2}\n  let ref2 = data{1, 2}\n  let ref3 = data{1, 3}\n  let ref4 = ^info{\"key\"}\n\n  write ref1 == ref2\n  write ref1 == ref3\n  write ref1 == ref4\n  write ref1 != ref3\n}\n\n; Function that takes a Ref\nfun get-or-default(r: Ref, default: Storable) -> Storable {\n  @get r ?? default\n}\n\n; Function that returns a Ref\nfun make-ref(key: Int) -> Ref {\n  data{key}\n}\n"
 ---
 data{1, 2}
 ^info{"key"}
@@ -18,7 +18,7 @@ Option.Some("via ref")
 "killed"
 Option.Some("set via ref")
 "global killed"
-TRUE
-FALSE
-FALSE
-TRUE
+true
+false
+false
+true

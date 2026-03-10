@@ -1,27 +1,27 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Module constants\n; Tests Math.pi, Math.e, Math.tau, Math.inf, Math.neg-inf\n\n; ============ Math.pi ============\n\nWRITE Math.pi  ; ~3.14159...\n\nLET pi-val = Math.pi\nWRITE pi-val > 3.14  ; true\nWRITE pi-val < 3.15  ; true\n\n; Use in calculations\nLET area = Math.pi * 4.0  ; area of circle with r=2\nWRITE area > 12.0  ; true\n\n; ============ Math.e ============\n\nWRITE Math.e  ; ~2.71828...\n\nLET e-val = Math.e\nWRITE e-val > 2.71  ; true\nWRITE e-val < 2.72  ; true\n\n; Use with log\nLET log-e = Math.log(Math.e)\nWRITE Math.round(log-e)  ; 1\n\n; ============ Math.tau ============\n\nWRITE Math.tau  ; ~6.28318... (2*pi)\n\nLET tau-val = Math.tau\nWRITE tau-val > 6.28  ; true\nWRITE tau-val < 6.29  ; true\n\n; tau = 2*pi\nLET two-pi = Math.pi * 2.0\nLET diff = Math.abs(Math.tau - two-pi)\nWRITE diff < 0.0001  ; true (essentially equal)\n\n; ============ Math.inf ============\n\nWRITE Math.inf  ; inf\n\nLET inf-val = Math.inf\nWRITE inf-val > 1000000.0  ; true\nWRITE inf-val > 0.0  ; true\n\n; ============ Math.neg-inf ============\n\nWRITE Math.neg-inf  ; -inf\n\nLET neg-inf-val = Math.neg-inf\nWRITE neg-inf-val < -1000000.0  ; true\nWRITE neg-inf-val < 0.0  ; true\n\n; ============ Constants in expressions ============\n\n; Circle circumference: 2 * pi * r\nLET radius = 5.0\nLET circ = Math.tau * radius\nWRITE circ > 31.0  ; true\n\n; Constants work with pipeline\nLET doubled-pi = Math.pi\n  |> (x => x * 2.0)\nWRITE Math.abs(doubled-pi - Math.tau) < 0.0001  ; true\n\n; Constants in array\nLET consts = [Math.pi, Math.e, Math.tau]\nWRITE Iter.length(consts)  ; 3\n\n; Constants in object\nLET math-consts = {\n  pi: Math.pi,\n  e: Math.e,\n  tau: Math.tau\n}\nWRITE math-consts.pi > 3.0  ; true\nWRITE math-consts.e > 2.0  ; true\n"
+description: "; Module constants\n; Tests Math.pi, Math.e, Math.tau, Math.inf, Math.neg-inf\n\nfun main() {\n  ; ============ Math.pi ============\n\n  write Math.pi  ; ~3.14159...\n\n  let pi-val = Math.pi\n  write pi-val > 3.14  ; true\n  write pi-val < 3.15  ; true\n\n  ; Use in calculations\n  let area = Math.pi * 4.0  ; area of circle with r=2\n  write area > 12.0  ; true\n\n  ; ============ Math.e ============\n\n  write Math.e  ; ~2.71828...\n\n  let e-val = Math.e\n  write e-val > 2.71  ; true\n  write e-val < 2.72  ; true\n\n  ; Use with log\n  let log-e = Math.log(Math.e)\n  write Math.round(log-e)  ; 1\n\n  ; ============ Math.tau ============\n\n  write Math.tau  ; ~6.28318... (2*pi)\n\n  let tau-val = Math.tau\n  write tau-val > 6.28  ; true\n  write tau-val < 6.29  ; true\n\n  ; tau = 2*pi\n  let two-pi = Math.pi * 2.0\n  let diff = Math.abs(Math.tau - two-pi)\n  write diff < 0.0001  ; true (essentially equal)\n\n  ; ============ Math.inf ============\n\n  write Math.inf  ; inf\n\n  let inf-val = Math.inf\n  write inf-val > 1000000.0  ; true\n  write inf-val > 0.0  ; true\n\n  ; ============ Math.neg-inf ============\n\n  write Math.neg-inf  ; -inf\n\n  let neg-inf-val = Math.neg-inf\n  write neg-inf-val < -1000000.0  ; true\n  write neg-inf-val < 0.0  ; true\n\n  ; ============ Constants in expressions ============\n\n  ; Circle circumference: 2 * pi * r\n  let radius = 5.0\n  let circ = Math.tau * radius\n  write circ > 31.0  ; true\n\n  ; Constants work with pipeline\n  let doubled-pi = Math.pi\n    |> (x => x * 2.0)\n  write Math.abs(doubled-pi - Math.tau) < 0.0001  ; true\n\n  ; Constants in array\n  let consts = [Math.pi, Math.e, Math.tau]\n  write Iterable:length(consts)  ; 3\n\n  ; Constants in object\n  let math-consts = {\n    pi: Math.pi,\n    e: Math.e,\n    tau: Math.tau\n  }\n  write math-consts.pi > 3.0  ; true\n  write math-consts.e > 2.0  ; true\n}\n"
 ---
 3.141592653589793
-TRUE
-TRUE
-TRUE
+true
+true
+true
 2.718281828459045
-TRUE
-TRUE
+true
+true
 1
 6.283185307179586
-TRUE
-TRUE
-TRUE
+true
+true
+true
 inf.0
-TRUE
-TRUE
+true
+true
 -inf.0
-TRUE
-TRUE
-TRUE
-TRUE
+true
+true
+true
+true
 3
-TRUE
-TRUE
+true
+true

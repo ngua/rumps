@@ -1,13 +1,13 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Module-level mutual recursion: functions within a module calling each other\n\nMODULE Parity {\n    +FUN is-even(n: Int) -> Bool {\n        IF n == 0 { true } ELSE { is-odd(n - 1) }\n    }\n\n    +FUN is-odd(n: Int) -> Bool {\n        IF n == 0 { false } ELSE { is-even(n - 1) }\n    }\n}\n\n; Test mutual recursion via module path\n@OUTPUT Parity.is-even(0)\n@OUTPUT Parity.is-even(4)\n@OUTPUT Parity.is-even(7)\n@OUTPUT Parity.is-odd(0)\n@OUTPUT Parity.is-odd(3)\n@OUTPUT Parity.is-odd(6)\n\n; Nested module with mutual recursion\nMODULE Math {\n    MODULE Fibonacci {\n        ; Mutually recursive helper functions\n        +FUN fib(n: Int) -> Int {\n            IF n <= 1 { n } ELSE { fib-sum(n) }\n        }\n\n        FUN fib-sum(n: Int) -> Int {\n            fib(n - 1) + fib(n - 2)\n        }\n    }\n}\n\n@OUTPUT Math.Fibonacci.fib(0)\n@OUTPUT Math.Fibonacci.fib(1)\n@OUTPUT Math.Fibonacci.fib(10)\n"
+description: "; Module-level mutual recursion: functions within a module calling each other\n\nfun main() {\n  ; Test mutual recursion via module path\n  write Parity.is-even(0)\n  write Parity.is-even(4)\n  write Parity.is-even(7)\n  write Parity.is-odd(0)\n  write Parity.is-odd(3)\n  write Parity.is-odd(6)\n\n  write Math.Fibonacci.fib(0)\n  write Math.Fibonacci.fib(1)\n  write Math.Fibonacci.fib(10)\n}\n\nmodule Parity {\n    +fun is-even(n: Int) -> Bool {\n        if n == 0 { true } else { is-odd(n - 1) }\n    }\n\n    +fun is-odd(n: Int) -> Bool {\n        if n == 0 { false } else { is-even(n - 1) }\n    }\n}\n\n; Nested module with mutual recursion\nmodule Math {\n    module Fibonacci {\n        ; Mutually recursive helper functions\n        +fun fib(n: Int) -> Int {\n            if n <= 1 { n } else { fib-sum(n) }\n        }\n\n        fun fib-sum(n: Int) -> Int {\n            fib(n - 1) + fib(n - 2)\n        }\n    }\n}\n"
 ---
-TRUE
-TRUE
-FALSE
-FALSE
-TRUE
-FALSE
+true
+true
+false
+false
+true
+false
 0
 1
 55

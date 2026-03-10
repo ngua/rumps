@@ -1,21 +1,21 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Binary operator dispatch through user-defined class instances\n;\n; Tests that operators like `==`, `+`, `<`, etc... dispatch to\n; user-defined CLASS implementations on newtypes, rather than\n; falling through to the underlying type's builtin instance.\n\nFUN main() {\n  ; === Eq: custom `==` raises ===\n\n  LET a: X[Unit] = 1\n  LET b: X[Unit] = 1\n  WRITE (a == b) CATCH e => false\n\n  ; === Eq: custom `!=` also dispatches through `eq` ===\n\n  WRITE (a != b) CATCH e => false\n\n  ; === Numeric: custom `+` on newtype (doubles result) ===\n\n  LET x: MyInt = 10\n  LET y: MyInt = 3\n  WRITE x + y\n  WRITE x - y\n  WRITE x * y\n  WRITE x // y\n  WRITE x % y\n  WRITE x ** y\n\n  ; === Ord: custom `<`, `>`, `<=`, `>=` on newtype ===\n  ; Priority has reversed ordering (higher number = lower priority)\n\n  LET lo: Priority = 10\n  LET hi: Priority = 1\n  WRITE lo < hi\n  WRITE lo > hi\n  WRITE lo <= hi\n  WRITE lo >= hi\n  WRITE lo == hi\n\n  ; Same values\n  LET s1: Priority = 5\n  LET s2: Priority = 5\n  WRITE s1 <= s2\n  WRITE s1 >= s2\n  WRITE s1 == s2\n\n  ; === Auto-derive inside class body ===\n  ; Operators inside `CLASS Numeric FOR MyInt` should use the\n  ; underlying `Int` arithmetic, not recurse infinitely.\n\n  LET p: MyInt = 2\n  LET q: MyInt = 3\n  WRITE p + q\n}\n\n; Newtype whose `Eq` always raises\nNEWTYPE X[T] = Int\n\nCLASS Eq FOR X[T] {\n  FUN eq(a: X[T], b: X[T]) -> Bool {\n    RAISE \"no eq for X\"\n  }\n}\n\n; Newtype with custom `Numeric` that doubles every result\nNEWTYPE MyInt = Int\n\nCLASS Numeric FOR MyInt {\n  FUN add(a: MyInt, b: MyInt) -> MyInt {\n    LET x: Int = a\n    LET y: Int = b\n    (x + y) * 2\n  }\n  FUN sub(a: MyInt, b: MyInt) -> MyInt {\n    LET x: Int = a\n    LET y: Int = b\n    (x - y) * 2\n  }\n  FUN mul(a: MyInt, b: MyInt) -> MyInt {\n    LET x: Int = a\n    LET y: Int = b\n    (x * y) * 2\n  }\n  FUN floor-div(a: MyInt, b: MyInt) -> MyInt {\n    LET x: Int = a\n    LET y: Int = b\n    (x // y) * 2\n  }\n  FUN mod(a: MyInt, b: MyInt) -> MyInt {\n    LET x: Int = a\n    LET y: Int = b\n    (x % y) * 2\n  }\n  FUN pow(a: MyInt, b: MyInt) -> MyInt {\n    LET x: Int = a\n    LET y: Int = b\n    (x ** y) * 2\n  }\n}\n\n; Newtype with reversed ordering\nNEWTYPE Priority = Int\n\nCLASS Ord FOR Priority {\n  FUN compare(a: Priority, b: Priority) -> Ordering {\n    LET x: Int = a\n    LET y: Int = b\n    ; Reversed: higher number = lower priority\n    IF x > y { Ordering.Lt } ELSE {\n      IF x == y { Ordering.Eq } ELSE { Ordering.Gt }\n    }\n  }\n}\n\nCLASS Eq FOR Priority {\n  FUN eq(a: Priority, b: Priority) -> Bool {\n    LET x: Int = a\n    LET y: Int = b\n    x == y\n  }\n}\n"
+description: "; Binary operator dispatch through user-defined class instances\n;\n; Tests that operators like `==`, `+`, `<`, etc... dispatch to\n; user-defined class implementations on newtypes, rather than\n; falling through to the underlying type's builtin instance.\n\nfun main() {\n  ; === Eq: custom `==` raises ===\n\n  let a: X[Unit] = 1\n  let b: X[Unit] = 1\n  write (a == b) catch e => false\n\n  ; === Eq: custom `!=` also dispatches through `eq` ===\n\n  write (a != b) catch e => false\n\n  ; === Numeric: custom `+` on newtype (doubles result) ===\n\n  let x: MyInt = 10\n  let y: MyInt = 3\n  write x + y\n  write x - y\n  write x * y\n  write x // y\n  write x % y\n  write x ** y\n\n  ; === Ord: custom `<`, `>`, `<=`, `>=` on newtype ===\n  ; Priority has reversed ordering (higher number = lower priority)\n\n  let lo: Priority = 10\n  let hi: Priority = 1\n  write lo < hi\n  write lo > hi\n  write lo <= hi\n  write lo >= hi\n  write lo == hi\n\n  ; Same values\n  let s1: Priority = 5\n  let s2: Priority = 5\n  write s1 <= s2\n  write s1 >= s2\n  write s1 == s2\n\n  ; === Auto-derive inside class body ===\n  ; Operators inside `class Numeric for MyInt` should use the\n  ; underlying `Int` arithmetic, not recurse infinitely.\n\n  let p: MyInt = 2\n  let q: MyInt = 3\n  write p + q\n}\n\n; Newtype whose `Eq` always raises\nnewtype X[T] = Int\n\nclass Eq for X[T] {\n  fun eq(a: X[T], b: X[T]) -> Bool {\n    raise \"no eq for X\"\n  }\n}\n\n; Newtype with custom `Numeric` that doubles every result\nnewtype MyInt = Int\n\nclass Numeric for MyInt {\n  fun add(a: MyInt, b: MyInt) -> MyInt {\n    let x: Int = a\n    let y: Int = b\n    (x + y) * 2\n  }\n  fun sub(a: MyInt, b: MyInt) -> MyInt {\n    let x: Int = a\n    let y: Int = b\n    (x - y) * 2\n  }\n  fun mul(a: MyInt, b: MyInt) -> MyInt {\n    let x: Int = a\n    let y: Int = b\n    (x * y) * 2\n  }\n  fun floor-div(a: MyInt, b: MyInt) -> MyInt {\n    let x: Int = a\n    let y: Int = b\n    (x // y) * 2\n  }\n  fun mod(a: MyInt, b: MyInt) -> MyInt {\n    let x: Int = a\n    let y: Int = b\n    (x % y) * 2\n  }\n  fun pow(a: MyInt, b: MyInt) -> MyInt {\n    let x: Int = a\n    let y: Int = b\n    (x ** y) * 2\n  }\n}\n\n; Newtype with reversed ordering\nnewtype Priority = Int\n\nclass Ord for Priority {\n  fun compare(a: Priority, b: Priority) -> Ordering {\n    let x: Int = a\n    let y: Int = b\n    ; Reversed: higher number = lower priority\n    if x > y { Ordering.Lt } else {\n      if x == y { Ordering.Eq } else { Ordering.Gt }\n    }\n  }\n}\n\nclass Eq for Priority {\n  fun eq(a: Priority, b: Priority) -> Bool {\n    let x: Int = a\n    let y: Int = b\n    x == y\n  }\n}\n"
 ---
-FALSE
-FALSE
+false
+false
 26
 14
 60
 6
 2
 2000
-TRUE
-FALSE
-TRUE
-FALSE
-FALSE
-TRUE
-TRUE
-TRUE
+true
+false
+true
+false
+false
+true
+true
+true
 10

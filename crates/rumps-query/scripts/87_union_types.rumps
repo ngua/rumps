@@ -1,48 +1,48 @@
 ; Union type tests
 
-UNION NumericId = Int | String
+union NumericId = Int | String
 
-FUN format-id(id: NumericId) -> String {
-  MATCH id {
-    n IS Int => { "ID#{n}" }
-    s IS String => { "ID:{s}" }
+fun format-id(id: NumericId) -> String {
+  match id {
+    n is Int => { "ID#{n}" }
+    s is String => { "ID:{s}" }
     _ => { "unknown" }
   }
 }
 
-FUN classify(v: Storable) -> String {
-  MATCH v {
-    n IS Int IF n > 100 => { "large int" }
-    n IS Int IF n > 0 => { "positive int" }
-    n IS Int => { "non-positive int" }
-    s IS String IF String.length(s) > 10 => { "long string" }
-    s IS String => { "short string" }
-    b IS Bool => { "boolean" }
+fun classify(v: Storable) -> String {
+  match v {
+    n is Int if n > 100 => { "large int" }
+    n is Int if n > 0 => { "positive int" }
+    n is Int => { "non-positive int" }
+    s is String if String.length(s) > 10 => { "long string" }
+    s is String => { "short string" }
+    b is Bool => { "boolean" }
     _ => { "other storable" }
   }
 }
 
-FUN describe-scalar(opt: Option[Scalar]) -> String {
-  MATCH opt {
+fun describe-scalar(opt: Option[Scalar]) -> String {
+  match opt {
     Option.None => { "missing" }
     Option.Some(s) => {
-      MATCH s {
-        v IS String => { "string: {v}" }
-        v IS Int => { "int: {v}" }
-        v IS Bool => { "bool: {v}" }
-        v IS Float => { "float: {v}" }
+      match s {
+        v is String => { "string: {v}" }
+        v is Int => { "int: {v}" }
+        v is Bool => { "bool: {v}" }
+        v is Float => { "float: {v}" }
         _ => { "unknown scalar" }
       }
     }
   }
 }
 
-FUN get-id(use-int: Bool) -> Int | String {
-  IF use-int { 42 } ELSE { "abc-123" }
+fun get-id(use-int: Bool) -> Int | String {
+  if use-int { 42 } else { "abc-123" }
 }
 
-FUN get-storable(kind: Int) -> Storable {
-  MATCH kind {
+fun get-storable(kind: Int) -> Storable {
+  match kind {
     0 => { true }
     1 => { 42 }
     2 => { 3.14 }
@@ -52,8 +52,8 @@ FUN get-storable(kind: Int) -> Storable {
   }
 }
 
-FUN get-scalar(kind: Int) -> Scalar {
-  MATCH kind {
+fun get-scalar(kind: Int) -> Scalar {
+  match kind {
     0 => { true }
     1 => { 42 }
     2 => { 3.14 }
@@ -61,204 +61,204 @@ FUN get-scalar(kind: Int) -> Scalar {
   }
 }
 
-FUN parse-id(s: String) -> NumericId {
-  LET as-int = s READ Int
-  MATCH as-int {
+fun parse-id(s: String) -> NumericId {
+  let as-int = s read Int
+  match as-int {
     Result.Ok(n) => { n }
     Result.Err(_) => { s }
   }
 }
 
-FUN main() {
+fun main() {
   ; === Builtin unions: Storable and Scalar ===
 
   ; Storable contains: Bool | Int | Float | Char | String | Json
   ; Scalar contains: Bool | Int | Float | String
 
-  ; IS checks against Storable
-  LET b: Bool = true
-  LET i: Int = 42
-  LET f: Float = 3.14
-  LET c: Char = 'x'
-  LET s: String = "hello"
+  ; is checks against Storable
+  let b: Bool = true
+  let i: Int = 42
+  let f: Float = 3.14
+  let c: Char = 'x'
+  let s: String = "hello"
 
-  WRITE b IS Storable
-  WRITE i IS Storable
-  WRITE f IS Storable
-  WRITE c IS Storable
-  WRITE s IS Storable
+  write b is Storable
+  write i is Storable
+  write f is Storable
+  write c is Storable
+  write s is Storable
 
   ; Non-storables
-  LET arr = [1, 2, 3]
-  LET obj = { x: 1 }
-  LET tup = (1, 2)
-  WRITE arr IS Storable
-  WRITE obj IS Storable
-  WRITE tup IS Storable
+  let arr = [1, 2, 3]
+  let obj = { x: 1 }
+  let tup = (1, 2)
+  write arr is Storable
+  write obj is Storable
+  write tup is Storable
 
-  ; IS checks against Scalar
-  WRITE b IS Scalar
-  WRITE i IS Scalar
-  WRITE f IS Scalar
-  WRITE s IS Scalar
-  WRITE c IS Scalar  ; Char is NOT Scalar
+  ; is checks against Scalar
+  write b is Scalar
+  write i is Scalar
+  write f is Scalar
+  write s is Scalar
+  write c is Scalar  ; Char is not Scalar
 
-  ; === AS cast for Storable (infallible) ===
+  ; === as cast for Storable (infallible) ===
 
-  LET int-val: Int = 100
-  LET storable-int = int-val AS Storable
-  WRITE storable-int IS Storable
-  WRITE storable-int IS Int
+  let int-val: Int = 100
+  let storable-int = int-val as Storable
+  write storable-int is Storable
+  write storable-int is Int
 
-  LET str-val: String = "test"
-  LET storable-str = str-val AS Storable
-  WRITE storable-str IS Storable
-  WRITE storable-str IS String
+  let str-val: String = "test"
+  let storable-str = str-val as Storable
+  write storable-str is Storable
+  write storable-str is String
 
   ; === User-defined unions ===
 
-  LET id1: Int = 123
-  LET id2: String = "abc-456"
+  let id1: Int = 123
+  let id2: String = "abc-456"
 
-  WRITE id1 IS NumericId
-  WRITE id2 IS NumericId
+  write id1 is NumericId
+  write id2 is NumericId
 
   ; Non-member
-  LET not-id: Float = 1.5
-  WRITE not-id IS NumericId
+  let not-id: Float = 1.5
+  write not-id is NumericId
 
   ; === Union type in function signatures ===
 
-  WRITE format-id(123)
-  WRITE format-id("xyz")
+  write format-id(123)
+  write format-id("xyz")
 
-  ; === MATCH with IS patterns ===
+  ; === match with is patterns ===
 
-  LET val1 = 42
-  LET result1 = MATCH val1 {
-    n IS Int => { "int: {n}" }
-    s IS String => { "str: {s}" }
-    b IS Bool => { "bool" }
+  let val1 = 42
+  let result1 = match val1 {
+    n is Int => { "int: {n}" }
+    s is String => { "str: {s}" }
+    b is Bool => { "bool" }
     _ => { "other" }
   }
-  WRITE result1
+  write result1
 
-  LET val2 = "hello"
-  LET result2 = MATCH val2 {
-    n IS Int => { "int: {n}" }
-    s IS String => { "str: {s}" }
-    b IS Bool => { "bool" }
+  let val2 = "hello"
+  let result2 = match val2 {
+    n is Int => { "int: {n}" }
+    s is String => { "str: {s}" }
+    b is Bool => { "bool" }
     _ => { "other" }
   }
-  WRITE result2
+  write result2
 
-  LET val3 = true
-  LET result3 = MATCH val3 {
-    n IS Int => { "int" }
-    s IS String => { "str" }
-    b IS Bool => { "bool: {b}" }
+  let val3 = true
+  let result3 = match val3 {
+    n is Int => { "int" }
+    s is String => { "str" }
+    b is Bool => { "bool: {b}" }
     _ => { "other" }
   }
-  WRITE result3
+  write result3
 
   ; === Inline union types ===
 
-  LET mixed: Int | String = 99
-  WRITE mixed IS Int
-  WRITE mixed IS String
+  let mixed: Int | String = 99
+  write mixed is Int
+  write mixed is String
 
-  LET mixed2: Int | String = "foo"
-  WRITE mixed2 IS Int
-  WRITE mixed2 IS String
+  let mixed2: Int | String = "foo"
+  write mixed2 is Int
+  write mixed2 is String
 
   ; === Complex match with guards ===
 
-  WRITE classify(500)
-  WRITE classify(50)
-  WRITE classify(0)
-  WRITE classify("hello world!!!")
-  WRITE classify("hi")
-  WRITE classify(true)
-  WRITE classify(3.14)
+  write classify(500)
+  write classify(50)
+  write classify(0)
+  write classify("hello world!!!")
+  write classify("hi")
+  write classify(true)
+  write classify(3.14)
 
-  ; === JSON scalar extraction returns Option[Scalar] ===
+  ; === json scalar extraction returns Option[Scalar] ===
 
-  LET data = { "name": "Alice", "age": 30, "active": true, "score": 3.14 }
+  let data = { "name": "Alice", "age": 30, "active": true, "score": 3.14 }
 
   ; ->> returns Option[Scalar]
-  LET name-opt = data->>("name")
-  LET age-opt = data->>("age")
-  LET active-opt = data->>("active")
-  LET score-opt = data->>("score")
-  LET missing-opt = data->>("missing")
+  let name-opt = data->>("name")
+  let age-opt = data->>("age")
+  let active-opt = data->>("active")
+  let score-opt = data->>("score")
+  let missing-opt = data->>("missing")
 
-  WRITE name-opt IS Option[_]
-  WRITE age-opt IS Option[_]
-  WRITE missing-opt IS Option.None
+  write name-opt is Option[_]
+  write age-opt is Option[_]
+  write missing-opt is Option.None
 
   ; Unwrapped values are Scalar (the union type)
-  LET name-val = name-opt!
-  LET age-val = age-opt!
-  LET active-val = active-opt!
-  LET score-val = score-opt!
+  let name-val = name-opt!
+  let age-val = age-opt!
+  let active-val = active-opt!
+  let score-val = score-opt!
 
-  WRITE name-val IS Scalar
-  WRITE age-val IS Scalar
-  WRITE active-val IS Scalar
-  WRITE score-val IS Scalar
+  write name-val is Scalar
+  write age-val is Scalar
+  write active-val is Scalar
+  write score-val is Scalar
 
-  ; Can narrow Scalar with IS
-  WRITE name-val IS String
-  WRITE age-val IS Int
-  WRITE active-val IS Bool
-  WRITE score-val IS Float
+  ; Can narrow Scalar with is
+  write name-val is String
+  write age-val is Int
+  write active-val is Bool
+  write score-val is Float
 
-  ; === Type narrowing with MATCH on JSON scalars ===
+  ; === Type narrowing with match on json scalars ===
 
-  WRITE describe-scalar(data->>("name"))
-  WRITE describe-scalar(data->>("age"))
-  WRITE describe-scalar(data->>("active"))
-  WRITE describe-scalar(data->>("score"))
-  WRITE describe-scalar(data->>("missing"))
+  write describe-scalar(data->>("name"))
+  write describe-scalar(data->>("age"))
+  write describe-scalar(data->>("active"))
+  write describe-scalar(data->>("score"))
+  write describe-scalar(data->>("missing"))
 
   ; === Static field extraction with .. also returns Option[Scalar] ===
 
-  LET static-name = data..name
-  LET static-age = data..age
+  let static-name = data..name
+  let static-age = data..age
 
-  WRITE static-name IS Option[_]
-  WRITE static-name! IS Scalar
-  WRITE static-name! IS String
+  write static-name is Option[_]
+  write static-name! is Scalar
+  write static-name! is String
 
-  WRITE static-age IS Option[_]
-  WRITE static-age! IS Scalar
-  WRITE static-age! IS Int
+  write static-age is Option[_]
+  write static-age! is Scalar
+  write static-age! is Int
 
   ; === Returning union types from functions ===
 
-  LET id-int = get-id(true)
-  LET id-str = get-id(false)
+  let id-int = get-id(true)
+  let id-str = get-id(false)
 
-  WRITE id-int IS Int
-  WRITE id-int IS String
-  WRITE id-str IS Int
-  WRITE id-str IS String
+  write id-int is Int
+  write id-int is String
+  write id-str is Int
+  write id-str is String
 
   ; Return Storable
-  WRITE get-storable(0) IS Bool
-  WRITE get-storable(1) IS Int
-  WRITE get-storable(2) IS Float
-  WRITE get-storable(3) IS Char
-  WRITE get-storable(4) IS String
-  WRITE get-storable(5) IS Json
+  write get-storable(0) is Bool
+  write get-storable(1) is Int
+  write get-storable(2) is Float
+  write get-storable(3) is Char
+  write get-storable(4) is String
+  write get-storable(5) is Json
 
   ; Return Scalar
-  WRITE get-scalar(0) IS Bool
-  WRITE get-scalar(1) IS Int
-  WRITE get-scalar(2) IS Float
-  WRITE get-scalar(3) IS String
+  write get-scalar(0) is Bool
+  write get-scalar(1) is Int
+  write get-scalar(2) is Float
+  write get-scalar(3) is String
 
   ; Return user-defined union
-  WRITE parse-id("123") IS Int
-  WRITE parse-id("abc") IS String
+  write parse-id("123") is Int
+  write parse-id("abc") is String
 }

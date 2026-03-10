@@ -1,13 +1,13 @@
 ; Test: type shadowing
 ; Declaring a type with the same name twice shadows the first definition
 
-TYPE Status = Pending | Active
+type Status = Pending | Active
 
 ; This shadows the previous definition
-TYPE Status = Open | Closed
+type Status = Open | Closed
 
-FUN main() {
+fun main() {
   ; Use the shadowed type (should have Open and Closed variants)
-  LET s: Status = Status.Open
-  WRITE s
+  let s: Status = Status.Open
+  write s
 }

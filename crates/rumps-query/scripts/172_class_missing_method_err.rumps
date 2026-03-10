@@ -2,10 +2,10 @@
 ;
 ; The Display class requires a `display` method but none is provided.
 
-FUN main() { }
+fun main() { }
 
-TYPE Point = Point(Int, Int)
+type Point = Point(Int, Int)
 
-CLASS Display FOR Point {
+class Display for Point {
   ; Missing the display method
 }

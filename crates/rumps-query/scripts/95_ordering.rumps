@@ -1,72 +1,72 @@
 ; Ordering type tests
 
-FUN main() {
+fun main() {
   ; === Ordering variant construction ===
 
-  LET lt = Ordering.Lt
-  LET eq = Ordering.Eq
-  LET gt = Ordering.Gt
+  let lt = Ordering.Lt
+  let eq = Ordering.Eq
+  let gt = Ordering.Gt
 
-  WRITE lt
-  WRITE eq
-  WRITE gt
+  write lt
+  write eq
+  write gt
 
   ; === Pattern matching on Ordering ===
 
-  WRITE describe(Ordering.Lt)
-  WRITE describe(Ordering.Eq)
-  WRITE describe(Ordering.Gt)
+  write describe(Ordering.Lt)
+  write describe(Ordering.Eq)
+  write describe(Ordering.Gt)
 
   ; === Using Ordering as function result ===
 
-  WRITE describe(compare-int(1, 2))
-  WRITE describe(compare-int(2, 2))
-  WRITE describe(compare-int(3, 2))
+  write describe(compare-int(1, 2))
+  write describe(compare-int(2, 2))
+  write describe(compare-int(3, 2))
 
   ; === Ordering in data structures ===
 
-  LET orderings: Array[Ordering] = [Ordering.Lt, Ordering.Eq, Ordering.Gt]
-  WRITE Iterable:length(orderings)
+  let orderings: Array[Ordering] = [Ordering.Lt, Ordering.Eq, Ordering.Gt]
+  write Iterable:length(orderings)
 
-  LET mapped = Mappable:map(describe, orderings)
-  WRITE mapped
+  let mapped = Mappable:map(describe, orderings)
+  write mapped
 
   ; === Ordering in match with guards ===
 
-  WRITE classify(Ordering.Lt)
-  WRITE classify(Ordering.Eq)
-  WRITE classify(Ordering.Gt)
+  write classify(Ordering.Lt)
+  write classify(Ordering.Eq)
+  write classify(Ordering.Gt)
 
   ; === Type annotation with Ordering ===
 
-  LET typed: Ordering = Ordering.Gt
-  WRITE describe(typed)
+  let typed: Ordering = Ordering.Gt
+  write describe(typed)
 
-  WRITE describe(identity(Ordering.Eq))
+  write describe(identity(Ordering.Eq))
 }
 
-FUN describe(ord: Ordering) -> String {
-  MATCH ord {
+fun describe(ord: Ordering) -> String {
+  match ord {
     Ordering.Lt => { "less than" }
     Ordering.Eq => { "equal" }
     Ordering.Gt => { "greater than" }
   }
 }
 
-FUN compare-int(a: Int, b: Int) -> Ordering {
-  IF a < b { Ordering.Lt } ELSE {
-    IF a == b { Ordering.Eq } ELSE { Ordering.Gt }
+fun compare-int(a: Int, b: Int) -> Ordering {
+  if a < b { Ordering.Lt } else {
+    if a == b { Ordering.Eq } else { Ordering.Gt }
   }
 }
 
-FUN classify(ord: Ordering) -> Int {
-  MATCH ord {
+fun classify(ord: Ordering) -> Int {
+  match ord {
     Ordering.Lt => { -1 }
     Ordering.Eq => { 0 }
     Ordering.Gt => { 1 }
   }
 }
 
-FUN identity(ord: Ordering) -> Ordering {
+fun identity(ord: Ordering) -> Ordering {
   ord
 }

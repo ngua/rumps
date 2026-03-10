@@ -1,90 +1,90 @@
-; Test: IF/ELSE branches
+; Test: if/else branches
 ; Tests conditional expressions and statements
 
-FUN main() {
-  ; Simple IF with true condition
-  IF TRUE {
-    WRITE "TRUE branch taken"
+fun main() {
+  ; Simple if with true condition
+  if true {
+    write "true branch taken"
   }
 
-  ; Simple IF with false condition (no output)
-  IF FALSE {
-    WRITE "This should not print"
+  ; Simple if with false condition (no output)
+  if false {
+    write "This should not print"
   }
 
-  ; IF/ELSE with true condition
-  IF TRUE {
-    WRITE "IF branch"
-  } ELSE {
-    WRITE "ELSE branch"
+  ; if/else with true condition
+  if true {
+    write "if branch"
+  } else {
+    write "else branch"
   }
-  ; Expected: IF branch
+  ; Expected: if branch
 
-  ; IF/ELSE with false condition
-  IF FALSE {
-    WRITE "IF branch"
-  } ELSE {
-    WRITE "ELSE branch"
+  ; if/else with false condition
+  if false {
+    write "if branch"
+  } else {
+    write "else branch"
   }
-  ; Expected: ELSE branch
+  ; Expected: else branch
 
-  ; IF with comparison
-  LET x = 10
-  IF x > 5 {
-    WRITE "x is greater than 5"
-  } ELSE {
-    WRITE "x is not greater than 5"
+  ; if with comparison
+  let x = 10
+  if x > 5 {
+    write "x is greater than 5"
+  } else {
+    write "x is not greater than 5"
   }
   ; Expected: x is greater than 5
 
-  ; IF with equality
-  LET name = "Alice"
-  IF name == "Alice" {
-    WRITE "Hello, Alice!"
-  } ELSE {
-    WRITE "You are not Alice"
+  ; if with equality
+  let name = "Alice"
+  if name == "Alice" {
+    write "Hello, Alice!"
+  } else {
+    write "You are not Alice"
   }
   ; Expected: Hello, Alice!
 
-  ; IF as expression
-  LET result = IF 10 > 5 { "big" } ELSE { "small" }
-  WRITE result
+  ; if as expression
+  let result = if 10 > 5 { "big" } else { "small" }
+  write result
   ; Expected: big
 
-  ; Nested IF
-  LET score = 85
-  IF score >= 90 {
-    WRITE "A"
-  } ELSE {
-    IF score >= 80 {
-      WRITE "B"
-    } ELSE {
-      IF score >= 70 {
-        WRITE "C"
-      } ELSE {
-        WRITE "F"
+  ; Nested if
+  let score = 85
+  if score >= 90 {
+    write "A"
+  } else {
+    if score >= 80 {
+      write "B"
+    } else {
+      if score >= 70 {
+        write "C"
+      } else {
+        write "F"
       }
     }
   }
   ; Expected: B
 
-  ; IF with logical operators
-  LET a = TRUE
-  LET b = FALSE
-  IF a AND NOT b {
-    WRITE "a is true and b is false"
+  ; if with logical operators
+  let a = true
+  let b = false
+  if a and not b {
+    write "a is true and b is false"
   }
   ; Expected: a is true and b is false
 
-  ; IF with complex condition
-  LET age = 25
-  LET has-license = TRUE
-  IF age >= 18 AND has-license {
-    WRITE "Can drive"
-  } ELSE {
-    WRITE "Cannot drive"
+  ; if with complex condition
+  let age = 25
+  let has-license = true
+  if age >= 18 and has-license {
+    write "Can drive"
+  } else {
+    write "Cannot drive"
   }
   ; Expected: Can drive
 
-  WRITE "IF/ELSE test complete"
+  write "if/else test complete"
 }

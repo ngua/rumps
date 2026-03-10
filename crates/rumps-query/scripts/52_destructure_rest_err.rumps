@@ -1,5 +1,5 @@
-; Array destructuring not allowed in LET (only in MATCH)
+; Array destructuring not allowed in let (only in match)
 
-FUN main() {
-  LET [a, b, ...rest] = [1, 2, 3]
+fun main() {
+  let [a, b, ...rest] = [1, 2, 3]
 }

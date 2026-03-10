@@ -1,107 +1,107 @@
-; Test: FOREVER loop construct
+; Test: forever loop construct
 ; Continuation-passing style loop with explicit state
 
-FUN main() {
+fun main() {
   ; Basic: count to 5
-  LET count = FOREVER 1 (n, cont) => {
-    IF n > 5 {
+  let count = forever 1 (n, cont) => {
+    if n > 5 {
       n - 1  ; return last valid value
-    } ELSE {
+    } else {
       cont(n + 1)
     }
   }
-  WRITE count
+  write count
 
   ; Sum from 1 to 10
-  LET sum = FOREVER { acc: 0, i: 1 } (state, cont) => {
-    IF state.i > 10 {
+  let sum = forever { acc: 0, i: 1 } (state, cont) => {
+    if state.i > 10 {
       state.acc
-    } ELSE {
+    } else {
       cont({ acc: state.acc + state.i, i: state.i + 1 })
     }
   }
-  WRITE sum
+  write sum
 
   ; Factorial of 5
-  LET factorial = FOREVER { result: 1, n: 5 } (state, cont) => {
-    IF state.n <= 1 {
+  let factorial = forever { result: 1, n: 5 } (state, cont) => {
+    if state.n <= 1 {
       state.result
-    } ELSE {
+    } else {
       cont({ result: state.result * state.n, n: state.n - 1 })
     }
   }
-  WRITE factorial
+  write factorial
 
   ; Early exit based on condition
-  LET early = FOREVER 0 (n, cont) => {
-    IF n == 3 {
+  let early = forever 0 (n, cont) => {
+    if n == 3 {
       "stopped at 3"
-    } ELSE {
+    } else {
       cont(n + 1)
     }
   }
-  WRITE early
+  write early
 
   ; Collect even numbers from 0 to 10
-  LET evens = FOREVER { i: 0, acc: [] } (state, cont) => {
-    IF state.i > 10 {
+  let evens = forever { i: 0, acc: [] } (state, cont) => {
+    if state.i > 10 {
       state.acc
-    } ELSE {
-      IF state.i % 2 == 0 {
+    } else {
+      if state.i % 2 == 0 {
         cont({ i: state.i + 1, acc: Array.concat(state.acc, [state.i]) })
-      } ELSE {
+      } else {
         cont({ i: state.i + 1, acc: state.acc })
       }
     }
   }
-  WRITE evens
+  write evens
 
-  ; Using @ORDER to iterate through subscripts
-  @SET data{1} "one"
-  @SET data{2} "two"
-  @SET data{3} "three"
-  @SET data{4} "four"
+  ; Using @order to iterate through subscripts
+  @set data{1} "one"
+  @set data{2} "two"
+  @set data{3} "three"
+  @set data{4} "four"
 
-  ; Collect keys using @ORDER and FOREVER
-  LET keys = FOREVER { key: @ORDER data{}, acc: [] } (state, cont) => {
-    MATCH state.key {
+  ; Collect keys using @order and forever
+  let keys = forever { key: @order data{}, acc: [] } (state, cont) => {
+    match state.key {
       Option.None => state.acc
       Option.Some(s) => {
-        LET s = (s READ Int)!
+        let s = (s read Int)!
         cont({
-          key: @ORDER data{s},
+          key: @order data{s},
           acc: Array.concat(state.acc, [s])
         })
       }
     }
   }
-  WRITE keys
+  write keys
 
-  ; Collect all values using @ORDER
-  LET vals = FOREVER { key: @ORDER data{}, acc: "" } (state, cont) => {
-    MATCH state.key {
+  ; Collect all values using @order
+  let vals = forever { key: @order data{}, acc: "" } (state, cont) => {
+    match state.key {
       Option.None => state.acc
       Option.Some(k) => {
-        LET ki = (k READ Int)!
-        LET v = @GET data{ki}!
+        let ki = (k read Int)!
+        let v = @get data{ki}!
         cont({
-          key: @ORDER data{ki},
+          key: @order data{ki},
           acc: "{state.acc}{v} "
         })
       }
     }
   }
-  WRITE vals
+  write vals
 
   ; Large iteration count (previously caused stack overflow at ~100k)
-  LET big = FOREVER 0 (n, cont) => {
-    IF n >= 200000 {
+  let big = forever 0 (n, cont) => {
+    if n >= 200000 {
       n
-    } ELSE {
+    } else {
       cont(n + 1)
     }
   }
-  WRITE big
+  write big
 
-  WRITE "FOREVER test complete"
+  write "forever test complete"
 }

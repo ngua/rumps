@@ -1,88 +1,88 @@
 ; Test: Expression type annotations
 ; Tests `(expr) : Type` syntax for inline type annotations
 
-FUN main() {
+fun main() {
   ; === Basic expression annotations ===
 
   ; Int annotation
-  LET x = (42) : Int
-  WRITE x
+  let x = (42) : Int
+  write x
   ; Expected: 42
 
   ; String annotation
-  LET s = ("hello") : String
-  WRITE s
+  let s = ("hello") : String
+  write s
   ; Expected: hello
 
   ; Bool annotation
-  LET b = (TRUE) : Bool
-  WRITE b
-  ; Expected: TRUE
+  let b = (true) : Bool
+  write b
+  ; Expected: true
 
   ; Float annotation
-  LET f = (3.14) : Float
-  WRITE f
+  let f = (3.14) : Float
+  write f
   ; Expected: 3.14
 
   ; === Annotating expressions ===
 
   ; Annotate arithmetic expression
-  LET sum = (1 + 2) : Int
-  WRITE sum
+  let sum = (1 + 2) : Int
+  write sum
   ; Expected: 3
 
   ; Annotate function call result
-  LET len = (Iterable:length([1, 2, 3])) : Int
-  WRITE len
+  let len = (Iterable:length([1, 2, 3])) : Int
+  write len
   ; Expected: 3
 
   ; === Parameterized type annotations ===
 
   ; Option[Int] with Some
-  LET opt = (Option.Some(10)) : Option[Int]
-  WRITE opt
+  let opt = (Option.Some(10)) : Option[Int]
+  write opt
   ; Expected: Option.Some(10)
 
   ; Option[String] with None
-  LET none = (Option.None) : Option[String]
-  WRITE none
+  let none = (Option.None) : Option[String]
+  write none
   ; Expected: Option.None
 
   ; Result[Int, String] with Ok
-  LET res = (Result.Ok(42)) : Result[Int, String]
-  WRITE res
+  let res = (Result.Ok(42)) : Result[Int, String]
+  write res
   ; Expected: Result.Ok(42)
 
   ; === Nested type annotations ===
 
   ; Array[Int]
-  LET arr = ([1, 2, 3]) : Array[Int]
-  WRITE arr
+  let arr = ([1, 2, 3]) : Array[Int]
+  write arr
   ; Expected: [ 1, 2, 3 ]
 
   ; === Chained usage ===
 
   ; Use annotated expression in pipeline
-  LET piped = (5) : Int |> (n => n * 2)
-  WRITE piped
+  let piped = (5) : Int |> (n => n * 2)
+  write piped
   ; Expected: 10
 
   ; Use in arithmetic
-  LET doubled = (10) : Int + (20) : Int
-  WRITE doubled
+  let doubled = (10) : Int + (20) : Int
+  write doubled
   ; Expected: 30
 
   ; === Tuple with type annotation (double parens) ===
 
   ; Annotate a tuple with double parentheses
-  LET tup = ((1, 2)) : (Int, Int)
-  WRITE tup
+  let tup = ((1, 2)) : (Int, Int)
+  write tup
   ; Expected: ( 1, 2 )
 
   ; Tuple in arithmetic context
-  LET pair = ((10, 20)) : (Int, Int)
-  WRITE pair.0 + pair.1
+  let pair = ((10, 20)) : (Int, Int)
+  write pair.0 + pair.1
   ; Expected: 30
 
-  WRITE "Expression annotation test complete"
+  write "Expression annotation test complete"
 }

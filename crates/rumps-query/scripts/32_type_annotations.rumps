@@ -1,34 +1,34 @@
-; Test: Type annotations on LET bindings
-; Tests `LET x: Type = expr` syntax with type checking
+; Test: Type annotations on let bindings
+; Tests `let x: Type = expr` syntax with type checking
 
-FUN main() {
+fun main() {
   ; === Basic type annotations ===
 
   ; Int annotation
-  LET x: Int = 42
-  WRITE x
+  let x: Int = 42
+  write x
   ; Expected: 42
 
   ; String annotation
-  LET s: String = "hello"
-  WRITE s
+  let s: String = "hello"
+  write s
   ; Expected: hello
 
   ; Bool annotation
-  LET b: Bool = TRUE
-  WRITE b
+  let b: Bool = true
+  write b
   ; Expected: true
 
   ; Float annotation
-  LET f: Float = 3.14
-  WRITE f
+  let f: Float = 3.14
+  write f
   ; Expected: 3.14
 
   ; === Parameterized type annotations ===
 
   ; Option[Int] with Some
-  LET opt: Option[Int] = Option.Some(10)
-  WRITE opt
+  let opt: Option[Int] = Option.Some(10)
+  write opt
   ; Expected: Option.Some(10)
 
   ; Option[Int] with None (this tests type compatibility)
@@ -37,25 +37,25 @@ FUN main() {
   ; === Nested type annotations ===
 
   ; Array[Int]
-  LET arr: Array[Int] = [1, 2, 3]
-  WRITE arr
+  let arr: Array[Int] = [1, 2, 3]
+  write arr
   ; Expected: [1, 2, 3]
 
   ; Array[Option[Int]] - nested parameterized type
-  LET arr-opt: Array[Option[Int]] = [Option.Some(1), Option.Some(2)]
-  WRITE arr-opt
+  let arr-opt: Array[Option[Int]] = [Option.Some(1), Option.Some(2)]
+  write arr-opt
   ; Expected: [Option.Some(1), Option.Some(2)]
 
   ; Result[Int, String] - two type parameters
-  LET res: Result[Int, String] = Result.Ok(42)
-  WRITE res
+  let res: Result[Int, String] = Result.Ok(42)
+  write res
   ; Expected: Result.Ok(42)
 
   ; === Without annotations (still works) ===
 
-  LET no-ann = 123
-  WRITE no-ann
+  let no-ann = 123
+  write no-ann
   ; Expected: 123
 
-  WRITE "Type annotation test complete"
+  write "Type annotation test complete"
 }

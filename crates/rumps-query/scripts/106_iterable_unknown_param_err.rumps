@@ -1,11 +1,11 @@
 ; Error: HKT class Iterable does not accept type args in constraint position
 
-FUN main() {
+fun main() {
   ; Closure case
-  LET bad-closure = [T: Iterable[Y]](coll: T) -> Int => 0
+  let bad-closure = [T: Iterable[Y]](coll: T) -> Int => 0
 }
 
 ; Function case
-FUN bad[T: Iterable[X]](coll: T) -> Int {
+fun bad[T: Iterable[X]](coll: T) -> Int {
   0
 }

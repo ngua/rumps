@@ -1,29 +1,29 @@
 ; Test: deeply nested structures
 ; Tests complex nesting of arrays, objects, and blocks
 
-FUN main() {
+fun main() {
   ; === Deeply nested arrays ===
 
-  LET deep = [[[[1]]]]
-  WRITE deep[0][0][0][0]
+  let deep = [[[[1]]]]
+  write deep[0][0][0][0]
   ; Expected: 1
 
-  LET matrix3d = [
+  let matrix3d = [
     [[1, 2], [3, 4]],
     [[5, 6], [7, 8]]
   ]
-  WRITE matrix3d[0][0][0]
+  write matrix3d[0][0][0]
   ; Expected: 1
 
-  WRITE matrix3d[1][1][1]
+  write matrix3d[1][1][1]
   ; Expected: 8
 
-  WRITE matrix3d[-1][-1][-1]
+  write matrix3d[-1][-1][-1]
   ; Expected: 8
 
   ; === Deeply nested objects ===
 
-  LET nested = {
+  let nested = {
     level1: {
       level2: {
         level3: {
@@ -32,12 +32,12 @@ FUN main() {
       }
     }
   }
-  WRITE nested.level1.level2.level3.value
+  write nested.level1.level2.level3.value
   ; Expected: deep
 
   ; === Mixed nesting ===
 
-  LET complex = {
+  let complex = {
     users: [
       { name: "Alice", scores: [100, 95, 88] },
       { name: "Bob", scores: [90, 85, 92] }
@@ -48,87 +48,87 @@ FUN main() {
     }
   }
 
-  WRITE complex.users[0].name
+  write complex.users[0].name
   ; Expected: Alice
 
-  WRITE complex.users[0].scores[0]
+  write complex.users[0].scores[0]
   ; Expected: 100
 
-  WRITE complex.users[1].scores[-1]
+  write complex.users[1].scores[-1]
   ; Expected: 92
 
-  WRITE complex.meta.tags[0]
+  write complex.meta.tags[0]
   ; Expected: active
 
-  WRITE complex.users[1].name
+  write complex.users[1].name
   ; Expected: Bob
 
   ; === Nested blocks ===
 
-  LET result = {
-    LET a = {
-      LET b = {
-        LET c = 10
+  let result = {
+    let a = {
+      let b = {
+        let c = 10
         c * 2
       }
       b + 5
     }
     a * 3
   }
-  WRITE result
+  write result
   ; Expected: 75 ((10 * 2 + 5) * 3 = 25 * 3)
 
   ; === Nested conditionals ===
 
-  LET score = 85
-  LET grade = IF score >= 90 {
+  let score = 85
+  let grade = if score >= 90 {
     "A"
-  } ELSE {
-    IF score >= 80 {
+  } else {
+    if score >= 80 {
       "B"
-    } ELSE {
-      IF score >= 70 {
+    } else {
+      if score >= 70 {
         "C"
-      } ELSE {
+      } else {
         "F"
       }
     }
   }
-  WRITE grade
+  write grade
   ; Expected: B
 
   ; === Array of blocks ===
 
-  LET computed = [
-    { LET x = 1
+  let computed = [
+    { let x = 1
       x + 1
     },
-    { LET x = 2
+    { let x = 2
       x + 1
     },
-    { LET x = 3
+    { let x = 3
       x + 1
     }
   ]
-  WRITE computed
+  write computed
   ; Expected: [ 2, 3, 4 ]
 
   ; === Object with computed values ===
 
-  LET base = 10
-  LET obj = {
+  let base = 10
+  let obj = {
     double: base * 2,
     triple: base * 3,
     square: base * base
   }
-  WRITE obj.double
+  write obj.double
   ; Expected: 20
 
-  WRITE obj.triple
+  write obj.triple
   ; Expected: 30
 
-  WRITE obj.square
+  write obj.square
   ; Expected: 100
 
-  WRITE "Nested structures test complete"
+  write "Nested structures test complete"
 }

@@ -4,11 +4,11 @@
 
 ; === Wrong argument type ===
 
-FUN add (a: Int, b: Int) -> Int {
+fun add (a: Int, b: Int) -> Int {
   a + b
 }
 
-FUN main() {
+fun main() {
   ; Passing string to Int parameter
-  WRITE add("hello", 5)
+  write add("hello", 5)
 }

@@ -1,76 +1,76 @@
 ; Test: Generic user-defined functions with explicit type parameters
-; Tests `FUN name[T](x: T) -> T` syntax
+; Tests `fun name[T](x: T) -> T` syntax
 
-FUN main() {
-  WRITE id(42)        ; 42
-  WRITE id("hello")   ; hello
-  WRITE id(TRUE)      ; true
+fun main() {
+  write id(42)        ; 42
+  write id("hello")   ; hello
+  write id(true)      ; true
 
-  WRITE pair(1, "hello")  ; (1, "hello")
-  WRITE pair(TRUE, 3.14)  ; (true, 3.14)
+  write pair(1, "hello")  ; (1, "hello")
+  write pair(true, 3.14)  ; (true, 3.14)
 
-  WRITE wrap(42)      ; Option.Some(42)
-  WRITE wrap("test")  ; Option.Some("test")
+  write wrap(42)      ; Option.Some(42)
+  write wrap("test")  ; Option.Some("test")
 
-  WRITE swap((1, "x"))    ; ("x", 1)
-  WRITE swap(("a", TRUE)) ; (true, "a")
+  write swap((1, "x"))    ; ("x", 1)
+  write swap(("a", true)) ; (true, "a")
 
-  LET p = (42, "answer")
-  WRITE fst(p)  ; 42
-  WRITE snd(p)  ; answer
+  let p = (42, "answer")
+  write fst(p)  ; 42
+  write snd(p)  ; answer
 
-  WRITE apply(double, 21)        ; 42
-  WRITE apply(greet, "World")    ; Hello, World
+  write apply(double, 21)        ; 42
+  write apply(greet, "World")    ; Hello, World
 
   ; Both should work the same way
-  WRITE implicit-id(100)   ; 100
-  WRITE explicit-id(100)   ; 100
-  WRITE implicit-id("hi")  ; hi
-  WRITE explicit-id("hi")  ; hi
+  write implicit-id(100)   ; 100
+  write explicit-id(100)   ; 100
+  write implicit-id("hi")  ; hi
+  write explicit-id("hi")  ; hi
 
-  WRITE "Generic functions test complete"
+  write "Generic functions test complete"
 }
 
 ; === Simple identity function with explicit type parameter ===
 
-FUN id[T](x: T) -> T { x }
+fun id[T](x: T) -> T { x }
 
 ; === Multiple type parameters ===
 
-FUN pair[A, B](a: A, b: B) -> (A, B) {
+fun pair[A, B](a: A, b: B) -> (A, B) {
   (a, b)
 }
 
 ; === Generic function returning parameterized type ===
 
-FUN wrap[T](x: T) -> Option[T] {
+fun wrap[T](x: T) -> Option[T] {
   Option.Some(x)
 }
 
 ; === Generic swap function ===
 
-FUN swap[A, B](p: (A, B)) -> (B, A) {
+fun swap[A, B](p: (A, B)) -> (B, A) {
   (p.1, p.0)
 }
 
 ; === Generic first/second accessors ===
 
-FUN fst[A, B](p: (A, B)) -> A { p.0 }
-FUN snd[A, B](p: (A, B)) -> B { p.1 }
+fun fst[A, B](p: (A, B)) -> A { p.0 }
+fun snd[A, B](p: (A, B)) -> B { p.1 }
 
 ; === Generic higher-order function ===
 
-FUN apply[A, B](f: (A) -> B, x: A) -> B {
+fun apply[A, B](f: (A) -> B, x: A) -> B {
   f(x)
 }
 
-FUN double(n: Int) -> Int { n * 2 }
-FUN greet(s: String) -> String { "Hello, {s}" }
+fun double(n: Int) -> Int { n * 2 }
+fun greet(s: String) -> String { "Hello, {s}" }
 
 ; === Mix of implicit and explicit generics ===
 
 ; This function is implicitly generic (inferred)
-FUN implicit-id(x) { x }
+fun implicit-id(x) { x }
 
 ; This function is explicitly generic
-FUN explicit-id[T](x: T) -> T { x }
+fun explicit-id[T](x: T) -> T { x }

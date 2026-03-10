@@ -2,29 +2,29 @@
 ; Regression test for type variable collision bug where empty arrays
 ; caused subsequent polymorphic function instantiation to fail
 
-FUN main() {
+fun main() {
   ; Empty array creates a fresh type var that could collide with scheme vars
-  LET nums: Array[Int] = []
-  LET left = { "x" => 10, "y" => 20 }
-  WRITE Map.lookup(left, "x")
-  WRITE Map.lookup(left, "y")
+  let nums: Array[Int] = []
+  let left = { "x" => 10, "y" => 20 }
+  write Map.lookup(left, "x")
+  write Map.lookup(left, "y")
 
   ; Non-empty array for comparison (always worked)
-  LET nums2: Array[Int] = [1, 2, 3]
-  LET right = { "a" => 100, "b" => 200 }
-  WRITE Map.lookup(right, "a")
+  let nums2: Array[Int] = [1, 2, 3]
+  let right = { "a" => 100, "b" => 200 }
+  write Map.lookup(right, "a")
 
   ; Multiple empty collections in sequence
-  LET empty1: Array[String] = []
-  LET empty2: Array[Bool] = []
-  LET empty3: Map[Int, String] = Map.empty()
-  LET m = { "key" => 42 }
-  WRITE Map.lookup(m, "key")
+  let empty1: Array[String] = []
+  let empty2: Array[Bool] = []
+  let empty3: Map[Int, String] = Map.empty()
+  let m = { "key" => 42 }
+  write Map.lookup(m, "key")
 
   ; Polymorphic functions after empty arrays
-  LET arr: Array[Float] = []
-  WRITE Iterable:length(arr)
-  WRITE Mappable:map(x => x * 2, [1, 2, 3])
+  let arr: Array[Float] = []
+  write Iterable:length(arr)
+  write Mappable:map(x => x * 2, [1, 2, 3])
 
-  WRITE "empty array + polymorphic OK"
+  write "empty array + polymorphic OK"
 }

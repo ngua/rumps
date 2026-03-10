@@ -1,100 +1,100 @@
 ; Test: indentation-based expression continuation
 ; Expressions continue across newlines when indented
 
-FUN main() {
+fun main() {
   ; === Basic continuation ===
 
-  LET x = 1
+  let x = 1
     + 2
-  WRITE x
+  write x
   ; Expected: 3
 
-  LET y = 10
+  let y = 10
     - 3
     - 2
-  WRITE y
+  write y
   ; Expected: 5
 
   ; === Multi-operator continuation ===
 
-  LET sum = 1
+  let sum = 1
     + 2
     + 3
     + 4
-  WRITE sum
+  write sum
   ; Expected: 10
 
   ; === Mixed operators with precedence ===
 
-  LET expr = 1
+  let expr = 1
     + 2
     * 3
-  WRITE expr
+  write expr
   ; Expected: 7 (1 + (2 * 3))
 
-  LET expr2 = 2
+  let expr2 = 2
     * 3
     + 4
-  WRITE expr2
+  write expr2
   ; Expected: 10 ((2 * 3) + 4)
 
   ; === Comparison continuation ===
 
-  LET cmp = 10
+  let cmp = 10
     > 5
-  WRITE cmp
+  write cmp
   ; Expected: true
 
   ; === Logical continuation ===
 
-  LET logic = TRUE
-    AND TRUE
-    AND FALSE
-  WRITE logic
+  let logic = true
+    and true
+    and false
+  write logic
   ; Expected: false
 
   ; === String interpolation (replaces concat) ===
 
-  LET greet = "Hello"
-  LET target = "World"
-  LET msg = "{greet} {target}"
-  WRITE msg
+  let greet = "Hello"
+  let target = "World"
+  let msg = "{greet} {target}"
+  write msg
   ; Expected: Hello World
 
-  ; === Continuation does NOT apply inside delimiters ===
+  ; === Continuation does not apply inside delimiters ===
 
   ; Arrays can have newlines freely
-  LET arr = [
+  let arr = [
     1,
     2,
     3
   ]
-  WRITE arr[0]
+  write arr[0]
   ; Expected: 1
 
   ; Objects can have newlines freely
-  LET obj = {
+  let obj = {
     a: 1,
     b: 2
   }
-  WRITE obj.a
+  write obj.a
   ; Expected: 1
 
   ; Blocks use braces, not indentation
-  LET blk = {
-    LET inner = 5
+  let blk = {
+    let inner = 5
     inner * 2
   }
-  WRITE blk
+  write blk
   ; Expected: 10
 
   ; === Continuation ends at dedent ===
 
-  LET a = 1
+  let a = 1
     + 2
-  LET b = 3
-  WRITE a + b
+  let b = 3
+  write a + b
   ; Expected: 6
 
-  WRITE "Indent continuation test complete"
+  write "Indent continuation test complete"
 }

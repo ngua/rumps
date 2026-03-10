@@ -1,7 +1,7 @@
 ; Test: Unknown type error
 ; Type checker should catch use of undefined type names
 
-FUN main() {
+fun main() {
   ; This should fail: `Florbl` is not a defined type
-  WRITE "3.14" READ Florbl
+  write "3.14" read Florbl
 }

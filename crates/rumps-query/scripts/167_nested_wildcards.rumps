@@ -1,40 +1,40 @@
-; Nested wildcards in IS checks
+; Nested wildcards in is checks
 
-FUN main() {
+fun main() {
   ; Simple wildcard
-  LET x: Option[Int] = Option.Some(42)
-  WRITE x IS Option[_]
+  let x: Option[Int] = Option.Some(42)
+  write x is Option[_]
 
   ; 2 levels: Array[Option[_]]
-  LET arr: Array[Option[Int]] = [Option.Some(1), Option.None]
-  WRITE arr IS Array[_]
-  WRITE arr IS Array[Option[_]]
+  let arr: Array[Option[Int]] = [Option.Some(1), Option.None]
+  write arr is Array[_]
+  write arr is Array[Option[_]]
 
   ; 2 levels: Option[Array[_]]
-  LET opt: Option[Array[Int]] = Option.Some([1, 2, 3])
-  WRITE opt IS Option[_]
-  WRITE opt IS Option[Array[_]]
+  let opt: Option[Array[Int]] = Option.Some([1, 2, 3])
+  write opt is Option[_]
+  write opt is Option[Array[_]]
 
   ; 3 levels
-  LET v3: Array[Option[Result[Int, String]]] = [Option.Some(Result.Ok(42))]
-  WRITE v3 IS Array[Option[Result[_, _]]]
+  let v3: Array[Option[Result[Int, String]]] = [Option.Some(Result.Ok(42))]
+  write v3 is Array[Option[Result[_, _]]]
 
   ; 4 levels
-  LET v4: Array[Option[Result[Array[Int], String]]] = [Option.Some(Result.Ok([1]))]
-  WRITE v4 IS Array[Option[Result[Array[_], _]]]
+  let v4: Array[Option[Result[Array[Int], String]]] = [Option.Some(Result.Ok([1]))]
+  write v4 is Array[Option[Result[Array[_], _]]]
 
   ; 5 levels
-  LET v5: Array[Option[Result[Array[Option[Int]], String]]] = [Option.Some(Result.Ok([Option.Some(1)]))]
-  WRITE v5 IS Array[Option[Result[Array[Option[_]], _]]]
+  let v5: Array[Option[Result[Array[Option[Int]], String]]] = [Option.Some(Result.Ok([Option.Some(1)]))]
+  write v5 is Array[Option[Result[Array[Option[_]], _]]]
 
   ; 6 levels (maximum supported)
-  LET v6: Array[Option[Result[Array[Option[Result[Int, String]]], String]]] = [Option.Some(Result.Ok([Option.Some(Result.Ok(1))]))]
-  WRITE v6 IS Array[Option[Result[Array[Option[Result[_, _]]], _]]]
+  let v6: Array[Option[Result[Array[Option[Result[Int, String]]], String]]] = [Option.Some(Result.Ok([Option.Some(Result.Ok(1))]))]
+  write v6 is Array[Option[Result[Array[Option[Result[_, _]]], _]]]
 
   ; Negative cases: mismatched nested types
-  LET arr2: Array[Option[Int]] = [Option.Some(1)]
-  WRITE arr2 IS Array[Result[_, _]]
+  let arr2: Array[Option[Int]] = [Option.Some(1)]
+  write arr2 is Array[Result[_, _]]
 
-  LET opt2: Option[Int] = Option.Some(42)
-  WRITE opt2 IS Option[Array[_]]
+  let opt2: Option[Int] = Option.Some(42)
+  write opt2 is Option[Array[_]]
 }

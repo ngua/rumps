@@ -2,207 +2,207 @@
 ; Tests Iterable:length, Array.push, Array.pop, Array.head, Array.tail,
 ; Iterable:reverse, Array.sort, Array.slice, Iterable:contains, Array.concat
 
-FUN main() {
+fun main() {
   ; ============ Iterable:length ============
 
-  LET nums = [1, 2, 3, 4, 5]
-  WRITE Iterable:length(nums)  ; 5
+  let nums = [1, 2, 3, 4, 5]
+  write Iterable:length(nums)  ; 5
 
-  LET empty = []
-  WRITE Iterable:length(empty)  ; 0
+  let empty = []
+  write Iterable:length(empty)  ; 0
 
-  LET single = [42]
-  WRITE Iterable:length(single)  ; 1
+  let single = [42]
+  write Iterable:length(single)  ; 1
 
   ; ============ Array.push ============
 
-  LET base-arr = [1, 2, 3]
-  LET pushed = Array.push(base-arr, 4)
-  WRITE pushed  ; [1, 2, 3, 4]
+  let base-arr = [1, 2, 3]
+  let pushed = Array.push(base-arr, 4)
+  write pushed  ; [1, 2, 3, 4]
 
   ; Original unchanged (immutable)
-  WRITE base-arr  ; [1, 2, 3]
+  write base-arr  ; [1, 2, 3]
 
   ; Push to empty array
-  LET pushed-empty = Array.push([], 1)
-  WRITE pushed-empty  ; [1]
+  let pushed-empty = Array.push([], 1)
+  write pushed-empty  ; [1]
 
   ; ============ Array.pop ============
 
-  LET to-pop = [1, 2, 3]
-  LET popped = Array.pop(to-pop)
-  WRITE popped  ; [1, 2]
+  let to-pop = [1, 2, 3]
+  let popped = Array.pop(to-pop)
+  write popped  ; [1, 2]
 
   ; Pop from single element
-  LET pop-single = Array.pop([42])
-  WRITE pop-single  ; []
+  let pop-single = Array.pop([42])
+  write pop-single  ; []
 
   ; Pop from empty (returns empty)
-  LET pop-empty = Array.pop([])
-  WRITE pop-empty  ; []
+  let pop-empty = Array.pop([])
+  write pop-empty  ; []
 
   ; ============ Array.head ============
 
-  LET head-arr = [10, 20, 30]
-  LET first = Array.head(head-arr)
-  WRITE first  ; Option.Some(10)
+  let head-arr = [10, 20, 30]
+  let first = Array.head(head-arr)
+  write first  ; Option.Some(10)
 
   ; Head of empty array
-  LET head-empty = Array.head([])
-  WRITE head-empty  ; Option.None
+  let head-empty = Array.head([])
+  write head-empty  ; Option.None
 
   ; Head with unwrap
-  LET head-val = Array.head([100, 200])!
-  WRITE head-val  ; 100
+  let head-val = Array.head([100, 200])!
+  write head-val  ; 100
 
   ; ============ Array.tail ============
 
-  LET tail-arr = [1, 2, 3, 4]
-  LET rest = Array.tail(tail-arr)
-  WRITE rest  ; [2, 3, 4]
+  let tail-arr = [1, 2, 3, 4]
+  let rest = Array.tail(tail-arr)
+  write rest  ; [2, 3, 4]
 
   ; Tail of single element
-  LET tail-single = Array.tail([42])
-  WRITE tail-single  ; []
+  let tail-single = Array.tail([42])
+  write tail-single  ; []
 
   ; Tail of empty array
-  LET tail-empty = Array.tail([])
-  WRITE tail-empty  ; []
+  let tail-empty = Array.tail([])
+  write tail-empty  ; []
 
   ; ============ Iterable:reverse ============
 
-  LET to-reverse = [1, 2, 3, 4, 5]
-  LET reversed = Iterable:reverse(to-reverse)
-  WRITE reversed  ; [5, 4, 3, 2, 1]
+  let to-reverse = [1, 2, 3, 4, 5]
+  let reversed = Iterable:reverse(to-reverse)
+  write reversed  ; [5, 4, 3, 2, 1]
 
   ; Reverse single element
-  LET rev-single = Iterable:reverse([42])
-  WRITE rev-single  ; [42]
+  let rev-single = Iterable:reverse([42])
+  write rev-single  ; [42]
 
   ; Reverse empty
-  LET rev-empty = Iterable:reverse([])
-  WRITE rev-empty  ; []
+  let rev-empty = Iterable:reverse([])
+  write rev-empty  ; []
 
   ; ============ Array.sort ============
 
-  LET unsorted = [3, 1, 4, 1, 5, 9, 2, 6]
-  LET sorted = Array.sort(unsorted)
-  WRITE sorted  ; [1, 1, 2, 3, 4, 5, 6, 9]
+  let unsorted = [3, 1, 4, 1, 5, 9, 2, 6]
+  let sorted = Array.sort(unsorted)
+  write sorted  ; [1, 1, 2, 3, 4, 5, 6, 9]
 
   ; Sort already sorted
-  LET already-sorted = Array.sort([1, 2, 3])
-  WRITE already-sorted  ; [1, 2, 3]
+  let already-sorted = Array.sort([1, 2, 3])
+  write already-sorted  ; [1, 2, 3]
 
   ; Sort reverse order
-  LET sort-reverse = Array.sort([3, 2, 1])
-  WRITE sort-reverse  ; [1, 2, 3]
+  let sort-reverse = Array.sort([3, 2, 1])
+  write sort-reverse  ; [1, 2, 3]
 
   ; Sort strings
-  LET unsorted-strs = ["banana", "apple", "cherry"]
-  LET sorted-strs = Array.sort(unsorted-strs)
-  WRITE sorted-strs  ; ["apple", "banana", "cherry"]
+  let unsorted-strs = ["banana", "apple", "cherry"]
+  let sorted-strs = Array.sort(unsorted-strs)
+  write sorted-strs  ; ["apple", "banana", "cherry"]
 
   ; Sort booleans
-  LET unsorted-bools = [TRUE, FALSE, TRUE, FALSE]
-  LET sorted-bools = Array.sort(unsorted-bools)
-  WRITE sorted-bools  ; [false, false, true, true]
+  let unsorted-bools = [true, false, true, false]
+  let sorted-bools = Array.sort(unsorted-bools)
+  write sorted-bools  ; [false, false, true, true]
 
   ; Sort empty
-  LET sort-empty = Array.sort([])
-  WRITE sort-empty  ; []
+  let sort-empty = Array.sort([])
+  write sort-empty  ; []
 
   ; ============ Array.slice ============
 
-  LET slice-arr = [0, 1, 2, 3, 4, 5]
-  LET sliced = Array.slice(slice-arr, 1, 4)
-  WRITE sliced  ; [1, 2, 3]
+  let slice-arr = [0, 1, 2, 3, 4, 5]
+  let sliced = Array.slice(slice-arr, 1, 4)
+  write sliced  ; [1, 2, 3]
 
   ; Slice from start
-  LET slice-start = Array.slice(slice-arr, 0, 3)
-  WRITE slice-start  ; [0, 1, 2]
+  let slice-start = Array.slice(slice-arr, 0, 3)
+  write slice-start  ; [0, 1, 2]
 
   ; Slice to end
-  LET slice-end = Array.slice(slice-arr, 3, 6)
-  WRITE slice-end  ; [3, 4, 5]
+  let slice-end = Array.slice(slice-arr, 3, 6)
+  write slice-end  ; [3, 4, 5]
 
   ; Slice full array
-  LET slice-full = Array.slice(slice-arr, 0, 6)
-  WRITE slice-full  ; [0, 1, 2, 3, 4, 5]
+  let slice-full = Array.slice(slice-arr, 0, 6)
+  write slice-full  ; [0, 1, 2, 3, 4, 5]
 
   ; Slice empty range
-  LET slice-none = Array.slice(slice-arr, 2, 2)
-  WRITE slice-none  ; []
+  let slice-none = Array.slice(slice-arr, 2, 2)
+  write slice-none  ; []
 
   ; Slice with clamped bounds
-  LET slice-clamp = Array.slice([1, 2, 3], 0, 100)
-  WRITE slice-clamp  ; [1, 2, 3]
+  let slice-clamp = Array.slice([1, 2, 3], 0, 100)
+  write slice-clamp  ; [1, 2, 3]
 
   ; Slice with negative start (clamped to 0)
-  LET slice-neg = Array.slice([1, 2, 3], -5, 2)
-  WRITE slice-neg  ; [1, 2]
+  let slice-neg = Array.slice([1, 2, 3], -5, 2)
+  write slice-neg  ; [1, 2]
 
   ; ============ Iterable:contains ============
 
-  LET contains-arr = [1, 2, 3, 4, 5]
-  WRITE Iterable:contains(contains-arr, 3)  ; true
-  WRITE Iterable:contains(contains-arr, 10)  ; false
+  let contains-arr = [1, 2, 3, 4, 5]
+  write Iterable:contains(contains-arr, 3)  ; true
+  write Iterable:contains(contains-arr, 10)  ; false
 
   ; Contains in empty array
-  WRITE Iterable:contains([], 1)  ; false
+  write Iterable:contains([], 1)  ; false
 
   ; Contains with strings
-  LET str-arr = ["hello", "world"]
-  WRITE Iterable:contains(str-arr, "hello")  ; true
-  WRITE Iterable:contains(str-arr, "foo")  ; false
+  let str-arr = ["hello", "world"]
+  write Iterable:contains(str-arr, "hello")  ; true
+  write Iterable:contains(str-arr, "foo")  ; false
 
   ; Contains with booleans
-  LET bool-arr = [TRUE, FALSE]
-  WRITE Iterable:contains(bool-arr, TRUE)  ; true
+  let bool-arr = [true, false]
+  write Iterable:contains(bool-arr, true)  ; true
 
   ; ============ Array.concat ============
 
-  LET arr-a = [1, 2, 3]
-  LET arr-b = [4, 5, 6]
-  LET combined = Array.concat(arr-a, arr-b)
-  WRITE combined  ; [1, 2, 3, 4, 5, 6]
+  let arr-a = [1, 2, 3]
+  let arr-b = [4, 5, 6]
+  let combined = Array.concat(arr-a, arr-b)
+  write combined  ; [1, 2, 3, 4, 5, 6]
 
   ; Concat with empty first
-  LET concat-empty-a = Array.concat([], [1, 2, 3])
-  WRITE concat-empty-a  ; [1, 2, 3]
+  let concat-empty-a = Array.concat([], [1, 2, 3])
+  write concat-empty-a  ; [1, 2, 3]
 
   ; Concat with empty second
-  LET concat-empty-b = Array.concat([1, 2, 3], [])
-  WRITE concat-empty-b  ; [1, 2, 3]
+  let concat-empty-b = Array.concat([1, 2, 3], [])
+  write concat-empty-b  ; [1, 2, 3]
 
   ; Concat two empty
-  LET concat-both-empty = Array.concat([], [])
-  WRITE concat-both-empty  ; []
+  let concat-both-empty = Array.concat([], [])
+  write concat-both-empty  ; []
 
   ; Concat strings
-  LET concat-strs = Array.concat(["a", "b"], ["c", "d"])
-  WRITE concat-strs  ; ["a", "b", "c", "d"]
+  let concat-strs = Array.concat(["a", "b"], ["c", "d"])
+  write concat-strs  ; ["a", "b", "c", "d"]
 
   ; ============ Chaining operations ============
 
   ; Get first element of sorted reversed array
-  LET chain-arr = [3, 1, 4, 1, 5]
-  LET chain-result = Array.head(Iterable:reverse(Array.sort(chain-arr)))!
-  WRITE chain-result  ; 5
+  let chain-arr = [3, 1, 4, 1, 5]
+  let chain-result = Array.head(Iterable:reverse(Array.sort(chain-arr)))!
+  write chain-result  ; 5
 
   ; Slice then reverse
-  LET slice-rev = Iterable:reverse(Array.slice([0, 1, 2, 3, 4], 1, 4))
-  WRITE slice-rev  ; [3, 2, 1]
+  let slice-rev = Iterable:reverse(Array.slice([0, 1, 2, 3, 4], 1, 4))
+  write slice-rev  ; [3, 2, 1]
 
   ; Push then length
-  LET push-len = Iterable:length(Array.push([1, 2], 3))
-  WRITE push-len  ; 3
+  let push-len = Iterable:length(Array.push([1, 2], 3))
+  write push-len  ; 3
 
   ; ============ Pipeline usage ============
 
-  LET pipeline-arr = [5, 3, 8, 1, 9]
-  LET pipeline-result = pipeline-arr
+  let pipeline-arr = [5, 3, 8, 1, 9]
+  let pipeline-result = pipeline-arr
     |> Array.sort
     |> Iterable:reverse
     |> (arr => Array.slice(arr, 0, 3))
-  WRITE pipeline-result  ; [9, 8, 5]
+  write pipeline-result  ; [9, 8, 5]
 }

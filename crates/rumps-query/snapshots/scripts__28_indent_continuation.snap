@@ -1,14 +1,14 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: indentation-based expression continuation\n; Expressions continue across newlines when indented\n\n; === Basic continuation ===\n\nLET x = 1\n    + 2\nOUTPUT x\n; Expected: 3\n\nLET y = 10\n    - 3\n    - 2\nOUTPUT y\n; Expected: 5\n\n; === Multi-operator continuation ===\n\nLET sum = 1\n    + 2\n    + 3\n    + 4\nOUTPUT sum\n; Expected: 10\n\n; === Mixed operators with precedence ===\n\nLET expr = 1\n    + 2\n    * 3\nOUTPUT expr\n; Expected: 7 (1 + (2 * 3))\n\nLET expr2 = 2\n    * 3\n    + 4\nOUTPUT expr2\n; Expected: 10 ((2 * 3) + 4)\n\n; === Comparison continuation ===\n\nLET cmp = 10\n    > 5\nOUTPUT cmp\n; Expected: true\n\n; === Logical continuation ===\n\nLET logic = TRUE\n    AND TRUE\n    AND FALSE\nOUTPUT logic\n; Expected: false\n\n; === String concat continuation ===\n\nLET msg = \"Hello\"\n    ++ \" \"\n    ++ \"World\"\nOUTPUT msg\n; Expected: Hello World\n\n; === Continuation does NOT apply inside delimiters ===\n\n; Arrays can have newlines freely\nLET arr = [\n    1,\n    2,\n    3\n]\nOUTPUT arr[0]\n; Expected: 1\n\n; Objects can have newlines freely\nLET obj = {\n    a: 1,\n    b: 2\n}\nOUTPUT obj.a\n; Expected: 1\n\n; Blocks use braces, not indentation\nLET blk = {\n    LET inner = 5\n    inner * 2\n}\nOUTPUT blk\n; Expected: 10\n\n; === Continuation ends at dedent ===\n\nLET a = 1\n    + 2\nLET b = 3\nOUTPUT a + b\n; Expected: 6\n\nOUTPUT \"Indent continuation test complete\"\n"
+description: "; Test: indentation-based expression continuation\n; Expressions continue across newlines when indented\n\nfun main() {\n  ; === Basic continuation ===\n\n  let x = 1\n    + 2\n  write x\n  ; Expected: 3\n\n  let y = 10\n    - 3\n    - 2\n  write y\n  ; Expected: 5\n\n  ; === Multi-operator continuation ===\n\n  let sum = 1\n    + 2\n    + 3\n    + 4\n  write sum\n  ; Expected: 10\n\n  ; === Mixed operators with precedence ===\n\n  let expr = 1\n    + 2\n    * 3\n  write expr\n  ; Expected: 7 (1 + (2 * 3))\n\n  let expr2 = 2\n    * 3\n    + 4\n  write expr2\n  ; Expected: 10 ((2 * 3) + 4)\n\n  ; === Comparison continuation ===\n\n  let cmp = 10\n    > 5\n  write cmp\n  ; Expected: true\n\n  ; === Logical continuation ===\n\n  let logic = true\n    and true\n    and false\n  write logic\n  ; Expected: false\n\n  ; === String interpolation (replaces concat) ===\n\n  let greet = \"Hello\"\n  let target = \"World\"\n  let msg = \"{greet} {target}\"\n  write msg\n  ; Expected: Hello World\n\n  ; === Continuation does not apply inside delimiters ===\n\n  ; Arrays can have newlines freely\n  let arr = [\n    1,\n    2,\n    3\n  ]\n  write arr[0]\n  ; Expected: 1\n\n  ; Objects can have newlines freely\n  let obj = {\n    a: 1,\n    b: 2\n  }\n  write obj.a\n  ; Expected: 1\n\n  ; Blocks use braces, not indentation\n  let blk = {\n    let inner = 5\n    inner * 2\n  }\n  write blk\n  ; Expected: 10\n\n  ; === Continuation ends at dedent ===\n\n  let a = 1\n    + 2\n  let b = 3\n  write a + b\n  ; Expected: 6\n\n  write \"Indent continuation test complete\"\n}\n"
 ---
 3
 5
 10
 7
 10
-TRUE
-FALSE
+true
+false
 "Hello World"
 1
 1

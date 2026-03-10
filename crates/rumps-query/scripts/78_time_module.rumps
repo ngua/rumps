@@ -3,94 +3,94 @@
 ; Time.add-seconds, Time.diff-seconds, Time.year, Time.month,
 ; Time.day, Time.hour, Time.minute, Time.second
 
-FUN main() {
+fun main() {
   ; ============ Time.epoch ============
 
-  LET epoch = Time.epoch()
-  WRITE epoch
+  let epoch = Time.epoch()
+  write epoch
 
   ; Epoch components
-  WRITE Time.year(epoch)    ; 1970
-  WRITE Time.month(epoch)   ; 1
-  WRITE Time.day(epoch)     ; 1
-  WRITE Time.hour(epoch)    ; 0
-  WRITE Time.minute(epoch)  ; 0
-  WRITE Time.second(epoch)  ; 0
+  write Time.year(epoch)    ; 1970
+  write Time.month(epoch)   ; 1
+  write Time.day(epoch)     ; 1
+  write Time.hour(epoch)    ; 0
+  write Time.minute(epoch)  ; 0
+  write Time.second(epoch)  ; 0
 
   ; ============ Time.add-seconds ============
 
-  LET one-hour = Time.add-seconds(epoch, 3600)
-  WRITE Time.hour(one-hour)  ; 1
+  let one-hour = Time.add-seconds(epoch, 3600)
+  write Time.hour(one-hour)  ; 1
 
-  LET one-day = Time.add-seconds(epoch, 86400)
-  WRITE Time.day(one-day)  ; 2
+  let one-day = Time.add-seconds(epoch, 86400)
+  write Time.day(one-day)  ; 2
 
   ; Negative seconds (subtract)
-  LET back = Time.add-seconds(one-hour, -3600)
-  WRITE Time.hour(back)  ; 0
+  let back = Time.add-seconds(one-hour, -3600)
+  write Time.hour(back)  ; 0
 
   ; ============ Time.diff-seconds ============
 
-  LET diff1 = Time.diff-seconds(one-hour, epoch)
-  WRITE diff1  ; 3600.0
+  let diff1 = Time.diff-seconds(one-hour, epoch)
+  write diff1  ; 3600.0
 
-  LET diff2 = Time.diff-seconds(epoch, one-hour)
-  WRITE diff2  ; -3600.0
+  let diff2 = Time.diff-seconds(epoch, one-hour)
+  write diff2  ; -3600.0
 
-  LET diff3 = Time.diff-seconds(one-day, epoch)
-  WRITE diff3  ; 86400.0
+  let diff3 = Time.diff-seconds(one-day, epoch)
+  write diff3  ; 86400.0
 
   ; ============ Time.format and Time.parse ============
 
   ; Format epoch to ISO-like string
-  LET fmt = Time.format("%Y-%m-%d %H:%M:%S %z", epoch)
-  WRITE fmt  ; 1970-01-01 00:00:00 +0000
+  let fmt = Time.format("%Y-%m-%d %H:%M:%S %z", epoch)
+  write fmt  ; 1970-01-01 00:00:00 +0000
 
   ; Format with different patterns
-  LET date-only = Time.format("%Y-%m-%d", epoch)
-  WRITE date-only  ; 1970-01-01
+  let date-only = Time.format("%Y-%m-%d", epoch)
+  write date-only  ; 1970-01-01
 
-  LET time-only = Time.format("%H:%M:%S", epoch)
-  WRITE time-only  ; 00:00:00
+  let time-only = Time.format("%H:%M:%S", epoch)
+  write time-only  ; 00:00:00
 
   ; Parse a date string back
-  LET parsed = Time.parse("%Y-%m-%d %H:%M:%S %z", "2024-06-15 14:30:45 +0000")
-  WRITE parsed  ; Result[Time, String]
+  let parsed = Time.parse("%Y-%m-%d %H:%M:%S %z", "2024-06-15 14:30:45 +0000")
+  write parsed  ; Result[Time, String]
 
   ; Check that parsed is Ok
-  WRITE parsed IS Result.Ok(_)  ; true
+  write parsed is Result.Ok(_)  ; true
 
   ; Unwrap and check components
-  LET t = parsed!
-  WRITE Time.year(t)    ; 2024
-  WRITE Time.month(t)   ; 6
-  WRITE Time.day(t)     ; 15
-  WRITE Time.hour(t)    ; 14
-  WRITE Time.minute(t)  ; 30
-  WRITE Time.second(t)  ; 45
+  let t = parsed!
+  write Time.year(t)    ; 2024
+  write Time.month(t)   ; 6
+  write Time.day(t)     ; 15
+  write Time.hour(t)    ; 14
+  write Time.minute(t)  ; 30
+  write Time.second(t)  ; 45
 
   ; ============ Parse error handling ============
 
-  LET bad-parse = Time.parse("%Y-%m-%d", "not-a-date")
-  WRITE bad-parse IS Result.Err(_)  ; true
+  let bad-parse = Time.parse("%Y-%m-%d", "not-a-date")
+  write bad-parse is Result.Err(_)  ; true
 
   ; ============ Time.now ============
 
   ; Just verify it runs and returns a Time
-  LET now = Time.now()
-  WRITE now IS Time  ; true
+  let now = Time.now()
+  write now is Time  ; true
 
   ; ============ Chaining with pipeline ============
 
-  LET chain = Time.add-seconds(Time.epoch(), 3661)  ; 1 hour, 1 minute, 1 second
-  WRITE Time.hour(chain)    ; 1
-  WRITE Time.minute(chain)  ; 1
-  WRITE Time.second(chain)  ; 1
+  let chain = Time.add-seconds(Time.epoch(), 3661)  ; 1 hour, 1 minute, 1 second
+  write Time.hour(chain)    ; 1
+  write Time.minute(chain)  ; 1
+  write Time.second(chain)  ; 1
 
   ; ============ Formatting variations ============
 
-  LET t2 = Time.add-seconds(epoch, 90061)  ; 1 day + 1 hour + 1 minute + 1 second
+  let t2 = Time.add-seconds(epoch, 90061)  ; 1 day + 1 hour + 1 minute + 1 second
 
-  WRITE Time.format("%d/%m/%Y", t2)  ; 02/01/1970
-  WRITE Time.format("%I:%M %p", t2)  ; 01:01 AM
+  write Time.format("%d/%m/%Y", t2)  ; 02/01/1970
+  write Time.format("%I:%M %p", t2)  ; 01:01 AM
 }

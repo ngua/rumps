@@ -1,112 +1,112 @@
 ; Test: Unit type and Option values
-; Tests blocks returning Unit, single-arm IF returning Unit, and Option behavior
+; Tests blocks returning Unit, single-arm if returning Unit, and Option behavior
 
 ; Function that expects an Option argument
-FUN maybe-double(x: Option[Int]) -> Int {
+fun maybe-double(x: Option[Int]) -> Int {
   (x ?? 0) * 2
 }
 
-FUN main() {
+fun main() {
   ; === Block without tail returns Unit ===
 
-  LET result = {
-    WRITE "Side effect only"
+  let result = {
+    write "Side effect only"
   }
-  WRITE result
+  write result
   ; Expected: Unit
 
-  LET result-2 = {
-    LET x = 42
-    WRITE x
+  let result-2 = {
+    let x = 42
+    write x
     ; No tail expression
   }
-  WRITE result-2
+  write result-2
   ; Expected: Unit
 
   ; === Block with tail returns value ===
 
-  LET result-3 = {
-    LET x = 42
+  let result-3 = {
+    let x = 42
     x
   }
-  WRITE result-3
+  write result-3
   ; Expected: 42
 
-  ; === Single-arm IF returns Unit ===
+  ; === Single-arm if returns Unit ===
 
-  ; Single-arm IF with false condition (body not evaluated)
-  LET cond-1 = IF FALSE {
-    WRITE "never reached"
+  ; Single-arm if with false condition (body not evaluated)
+  let cond-1 = if false {
+    write "never reached"
   }
-  WRITE cond-1
+  write cond-1
   ; Expected: Unit
 
-  ; Single-arm IF with true condition (body evaluated, must be Unit)
-  LET cond-2 = IF TRUE {
-    WRITE "side effect"
+  ; Single-arm if with true condition (body evaluated, must be Unit)
+  let cond-2 = if true {
+    write "side effect"
   }
-  WRITE cond-2
+  write cond-2
   ; Expected: Unit
 
   ; === Option values ===
 
   ; Option.None
-  WRITE Option.None
+  write Option.None
   ; Expected: Option.None
 
   ; Option.Some unwrapping with coalesce
-  WRITE Option.Some(42) ?? 0
+  write Option.Some(42) ?? 0
   ; Expected: 42
 
   ; Option.None fallback with coalesce
-  WRITE Option.None ?? "fallback"
+  write Option.None ?? "fallback"
   ; Expected: fallback
 
   ; === Prefix `?` for Some wrapping ===
 
   ; Basic usage: wrap a value in Some
-  LET wrapped = ?42
-  WRITE wrapped
+  let wrapped = ?42
+  write wrapped
   ; Expected: Option.Some(42)
 
   ; Unwrap with coalesce
-  WRITE ?100 ?? 0
+  write ?100 ?? 0
   ; Expected: 100
 
   ; Wrap a string
-  WRITE ?"hello"
+  write ?"hello"
   ; Expected: Option.Some(hello)
 
   ; Nested `?` produces Option.Some(Option.Some(v))
   ; Note: `??` is the coalesce operator, so use `?(?x)` for nesting
-  LET nested = ?(?10)
-  WRITE nested
+  let nested = ?(?10)
+  write nested
   ; Expected: Option.Some(Option.Some(10))
 
   ; Unwrap outer layer
-  WRITE nested!
+  write nested!
   ; Expected: Option.Some(10)
 
   ; Fully unwrap nested
-  WRITE nested!!
+  write nested!!
   ; Expected: 10
 
   ; Call with explicit Some
-  WRITE maybe-double(Option.Some(5))
+  write maybe-double(Option.Some(5))
   ; Expected: 10
 
   ; Call with `?` wrap syntax
-  WRITE maybe-double(?7)
+  write maybe-double(?7)
   ; Expected: 14
 
   ; Call with None
-  WRITE maybe-double(Option.None)
+  write maybe-double(Option.None)
   ; Expected: 0
 
   ; Wrap an expression
-  LET expr-result = ?(3 + 4)
-  WRITE expr-result
+  let expr-result = ?(3 + 4)
+  write expr-result
   ; Expected: Option.Some(7)
 
-  WRITE "Unit and Option test complete"
+  write "Unit and Option test complete"
 }

@@ -1,49 +1,49 @@
 ; Tuple literals and access
 
-FUN main() {
+fun main() {
   ; Basic tuple construction
-  LET pair = (1, "hello")
-  WRITE pair.0
-  WRITE pair.1
+  let pair = (1, "hello")
+  write pair.0
+  write pair.1
 
   ; Triple
-  LET triple = (true, 42, "world")
-  WRITE triple.0
-  WRITE triple.1
-  WRITE triple.2
+  let triple = (true, 42, "world")
+  write triple.0
+  write triple.1
+  write triple.2
 
   ; Nested tuples
-  LET nested = ((1, 2), (3, 4))
-  LET inner1 = nested.0
-  LET inner2 = nested.1
-  WRITE inner1.0
-  WRITE inner1.1
-  WRITE inner2.0
-  WRITE inner2.1
+  let nested = ((1, 2), (3, 4))
+  let inner1 = nested.0
+  let inner2 = nested.1
+  write inner1.0
+  write inner1.1
+  write inner2.0
+  write inner2.1
 
   ; Empty tuple (unit)
-  LET unit = ()
-  WRITE unit
+  let unit = ()
+  write unit
 
   ; Single-element tuple (trailing comma required)
-  LET single = (42,)
-  WRITE single.0
+  let single = (42,)
+  write single.0
 
   ; Tuple in expression
-  LET first = (1, 2).0
-  LET second = (1, 2).1
-  LET sum = first + second
-  WRITE sum
+  let first = (1, 2).0
+  let second = (1, 2).1
+  let sum = first + second
+  write sum
 
   ; Tuple with function results
-  LET expr-tuple = (1 + 2, 3 * 4, "test")
-  WRITE expr-tuple.0
-  WRITE expr-tuple.1
-  WRITE expr-tuple.2
+  let expr-tuple = (1 + 2, 3 * 4, "test")
+  write expr-tuple.0
+  write expr-tuple.1
+  write expr-tuple.2
 
   ; Tuple passed to closure
-  LET get-first = t => t.0
-  LET get-second = t => t.1
-  WRITE get-first((10, 20))
-  WRITE get-second((10, 20))
+  let get-first = t => t.0
+  let get-second = t => t.1
+  write get-first((10, 20))
+  write get-second((10, 20))
 }

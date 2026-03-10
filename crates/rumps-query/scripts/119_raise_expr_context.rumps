@@ -1,10 +1,10 @@
-; Test RAISE in expression context (match arm)
-; The RAISE branch is not taken, so we get the value 1
+; Test raise in expression context (match arm)
+; The raise branch is not taken, so we get the value 1
 
-FUN main() {
-  LET x = MATCH Option.Some(1) {
+fun main() {
+  let x = match Option.Some(1) {
     Option.Some(n) => n
-    Option.None => RAISE "unreachable"
+    Option.None => raise "unreachable"
   }
-  WRITE x
+  write x
 }

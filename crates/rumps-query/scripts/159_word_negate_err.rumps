@@ -1,5 +1,5 @@
 ; Test: negating a Word is a type error (Word is unsigned)
 
-FUN main() {
-  WRITE -(10: Word)
+fun main() {
+  write -(10: Word)
 }

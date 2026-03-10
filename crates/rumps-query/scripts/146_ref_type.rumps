@@ -1,82 +1,82 @@
 ; Test Ref as first-class type
 
-FUN main() {
+fun main() {
   ; Create refs to locals and globals
-  LET local-ref = data{1, 2}
-  LET global-ref = ^info{"key"}
+  let local-ref = data{1, 2}
+  let global-ref = ^info{"key"}
 
-  WRITE local-ref
-  WRITE global-ref
+  write local-ref
+  write global-ref
 
   ; Set up some data
-  @SET data{1, 2} "nested"
-  @SET data{42} "found"
-  TRANSACTION {
-    @SET ^info{"key"} "global value"
+  @set data{1, 2} "nested"
+  @set data{42} "found"
+  transaction {
+    @set ^info{"key"} "global value"
   }
 
   ; Use refs with functions
-  WRITE get-or-default(local-ref, "missing")
-  WRITE get-or-default(global-ref, "missing")
-  WRITE get-or-default(data{999}, "not found")
+  write get-or-default(local-ref, "missing")
+  write get-or-default(global-ref, "missing")
+  write get-or-default(data{999}, "not found")
 
   ; Direct ref usage
-  LET r = data{42}
-  WRITE r
-  WRITE @GET r
+  let r = data{42}
+  write r
+  write @get r
 
   ; Refs in collections
-  LET refs = [data{1}, data{2}, data{3}]
-  WRITE refs
+  let refs = [data{1}, data{2}, data{3}]
+  write refs
 
   ; Ref with spread subscripts
-  LET keys = [1, 2]
-  LET spread-ref = data{...keys}
-  WRITE spread-ref
-  @SET data{1, 2} "via spread"
-  WRITE @GET spread-ref
+  let keys = [1, 2]
+  let spread-ref = data{...keys}
+  write spread-ref
+  @set data{1, 2} "via spread"
+  write @get spread-ref
 
-  LET returned = make-ref(42)
-  WRITE returned
-  WRITE @GET returned
+  let returned = make-ref(42)
+  write returned
+  write @get returned
 
-  ; @SET and @KILL with local Ref variable (no transaction needed)
-  LET set-ref = data{100}
-  @SET set-ref "via ref"
-  WRITE @GET set-ref
+  ; @set and @kill with local Ref variable (no transaction needed)
+  let set-ref = data{100}
+  @set set-ref "via ref"
+  write @get set-ref
 
   ; KILL local ref via variable (no transaction needed)
-  LET kill-ref = data{100}
-  @KILL kill-ref
-  WRITE @GET kill-ref ?? "killed"
+  let kill-ref = data{100}
+  @kill kill-ref
+  write @get kill-ref ?? "killed"
 
   ; Global ref via variable (requires transaction)
-  TRANSACTION {
-    LET g-ref = ^info{"txn-key"}
-    @SET g-ref "set via ref"
-    WRITE @GET g-ref
-    @KILL g-ref
-    WRITE @GET g-ref ?? "global killed"
+  transaction {
+    let g-ref = ^info{"txn-key"}
+    @set g-ref "set via ref"
+    write @get g-ref
+    @kill g-ref
+    write @get g-ref ?? "global killed"
   }
 
   ; Ref equality comparison
-  LET ref1 = data{1, 2}
-  LET ref2 = data{1, 2}
-  LET ref3 = data{1, 3}
-  LET ref4 = ^info{"key"}
+  let ref1 = data{1, 2}
+  let ref2 = data{1, 2}
+  let ref3 = data{1, 3}
+  let ref4 = ^info{"key"}
 
-  WRITE ref1 == ref2
-  WRITE ref1 == ref3
-  WRITE ref1 == ref4
-  WRITE ref1 != ref3
+  write ref1 == ref2
+  write ref1 == ref3
+  write ref1 == ref4
+  write ref1 != ref3
 }
 
 ; Function that takes a Ref
-FUN get-or-default(r: Ref, default: Storable) -> Storable {
-  @GET r ?? default
+fun get-or-default(r: Ref, default: Storable) -> Storable {
+  @get r ?? default
 }
 
 ; Function that returns a Ref
-FUN make-ref(key: Int) -> Ref {
+fun make-ref(key: Int) -> Ref {
   data{key}
 }

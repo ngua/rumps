@@ -1,107 +1,107 @@
 ; Variant constructor tests
 ; Tests explicit construction of Option and Result variants
 
-FUN main() {
+fun main() {
   ; === Option.Some ===
 
-  LET some1 = Option.Some(42)
-  WRITE some1
+  let some1 = Option.Some(42)
+  write some1
   ; Expected: Option.Some(42)
 
-  LET some2 = Option.Some("hello")
-  WRITE some2
+  let some2 = Option.Some("hello")
+  write some2
   ; Expected: Option.Some(hello)
 
   ; === Option.None ===
 
-  LET none = Option.None
-  WRITE none
+  let none = Option.None
+  write none
   ; Expected: Option.None
 
   ; === Result.Ok ===
 
-  LET ok1 = Result.Ok(100)
-  WRITE ok1
+  let ok1 = Result.Ok(100)
+  write ok1
   ; Expected: Result.Ok(100)
 
-  LET ok2 = Result.Ok("success")
-  WRITE ok2
+  let ok2 = Result.Ok("success")
+  write ok2
   ; Expected: Result.Ok(success)
 
   ; === Result.Err ===
 
-  LET err1 = Result.Err("failed")
-  WRITE err1
+  let err1 = Result.Err("failed")
+  write err1
   ; Expected: Result.Err(failed)
 
-  LET err2 = Result.Err(404)
-  WRITE err2
+  let err2 = Result.Err(404)
+  write err2
   ; Expected: Result.Err(404)
 
   ; === Nested variants ===
 
-  LET nested1 = Option.Some(Result.Ok(1))
-  WRITE nested1
+  let nested1 = Option.Some(Result.Ok(1))
+  write nested1
   ; Expected: Option.Some(Result.Ok(1))
 
-  LET nested2 = Result.Ok(Option.Some("inner"))
-  WRITE nested2
+  let nested2 = Result.Ok(Option.Some("inner"))
+  write nested2
   ; Expected: Result.Ok(Option.Some(inner))
 
-  LET nested3 = Option.Some(Option.None)
-  WRITE nested3
+  let nested3 = Option.Some(Option.None)
+  write nested3
   ; Expected: Option.Some(Option.None)
 
   ; === Variants with expressions ===
 
-  LET x = 10
-  LET computed = Option.Some(x * 2)
-  WRITE computed
+  let x = 10
+  let computed = Option.Some(x * 2)
+  write computed
   ; Expected: Option.Some(20)
 
-  LET cond = TRUE
-  LET conditional = Result.Ok(IF cond { "yes" } ELSE { "no" })
-  WRITE conditional
+  let cond = true
+  let conditional = Result.Ok(if cond { "yes" } else { "no" })
+  write conditional
   ; Expected: Result.Ok(yes)
 
   ; === Coalesce with explicit variants ===
 
-  LET some-val = Option.Some(42)
-  WRITE some-val ?? 0
+  let some-val = Option.Some(42)
+  write some-val ?? 0
   ; Expected: 42
 
-  LET none-val = Option.None
-  WRITE none-val ?? 99
+  let none-val = Option.None
+  write none-val ?? 99
   ; Expected: 99
 
-  LET ok-val = Result.Ok("data")
-  WRITE ok-val ?? "fallback"
+  let ok-val = Result.Ok("data")
+  write ok-val ?? "fallback"
   ; Expected: data
 
-  LET err-val = Result.Err("oops")
-  WRITE err-val ?? "recovered"
+  let err-val = Result.Err("oops")
+  write err-val ?? "recovered"
   ; Expected: recovered
 
   ; === Variant in object ===
 
-  LET obj = {
+  let obj = {
     status: Result.Ok("active"),
     value: Option.Some(123)
   }
-  WRITE obj.status
+  write obj.status
   ; Expected: Result.Ok(active)
-  WRITE obj.value
+  write obj.value
   ; Expected: Option.Some(123)
 
   ; === Variant in array ===
 
-  LET arr = [Option.Some(1), Option.None, Option.Some(3)]
-  WRITE arr[0]
+  let arr = [Option.Some(1), Option.None, Option.Some(3)]
+  write arr[0]
   ; Expected: Option.Some(1)
-  WRITE arr[1]
+  write arr[1]
   ; Expected: Option.None
-  WRITE arr[2]
+  write arr[2]
   ; Expected: Option.Some(3)
 
-  WRITE "Variant constructor tests complete"
+  write "Variant constructor tests complete"
 }

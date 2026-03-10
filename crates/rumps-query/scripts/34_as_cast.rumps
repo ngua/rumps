@@ -1,113 +1,113 @@
-; Test: Type cast operator (AS)
+; Test: Type cast operator (as)
 ; Tests infallible type conversions with the `as` keyword
 
-FUN main() {
+fun main() {
   ; === Int -> Float (widen) ===
 
-  LET i = 42
-  LET f = i AS Float
-  WRITE f
+  let i = 42
+  let f = i as Float
+  write f
   ; Expected: 42
 
   ; === Float -> Int (truncate) ===
 
-  LET pi = 3.7
-  LET truncated = pi AS Int
-  WRITE truncated
+  let pi = 3.7
+  let truncated = pi as Int
+  write truncated
   ; Expected: 3
 
-  LET neg = -2.9
-  LET neg-trunc = neg AS Int
-  WRITE neg-trunc
+  let neg = -2.9
+  let neg-trunc = neg as Int
+  write neg-trunc
   ; Expected: -2
 
   ; === Bool -> Int ===
 
-  LET t = TRUE AS Int
-  WRITE t
+  let t = true as Int
+  write t
   ; Expected: 1
 
-  LET f = FALSE AS Int
-  WRITE f
+  let f = false as Int
+  write f
   ; Expected: 0
 
   ; === T -> String (stringify anything) ===
 
   ; Int to String
-  LET n = 123
-  LET n-str = n AS String
-  WRITE n-str
+  let n = 123
+  let n-str = n as String
+  write n-str
   ; Expected: 123
 
   ; Float to String
-  LET pi-str = 3.14 AS String
-  WRITE pi-str
+  let pi-str = 3.14 as String
+  write pi-str
   ; Expected: 3.14
 
   ; Bool to String
-  LET b-str = TRUE AS String
-  WRITE b-str
-  ; Expected: TRUE
+  let b-str = true as String
+  write b-str
+  ; Expected: true
 
-  LET b-str2 = FALSE AS String
-  WRITE b-str2
-  ; Expected: FALSE
+  let b-str2 = false as String
+  write b-str2
+  ; Expected: false
 
   ; Array to String
-  LET arr = [1, 2, 3]
-  LET arr-str = arr AS String
-  WRITE arr-str
+  let arr = [1, 2, 3]
+  let arr-str = arr as String
+  write arr-str
   ; Expected: [ 1, 2, 3 ]
 
   ; Object to String
-  LET obj = { name: "Alice", age: 30 }
-  LET obj-str = obj AS String
-  WRITE obj-str
+  let obj = { name: "Alice", age: 30 }
+  let obj-str = obj as String
+  write obj-str
   ; Expected: { name: Alice, age: 30 }
 
   ; Option to String
-  LET some = Option.Some(42)
-  LET some-str = some AS String
-  WRITE some-str
+  let some = Option.Some(42)
+  let some-str = some as String
+  write some-str
   ; Expected: Option.Some(42)
 
-  LET none = Option.None
-  LET none-str = none AS String
-  WRITE none-str
+  let none = Option.None
+  let none-str = none as String
+  write none-str
   ; Expected: Option.None
 
   ; === Identity casts ===
 
-  LET x = 42 AS Int
-  WRITE x
+  let x = 42 as Int
+  write x
   ; Expected: 42
 
-  LET s = "hello" AS String
-  WRITE s
+  let s = "hello" as String
+  write s
   ; Expected: hello
 
   ; Tuple identity cast
-  LET tup = (1, 2)
-  WRITE tup AS (Int, Int)
+  let tup = (1, 2)
+  write tup as (Int, Int)
   ; Expected: (1, 2)
 
   ; Object identity cast
-  LET obj2 = { a: 1, b: 2 }
-  WRITE obj2 AS { a: Int, b: Int }
+  let obj2 = { a: 1, b: 2 }
+  write obj2 as { a: Int, b: Int }
   ; Expected: { a: 1, b: 2 }
 
   ; === Chained casts ===
 
-  ; Note: Chained casts like `3.7 AS Int AS Float` require parentheses
-  LET chain = (3.7 AS Int) AS Float
-  WRITE chain
+  ; Note: Chained casts like `3.7 as Int as Float` require parentheses
+  let chain = (3.7 as Int) as Float
+  write chain
   ; Expected: 3
 
   ; === Cast with expressions ===
 
-  LET result = (10 + 5) AS Float
-  WRITE result
+  let result = (10 + 5) as Float
+  write result
   ; Expected: 15
 
-  WRITE "Type cast test complete"
+  write "Type cast test complete"
 }

@@ -2,12 +2,12 @@
 ;
 ; The Display class requires `display(self) -> String` but we return Int.
 
-FUN main() { }
+fun main() { }
 
-TYPE Point = Point(Int, Int)
+type Point = Point(Int, Int)
 
-CLASS Display FOR Point {
-  FUN display(p: Point) -> Int {
+class Display for Point {
+  fun display(p: Point) -> Int {
     42
   }
 }

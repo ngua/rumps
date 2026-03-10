@@ -1,121 +1,121 @@
-; User-defined sum types (TYPE declarations)
+; User-defined sum types (type declarations)
 
 ; Simple enumeration with no payloads
-TYPE Status = Pending | Active | Completed | Failed
+type Status = Pending | Active | Completed | Failed
 
 ; Sum type with payloads
-TYPE Event = Click(Int, Int) | KeyPress(String) | Resize(Int, Int)
+type Event = Click(Int, Int) | KeyPress(String) | Resize(Int, Int)
 
 ; Parameterized type (generic)
-TYPE Either[L, R] = Left(L) | Right(R)
+type Either[L, R] = Left(L) | Right(R)
 
 ; Multi-line syntax (use Outcome to avoid conflict with builtin Result)
-TYPE Outcome[T, E] =
+type Outcome[T, E] =
   Success(T)
   | Failure(E)
 
 ; Single type parameter
-TYPE Maybe[T] = Just(T) | Nothing
+type Maybe[T] = Just(T) | Nothing
 
 ; Test that keywords can be used as variant names (exercises `ident_or_contextual_kw`)
 ; `Raise`, `Catch`, `Write`, `Read` are keywords but should work as variant names
-TYPE Action = Raise(String) | Catch(String) | Write(String) | Read(String)
+type Action = Raise(String) | Catch(String) | Write(String) | Read(String)
 
-FUN main() {
+fun main() {
   ; Create values using the defined type
-  LET s1 = Status.Pending
-  LET s2 = Status.Active
-  LET s3 = Status.Completed
-  LET s4 = Status.Failed
+  let s1 = Status.Pending
+  let s2 = Status.Active
+  let s3 = Status.Completed
+  let s4 = Status.Failed
 
-  WRITE s1
-  WRITE s2
-  WRITE s3
-  WRITE s4
+  write s1
+  write s2
+  write s3
+  write s4
 
   ; Test with is operator
-  IF s1 is Status.Pending {
-    WRITE "s1 is Pending"
+  if s1 is Status.Pending {
+    write "s1 is Pending"
   }
 
-  IF s2 is Status.Active {
-    WRITE "s2 is Active"
+  if s2 is Status.Active {
+    write "s2 is Active"
   }
 
-  LET click = Event.Click(100, 200)
-  LET key = Event.KeyPress("Enter")
-  LET resize = Event.Resize(1920, 1080)
+  let click = Event.Click(100, 200)
+  let key = Event.KeyPress("Enter")
+  let resize = Event.Resize(1920, 1080)
 
-  WRITE click
-  WRITE key
-  WRITE resize
+  write click
+  write key
+  write resize
 
   ; Test is with bindings
-  IF click is Event.Click(x, y) {
-    WRITE "Click at: {x}, {y}"
+  if click is Event.Click(x, y) {
+    write "Click at: {x}, {y}"
   }
 
-  IF key is Event.KeyPress(k) {
-    WRITE "Key: {k}"
+  if key is Event.KeyPress(k) {
+    write "Key: {k}"
   }
 
-  LET left = Either.Left("error message")
-  LET right = Either.Right(42)
+  let left = Either.Left("error message")
+  let right = Either.Right(42)
 
-  WRITE left
-  WRITE right
+  write left
+  write right
 
   ; Test is with generic variants
-  IF left is Either.Left(msg) {
-    WRITE "Got left: {msg}"
+  if left is Either.Left(msg) {
+    write "Got left: {msg}"
   }
 
-  IF right is Either.Right(val) {
-    WRITE "Got right: {val}"
+  if right is Either.Right(val) {
+    write "Got right: {val}"
   }
 
-  LET ok = Outcome.Success(100)
-  LET err = Outcome.Failure("failed")
+  let ok = Outcome.Success(100)
+  let err = Outcome.Failure("failed")
 
-  WRITE ok
-  WRITE err
+  write ok
+  write err
 
   ; Test wildcard patterns
-  IF ok is Outcome.Success(_) {
-    WRITE "ok is Success (wildcard)"
+  if ok is Outcome.Success(_) {
+    write "ok is Success (wildcard)"
   }
 
-  LET just = Maybe.Just("hello")
-  LET nothing = Maybe.Nothing
+  let just = Maybe.Just("hello")
+  let nothing = Maybe.Nothing
 
-  WRITE just
-  WRITE nothing
+  write just
+  write nothing
 
-  LET a1 = Action.Raise("raising")
-  LET a2 = Action.Catch("catching")
-  LET a3 = Action.Write("writing")
-  LET a4 = Action.Read("reading")
+  let a1 = Action.Raise("raising")
+  let a2 = Action.Catch("catching")
+  let a3 = Action.Write("writing")
+  let a4 = Action.Read("reading")
 
-  WRITE a1
-  WRITE a2
-  WRITE a3
-  WRITE a4
+  write a1
+  write a2
+  write a3
+  write a4
 
-  IF a1 IS Action.Raise(msg) {
-    WRITE "Action.Raise: {msg}"
+  if a1 is Action.Raise(msg) {
+    write "Action.Raise: {msg}"
   }
 
-  IF a2 IS Action.Catch(msg) {
-    WRITE "Action.Catch: {msg}"
+  if a2 is Action.Catch(msg) {
+    write "Action.Catch: {msg}"
   }
 
-  IF a3 IS Action.Write(msg) {
-    WRITE "Action.Write: {msg}"
+  if a3 is Action.Write(msg) {
+    write "Action.Write: {msg}"
   }
 
-  IF a4 IS Action.Read(msg) {
-    WRITE "Action.Read: {msg}"
+  if a4 is Action.Read(msg) {
+    write "Action.Read: {msg}"
   }
 
-  WRITE "User-defined sum types complete"
+  write "User-defined sum types complete"
 }

@@ -1,43 +1,43 @@
 ; Module hoisting: forward references to modules
 
-FUN main() {
+fun main() {
   ; Forward reference to module defined later
-  WRITE M.get-value()
-  WRITE M.add(10, 20)
+  write M.get-value()
+  write M.add(10, 20)
 
   ; Forward reference to nested module
-  WRITE Outer.Inner.greet("world")
+  write Outer.Inner.greet("world")
 
   ; Simple module function
-  WRITE Utils.double(21)
+  write Utils.double(21)
 
-  ; Forward reference to module LET constants
-  WRITE Config.name
-  WRITE Config.version
+  ; Forward reference to module let constants
+  write Config.name
+  write Config.version
 
   ; Forward reference to nested module constant
-  WRITE Outer.Inner.prefix
+  write Outer.Inner.prefix
 }
 
 ; Definitions
 
-MODULE M {
-  +FUN get-value() -> Int { 42 }
-  +FUN add(a: Int, b: Int) -> Int { a + b }
+module M {
+  +fun get-value() -> Int { 42 }
+  +fun add(a: Int, b: Int) -> Int { a + b }
 }
 
-MODULE Outer {
-  MODULE Inner {
-    +FUN greet(name: String) -> String { "Hello, " ++ name ++ "!" }
-    +LET prefix: String = "[Inner]"
+module Outer {
+  module Inner {
+    +fun greet(name: String) -> String { "Hello, " ++ name ++ "!" }
+    +let prefix: String = "[Inner]"
   }
 }
 
-MODULE Utils {
-  +FUN double(n: Int) -> Int { n * 2 }
+module Utils {
+  +fun double(n: Int) -> Int { n * 2 }
 }
 
-MODULE Config {
-  +LET name: String = "TestApp"
-  +LET version: Int = 42
+module Config {
+  +let name: String = "TestApp"
+  +let version: Int = 42
 }

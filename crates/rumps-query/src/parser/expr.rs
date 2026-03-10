@@ -16,18 +16,18 @@ impl Parser {
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
-        let format = Self::ctx_ident("JSON")
+        let format = Self::ctx_ident("json")
             .to(cst::OutputFormat::Json)
-            .or(Self::ctx_ident("RAW").to(cst::OutputFormat::Raw))
+            .or(Self::ctx_ident("raw").to(cst::OutputFormat::Raw))
             .or_not()
             .map(|f| f.unwrap_or_default());
 
-        let to_error = Self::ctx_ident("TO")
-            .ignore_then(Self::ctx_ident("ERROR"))
+        let to_error = Self::ctx_ident("to")
+            .ignore_then(Self::ctx_ident("error"))
             .to(cst::OutputTarget::Stderr);
 
-        let to_file = Self::ctx_ident("TO")
-            .ignore_then(Self::ctx_ident("FILE"))
+        let to_file = Self::ctx_ident("to")
+            .ignore_then(Self::ctx_ident("file"))
             .ignore_then(expr.clone())
             .map(|e| cst::OutputTarget::File(Box::new(e)));
 
@@ -160,30 +160,30 @@ impl Parser {
     ) -> impl chumsky::Parser<Token, cst::TransactionModifiers, Error = ParseErr>
            + Clone {
         // ON CONFLICT (ABORT | OVERWRITE)
-        let conflict = Self::ctx_ident("ON")
-            .ignore_then(Self::ctx_ident("CONFLICT"))
+        let conflict = Self::ctx_ident("on")
+            .ignore_then(Self::ctx_ident("conflict"))
             .ignore_then(choice((
-                Self::ctx_ident("ABORT").to(cst::ConflictModifier::Abort),
-                Self::ctx_ident("OVERWRITE")
+                Self::ctx_ident("abort").to(cst::ConflictModifier::Abort),
+                Self::ctx_ident("overwrite")
                     .to(cst::ConflictModifier::Overwrite),
             )));
 
         // WITH TIMEOUT expr
-        let timeout = Self::ctx_ident("WITH")
-            .ignore_then(Self::ctx_ident("TIMEOUT"))
+        let timeout = Self::ctx_ident("with")
+            .ignore_then(Self::ctx_ident("timeout"))
             .ignore_then(expr)
             .map(Box::new);
 
         // WITH RETRIES n
-        let retries = Self::ctx_ident("WITH")
-            .ignore_then(Self::ctx_ident("RETRIES"))
+        let retries = Self::ctx_ident("with")
+            .ignore_then(Self::ctx_ident("retries"))
             .ignore_then(select! { Token::Int(n) => n as u32 });
 
         // WITH ISOLATION SNAPSHOT
-        let isolation = Self::ctx_ident("WITH")
-            .ignore_then(Self::ctx_ident("ISOLATION"))
+        let isolation = Self::ctx_ident("with")
+            .ignore_then(Self::ctx_ident("isolation"))
             .ignore_then(
-                Self::ctx_ident("SNAPSHOT")
+                Self::ctx_ident("snapshot")
                     .to(cst::IsolationModifier::Snapshot),
             );
 

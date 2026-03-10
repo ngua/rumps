@@ -1,124 +1,124 @@
 ; Module type scoping tests
 ;
-; Tests that TYPE, NEWTYPE, and UNION declared in a module can be used
+; Tests that type, newtype, and union declared in a module can be used
 ; without full qualification from within the same module.
 
 ; Import to bring class instances into scope
-IMPORT Shapes.{ }
+import Shapes.{ }
 
-FUN main() {
-  ; ============ TYPE variants with unqualified type names ============
+fun main() {
+  ; ============ type variants with unqualified type names ============
 
-  LET c = Shapes.Circle.Circle(2.0)
-  WRITE Display:display(c)
-  WRITE Shapes.area(c)
+  let c = Shapes.Circle.Circle(2.0)
+  write Display:display(c)
+  write Shapes.area(c)
 
-  ; ============ NEWTYPE with unqualified type names ============
+  ; ============ newtype with unqualified type names ============
 
-  LET dist: Units.Meters = 10.0
-  WRITE Units.meters-to-feet(dist)
-  WRITE Units.double(dist)
+  let dist: Units.Meters = 10.0
+  write Units.meters-to-feet(dist)
+  write Units.double(dist)
 
-  ; ============ UNION with unqualified type names ============
+  ; ============ union with unqualified type names ============
 
-  LET v1: Data.Value = 42
-  LET v2: Data.Value = "hello"
-  LET v3: Data.Value = TRUE
-  WRITE Data.describe(v1)
-  WRITE Data.describe(v2)
-  WRITE Data.describe(v3)
+  let v1: Data.Value = 42
+  let v2: Data.Value = "hello"
+  let v3: Data.Value = true
+  write Data.describe(v1)
+  write Data.describe(v2)
+  write Data.describe(v3)
 
-  ; ============ TYPE with type parameters unqualified ============
+  ; ============ type with type parameters unqualified ============
 
-  LET box1 = Container.Box.Box(42)
-  LET box2: Container.Box[Int] = Container.Box.Empty
-  WRITE Container.unwrap-or(box1, 0)
-  WRITE Container.unwrap-or(box2, -1)
-  WRITE Container.unwrap-or(Container.wrap(100), 0)
+  let box1 = Container.Box.Box(42)
+  let box2: Container.Box[Int] = Container.Box.Empty
+  write Container.unwrap-or(box1, 0)
+  write Container.unwrap-or(box2, -1)
+  write Container.unwrap-or(Container.wrap(100), 0)
 
   ; ============ Mixed types in same module ============
 
-  LET id: Mixed.Id = 123
-  LET status = Mixed.Status.Done
-  LET payload: Mixed.Payload = "data"
-  WRITE Mixed.process(id, status, payload)
+  let id: Mixed.Id = 123
+  let status = Mixed.Status.Done
+  let payload: Mixed.Payload = "data"
+  write Mixed.process(id, status, payload)
 }
 
-MODULE Shapes {
-  +TYPE Circle = Circle(Float)
+module Shapes {
+  +type Circle = Circle(Float)
 
-  ; Use unqualified `Circle` in CLASS declaration
-  CLASS Display FOR Circle {
-    FUN display(c: Circle) -> String {
-      MATCH c {
+  ; Use unqualified `Circle` in class declaration
+  class Display for Circle {
+    fun display(c: Circle) -> String {
+      match c {
         Circle.Circle(r) => { "Circle(r={r})" }
       }
     }
   }
 
   ; Function using unqualified type in signature
-  +FUN area(c: Circle) -> Float {
-    MATCH c {
+  +fun area(c: Circle) -> Float {
+    match c {
       Circle.Circle(r) => { 3.14159 * r * r }
     }
   }
 }
 
-MODULE Units {
-  +NEWTYPE Meters = Float
-  +NEWTYPE Feet = Float
+module Units {
+  +newtype Meters = Float
+  +newtype Feet = Float
 
   ; Function using unqualified newtypes in signature
-  +FUN meters-to-feet(m: Meters) -> Feet {
+  +fun meters-to-feet(m: Meters) -> Feet {
     m * 3.28084
   }
 
   ; Function returning unqualified newtype
-  +FUN double(m: Meters) -> Meters {
+  +fun double(m: Meters) -> Meters {
     m * 2.0
   }
 }
 
-MODULE Data {
-  +UNION Value = Int | String | Bool
+module Data {
+  +union Value = Int | String | Bool
 
   ; Function using unqualified union in signature
-  +FUN describe(v: Value) -> String {
-    IF v IS Int { "integer" } ELSE {
-      IF v IS String { "string" } ELSE { "boolean" }
+  +fun describe(v: Value) -> String {
+    if v is Int { "integer" } else {
+      if v is String { "string" } else { "boolean" }
     }
   }
 }
 
-MODULE Container {
-  +TYPE Box[T] = Box(T) | Empty
+module Container {
+  +type Box[T] = Box(T) | Empty
 
   ; Function using unqualified parameterized type
-  +FUN unwrap-or[T](b: Box[T], default: T) -> T {
-    MATCH b {
+  +fun unwrap-or[T](b: Box[T], default: T) -> T {
+    match b {
       Box.Box(v) => { v }
       Box.Empty => { default }
     }
   }
 
   ; Function creating unqualified variant
-  +FUN wrap[T](v: T) -> Box[T] {
+  +fun wrap[T](v: T) -> Box[T] {
     Box.Box(v)
   }
 }
 
-MODULE Mixed {
-  +TYPE Status = Pending | Done
-  +NEWTYPE Id = Int
-  +UNION Payload = Int | String
+module Mixed {
+  +type Status = Pending | Done
+  +newtype Id = Int
+  +union Payload = Int | String
 
   ; Function using all three unqualified
-  +FUN process(id: Id, status: Status, payload: Payload) -> String {
-    LET s = MATCH status {
+  +fun process(id: Id, status: Status, payload: Payload) -> String {
+    let s = match status {
       Status.Pending => { "pending" }
       Status.Done => { "done" }
     }
-    LET p = IF payload IS Int { "int" } ELSE { "string" }
+    let p = if payload is Int { "int" } else { "string" }
     "id={id}, status={s}, payload={p}"
   }
 }

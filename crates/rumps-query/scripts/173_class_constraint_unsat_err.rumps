@@ -1,23 +1,23 @@
-; Error: WHERE constraint not satisfied at use site
+; Error: where constraint not satisfied at use site
 ;
 ; Pair requires both L and R to implement Display, but we try to use
 ; it with a function type (which cannot implement Display).
 
-FUN main() {
+fun main() {
   ; Int -> Int is a function type; functions don't implement Display
-  LET f: Int -> Int = x => { x + 1 }
-  LET bad = Pair.Pair(f, 42)
-  WRITE Display:display(bad)
+  let f: Int -> Int = x => { x + 1 }
+  let bad = Pair.Pair(f, 42)
+  write Display:display(bad)
 }
 
-TYPE Pair[L, R] = Pair(L, R)
+type Pair[L, R] = Pair(L, R)
 
-CLASS Display FOR Pair[L, R] WHERE L: Display, R: Display {
-  FUN display(p: Pair[L, R]) -> String {
-    MATCH p {
+class Display for Pair[L, R] where L: Display, R: Display {
+  fun display(p: Pair[L, R]) -> String {
+    match p {
       Pair.Pair(l, r) => {
-        LET ls = Display:display(l)
-        LET rs = Display:display(r)
+        let ls = Display:display(l)
+        let rs = Display:display(r)
         "({ls}, {rs})"
       }
     }

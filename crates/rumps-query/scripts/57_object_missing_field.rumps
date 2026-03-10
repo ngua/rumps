@@ -1,8 +1,8 @@
 ; Error: missing required field in object alias
 
-NEWTYPE Person = { name: String, age: Int }
+newtype Person = { name: String, age: Int }
 
-FUN main() {
+fun main() {
   ; Missing `age` field
-  LET p: Person = { name: "Alice" }
+  let p: Person = { name: "Alice" }
 }

@@ -423,7 +423,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Stringify a map key for display.
     fn stringify_map_key(&self, k: &MapKey) -> String {
         match k {
-            MapKey::Bool(b) => b.to_string().to_uppercase(),
+            MapKey::Bool(b) => b.to_string(),
             MapKey::Int(n) => n.to_string(),
             MapKey::Float(f) => f.to_string(),
             MapKey::Char(c) => format!("'{c}'"),

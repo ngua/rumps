@@ -1,75 +1,75 @@
 ; Test: block expressions
 ; Tests block syntax with multiple statements and tail expressions
 
-FUN main() {
+fun main() {
   ; Simple block with tail expression
-  LET x = {
-    LET a = 10
-    LET b = 20
+  let x = {
+    let a = 10
+    let b = 20
     a + b
   }
-  WRITE x
+  write x
   ; Expected: 30
 
   ; Block with no tail (returns None)
-  LET y = {
-    WRITE "Side effect"
+  let y = {
+    write "Side effect"
   }
   ; y should be Option.None or unit
 
   ; Nested blocks
-  LET z = {
-    LET outer = 5
+  let z = {
+    let outer = 5
     {
-      LET inner = 10
+      let inner = 10
       outer + inner
     }
   }
-  WRITE z
+  write z
   ; Expected: 15
 
-  ; Block with @SET (side effect, no return)
+  ; Block with @set (side effect, no return)
   {
-    @SET counter{} 0
-    @SET counter{} 1
-    @SET counter{} 2
+    @set counter{} 0
+    @set counter{} 1
+    @set counter{} 2
   }
-  LET c = @GET counter{}
-  WRITE c
+  let c = @get counter{}
+  write c
   ; Expected: 2
 
   ; Block scope isolation
-  LET val = 100
+  let val = 100
   {
-    LET val = 200
-    WRITE val
+    let val = 200
+    write val
     ; Expected: 200
   }
-  WRITE val
-  ; Expected: 100 (outer val unchanged due to LET shadowing)
+  write val
+  ; Expected: 100 (outer val unchanged due to let shadowing)
 
   ; Block with conditional
-  LET result = {
-    LET score = 75
-    IF score >= 70 {
+  let result = {
+    let score = 75
+    if score >= 70 {
       "pass"
-    } ELSE {
+    } else {
       "fail"
     }
   }
-  WRITE result
+  write result
   ; Expected: pass
 
   ; Multiple statements before tail
-  LET multi = {
-    LET a = 1
-    LET b = 2
-    LET c = 3
-    WRITE "Computing..."
+  let multi = {
+    let a = 1
+    let b = 2
+    let c = 3
+    write "Computing..."
     a + b + c
   }
-  WRITE multi
+  write multi
   ; Expected: Computing... then 6
 
-  WRITE "Block test complete"
+  write "Block test complete"
 }

@@ -1,121 +1,121 @@
 ; Binary operator dispatch through user-defined class instances
 ;
 ; Tests that operators like `==`, `+`, `<`, etc... dispatch to
-; user-defined CLASS implementations on newtypes, rather than
+; user-defined class implementations on newtypes, rather than
 ; falling through to the underlying type's builtin instance.
 
-FUN main() {
+fun main() {
   ; === Eq: custom `==` raises ===
 
-  LET a: X[Unit] = 1
-  LET b: X[Unit] = 1
-  WRITE (a == b) CATCH e => false
+  let a: X[Unit] = 1
+  let b: X[Unit] = 1
+  write (a == b) catch e => false
 
   ; === Eq: custom `!=` also dispatches through `eq` ===
 
-  WRITE (a != b) CATCH e => false
+  write (a != b) catch e => false
 
   ; === Numeric: custom `+` on newtype (doubles result) ===
 
-  LET x: MyInt = 10
-  LET y: MyInt = 3
-  WRITE x + y
-  WRITE x - y
-  WRITE x * y
-  WRITE x // y
-  WRITE x % y
-  WRITE x ** y
+  let x: MyInt = 10
+  let y: MyInt = 3
+  write x + y
+  write x - y
+  write x * y
+  write x // y
+  write x % y
+  write x ** y
 
   ; === Ord: custom `<`, `>`, `<=`, `>=` on newtype ===
   ; Priority has reversed ordering (higher number = lower priority)
 
-  LET lo: Priority = 10
-  LET hi: Priority = 1
-  WRITE lo < hi
-  WRITE lo > hi
-  WRITE lo <= hi
-  WRITE lo >= hi
-  WRITE lo == hi
+  let lo: Priority = 10
+  let hi: Priority = 1
+  write lo < hi
+  write lo > hi
+  write lo <= hi
+  write lo >= hi
+  write lo == hi
 
   ; Same values
-  LET s1: Priority = 5
-  LET s2: Priority = 5
-  WRITE s1 <= s2
-  WRITE s1 >= s2
-  WRITE s1 == s2
+  let s1: Priority = 5
+  let s2: Priority = 5
+  write s1 <= s2
+  write s1 >= s2
+  write s1 == s2
 
   ; === Auto-derive inside class body ===
-  ; Operators inside `CLASS Numeric FOR MyInt` should use the
+  ; Operators inside `class Numeric for MyInt` should use the
   ; underlying `Int` arithmetic, not recurse infinitely.
 
-  LET p: MyInt = 2
-  LET q: MyInt = 3
-  WRITE p + q
+  let p: MyInt = 2
+  let q: MyInt = 3
+  write p + q
 }
 
 ; Newtype whose `Eq` always raises
-NEWTYPE X[T] = Int
+newtype X[T] = Int
 
-CLASS Eq FOR X[T] {
-  FUN eq(a: X[T], b: X[T]) -> Bool {
-    RAISE "no eq for X"
+class Eq for X[T] {
+  fun eq(a: X[T], b: X[T]) -> Bool {
+    raise "no eq for X"
   }
 }
 
 ; Newtype with custom `Numeric` that doubles every result
-NEWTYPE MyInt = Int
+newtype MyInt = Int
 
-CLASS Numeric FOR MyInt {
-  FUN add(a: MyInt, b: MyInt) -> MyInt {
-    LET x: Int = a
-    LET y: Int = b
+class Numeric for MyInt {
+  fun add(a: MyInt, b: MyInt) -> MyInt {
+    let x: Int = a
+    let y: Int = b
     (x + y) * 2
   }
-  FUN sub(a: MyInt, b: MyInt) -> MyInt {
-    LET x: Int = a
-    LET y: Int = b
+  fun sub(a: MyInt, b: MyInt) -> MyInt {
+    let x: Int = a
+    let y: Int = b
     (x - y) * 2
   }
-  FUN mul(a: MyInt, b: MyInt) -> MyInt {
-    LET x: Int = a
-    LET y: Int = b
+  fun mul(a: MyInt, b: MyInt) -> MyInt {
+    let x: Int = a
+    let y: Int = b
     (x * y) * 2
   }
-  FUN floor-div(a: MyInt, b: MyInt) -> MyInt {
-    LET x: Int = a
-    LET y: Int = b
+  fun floor-div(a: MyInt, b: MyInt) -> MyInt {
+    let x: Int = a
+    let y: Int = b
     (x // y) * 2
   }
-  FUN mod(a: MyInt, b: MyInt) -> MyInt {
-    LET x: Int = a
-    LET y: Int = b
+  fun mod(a: MyInt, b: MyInt) -> MyInt {
+    let x: Int = a
+    let y: Int = b
     (x % y) * 2
   }
-  FUN pow(a: MyInt, b: MyInt) -> MyInt {
-    LET x: Int = a
-    LET y: Int = b
+  fun pow(a: MyInt, b: MyInt) -> MyInt {
+    let x: Int = a
+    let y: Int = b
     (x ** y) * 2
   }
 }
 
 ; Newtype with reversed ordering
-NEWTYPE Priority = Int
+newtype Priority = Int
 
-CLASS Ord FOR Priority {
-  FUN compare(a: Priority, b: Priority) -> Ordering {
-    LET x: Int = a
-    LET y: Int = b
+class Ord for Priority {
+  fun compare(a: Priority, b: Priority) -> Ordering {
+    let x: Int = a
+    let y: Int = b
     ; Reversed: higher number = lower priority
-    IF x > y { Ordering.Lt } ELSE {
-      IF x == y { Ordering.Eq } ELSE { Ordering.Gt }
+    if x > y { Ordering.Lt } else {
+      if x == y { Ordering.Eq } else { Ordering.Gt }
     }
   }
 }
 
-CLASS Eq FOR Priority {
-  FUN eq(a: Priority, b: Priority) -> Bool {
-    LET x: Int = a
-    LET y: Int = b
+class Eq for Priority {
+  fun eq(a: Priority, b: Priority) -> Bool {
+    let x: Int = a
+    let y: Int = b
     x == y
   }
 }

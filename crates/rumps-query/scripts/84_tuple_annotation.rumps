@@ -1,7 +1,7 @@
 ; Test: Tuple type annotation now works with postfix syntax
 ; `(a, b): T` is valid (annotation applied to tuple expression)
 
-FUN main() {
-  LET x = (1, 2): (Int, Int)
-  WRITE x
+fun main() {
+  let x = (1, 2): (Int, Int)
+  write x
 }

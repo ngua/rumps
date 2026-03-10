@@ -1,5 +1,5 @@
 ; Wrong type for destructuring
 
-FUN main() {
-  LET (a, b) = 42
+fun main() {
+  let (a, b) = 42
 }

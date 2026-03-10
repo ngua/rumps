@@ -1,41 +1,41 @@
-; Test: JSON type and access operators
-; Tests JSON literals, field access, type conversions, and heterogeneous arrays
+; Test: json type and access operators
+; Tests json literals, field access, type conversions, and heterogeneous arrays
 
-NEWTYPE Person = { name: String, age: Int }
-NEWTYPE Box[T] = { value: T }
-NEWTYPE Pair[A, B] = { first: A, second: B }
-NEWTYPE Address = { city: String, zip: Int }
-NEWTYPE Employee = { name: String, addr: Address }
+newtype Person = { name: String, age: Int }
+newtype Box[T] = { value: T }
+newtype Pair[A, B] = { first: A, second: B }
+newtype Address = { city: String, zip: Int }
+newtype Employee = { name: String, addr: Address }
 
-FUN main() {
+fun main() {
   ; ============================================================
-  ; JSON LITERALS (quoted keys)
+  ; json LITERALS (quoted keys)
   ; ============================================================
 
-  LET j = { "name": "Alice", "age": 30, "active": TRUE }
+  let j = { "name": "Alice", "age": 30, "active": true }
 
   ; Type checking
-  WRITE j IS Json
-  ; Expected: TRUE
+  write j is Json
+  ; Expected: true
 
   ; ============================================================
-  ; JSON FIELD ACCESS (returns Json)
+  ; json FIELD ACCESS (returns Json)
   ; ============================================================
 
-  LET name = j.name
-  WRITE name IS Json
-  ; Expected: TRUE
+  let name = j.name
+  write name is Json
+  ; Expected: true
 
   ; Missing field returns Json null
-  LET missing = j.missing
-  WRITE missing IS Json
-  ; Expected: TRUE
+  let missing = j.missing
+  write missing is Json
+  ; Expected: true
 
   ; ============================================================
-  ; NESTED JSON ACCESS
+  ; NESTED json ACCESS
   ; ============================================================
 
-  LET nested = {
+  let nested = {
     "user": {
       "profile": {
         "firstName": "Bob"
@@ -43,363 +43,363 @@ FUN main() {
     }
   }
 
-  WRITE nested.user.profile.firstName IS Json
-  ; Expected: TRUE
+  write nested.user.profile.firstName is Json
+  ; Expected: true
 
   ; ============================================================
-  ; NATIVE OBJECTS (unquoted keys) vs JSON
+  ; NATIVE OBJECTS (unquoted keys) vs json
   ; ============================================================
 
-  LET obj = { name: "Alice", age: 30 }
-  WRITE obj IS { name: String, age: Int }
-  ; Expected: TRUE
+  let obj = { name: "Alice", age: 30 }
+  write obj is { name: String, age: Int }
+  ; Expected: true
 
   ; Native object field access returns native type
-  WRITE obj.name IS String
-  ; Expected: TRUE
+  write obj.name is String
+  ; Expected: true
 
   ; ============================================================
-  ; JSON SCALAR EXTRACTION WITH .. (returns Option)
+  ; json SCALAR EXTRACTION with .. (returns Option)
   ; ============================================================
 
-  LET data = { "a": 1, "b": 2, "c": 3 }
-  LET a-scalar = data..a
-  WRITE a-scalar IS Option.Some(_)
-  ; Expected: TRUE
+  let data = { "a": 1, "b": 2, "c": 3 }
+  let a-scalar = data..a
+  write a-scalar is Option.Some(_)
+  ; Expected: true
 
   ; Unwrap scalar extraction
-  WRITE a-scalar!
+  write a-scalar!
   ; Expected: 1
 
   ; Another scalar extraction
-  LET c-val = data..c
-  WRITE c-val!
+  let c-val = data..c
+  write c-val!
   ; Expected: 3
 
   ; Missing key with .. returns Option.None
-  LET miss = data..missing
-  WRITE miss IS Option.None
-  ; Expected: TRUE
+  let miss = data..missing
+  write miss is Option.None
+  ; Expected: true
 
   ; Scalar extraction from string field
-  LET strs = { "greeting": "hello" }
-  LET s = strs..greeting
-  WRITE s!
+  let strs = { "greeting": "hello" }
+  let s = strs..greeting
+  write s!
   ; Expected: hello
 
   ; Scalar extraction from bool field
-  LET bools = { "flag": TRUE }
-  LET b = bools..flag
-  WRITE b!
-  ; Expected: TRUE
+  let bools = { "flag": true }
+  let b = bools..flag
+  write b!
+  ; Expected: true
 
   ; Scalar extraction from float field
-  LET floats = { "pi": 3.14 }
-  LET f = floats..pi
-  WRITE f!
+  let floats = { "pi": 3.14 }
+  let f = floats..pi
+  write f!
   ; Expected: 3.14
 
   ; ============================================================
-  ; DYNAMIC JSON ACCESS WITH -> AND ->>
+  ; DYNAMIC json ACCESS with -> and ->>
   ; ============================================================
 
-  LET key = "b"
-  LET dyn = data->(key)
-  WRITE dyn IS Json
-  ; Expected: TRUE
+  let key = "b"
+  let dyn = data->(key)
+  write dyn is Json
+  ; Expected: true
 
   ; Dynamic scalar access with ->>(expr)
-  LET key-c = "c"
-  LET dyn-c = data->>(key-c)
-  WRITE dyn-c!
+  let key-c = "c"
+  let dyn-c = data->>(key-c)
+  write dyn-c!
   ; Expected: 3
 
   ; ============================================================
-  ; AS Json COERCION (native -> Json)
+  ; as Json COERCION (native -> Json)
   ; ============================================================
 
   ; Native object -> Json
-  LET native-obj = { x: 1, y: 2 }
-  LET json-obj = native-obj AS Json
-  WRITE json-obj IS Json
-  ; Expected: TRUE
+  let native-obj = { x: 1, y: 2 }
+  let json-obj = native-obj as Json
+  write json-obj is Json
+  ; Expected: true
 
   ; Array -> Json
-  LET arr = [1, 2, 3]
-  LET json-arr = arr AS Json
-  WRITE json-arr IS Json
-  ; Expected: TRUE
+  let arr = [1, 2, 3]
+  let json-arr = arr as Json
+  write json-arr is Json
+  ; Expected: true
 
   ; Scalar -> Json
-  LET int-json = 42 AS Json
-  WRITE int-json IS Json
-  ; Expected: TRUE
+  let int-json = 42 as Json
+  write int-json is Json
+  ; Expected: true
 
-  LET str-json = "hello" AS Json
-  WRITE str-json IS Json
-  ; Expected: TRUE
+  let str-json = "hello" as Json
+  write str-json is Json
+  ; Expected: true
 
-  LET bool-json = TRUE AS Json
-  WRITE bool-json IS Json
-  ; Expected: TRUE
+  let bool-json = true as Json
+  write bool-json is Json
+  ; Expected: true
 
   ; ============================================================
-  ; Json READ T CONVERSIONS (Json -> native)
+  ; Json read T CONVERSIONS (Json -> native)
   ; ============================================================
 
-  LET j-data = { "name": "John", "age": 30, "active": TRUE, "score": 3.14 }
+  let j-data = { "name": "John", "age": 30, "active": true, "score": 3.14 }
 
   ; Json -> String
-  LET name-result = j-data.name READ String
-  WRITE name-result IS Result.Ok(_)
-  ; Expected: TRUE
-  WRITE name-result!
+  let name-result = j-data.name read String
+  write name-result is Result.Ok(_)
+  ; Expected: true
+  write name-result!
   ; Expected: John
 
   ; Json -> Int
-  LET age-result = j-data.age READ Int
-  WRITE age-result IS Result.Ok(_)
-  ; Expected: TRUE
-  WRITE age-result!
+  let age-result = j-data.age read Int
+  write age-result is Result.Ok(_)
+  ; Expected: true
+  write age-result!
   ; Expected: 30
 
   ; Json -> Bool
-  LET active-result = j-data.active READ Bool
-  WRITE active-result IS Result.Ok(_)
-  ; Expected: TRUE
-  WRITE active-result!
-  ; Expected: TRUE
+  let active-result = j-data.active read Bool
+  write active-result is Result.Ok(_)
+  ; Expected: true
+  write active-result!
+  ; Expected: true
 
   ; Json -> Float
-  LET score-result = j-data.score READ Float
-  WRITE score-result IS Result.Ok(_)
-  ; Expected: TRUE
-  WRITE score-result!
+  let score-result = j-data.score read Float
+  write score-result is Result.Ok(_)
+  ; Expected: true
+  write score-result!
   ; Expected: 3.14
 
   ; Json -> Object (structural type)
-  LET obj-data = { "nested": { "a": 1, "b": 2 } }
-  LET nested-result = obj-data.nested READ { a: Int, b: Int }
-  WRITE nested-result IS Result.Ok(_)
-  ; Expected: TRUE
+  let obj-data = { "nested": { "a": 1, "b": 2 } }
+  let nested-result = obj-data.nested read { a: Int, b: Int }
+  write nested-result is Result.Ok(_)
+  ; Expected: true
 
-  ; READ type mismatch returns Result.Err
-  LET bad-int = j-data.name READ Int
-  WRITE bad-int IS Result.Err(_)
-  ; Expected: TRUE
+  ; read type mismatch returns Result.Err
+  let bad-int = j-data.name read Int
+  write bad-int is Result.Err(_)
+  ; Expected: true
 
-  ; READ on missing field (JSON null) returns Result.Err for non-Option types
-  LET null-data = { "other": 1 }
-  LET null-read = null-data.missing READ Int
-  WRITE null-read IS Result.Err(_)
-  ; Expected: TRUE
+  ; read on missing field (json null) returns Result.Err for non-Option types
+  let null-data = { "other": 1 }
+  let null-read = null-data.missing read Int
+  write null-read is Result.Err(_)
+  ; Expected: true
 
   ; ============================================================
   ; HETEROGENEOUS ARRAYS -> Json
   ; ============================================================
 
   ; Mixed types become Json
-  LET hetero = [1, "two", TRUE, 3.14]
-  WRITE hetero IS Json
-  ; Expected: TRUE
+  let hetero = [1, "two", true, 3.14]
+  write hetero is Json
+  ; Expected: true
 
   ; String mixed with other types
-  LET str-mix = ["a", 1, "hello"]
-  WRITE str-mix IS Json
-  ; Expected: TRUE
+  let str-mix = ["a", 1, "hello"]
+  write str-mix is Json
+  ; Expected: true
 
   ; Two elements of different types
-  LET two-mix = [42, "hello"]
-  WRITE two-mix IS Json
-  ; Expected: TRUE
+  let two-mix = [42, "hello"]
+  write two-mix is Json
+  ; Expected: true
 
   ; Homogeneous arrays stay as Array
-  LET hom-int = [1, 2, 3]
-  WRITE hom-int IS Array[_]
-  ; Expected: TRUE
+  let hom-int = [1, 2, 3]
+  write hom-int is Array[_]
+  ; Expected: true
 
-  LET hom-str = ["a", "b", "c"]
-  WRITE hom-str IS Array[_]
-  ; Expected: TRUE
+  let hom-str = ["a", "b", "c"]
+  write hom-str is Array[_]
+  ; Expected: true
 
   ; ============================================================
-  ; NULL LITERAL IN JSON CONTEXTS
+  ; NULL LITERAL IN json CONTEXTS
   ; ============================================================
 
-  ; null in JSON object
-  LET with-null = { "name": "Alice", "middle": null }
-  WRITE with-null IS Json
-  ; Expected: TRUE
+  ; null in json object
+  let with-null = { "name": "Alice", "middle": null }
+  write with-null is Json
+  ; Expected: true
 
   ; null in heterogeneous array
-  LET arr-null = [1, null, "three"]
-  WRITE arr-null IS Json
-  ; Expected: TRUE
+  let arr-null = [1, null, "three"]
+  write arr-null is Json
+  ; Expected: true
 
   ; Array with only null becomes Json
-  LET null-only = [null, null]
-  WRITE null-only IS Json
-  ; Expected: TRUE
+  let null-only = [null, null]
+  write null-only is Json
+  ; Expected: true
 
   ; Option.None -> null
-  LET none-json = Option.None AS Json
-  WRITE none-json IS Json
-  ; Expected: TRUE
+  let none-json = Option.None as Json
+  write none-json is Json
+  ; Expected: true
 
   ; Option.Some(v) -> v
-  LET some-json = Option.Some(42) AS Json
-  WRITE some-json IS Json
-  ; Expected: TRUE
+  let some-json = Option.Some(42) as Json
+  write some-json is Json
+  ; Expected: true
 
   ; Verify Option.Some unwraps to inner value (not tagged object)
-  LET some-read = some-json READ Int
-  WRITE some-read!
+  let some-read = some-json read Int
+  write some-read!
   ; Expected: 42
 
   ; ============================================================
   ; CHAR LITERALS
   ; ============================================================
 
-  LET ch = 'a'
-  WRITE ch IS Char
-  ; Expected: TRUE
+  let ch = 'a'
+  write ch is Char
+  ; Expected: true
 
-  LET newline = '\n'
-  WRITE newline IS Char
-  ; Expected: TRUE
+  let newline = '\n'
+  write newline is Char
+  ; Expected: true
 
   ; Char in array (homogeneous)
-  LET chars = ['a', 'b', 'c']
-  WRITE chars IS Array[_]
-  ; Expected: TRUE
+  let chars = ['a', 'b', 'c']
+  write chars is Array[_]
+  ; Expected: true
 
   ; ============================================================
-  ; JSON READ INTO STRUCT TYPES
+  ; json read INTO STRUCT TYPES
   ; ============================================================
 
-  ; Read JSON into struct
-  LET person-json = { "name": "Alice", "age": 30 }
-  LET person-result = person-json READ Person
-  WRITE person-result IS Result.Ok(_)
-  ; Expected: TRUE
+  ; Read json into struct
+  let person-json = { "name": "Alice", "age": 30 }
+  let person-result = person-json read Person
+  write person-result is Result.Ok(_)
+  ; Expected: true
 
   ; Read NATIVE object into struct (extra fields allowed)
-  LET native-obj2 = { name: "Native", age: 25, extra: "ignored" }
-  LET native-result = native-obj2 READ Person
-  WRITE native-result IS Result.Ok(_)
-  ; Expected: TRUE
+  let native-obj2 = { name: "Native", age: 25, extra: "ignored" }
+  let native-result = native-obj2 read Person
+  write native-result is Result.Ok(_)
+  ; Expected: true
 
-  LET native-person = native-result!
-  WRITE native-person.name
+  let native-person = native-result!
+  write native-person.name
   ; Expected: Native
-  WRITE native-person.age
+  write native-person.age
   ; Expected: 25
 
-  LET person = person-result!
-  WRITE person.name
+  let person = person-result!
+  write person.name
   ; Expected: Alice
-  WRITE person.age
+  write person.age
   ; Expected: 30
 
   ; Missing field returns Result.Err
-  LET incomplete = { "name": "Bob" }
-  LET incomplete-result = incomplete READ Person
-  WRITE incomplete-result IS Result.Err(_)
-  ; Expected: TRUE
+  let incomplete = { "name": "Bob" }
+  let incomplete-result = incomplete read Person
+  write incomplete-result is Result.Err(_)
+  ; Expected: true
 
   ; Wrong field type returns Result.Err
-  LET wrong-type = { "name": "Carol", "age": "thirty" }
-  LET wrong-result = wrong-type READ Person
-  WRITE wrong-result IS Result.Err(_)
-  ; Expected: TRUE
+  let wrong-type = { "name": "Carol", "age": "thirty" }
+  let wrong-result = wrong-type read Person
+  write wrong-result is Result.Err(_)
+  ; Expected: true
 
   ; ============================================================
-  ; JSON READ INTO PARAMETRIC STRUCT TYPES
+  ; json read INTO PARAMETRIC STRUCT TYPES
   ; ============================================================
 
   ; Read into Box[Int]
-  LET box-json = { "value": 42 }
-  LET box-result = box-json READ Box[Int]
-  WRITE box-result IS Result.Ok(_)
-  ; Expected: TRUE
+  let box-json = { "value": 42 }
+  let box-result = box-json read Box[Int]
+  write box-result is Result.Ok(_)
+  ; Expected: true
 
-  LET box-val = box-result!
-  WRITE box-val.value
+  let box-val = box-result!
+  write box-val.value
   ; Expected: 42
 
   ; Read into Box[String]
-  LET str-box-json = { "value": "hello" }
-  LET str-box-result = str-box-json READ Box[String]
-  WRITE str-box-result IS Result.Ok(_)
-  ; Expected: TRUE
+  let str-box-json = { "value": "hello" }
+  let str-box-result = str-box-json read Box[String]
+  write str-box-result is Result.Ok(_)
+  ; Expected: true
 
-  WRITE str-box-result!.value
+  write str-box-result!.value
   ; Expected: hello
 
   ; Multi-param struct
-  LET pair-json = { "first": 1, "second": "one" }
-  LET pair-result = pair-json READ Pair[Int, String]
-  WRITE pair-result IS Result.Ok(_)
-  ; Expected: TRUE
+  let pair-json = { "first": 1, "second": "one" }
+  let pair-result = pair-json read Pair[Int, String]
+  write pair-result is Result.Ok(_)
+  ; Expected: true
 
-  LET pair-val = pair-result!
-  WRITE pair-val.first
+  let pair-val = pair-result!
+  write pair-val.first
   ; Expected: 1
-  WRITE pair-val.second
+  write pair-val.second
   ; Expected: one
 
   ; ============================================================
-  ; JSON READ INTO ARRAY[T]
+  ; json read INTO ARRAY[T]
   ; ============================================================
 
-  LET arr-json = [1, 2, 3] AS Json
-  LET arr-result = arr-json READ Array[Int]
-  WRITE arr-result IS Result.Ok(_)
-  ; Expected: TRUE
+  let arr-json = [1, 2, 3] as Json
+  let arr-result = arr-json read Array[Int]
+  write arr-result is Result.Ok(_)
+  ; Expected: true
 
-  LET arr-val = arr-result!
-  WRITE arr-val IS Array[_]
-  ; Expected: TRUE
-  WRITE Iterable:length(arr-val)
+  let arr-val = arr-result!
+  write arr-val is Array[_]
+  ; Expected: true
+  write Iterable:length(arr-val)
   ; Expected: 3
 
   ; Type mismatch in array element
-  LET bad-arr = [1, "two", 3] AS Json
-  LET bad-arr-result = bad-arr READ Array[Int]
-  WRITE bad-arr-result IS Result.Err(_)
-  ; Expected: TRUE
+  let bad-arr = [1, "two", 3] as Json
+  let bad-arr-result = bad-arr read Array[Int]
+  write bad-arr-result is Result.Err(_)
+  ; Expected: true
 
   ; ============================================================
-  ; JSON READ INTO OPTION[T]
+  ; json read INTO OPTION[T]
   ; ============================================================
 
   ; Non-null -> Some
-  LET opt-json = 42 AS Json
-  LET opt-result = opt-json READ Option[Int]
-  WRITE opt-result IS Result.Ok(_)
-  ; Expected: TRUE
+  let opt-json = 42 as Json
+  let opt-result = opt-json read Option[Int]
+  write opt-result is Result.Ok(_)
+  ; Expected: true
 
-  LET opt-val = opt-result!
-  WRITE opt-val IS Option.Some(_)
-  ; Expected: TRUE
-  WRITE opt-val!
+  let opt-val = opt-result!
+  write opt-val is Option.Some(_)
+  ; Expected: true
+  write opt-val!
   ; Expected: 42
 
   ; null -> None
-  LET null-json = { "value": null }
-  LET null-opt-result = null-json.value READ Option[Int]
-  WRITE null-opt-result IS Result.Ok(_)
-  ; Expected: TRUE
+  let null-json = { "value": null }
+  let null-opt-result = null-json.value read Option[Int]
+  write null-opt-result is Result.Ok(_)
+  ; Expected: true
 
-  LET null-opt-val = null-opt-result!
-  WRITE null-opt-val IS Option.None
-  ; Expected: TRUE
+  let null-opt-val = null-opt-result!
+  write null-opt-val is Option.None
+  ; Expected: true
 
   ; ============================================================
-  ; NESTED STRUCTS IN JSON READ
+  ; NESTED STRUCTS IN json read
   ; ============================================================
 
-  LET emp-json = {
+  let emp-json = {
     "name": "Dave",
     "addr": {
       "city": "NYC",
@@ -407,17 +407,17 @@ FUN main() {
     }
   }
 
-  LET emp-result = emp-json READ Employee
-  WRITE emp-result IS Result.Ok(_)
-  ; Expected: TRUE
+  let emp-result = emp-json read Employee
+  write emp-result is Result.Ok(_)
+  ; Expected: true
 
-  LET emp = emp-result!
-  WRITE emp.name
+  let emp = emp-result!
+  write emp.name
   ; Expected: Dave
-  WRITE emp.addr.city
+  write emp.addr.city
   ; Expected: NYC
-  WRITE emp.addr.zip
+  write emp.addr.zip
   ; Expected: 10001
 
-  WRITE "JSON test complete"
+  write "json test complete"
 }

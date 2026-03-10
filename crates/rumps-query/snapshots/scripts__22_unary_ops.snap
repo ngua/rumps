@@ -1,6 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: unary operators\n; Tests negation and logical NOT\n\n; === Numeric Negation ===\n\n; Negate integer\nWRITE -5\n; Expected: -5\n\nWRITE -0\n; Expected: 0\n\nWRITE -(-5)\n; Expected: 5\n\n; Negate float\nWRITE -3.14\n; Expected: -3.14\n\nWRITE -0.0\n; Expected: -0.0 (or 0.0)\n\nWRITE -(-2.5)\n; Expected: 2.5\n\n; Negate variable\nLET x = 42\nWRITE -x\n; Expected: -42\n\nLET y = -10\nWRITE -y\n; Expected: 10\n\n; Negate expression\nWRITE -(5 + 3)\n; Expected: -8\n\nWRITE -(10 - 15)\n; Expected: 5\n\n; Negate in larger expression\nWRITE 10 + -3\n; Expected: 7\n\nWRITE 10 - -5\n; Expected: 15\n\nWRITE -5 * 2\n; Expected: -10\n\nWRITE -5 * -2\n; Expected: 10\n\n; === Logical NOT ===\n\nWRITE NOT TRUE\n; Expected: FALSE\n\nWRITE NOT FALSE\n; Expected: TRUE\n\nWRITE !TRUE\n; Expected: FALSE\n\nWRITE !FALSE\n; Expected: TRUE\n\n; NOT with variable\nLET flag = TRUE\nWRITE NOT flag\n; Expected: FALSE\n\nWRITE !flag\n; Expected: FALSE\n\n; Double NOT\nWRITE NOT NOT TRUE\n; Expected: TRUE\n\nWRITE !!FALSE\n; Expected: FALSE\n\n; NOT in expression\nWRITE NOT (5 > 10)\n; Expected: TRUE\n\nWRITE !(3 == 4)\n; Expected: TRUE\n\n; NOT with AND/OR\nWRITE NOT TRUE AND FALSE\n; Expected: FALSE (NOT binds tighter: (NOT TRUE) AND FALSE = FALSE AND FALSE)\n\nWRITE NOT (TRUE AND FALSE)\n; Expected: TRUE (NOT applied to result: NOT FALSE = TRUE)\n\nWRITE NOT FALSE OR TRUE\n; Expected: TRUE ((NOT FALSE) OR TRUE = TRUE OR TRUE)\n\nWRITE \"Unary ops test complete\"\n"
+description: "; Test: unary operators\n; Tests negation and logical not\n\nfun main() {\n  ; === Numeric Negation ===\n\n  ; Negate integer\n  write -5\n  ; Expected: -5\n\n  write -0\n  ; Expected: 0\n\n  write -(-5)\n  ; Expected: 5\n\n  ; Negate float\n  write -3.14\n  ; Expected: -3.14\n\n  write -0.0\n  ; Expected: -0.0 (or 0.0)\n\n  write -(-2.5)\n  ; Expected: 2.5\n\n  ; Negate variable\n  let x = 42\n  write -x\n  ; Expected: -42\n\n  let y = -10\n  write -y\n  ; Expected: 10\n\n  ; Negate expression\n  write -(5 + 3)\n  ; Expected: -8\n\n  write -(10 - 15)\n  ; Expected: 5\n\n  ; Negate in larger expression\n  write 10 + -3\n  ; Expected: 7\n\n  write 10 - -5\n  ; Expected: 15\n\n  write -5 * 2\n  ; Expected: -10\n\n  write -5 * -2\n  ; Expected: 10\n\n  ; === Logical not ===\n\n  write not true\n  ; Expected: false\n\n  write not false\n  ; Expected: true\n\n  write !true\n  ; Expected: false\n\n  write !false\n  ; Expected: true\n\n  ; not with variable\n  let flag = true\n  write not flag\n  ; Expected: false\n\n  write !flag\n  ; Expected: false\n\n  ; Double not\n  write not not true\n  ; Expected: true\n\n  write !!false\n  ; Expected: false\n\n  ; not in expression\n  write not (5 > 10)\n  ; Expected: true\n\n  write !(3 == 4)\n  ; Expected: true\n\n  ; not with and/or\n  write not true and false\n  ; Expected: false (not binds tighter: (not true) and false = false and false)\n\n  write not (true and false)\n  ; Expected: true (not applied to result: not false = true)\n\n  write not false or true\n  ; Expected: true ((not false) or true = true or true)\n\n  write \"Unary ops test complete\"\n}\n"
 ---
 -5
 0
@@ -16,17 +16,17 @@ description: "; Test: unary operators\n; Tests negation and logical NOT\n\n; ===
 15
 -10
 10
-FALSE
-TRUE
-FALSE
-TRUE
-FALSE
-FALSE
-TRUE
-FALSE
-TRUE
-TRUE
-FALSE
-TRUE
-TRUE
+false
+true
+false
+true
+false
+false
+true
+false
+true
+true
+false
+true
+true
 "Unary ops test complete"

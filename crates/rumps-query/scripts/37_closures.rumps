@@ -1,60 +1,60 @@
 ; Test: Closures
 ; Tests closure definition, binding, and calling
 
-FUN main() {
+fun main() {
   ; === Single parameter closure ===
 
-  LET double = x => x * 2
-  WRITE double(21)
+  let double = x => x * 2
+  write double(21)
   ; Expected: 42
 
-  LET identity = x => x
-  WRITE identity(42)
+  let identity = x => x
+  write identity(42)
   ; Expected: 42
 
   ; === Multi-parameter closure ===
 
-  LET add = (a, b) => a + b
-  WRITE add(10, 32)
+  let add = (a, b) => a + b
+  write add(10, 32)
   ; Expected: 42
 
-  LET triple = (a, b, c) => a + b + c
-  WRITE triple(1, 2, 3)
+  let triple = (a, b, c) => a + b + c
+  write triple(1, 2, 3)
   ; Expected: 6
 
   ; === Nullary closure ===
 
-  LET const = () => 42
-  WRITE const()
+  let const = () => 42
+  write const()
   ; Expected: 42
 
   ; === Typed parameter closure ===
 
-  LET typed = (x: Int) => x + 1
-  WRITE typed(41)
+  let typed = (x: Int) => x + 1
+  write typed(41)
   ; Expected: 42
 
-  LET multi-typed = (x: Int, y: String) => y
-  WRITE multi-typed(1, "hello")
+  let multi-typed = (x: Int, y: String) => y
+  write multi-typed(1, "hello")
   ; Expected: "hello"
 
   ; === Closure with return type ===
 
-  LET with-ret = (x: Int) -> Int => x * x
-  WRITE with-ret(6)
+  let with-ret = (x: Int) -> Int => x * x
+  write with-ret(6)
   ; Expected: 36
 
   ; === Nested closure in expression ===
 
-  LET nested = (x => x + 1)
-  WRITE nested(41)
+  let nested = (x => x + 1)
+  write nested(41)
   ; Expected: 42
 
   ; === Closure with complex body ===
 
-  LET complex = (a, b) => { a * b + 1 }
-  WRITE complex(5, 8)
+  let complex = (a, b) => { a * b + 1 }
+  write complex(5, 8)
   ; Expected: 41
 
-  WRITE "Closure test complete"
+  write "Closure test complete"
 }

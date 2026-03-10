@@ -1,10 +1,10 @@
 ; Test: Return Type Error
 ; Function returns wrong type.
 
-FUN get-number () -> Int {
+fun get-number () -> Int {
   "not a number"
 }
 
-FUN main() {
-  WRITE get-number()
+fun main() {
+  write get-number()
 }

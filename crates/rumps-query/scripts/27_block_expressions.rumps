@@ -1,77 +1,77 @@
-; Test: Block and IF expressions in expression contexts
-; Tests that blocks and IF can appear anywhere an expression is expected
+; Test: Block and if expressions in expression contexts
+; Tests that blocks and if can appear anywhere an expression is expected
 
-FUN main() {
-  ; === Single-arm IF returns Unit ===
-  ; Single-arm IF always evaluates to Unit (for side effects only)
-  LET res = IF TRUE { WRITE "side effect" }
-  WRITE res
+fun main() {
+  ; === Single-arm if returns Unit ===
+  ; Single-arm if always evaluates to Unit (for side effects only)
+  let res = if true { write "side effect" }
+  write res
   ; Expected: Unit
 
-  ; === IF/ELSE expression in LET binding ===
-  LET a = IF TRUE { "yes" } ELSE { "no" }
-  WRITE a
+  ; === if/else expression in let binding ===
+  let a = if true { "yes" } else { "no" }
+  write a
 
-  LET b = IF FALSE { "yes" } ELSE { "no" }
-  WRITE b
+  let b = if false { "yes" } else { "no" }
+  write b
 
-  ; Nested IF/ELSE expressions
-  LET nested = IF TRUE {
-    IF FALSE { 1 } ELSE { 2 }
-  } ELSE {
+  ; Nested if/else expressions
+  let nested = if true {
+    if false { 1 } else { 2 }
+  } else {
     3
   }
-  WRITE nested
+  write nested
 
-  ; IF/ELSE in arithmetic
-  LET sum = 10 + IF TRUE { 5 } ELSE { 0 }
-  WRITE sum
+  ; if/else in arithmetic
+  let sum = 10 + if true { 5 } else { 0 }
+  write sum
 
-  ; IF/ELSE as argument
-  WRITE IF TRUE { "direct if" } ELSE { "nope" }
+  ; if/else as argument
+  write if true { "direct if" } else { "nope" }
 
   ; === Block expressions ===
 
-  ; Block expression in LET binding
-  LET blk = { 1 + 2 }
-  WRITE blk
+  ; Block expression in let binding
+  let blk = { 1 + 2 }
+  write blk
 
   ; Block with statements and tail
-  LET computed = {
-    LET tmp = 10
+  let computed = {
+    let tmp = 10
     tmp * 2
   }
-  WRITE computed
+  write computed
 
   ; Block in arithmetic
-  LET expr = { 5 } + { 3 }
-  WRITE expr
+  let expr = { 5 } + { 3 }
+  write expr
 
-  ; IF/ELSE with block that has statements
-  LET complex = IF TRUE {
-    LET inner = 100
+  ; if/else with block that has statements
+  let complex = if true {
+    let inner = 100
     inner + 1
-  } ELSE {
+  } else {
     0
   }
-  WRITE complex
+  write complex
 
-  ; Chained conditionals (all IF/ELSE)
-  LET grade = 85
-  LET letter = IF grade >= 90 { "A" } ELSE {
-    IF grade >= 80 { "B" } ELSE {
-      IF grade >= 70 { "C" } ELSE { "F" }
+  ; Chained conditionals (all if/else)
+  let grade = 85
+  let letter = if grade >= 90 { "A" } else {
+    if grade >= 80 { "B" } else {
+      if grade >= 70 { "C" } else { "F" }
     }
   }
-  WRITE letter
+  write letter
 
   ; === Blocks without tail return Unit ===
-  LET no-tail = {
-    LET tmp = 42
-    WRITE tmp
+  let no-tail = {
+    let tmp = 42
+    write tmp
   }
-  WRITE no-tail
+  write no-tail
   ; Expected: Unit
 
-  WRITE "Block expressions test complete"
+  write "Block expressions test complete"
 }

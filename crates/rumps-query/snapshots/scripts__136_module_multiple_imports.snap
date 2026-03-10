@@ -1,9 +1,9 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Multiple module file imports\n\nMODULE MyMath FROM \"../modules/lib/mymath.rumps\"\nMODULE Utils FROM \"../modules/lib/utils.rumps\"\n\n; Use functions from both modules\nWRITE MyMath.square(4)  ; 16\nWRITE Utils.is-even(4)  ; true\n\n; Combine results\nLET sq = MyMath.square(5)\nLET str = Utils.stringify(sq)\nWRITE str  ; 25\n\nWRITE Utils.version  ; 1.0\nWRITE MyMath.pi > 3.0  ; true\n"
+description: "; Multiple module file imports\n\nmodule MyMath from \"../modules/lib/mymath.rumps\"\nmodule Utils from \"../modules/lib/utils.rumps\"\n\nfun main() {\n  ; Use functions from both modules\n  write MyMath.square(4)  ; 16\n  write Utils.is-even(4)  ; true\n\n  ; Combine results\n  let sq = MyMath.square(5)\n  let str = Utils.stringify(sq)\n  write str  ; 25\n\n  write Utils.version  ; 1.0\n  write MyMath.pi > 3.0  ; true\n}\n"
 ---
 16
-TRUE
+true
 "25"
 "1.0"
-TRUE
+true

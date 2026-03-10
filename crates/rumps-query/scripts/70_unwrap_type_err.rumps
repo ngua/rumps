@@ -1,6 +1,6 @@
 ; Unwrap on non-Option/Result should error
 
-FUN main() {
-  LET plain = 42
-  WRITE plain!
+fun main() {
+  let plain = 42
+  write plain!
 }

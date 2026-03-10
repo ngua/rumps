@@ -1,51 +1,51 @@
 ; Test: arrays and objects
 ; Tests array and object literals, indexing, and field access
 
-FUN main() {
+fun main() {
   ; Array literal
-  LET arr = [1, 2, 3, 4, 5]
-  WRITE arr
+  let arr = [1, 2, 3, 4, 5]
+  write arr
   ; Expected: [1, 2, 3, 4, 5]
 
   ; Empty array
-  LET empty = []
-  WRITE empty
+  let empty = []
+  write empty
   ; Expected: []
 
   ; Array indexing
-  LET nums = [10, 20, 30]
-  WRITE nums[0]
+  let nums = [10, 20, 30]
+  write nums[0]
   ; Expected: 10
 
-  WRITE nums[1]
+  write nums[1]
   ; Expected: 20
 
-  WRITE nums[2]
+  write nums[2]
   ; Expected: 30
 
   ; Object literal
-  LET obj = { name: "Alice", age: 30 }
-  WRITE obj
+  let obj = { name: "Alice", age: 30 }
+  write obj
   ; Expected: { name: "Alice", age: 30 }
 
   ; Empty object
-  LET empty-obj = {}
-  WRITE empty-obj
+  let empty-obj = {}
+  write empty-obj
   ; Expected: {}
 
   ; Field access with dot notation
-  LET person = { name: "Bob", age: 25, active: TRUE }
-  WRITE person.name
+  let person = { name: "Bob", age: 25, active: true }
+  write person.name
   ; Expected: Bob
 
-  WRITE person.age
+  write person.age
   ; Expected: 25
 
-  WRITE person.active
+  write person.active
   ; Expected: true
 
   ; Nested objects
-  LET nested = {
+  let nested = {
     user: {
       name: "Charlie",
       address: {
@@ -54,33 +54,33 @@ FUN main() {
       }
     }
   }
-  WRITE nested.user.name
+  write nested.user.name
   ; Expected: Charlie
 
-  WRITE nested.user.address.city
+  write nested.user.address.city
   ; Expected: NYC
 
   ; Object with array value
-  LET rec = {
+  let rec = {
     items: [1, 2, 3],
     count: 3
   }
-  WRITE rec.items
+  write rec.items
   ; Expected: [1, 2, 3]
 
-  WRITE rec.items[0]
+  write rec.items[0]
   ; Expected: 1
 
   ; Array of objects
-  LET users = [
+  let users = [
     { name: "Alice", score: 100 },
     { name: "Bob", score: 85 }
   ]
-  WRITE users[0].name
+  write users[0].name
   ; Expected: Alice
 
-  WRITE users[1].score
+  write users[1].score
   ; Expected: 85
 
-  WRITE "Arrays/Objects test complete"
+  write "Arrays/Objects test complete"
 }

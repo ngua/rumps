@@ -1,14 +1,14 @@
 ; Non-exhaustive match error
 
-FUN main() {
-  LET x = 5
+fun main() {
+  let x = 5
 
   ; This should fail because no arm matches
-  LET result = MATCH x {
+  let result = match x {
     1 => { "one" }
     2 => { "two" }
     3 => { "three" }
   }
 
-  WRITE result
+  write result
 }

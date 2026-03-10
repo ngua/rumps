@@ -1,38 +1,38 @@
 ; Test: Explicit numeric conversions
-; Tests explicit `AS` conversions between numeric types
-; (implicit coercion between numeric types is NOT allowed)
+; Tests explicit `as` conversions between numeric types
+; (implicit coercion between numeric types is not allowed)
 
-FUN main() {
-  ; Int AS Float
-  LET f1 = 10 AS Float
-  WRITE f1
+fun main() {
+  ; Int as Float
+  let f1 = 10 as Float
+  write f1
 
-  ; Negative Int AS Float
-  LET f2 = (-5) AS Float
-  WRITE f2
+  ; Negative Int as Float
+  let f2 = (-5) as Float
+  write f2
 
-  ; Int AS Word (note: negative would fail at runtime; use READ for fallible)
-  LET w1 = 42 AS Word
-  WRITE w1
+  ; Int as Word (note: negative would fail at runtime; use read for fallible)
+  let w1 = 42 as Word
+  write w1
 
   ; Float literal with Float annotation (trivial)
-  LET f3: Float = 3.14
-  WRITE f3
+  let f3: Float = 3.14
+  write f3
 
   ; Int literal with Int annotation (trivial)
-  LET i: Int = 100
-  WRITE i
+  let i: Int = 100
+  write i
 
   ; Expression result converted explicitly
-  LET f4 = (10 + 5) AS Float
-  WRITE f4
+  let f4 = (10 + 5) as Float
+  write f4
 
-  ; Word AS Int (always succeeds)
-  LET w2: Word = 50
-  LET i2 = w2 AS Int
-  WRITE i2
+  ; Word as Int (always succeeds)
+  let w2: Word = 50
+  let i2 = w2 as Int
+  write i2
 
-  ; Word AS Float (always succeeds)
-  LET f5 = w2 AS Float
-  WRITE f5
+  ; Word as Float (always succeeds)
+  let f5 = w2 as Float
+  write f5
 }

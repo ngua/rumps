@@ -1,5 +1,5 @@
 ; Type arity error: `Option` requires 1 type argument
-FUN main() {
-  LET x = Option.Some(1)
-  WRITE x IS Option
+fun main() {
+  let x = Option.Some(1)
+  write x is Option
 }

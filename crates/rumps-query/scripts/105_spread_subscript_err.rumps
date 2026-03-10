@@ -1,12 +1,12 @@
 ; Test: Spread subscript type errors
 ; Spreading non-Array[Subscript] should produce type errors
 
-FUN main() {
+fun main() {
   ; Error: spreading a non-array
-  LET num = 42
-  LET v1 = @GET data{...num}
+  let num = 42
+  let v1 = @get data{...num}
 
   ; Error: spreading an array of wrong element type
-  LET units: Array[Unit] = [Unit, Unit]
-  LET v2 = @GET data{...units}
+  let units: Array[Unit] = [Unit, Unit]
+  let v2 = @get data{...units}
 }

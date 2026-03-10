@@ -1,75 +1,65 @@
-; Test: Extended WRITE statement
-; Tests WRITE with JSON format and TO ERROR/FILE targets
+; Test: Extended write statement
+; Tests write with json format and to error/file targets
 
-FUN main() {
-  ; === Basic WRITE (unchanged behavior) ===
-  WRITE "Hello, World!"
+fun main() {
+  ; === Basic write (unchanged behavior) ===
+  write "Hello, World!"
   ; Expected: Hello, World!
 
-  LET my-x = 42
-  WRITE my-x
+  let my-x = 42
+  write my-x
   ; Expected: 42
 
-  LET my-obj = { name: "Alice", age: 30 }
-  WRITE my-obj
+  let my-obj = { name: "Alice", age: 30 }
+  write my-obj
   ; Expected: { name: Alice, age: 30 }
 
-  ; === WRITE JSON (format modifier) ===
-  WRITE "Test JSON format" JSON
-  ; Expected: "Test JSON format"
+  ; === write json (format modifier) ===
+  write "Test json format" json
+  ; Expected: "Test json format"
 
-  WRITE 42 JSON
+  write 42 json
   ; Expected: 42
 
-  WRITE TRUE JSON
+  write true json
   ; Expected: true
 
-  LET my-arr = [1, 2, 3]
-  WRITE my-arr JSON
+  let my-arr = [1, 2, 3]
+  write my-arr json
   ; Expected: [1, 2, 3] (or pretty-printed)
 
-  LET my-data = { name: "Bob", scores: [90, 85, 95] }
-  WRITE my-data JSON
-  ; Expected: pretty-printed JSON object
+  let my-data = { name: "Bob", scores: [90, 85, 95] }
+  write my-data json
+  ; Expected: pretty-printed json object
 
-  ; === WRITE TO ERROR (target modifier) ===
-  WRITE "This goes to stderr" TO ERROR
+  ; === write to error (target modifier) ===
+  write "This goes to stderr" to error
   ; Expected: (on stderr) This goes to stderr
 
-  WRITE 123 TO ERROR
+  write 123 to error
   ; Expected: (on stderr) 123
 
-  ; === WRITE JSON TO ERROR (format + target) ===
-  WRITE { status: "error", code: 500 } JSON TO ERROR
-  ; Expected: (on stderr) pretty-printed JSON
+  ; === write json to error (format + target) ===
+  write { status: "error", code: 500 } json to error
+  ; Expected: (on stderr) pretty-printed json
 
   ; === Contextual identifiers as variable names ===
   ; These must work as regular identifiers
-  LET json = "my json var"
-  WRITE json
+  let json = "my json var"
+  write json
   ; Expected: my json var
 
-  LET to = 10
-  WRITE to
+  let to = 10
+  write to
   ; Expected: 10
 
-  LET error = "an error message"
-  WRITE error
+  let error = "an error message"
+  write error
   ; Expected: an error message
 
-  LET file = "/path/to/file"
-  WRITE file
+  let file = "/path/to/file"
+  write file
   ; Expected: /path/to/file
 
-  ; === Verify case-insensitivity of modifiers ===
-  WRITE "lowercase json" json
-  ; Expected: "lowercase json"
-
-  WRITE "mixed case" Json
-  ; Expected: "mixed case"
-
-  WRITE "uppercase error" TO error
-  ; Expected: (on stderr) uppercase error
-
-  WRITE "Complete!"
+  write "Complete!"
 }

@@ -1,18 +1,18 @@
 ; Multiple module file imports
 
-MODULE MyMath FROM "../modules/lib/mymath.rumps"
-MODULE Utils FROM "../modules/lib/utils.rumps"
+module MyMath from "../modules/lib/mymath.rumps"
+module Utils from "../modules/lib/utils.rumps"
 
-FUN main() {
+fun main() {
   ; Use functions from both modules
-  WRITE MyMath.square(4)  ; 16
-  WRITE Utils.is-even(4)  ; true
+  write MyMath.square(4)  ; 16
+  write Utils.is-even(4)  ; true
 
   ; Combine results
-  LET sq = MyMath.square(5)
-  LET str = Utils.stringify(sq)
-  WRITE str  ; 25
+  let sq = MyMath.square(5)
+  let str = Utils.stringify(sq)
+  write str  ; 25
 
-  WRITE Utils.version  ; 1.0
-  WRITE MyMath.pi > 3.0  ; true
+  write Utils.version  ; 1.0
+  write MyMath.pi > 3.0  ; true
 }

@@ -1,103 +1,103 @@
 ; Test: equality for complex types
 ; Tests structural equality for arrays, objects, and tagged values
 
-FUN main() {
+fun main() {
   ; === Array Equality ===
 
-  LET a1 = [1, 2, 3]
-  LET a2 = [1, 2, 3]
-  LET a3 = [1, 2, 4]
-  LET a4 = [1, 2]
+  let a1 = [1, 2, 3]
+  let a2 = [1, 2, 3]
+  let a3 = [1, 2, 4]
+  let a4 = [1, 2]
 
-  WRITE a1 == a2
+  write a1 == a2
   ; Expected: true (same elements)
 
-  WRITE a1 == a3
+  write a1 == a3
   ; Expected: false (different last element)
 
-  WRITE a1 == a4
+  write a1 == a4
   ; Expected: false (different length)
 
-  WRITE a1 != a3
+  write a1 != a3
   ; Expected: true
 
   ; Empty arrays
-  LET empty1 = []
-  LET empty2 = []
-  WRITE empty1 == empty2
+  let empty1 = []
+  let empty2 = []
+  write empty1 == empty2
   ; Expected: true
 
   ; Nested arrays
-  LET nested1 = [[1, 2], [3, 4]]
-  LET nested2 = [[1, 2], [3, 4]]
-  LET nested3 = [[1, 2], [3, 5]]
+  let nested1 = [[1, 2], [3, 4]]
+  let nested2 = [[1, 2], [3, 4]]
+  let nested3 = [[1, 2], [3, 5]]
 
-  WRITE nested1 == nested2
+  write nested1 == nested2
   ; Expected: true
 
-  WRITE nested1 == nested3
+  write nested1 == nested3
   ; Expected: false
 
   ; === Object Equality ===
 
-  LET o1 = { a: 1, b: 2 }
-  LET o2 = { a: 1, b: 2 }
-  LET o3 = { a: 1, b: 3 }
-  LET o4 = { a: 1 }
+  let o1 = { a: 1, b: 2 }
+  let o2 = { a: 1, b: 2 }
+  let o3 = { a: 1, b: 3 }
+  let o4 = { a: 1 }
 
-  WRITE o1 == o2
+  write o1 == o2
   ; Expected: true (same keys and values)
 
-  WRITE o1 == o3
+  write o1 == o3
   ; Expected: false (different value)
 
-  WRITE o1 == o4
+  write o1 == o4
   ; Expected: false (different keys)
 
-  WRITE o1 != o3
+  write o1 != o3
   ; Expected: true
 
   ; Empty objects
-  LET empty-obj-a = {}
-  LET empty-obj-b = {}
-  WRITE empty-obj-a == empty-obj-b
+  let empty-obj-a = {}
+  let empty-obj-b = {}
+  write empty-obj-a == empty-obj-b
   ; Expected: true
 
   ; Nested objects
-  LET no1 = { outer: { inner: 42 } }
-  LET no2 = { outer: { inner: 42 } }
-  LET no3 = { outer: { inner: 99 } }
+  let no1 = { outer: { inner: 42 } }
+  let no2 = { outer: { inner: 42 } }
+  let no3 = { outer: { inner: 99 } }
 
-  WRITE no1 == no2
+  write no1 == no2
   ; Expected: true
 
-  WRITE no1 == no3
+  write no1 == no3
   ; Expected: false
 
   ; Objects with arrays
-  LET oa1 = { items: [1, 2, 3] }
-  LET oa2 = { items: [1, 2, 3] }
-  LET oa3 = { items: [1, 2, 4] }
+  let oa1 = { items: [1, 2, 3] }
+  let oa2 = { items: [1, 2, 3] }
+  let oa3 = { items: [1, 2, 4] }
 
-  WRITE oa1 == oa2
+  write oa1 == oa2
   ; Expected: true
 
-  WRITE oa1 == oa3
+  write oa1 == oa3
   ; Expected: false
 
   ; === Same-type Equality ===
 
-  WRITE 5 == 5
+  write 5 == 5
   ; Expected: true (same type comparison)
 
-  WRITE 5.0 == 5.0
+  write 5.0 == 5.0
   ; Expected: true (same type comparison)
 
-  WRITE [1, 2, 3] == [1, 2, 3]
+  write [1, 2, 3] == [1, 2, 3]
   ; Expected: true
 
-  WRITE { x: 5 } == { x: 5 }
+  write { x: 5 } == { x: 5 }
   ; Expected: true
 
-  WRITE "Equality test complete"
+  write "Equality test complete"
 }

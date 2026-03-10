@@ -1,80 +1,80 @@
 ; Prefix `?` operator (wrap) for Option and Result types
 
-FUN main() {
+fun main() {
   ; Basic Option wrapping (default when unconstrained)
-  LET opt1 = ?42
-  LET opt2 = ?"hello"
-  LET opt3 = ?true
-  WRITE "opt1 = {opt1}"
-  WRITE "opt2 = {opt2}"
-  WRITE "opt3 = {opt3}"
+  let opt1 = ?42
+  let opt2 = ?"hello"
+  let opt3 = ?true
+  write "opt1 = {opt1}"
+  write "opt2 = {opt2}"
+  write "opt3 = {opt3}"
 
   ; Explicit Option annotation
-  LET opt4: Option[Int] = ?100
-  LET opt5: Option[String] = ?"world"
-  WRITE "opt4 = {opt4}"
-  WRITE "opt5 = {opt5}"
+  let opt4: Option[Int] = ?100
+  let opt5: Option[String] = ?"world"
+  write "opt4 = {opt4}"
+  write "opt5 = {opt5}"
 
-  WRITE "needs-result(?42) = {needs-result(?42)}"
-  WRITE "needs-result(?0) = {needs-result(?0)}"
+  write "needs-result(?42) = {needs-result(?42)}"
+  write "needs-result(?0) = {needs-result(?0)}"
 
   ; Explicit Result annotation
-  LET res1: Result[Int, String] = ?123
-  LET res2: Result[Bool, Int] = ?true
-  WRITE "res1 = {res1}"
-  WRITE "res2 = {res2}"
+  let res1: Result[Int, String] = ?123
+  let res2: Result[Bool, Int] = ?true
+  write "res1 = {res1}"
+  write "res2 = {res2}"
 
-  WRITE "make-opt(5) = {make-opt(5)}"
-  WRITE "make-result(10) = {make-result(10)}"
+  write "make-opt(5) = {make-opt(5)}"
+  write "make-result(10) = {make-result(10)}"
 
   ; Wrap with expressions
-  LET opt-expr = ?(1 + 2 * 3)
-  WRITE "opt-expr = {opt-expr}"
+  let opt-expr = ?(1 + 2 * 3)
+  write "opt-expr = {opt-expr}"
 
   ; Chained with coalesce
-  LET val = ?42 ?? 0
-  WRITE "?42 ?? 0 = {val}"
+  let val = ?42 ?? 0
+  write "?42 ?? 0 = {val}"
 
   ; Wrap in array context
-  LET opts: Array[Option[Int]] = [?1, ?2, ?3]
-  WRITE "opts = {opts}"
+  let opts: Array[Option[Int]] = [?1, ?2, ?3]
+  write "opts = {opts}"
 
   ; Nested wrap
-  LET nested: Option[Option[Int]] = ?(?5)
-  WRITE "nested = {nested}"
+  let nested: Option[Option[Int]] = ?(?5)
+  write "nested = {nested}"
 
   ; Wrap None/Err values explicitly
-  LET none-in-some: Option[Option[Int]] = ?Option.None
-  WRITE "none-in-some = {none-in-some}"
+  let none-in-some: Option[Option[Int]] = ?Option.None
+  write "none-in-some = {none-in-some}"
 
-  WRITE "err-string(?1) = {err-string(?1)}"
-  WRITE "err-int(?2) = {err-int(?2)}"
+  write "err-string(?1) = {err-string(?1)}"
+  write "err-int(?2) = {err-int(?2)}"
 
   ; Inline annotation (no parens required)
-  LET inline-opt = ?42 : Option[Int]
-  LET inline-res = ?42 : Result[Int, String]
-  WRITE "inline-opt = {inline-opt}"
-  WRITE "inline-res = {inline-res}"
+  let inline-opt = ?42 : Option[Int]
+  let inline-res = ?42 : Result[Int, String]
+  write "inline-opt = {inline-opt}"
+  write "inline-res = {inline-res}"
 
   ; Negation with annotation
-  LET neg-anno = -5 : Int
-  WRITE "neg-anno = {neg-anno}"
+  let neg-anno = -5 : Int
+  write "neg-anno = {neg-anno}"
 }
 
 ; Result wrapping when context expects Result
-FUN needs-result(x: Result[Int, String]) -> Int {
+fun needs-result(x: Result[Int, String]) -> Int {
   x ?? -1
 }
 
 ; Wrap in function return position
-FUN make-opt(x: Int) -> Option[Int] {
+fun make-opt(x: Int) -> Option[Int] {
   ?x
 }
 
-FUN make-result(x: Int) -> Result[Int, String] {
+fun make-result(x: Int) -> Result[Int, String] {
   ?x
 }
 
 ; Result with different error types
-FUN err-string(x: Result[Int, String]) -> Result[Int, String] { x }
-FUN err-int(x: Result[Int, Int]) -> Result[Int, Int] { x }
+fun err-string(x: Result[Int, String]) -> Result[Int, String] { x }
+fun err-int(x: Result[Int, Int]) -> Result[Int, Int] { x }

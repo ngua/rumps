@@ -1,78 +1,78 @@
 ; Test Fallible constraint for Option/Result polymorphism
 
-FUN main() {
+fun main() {
   ; ============================================================================
   ; Basic Fallible constraint with inner type
   ; ============================================================================
 
   ; Works with Option
-  LET opt = Option.Some(42)
-  WRITE unwrap(opt)
+  let opt = Option.Some(42)
+  write unwrap(opt)
 
   ; Works with Result
-  LET res = Result.Ok("hello")
-  WRITE unwrap(res)
+  let res = Result.Ok("hello")
+  write unwrap(res)
 
   ; ============================================================================
   ; Fallible with coalesce
   ; ============================================================================
 
-  WRITE or-else(Option.Some(10), 0)
-  WRITE or-else(Option.None, 99)
-  WRITE or-else(Result.Ok(5), 0)
-  WRITE or-else(Result.Err("oops"), -1)
+  write or-else(Option.Some(10), 0)
+  write or-else(Option.None, 99)
+  write or-else(Result.Ok(5), 0)
+  write or-else(Result.Err("oops"), -1)
 
   ; ============================================================================
   ; Closure with Fallible constraint
   ; ============================================================================
 
-  LET safe-get = [T, F: Fallible](x: F[T], default: T) -> T => x ?? default
+  let safe-get = [T, F: Fallible](x: F[T], default: T) -> T => x ?? default
 
-  WRITE safe-get(Option.Some(100), 0)
-  WRITE safe-get(Option.None, 42)
+  write safe-get(Option.Some(100), 0)
+  write safe-get(Option.None, 42)
 
   ; ============================================================================
   ; Combining Fallible with other constraints
   ; ============================================================================
 
-  WRITE unwrap-numeric(Option.Some(123))
-  WRITE unwrap-numeric(Option.None: Option[Int])
-  WRITE unwrap-numeric(Result.Ok(4.5))
+  write unwrap-numeric(Option.Some(123))
+  write unwrap-numeric(Option.None: Option[Int])
+  write unwrap-numeric(Result.Ok(4.5))
 
   ; ============================================================================
   ; Union types with Fallible constraint
   ; ============================================================================
 
-  WRITE fallible-unwrap(Option.Some(42))
-  WRITE fallible-unwrap(Result.Ok(99))
+  write fallible-unwrap(Option.Some(42))
+  write fallible-unwrap(Result.Ok(99))
 
-  WRITE fallible-or-default(Option.Some(10), 0)
-  WRITE fallible-or-default(Option.None, 77)
-  WRITE fallible-or-default(Result.Ok(5), 0)
-  WRITE fallible-or-default(Result.Err("oops"), -1)
+  write fallible-or-default(Option.Some(10), 0)
+  write fallible-or-default(Option.None, 77)
+  write fallible-or-default(Result.Ok(5), 0)
+  write fallible-or-default(Result.Err("oops"), -1)
 }
 
 ; Generic unwrap function that works on any Option[T] or Result[T, E]
-FUN unwrap[T, F: Fallible](x: F[T]) -> T {
+fun unwrap[T, F: Fallible](x: F[T]) -> T {
   x!
 }
 
 ; Generic or-else function
-FUN or-else[T, F: Fallible](x: F[T], default: T) -> T {
+fun or-else[T, F: Fallible](x: F[T], default: T) -> T {
   x ?? default
 }
 
 ; Fallible + Numeric inner type
-FUN unwrap-numeric[T: Numeric, F: Fallible](x: F[T]) -> T {
+fun unwrap-numeric[T: Numeric, F: Fallible](x: F[T]) -> T {
   x ?? 0
 }
 
 ; Union of fallible types should satisfy Fallible constraint
-FUN fallible-unwrap(x: Option[Int] | Result[Int, String]) -> Int {
+fun fallible-unwrap(x: Option[Int] | Result[Int, String]) -> Int {
   x!
 }
 
 ; Union with coalesce
-FUN fallible-or-default(x: Option[Int] | Result[Int, String], default: Int) -> Int {
+fun fallible-or-default(x: Option[Int] | Result[Int, String], default: Int) -> Int {
   x ?? default
 }
