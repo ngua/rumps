@@ -114,7 +114,7 @@ pub(crate) enum SubscriptElem {
 /// A reference to a B-tree variable (local or global) with subscripts.
 ///
 /// This is NOT an expression; it can only appear in database operations like
-/// `GET`, `SET`, `KILL`, `DATA`, and `ORDER`.
+/// `get`, `set`, `kill`, `data`, and `order`.
 #[derive(Clone, Debug)]
 pub(crate) enum DbRef {
     /// Local B-tree variable: `data{1}`, `data{...keys}`, `data{}`.
@@ -164,11 +164,11 @@ pub(crate) enum ExprKind {
     /// A lexical variable reference.
     Var(String),
 
-    /// Database intrinsic: `@GET`, `@SET`, `@KILL`, `@DATA`, `@ORDER`, `@QUERY`.
+    /// Database intrinsic: `@get`, `@set`, `@kill`, `@data`, `@order`, `@query`.
     ///
     /// - `Intrinsic`: which operation
     /// - `Box<Expr>`: the reference target
-    /// - `Option<Box<Expr>>`: value argument (only for `@SET`)
+    /// - `Option<Box<Expr>>`: value argument (only for `@set`)
     Intrinsic(Intrinsic, Box<Expr>, Option<Box<Expr>>),
 
     /// A binary operation.
@@ -238,7 +238,7 @@ pub(crate) enum ExprKind {
         body: Box<Expr>,
     },
 
-    /// Match expression: `MATCH expr { pattern => body, ... }`.
+    /// Match expression: `match expr { pattern => body, ... }`.
     Match(Box<Expr>, Vec<MatchArm>),
 
     /// Unwrap: `expr!`
@@ -295,10 +295,10 @@ pub(crate) enum ExprKind {
     /// Handler must be a closure `(Error) -> T` where `T` matches expr's type.
     Catch(Box<Expr>, Box<Expr>),
 
-    /// Write expression: `WRITE expr [JSON] [TO target]`.
+    /// Write expression: `write expr [JSON] [TO target]`.
     ///
     /// Executes the write side effect and evaluates to `Unit`.
-    /// This allows `WRITE` in expression contexts.
+    /// This allows `write` in expression contexts.
     Write(Box<WriteStmt>),
 
     /// Raise a runtime error: `RAISE expr`.
@@ -315,7 +315,7 @@ pub(crate) enum ExprKind {
         body: Box<Expr>,
     },
 
-    /// Transaction block expression: `TRANSACTION { ... }`.
+    /// Transaction block expression: `transaction { ... }`.
     Transaction(Box<TransactionExpr>),
 
     /// Monoid identity (`mempty`): `_` in expression context.
@@ -326,7 +326,7 @@ pub(crate) enum ExprKind {
     /// A database reference literal: `data{1, 2}` or `^global{key}`.
     ///
     /// Creates a first-class `Ref` value that can be stored or passed to
-    /// functions. Use with intrinsics: `@GET r`, `@SET r value`.
+    /// functions. Use with intrinsics: `@get r`, `@set r value`.
     RefLit(DbRef),
 
     /// Placeholder for pipe operator: `.` in call arguments.
@@ -347,7 +347,7 @@ pub(crate) enum ExprKind {
     /// Class method reference: `Class:method` or `Class[T, ...]:method`.
     ///
     /// A first-class function value. Can be assigned to variables and called
-    /// later. Example: `LET f = Filterable:filter`.
+    /// later. Example: `let f = Filterable:filter`.
     ///
     /// The optional type arguments (`Vec<TypeExpr>`) are required for convert
     /// methods (`Fallible:wrap`, `Into:into`, `TryInto:try-into`) when used as
@@ -390,7 +390,7 @@ pub(crate) enum RestPattern {
 /// Visibility modifier for module members.
 ///
 /// Inside a module, items are private by default. Use `+` prefix to make
-/// them public (e.g., `+LET`, `+FUN`, `+TYPE`).
+/// them public (e.g., `+let`, `+fun`, `+type`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Visibility {
     /// Private; only accessible within the module (default).
@@ -400,7 +400,7 @@ pub(crate) enum Visibility {
     Public,
 }
 
-/// A binding pattern for destructuring in `LET` statements (CST form).
+/// A binding pattern for destructuring in `let` statements (CST form).
 #[derive(Clone, Debug)]
 pub(crate) enum BindingPattern {
     /// Simple variable binding: `x`
@@ -431,8 +431,8 @@ pub(crate) struct InstanceMethodDef {
 
 /// An associated type definition in a class instance (CST form).
 ///
-/// Represents `NEWTYPE Index = Int` or `NEWTYPE Index: Ord = Int` inside a
-/// `CLASS ... FOR ...` block.
+/// Represents `newtype Index = Int` or `newtype Index: Ord = Int` inside a
+/// `class ... FOR ...` block.
 #[derive(Clone, Debug)]
 pub(crate) struct AssocTypeCst {
     /// Associated type name (e.g., `"Index"`).
@@ -450,7 +450,7 @@ pub(crate) struct AssocTypeCst {
 pub(crate) enum StmtKind {
     /// Lexical binding with destructuring.
     ///
-    /// The visibility is only meaningful inside modules (`+LET` for public).
+    /// The visibility is only meaningful inside modules (`+let` for public).
     Let(BindingPattern, Option<TypeExpr>, Expr, Visibility),
 
     /// Write a value with optional format and target.
@@ -461,7 +461,7 @@ pub(crate) enum StmtKind {
 
     /// Named function definition.
     ///
-    /// The visibility is only meaningful inside modules (`+FUN` for public).
+    /// The visibility is only meaningful inside modules (`+fun` for public).
     Fun {
         name: String,
         type_params: Vec<TypeParam>,
@@ -471,9 +471,9 @@ pub(crate) enum StmtKind {
         vis: Visibility,
     },
 
-    /// User-defined sum type declaration: `TYPE Name = Variant1 | Variant2(T)`.
+    /// User-defined sum type declaration: `type Name = Variant1 | Variant2(T)`.
     ///
-    /// The visibility is only meaningful inside modules (`+TYPE` for public).
+    /// The visibility is only meaningful inside modules (`+type` for public).
     Type {
         name: String,
         type_params: Vec<TypeParam>,
@@ -481,9 +481,9 @@ pub(crate) enum StmtKind {
         vis: Visibility,
     },
 
-    /// Transparent type alias: `NEWTYPE Name = Type` or `NEWTYPE Name[T] = Type`.
+    /// Transparent type alias: `newtype Name = Type` or `newtype Name[T] = Type`.
     ///
-    /// The visibility is only meaningful inside modules (`+NEWTYPE` for public).
+    /// The visibility is only meaningful inside modules (`+newtype` for public).
     NewType {
         name: String,
         type_params: Vec<TypeParam>,
@@ -491,12 +491,12 @@ pub(crate) enum StmtKind {
         vis: Visibility,
     },
 
-    /// Union type declaration: `UNION Name = Type1 | Type2 | ...`.
+    /// Union type declaration: `union Name = Type1 | Type2 | ...`.
     ///
     /// Anonymous unions for function parameters etc. use inline syntax
     /// (`x: Int | String`). Named unions are registered in the type registry.
     ///
-    /// The visibility is only meaningful inside modules (`+UNION` for public).
+    /// The visibility is only meaningful inside modules (`+union` for public).
     Union {
         name: String,
         type_params: Vec<TypeParam>,
@@ -508,16 +508,16 @@ pub(crate) enum StmtKind {
     ///
     /// Modules group related functions, constants, and nested modules.
     /// Contents can include:
-    /// - `FUN` definitions (registered as module functions)
-    /// - `LET` bindings (registered as module constants)
-    /// - Nested `MODULE` definitions (registered as submodules)
+    /// - `fun` definitions (registered as module functions)
+    /// - `let` bindings (registered as module constants)
+    /// - Nested `module` definitions (registered as submodules)
     ///
     /// The body contains `Stmt`s; only `Fun`, `Let`, and `Module` are valid.
     /// This is enforced during typechecking.
     ///
     /// Two forms are supported:
-    /// - Inline: `MODULE Name { ... }`
-    /// - File import: `MODULE Name FROM "path/to/module.rumps"`
+    /// - Inline: `module Name { ... }`
+    /// - File import: `module Name FROM "path/to/module.rumps"`
     Module { name: String, source: ModuleSource },
 
     /// Import members from a module.
@@ -525,15 +525,15 @@ pub(crate) enum StmtKind {
     /// Syntax: `IMPORT Module.{ member, ... }` or `IMPORT Module.{ ... }`.
     Import(ImportStmt),
 
-    /// User-defined class instance: `CLASS ClassName FOR Type { methods }`.
+    /// User-defined class instance: `class ClassName FOR Type { methods }`.
     ///
     /// Implements a builtin class (`Display`, `Into`, `Ord`, etc.) for a user
-    /// type (`TYPE`, `NEWTYPE`, or `UNION`).
+    /// type (`type`, `newtype`, or `union`).
     ///
     /// Examples:
-    /// - `CLASS Display FOR Point { FUN display(p: Point) -> String { ... } }`
-    /// - `CLASS Into[String] FOR UserId { FUN into(id: UserId) -> String { ... } }`
-    /// - `CLASS Display FOR Pair[A, B] WHERE A: Display, B: Display { ... }`
+    /// - `class Display FOR Point { fun display(p: Point) -> String { ... } }`
+    /// - `class Into[String] FOR UserId { fun into(id: UserId) -> String { ... } }`
+    /// - `class Display FOR Pair[A, B] WHERE A: Display, B: Display { ... }`
     ClassInstance {
         /// Class name (e.g., `"Display"`, `"Into"`, `"Ord"`).
         class_name: String,
@@ -547,7 +547,7 @@ pub(crate) enum StmtKind {
         ///
         /// Each entry is `(type_param_name, constraints)`.
         constraints: Vec<(String, Vec<BuiltinClass<TypeExpr>>)>,
-        /// Associated type definitions (e.g., `NEWTYPE Index = Int`).
+        /// Associated type definitions (e.g., `newtype Index = Int`).
         assoc_types: Vec<AssocTypeCst>,
         /// Method implementations.
         methods: Vec<InstanceMethodDef>,
@@ -557,9 +557,9 @@ pub(crate) enum StmtKind {
 /// Source of a module's contents.
 #[derive(Clone, Debug)]
 pub(crate) enum ModuleSource {
-    /// Inline module body: `MODULE Name { ... }`.
+    /// Inline module body: `module Name { ... }`.
     Inline(Vec<Stmt>),
-    /// File import: `MODULE Name FROM "path/to/module.rumps"`.
+    /// File import: `module Name FROM "path/to/module.rumps"`.
     ///
     /// The path is relative to the importing script's directory, or absolute.
     File(String),
@@ -645,7 +645,7 @@ pub(crate) struct VariantCst {
 
 /// A type definition body (CST form).
 ///
-/// Note: Only sum types remain; struct aliases now use `NEWTYPE`.
+/// Note: Only sum types remain; struct aliases now use `newtype`.
 #[derive(Clone, Debug)]
 pub(crate) enum TypeDefCst {
     /// Sum type: `Variant1 | Variant2(T) | ...`

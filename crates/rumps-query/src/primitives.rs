@@ -3,7 +3,7 @@
 //! Primitives are callable built-in functions registered in the environment.
 //! They are implemented as associated functions on module types ([`Array`],
 //! [`Str`], etc.), returning a future that resolves to a `ValueId`. Unlike
-//! keywords (GET, SET, KILL), primitives use standard function call syntax
+//! keywords (`@get`, `@set`, `@kill`), primitives use standard function call syntax
 //! and are case-sensitive.
 //!
 //! # Module Organization

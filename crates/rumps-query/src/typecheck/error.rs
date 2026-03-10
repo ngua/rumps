@@ -295,7 +295,7 @@ pub(crate) enum TypeError {
     #[error("type `{0}` is not a tuple")]
     NotATuple(TyId, Span),
 
-    /// Array pattern in LET binding (only allowed in MATCH).
+    /// Array pattern in let binding (only allowed in match).
     #[error("array destructuring is only allowed in MATCH expressions")]
     ArrayPatternInLet(Span),
 
@@ -333,7 +333,7 @@ pub(crate) enum TypeError {
 
     /// Variant pattern incompatible with scrutinee type.
     ///
-    /// Example: `IF x IS Option.Some(v)` where `x: F` and `F: Fallible[T]`.
+    /// Example: `if x IS Option.Some(v)` where `x: F` and `F: Fallible[T]`.
     /// Type variables cannot be refined by variant patterns since the concrete
     /// type is unknown at compile time.
     #[error(
@@ -348,14 +348,14 @@ pub(crate) enum TypeError {
     /// Invalid type cast.
     ///
     /// The source type cannot be cast to the target type. Suggests alternatives
-    /// like `READ` for fallible conversion or `MATCH`/`IS` for narrowing.
+    /// like `read` for fallible conversion or `match`/`IS` for narrowing.
     #[error("cannot cast `{from}` to `{to}`; use `READ` for fallible conversion or `MATCH`/`IS` for narrowing")]
     InvalidCast { from: TyId, to: TyId, span: Span },
 
-    /// Invalid `READ` conversion.
+    /// Invalid `read` conversion.
     ///
-    /// The source type cannot be fallibly converted to the target type via `READ`.
-    /// Function types, regex, and refs cannot be source or target of `READ`.
+    /// The source type cannot be fallibly converted to the target type via `read`.
+    /// Function types, regex, and refs cannot be source or target of `read`.
     #[error("cannot `READ` `{from}` as `{to}`")]
     InvalidRead { from: TyId, to: TyId, span: Span },
 
@@ -422,7 +422,7 @@ pub(crate) enum TypeError {
 
     /// Attempt to implement a class for a builtin type.
     ///
-    /// Users can only implement classes for their own types (TYPE, NEWTYPE, UNION).
+    /// Users can only implement classes for their own types (TYPE, newtype, union).
     #[error("cannot implement `{class}` for builtin type `{type_id:?}`")]
     BuiltinInstanceForbidden {
         class: BuiltinClassTag,
@@ -455,7 +455,7 @@ pub(crate) enum TypeError {
 
     /// Missing required associated type in instance definition.
     ///
-    /// Classes like `Indexable` require associated type definitions (e.g., `NEWTYPE Index = Int`).
+    /// Classes like `Indexable` require associated type definitions (e.g., `newtype Index = Int`).
     #[error("missing required associated type for class `{class}`")]
     MissingAssocType {
         class: BuiltinClassTag,
@@ -499,7 +499,7 @@ pub(crate) enum TypeError {
     /// Bare associated type reference outside class context.
     ///
     /// Unqualified associated types like `:Index` can only be used inside
-    /// `CLASS ... FOR ...` instance definitions where the class context is known.
+    /// `class ... FOR ...` instance definitions where the class context is known.
     #[error(
         "associated type `:{name}` can only be used inside a class instance"
     )]
@@ -538,7 +538,7 @@ pub(crate) enum TypeError {
     /// Top-level expression statement outside of `main`.
     ///
     /// Scripts must define a `main` function as the entry point. Expression
-    /// statements (including `WRITE`, function calls, etc.) must appear inside
+    /// statements (including `write`, function calls, etc.) must appear inside
     /// `main` or other functions, not at the top level.
     #[error("top-level expression statements are not allowed; move code into `main`")]
     TopLevelExpr(Span),

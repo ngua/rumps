@@ -188,7 +188,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Call a function by name (for `Var` callees).
     ///
     /// Resolution order:
-    /// 1. Named functions (from FUN definitions)
+    /// 1. Named functions (from fun definitions)
     /// 2. Lexical scope (may be a bound closure)
     ///
     /// Note: Built-in module functions (e.g., `Object.keys`) are resolved at
@@ -437,14 +437,14 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// first; falls back to auto-derivation for Union/Newtype, then builtin dispatch.
     ///
     /// User instance lookup:
-    /// 1. Check `instance_calls` map (for NEWTYPE/UNION where type isn't in value)
+    /// 1. Check `instance_calls` map (for newtype/union where type isn't in value)
     /// 2. Check first arg if `Value::Tagged`, `Value::Union`, or `Value::Newtype`
     /// 3. Look up user instance by (class, type_id)
     /// 4. If found, dispatch to generated function; else auto-derive for Union/Newtype
     ///
     /// The `expr_id` parameter is used by nullary methods (like `Monoid:identity`)
     /// to look up the inferred type from `mempty_types`, and for user instance
-    /// dispatch with NEWTYPE/UNION types.
+    /// dispatch with newtype/union types.
     #[async_recursion]
     pub(super) async fn dispatch_class_method(
         &mut self,

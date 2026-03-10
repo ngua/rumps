@@ -1,4 +1,4 @@
-//! Database primitives: GET, SET, KILL, DATA, and key construction.
+//! Database primitives: `@get`, `@set`, `@kill`, `@data`, and key construction.
 
 use async_recursion::async_recursion;
 use rumps_types::{DataStatus, Key, Name, Subscript};
@@ -33,7 +33,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         Ok(Value::Ref(is_global, name_id, sub_ids))
     }
 
-    /// Dispatcher for all DB intrinsics (`@GET`, `@SET`, `@KILL`, `@DATA`, `@ORDER`, `@QUERY`).
+    /// Dispatcher for all DB intrinsics (`@get`, `@set`, `@kill`, `@data`, `@order`, `@query`).
     #[async_recursion]
     pub(super) async fn intrinsic(
         &mut self,
@@ -46,7 +46,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         match op {
             Intrinsic::Get => self.get(rt, txn_id, span).await,
             Intrinsic::Set => {
-                let v = val.unwrap_or_else(|| invariant!("SET has value"));
+                let v = val.unwrap_or_else(|| invariant!("@set has value"));
                 self.set(rt, v, txn_id, span).await
             }
             Intrinsic::Kill => self.kill(rt, txn_id, span).await,
@@ -152,7 +152,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// `@GET` primitive; reads a value from a B-tree variable.
+    /// `@get` primitive; reads a value from a B-tree variable.
     ///
     /// Uses the specified transaction if `txn_id` is `Some`, otherwise reads
     /// directly from the database.
@@ -180,7 +180,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         })
     }
 
-    /// `@SET` primitive; writes a value to a B-tree variable.
+    /// `@set` primitive; writes a value to a B-tree variable.
     ///
     /// Returns `Result[Unit, String]`. Globals require an active transaction
     /// (enforced by typechecker). Locals can be set outside transactions.
@@ -201,7 +201,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             txn_id
                 .and_then(|id| self.txns.get(&id))
                 .unwrap_or_else(|| {
-                    typechecked!("global SET", "transaction context")
+                    typechecked!("global @set", "transaction context")
                 })
                 .set(&name, &key, storage_val)
                 .await
@@ -215,11 +215,11 @@ impl<I: IoContext> Interpreter<'_, I> {
 
         Ok(match res {
             Ok(()) => self.make_result_ok(Value::Unit, span),
-            Err(e) => self.make_result_err(&format!("SET failed: {e}"), span),
+            Err(e) => self.make_result_err(&format!("@set failed: {e}"), span),
         })
     }
 
-    /// `@KILL` primitive; deletes a variable and its descendants.
+    /// `@kill` primitive; deletes a variable and its descendants.
     ///
     /// Returns `Result[Unit, String]`. Globals require an active transaction
     /// (enforced by typechecker). Locals can be killed outside transactions.
@@ -237,7 +237,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             txn_id
                 .and_then(|id| self.txns.get(&id))
                 .unwrap_or_else(|| {
-                    typechecked!("global KILL", "transaction context")
+                    typechecked!("global @kill", "transaction context")
                 })
                 .kill(&name, &key)
                 .await
@@ -248,11 +248,11 @@ impl<I: IoContext> Interpreter<'_, I> {
 
         Ok(match res {
             Ok(()) => self.make_result_ok(Value::Unit, span),
-            Err(e) => self.make_result_err(&format!("KILL failed: {e}"), span),
+            Err(e) => self.make_result_err(&format!("@kill failed: {e}"), span),
         })
     }
 
-    /// `@DATA` primitive; queries existence status of a B-tree node.
+    /// `@data` primitive; queries existence status of a B-tree node.
     ///
     /// Uses the specified transaction if `txn_id` is `Some`, otherwise reads
     /// directly from the database. Returns a `DataStatus` enum value.
@@ -281,7 +281,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         Ok(Value::Tagged(type_expr_id, variant_idx, SmallVec::new()))
     }
 
-    /// `@ORDER` primitive; returns the next subscript at a given level.
+    /// `@order` primitive; returns the next subscript at a given level.
     ///
     /// Uses the specified transaction if `txn_id` is `Some`, otherwise reads
     /// directly from the database. Returns `Option[Subscript]`.
@@ -294,7 +294,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<Value> {
         let (name, key) = self.resolve_ref_target(rt).await?;
 
-        // `ORDER items(1)` means "find next subscript after `1` at root level",
+        // `@order items(1)` means "find next subscript after `1` at root level",
         // so we split the key: prefix = [] (root), after = `Some(1)`.
         let (prefix, after): (Key, Option<Subscript>) =
             match key.as_slice().split_last() {
@@ -329,7 +329,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// `@QUERY` primitive; returns the full key path to the next node.
+    /// `@query` primitive; returns the full key path to the next node.
     ///
     /// Uses the specified transaction if `txn_id` is `Some`, otherwise reads
     /// directly from the database. Returns `Option[Array[Subscript]]`.

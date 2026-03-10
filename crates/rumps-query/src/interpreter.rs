@@ -83,7 +83,7 @@
 //!    `Expr::Variant` (regardless of arity).
 //!
 //! 2. **Runtime** (`field()`, `call()`): For user-defined types declared via
-//!    `TYPE`. These are registered during interpretation, so they cannot be
+//!    `type`. These are registered during interpretation, so they cannot be
 //!    resolved at parse time. The interpreter checks if a field access like
 //!    `Status.Pending` refers to a registered type and constructs the variant.
 //!
@@ -142,10 +142,10 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
     /// The parsed AST (borrowed; immutable during interpretation).
     ast: &'a Ast,
 
-    /// Variable environment for lexical `LET` bindings and built-in functions.
+    /// Variable environment for lexical `let` bindings and built-in functions.
     env: Environment,
 
-    /// Database for all `SET`/`GET` operations (owned).
+    /// Database for all `@set`/`@get` operations (owned).
     ///
     /// The interpreter is the natural owner when running `rumps path/to/db script.rumps`.
     /// `Database` is cheap to clone (internal `Arc`), so ownership has low overhead.
@@ -153,7 +153,7 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
 
     /// Active transactions indexed by their unique ID.
     ///
-    /// Each `TRANSACTION` block gets a unique `TxnId` during typecheck; DB
+    /// Each `transaction` block gets a unique `TxnId` during typecheck; DB
     /// operations use this ID to look up the correct transaction context.
     txns: HashMap<TxnId, Transaction>,
 
@@ -166,7 +166,7 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
     /// Arena for type expressions (e.g., `Array[Int]`).
     type_exprs: TypeExprArena,
 
-    /// Registry of named functions (FUN definitions).
+    /// Registry of named functions (`fun` definitions).
     functions: HashMap<StringId, FunctionDef>,
 
     /// I/O context for output operations.
@@ -215,15 +215,15 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
 
     /// Registry of user-defined class instances for runtime dispatch.
     ///
-    /// Populated from the typechecker's instance registry when `CLASS`
+    /// Populated from the typechecker's instance registry when `class`
     /// statements are processed.
     user_instances: instance::RuntimeInstanceRegistry,
 
     /// Mapping from class method call expression IDs to user type IDs.
     ///
     /// Used to dispatch class methods to user instances when the receiver
-    /// type is not directly encoded in the runtime value (e.g., `NEWTYPE`
-    /// aliases or `UNION` types). For `TYPE` (sum types), the type is
+    /// type is not directly encoded in the runtime value (e.g., `newtype`
+    /// aliases or `union` types). For `type` (sum types), the type is
     /// available from `Value::Tagged`; this map handles the other cases.
     ///
     /// Populated during typechecking; used at runtime to look up the correct
@@ -738,7 +738,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                                 module
                                     .constants
                                     .insert(const_name.clone(), val_id);
-                                // Bind in scope so later LET initializers can
+                                // Bind in scope so later `let` initializers can
                                 // reference earlier constants.
                                 let name_id = self.arena.intern(const_name);
                                 self.env.scopes.bind(name_id, val_id);
@@ -1063,7 +1063,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Register a user-defined sum type declaration.
     ///
-    /// Processes `TYPE Name = Variant1 | Variant2(T) | ...` and registers
+    /// Processes `type Name = Variant1 | Variant2(T) | ...` and registers
     /// the type in the type registry. Errors if a type with the same name
     /// already exists or if referenced types are undeclared.
     fn type_decl(
@@ -1125,8 +1125,8 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Register a type alias declaration.
     ///
-    /// Processes `NEWTYPE Name = Type` and registers the alias in the type
-    /// registry. The alias is transparent; `NEWTYPE I = Int` makes `I`
+    /// Processes `newtype Name = Type` and registers the alias in the type
+    /// registry. The alias is transparent; `newtype I = Int` makes `I`
     /// interchangeable with `Int`.
     fn newtype_decl(
         &mut self,
@@ -1165,7 +1165,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Register a union type declaration.
     ///
     /// Union types define a set of types that a value can be.
-    /// Example: `UNION Storable = Bool | Int | Float | Char | String | Json`
+    /// Example: `union Storable = Bool | Int | Float | Char | String | Json`
     fn union_decl(
         &mut self,
         name: &str,
@@ -1300,7 +1300,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Convert an AST literal to a runtime value for pattern matching.
     ///
     /// For numeric literals, infers the type from the scrutinee value being
-    /// matched against. This allows `MATCH w { 10 => ... }` to work when
+    /// matched against. This allows `match w { 10 => ... }` to work when
     /// `w` is a `Word`.
     pub(crate) fn pattern_literal(
         &mut self,
@@ -1423,9 +1423,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         })
     }
 
-    /// Evaluate a lexical variable reference (LET bindings only).
+    /// Evaluate a lexical variable reference (`let` bindings only).
     ///
-    /// Does NOT fall back to B-tree locals; use `GET` for those.
+    /// Does NOT fall back to B-tree locals; use `@get` for those.
     fn var(&mut self, name: &str, _span: Span) -> Value {
         let name_id = self.arena.intern(name);
 
@@ -1558,7 +1558,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     ///
     /// Returns `true` if the value matches the pattern, `false` otherwise.
     /// For `VariantBind` patterns, bindings are NOT created here; they are
-    /// handled specially by `if_with_bindings` when used as an `IF` condition.
+    /// handled specially by `if_with_bindings` when used as an `if` condition.
     #[async_recursion]
     async fn is(
         &mut self,
@@ -1580,8 +1580,8 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// - `Bool -> Int` (`false` -> `0`, `true` -> `1`)
     /// - `T -> Storable` (identity if T is a Storable member type)
     ///
-    /// Note: `AS Storable` is the only infallible union cast. Other unions
-    /// require `READ` for fallible conversion or `MATCH` for type narrowing.
+    /// Note: `as Storable` is the only infallible union cast. Other unions
+    /// require `read` for fallible conversion or `match` for type narrowing.
     #[async_recursion]
     async fn r#as(
         &mut self,
@@ -1672,7 +1672,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Execute a `LET` binding with destructuring.
+    /// Execute a `let` binding with destructuring.
     ///
     /// If a type annotation is present, validates that the value's type matches
     /// before destructuring.
@@ -1729,7 +1729,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Refine a value's internal type to match an annotation.
     ///
-    /// Called when a value flows through a typing context (LET binding, function
+    /// Called when a value flows through a typing context (`let` binding, function
     /// parameter, return value) where the expected type provides additional
     /// information not present in the value itself.
     ///
@@ -1737,11 +1737,11 @@ impl<I: IoContext> Interpreter<'_, I> {
     ///
     /// **Union/Newtype Wrapping:**
     /// - If `expected` is a union or newtype, wraps the entire value
-    /// - Example: `LET x: MyUnion = 5` wraps `Int(5)` as `Union(MyUnion, ...)`
+    /// - Example: `let x: MyUnion = 5` wraps `Int(5)` as `Union(MyUnion, ...)`
     ///
     /// **Object Field Wrapping:**
     /// - For objects with union/newtype fields, recursively wraps field values
-    /// - Example: `LET obj: { a: T } = { a: 5 }` where `T` is a newtype
+    /// - Example: `let obj: { a: T } = { a: 5 }` where `T` is a newtype
     ///   - Wraps field `a`'s value as `Newtype(T, Int(5))`
     ///   - Ensures `obj.a` returns the wrapped value
     /// - Critical: Objects don't carry field type info at runtime, so wrapping
@@ -1749,7 +1749,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     ///
     /// **Collection Type Parameters:**
     /// - Arrays/Maps with `UNKNOWN` type params get concrete types from annotation
-    /// - Example: `LET xs: Array[Int] = []` refines `Array(UNKNOWN, [])` to `Array(Int, [])`
+    /// - Example: `let xs: Array[Int] = []` refines `Array(UNKNOWN, [])` to `Array(Int, [])`
     ///
     /// **Numeric Coercion:**
     /// - `Int -> Word` when annotation expects `Word` (type checker validates non-negative)
@@ -1821,13 +1821,13 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Refine object fields by wrapping them in unions/newtypes if needed.
     ///
     /// Objects (`Value::Object`) store only field values without type annotations.
-    /// When an object flows through a typed context (e.g., `LET x: { a: T } = obj`),
+    /// When an object flows through a typed context (e.g., `let x: { a: T } = obj`),
     /// we need to wrap fields whose types are unions or newtypes.
     ///
     /// Without this, field access would return unwrapped primitives:
     /// ```rumps
-    /// NEWTYPE UserId = Int
-    /// LET user: { id: UserId } = { id: 42 }
+    /// newtype UserId = Int
+    /// let user: { id: UserId } = { id: 42 }
     /// user.id  ; Would incorrectly return `Int(42)` instead of `Newtype(UserId, Int(42))`
     /// ```
     ///
@@ -1950,10 +1950,10 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Execute a `WRITE` statement.
+    /// Execute a `write` statement.
     ///
     /// Writes to stdout, stderr, or a file via the I/O context, with optional
-    /// JSON or RAW formatting.
+    /// `json` or `raw` format modifier.
     #[async_recursion]
     async fn write(&mut self, output: &WriteExpr) -> Result<()> {
         let span = self.ast.expr_span(output.expr).unwrap_or_default();

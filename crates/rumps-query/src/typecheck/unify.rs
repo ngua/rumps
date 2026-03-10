@@ -1851,7 +1851,7 @@ impl<'a> InferCtx<'a> {
                     }
 
                     // Builtin type with user-defined Into[UserType] instance
-                    // E.g., `CLASS Into[UserId] FOR Int { ... }`
+                    // E.g., `class Into[UserId] FOR Int { ... }`
                     _ => {
                         let type_id =
                             self.primitive_type_id(self.ty_arena.get(ty));
@@ -1883,7 +1883,7 @@ impl<'a> InferCtx<'a> {
                 }
             }
 
-            // `TryInto(target)`: `READ` casts
+            // `TryInto(target)`: `read` casts
             BuiltinClass::Parameterized(BuiltinClassTag::TryInto, to) => {
                 let to = *to;
                 let ty_shape = self.ty_arena.get(ty).clone();

@@ -288,7 +288,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Perform fallible type conversion for `READ` via `TryInto[T]` dispatch.
+    /// Perform fallible type conversion for `read` via `TryInto[T]` dispatch.
     ///
     /// This is the runtime helper for `expr READ Type` syntax.
     /// Returns a RUMPS `Result[T, String]` value (not `crate::Result`).
@@ -309,7 +309,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         )
     }
 
-    /// Perform typed conversion for `READ` with full type expression support.
+    /// Perform typed conversion for `read` with full type expression support.
     ///
     /// Handles object alias types (with type parameters), arrays, options, and
     /// delegates to `read_value` for primitive types.

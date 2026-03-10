@@ -1,4 +1,4 @@
-//! Control flow expressions: `IF`, `MATCH`, `CATCH`, blocks, coalesce, unwrap.
+//! Control flow expressions: `if`, `match`, `catch`, blocks, coalesce, unwrap.
 
 use async_recursion::async_recursion;
 use smallvec::SmallVec;
@@ -185,11 +185,11 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Evaluate an `IF` expression.
+    /// Evaluate an `if` expression.
     ///
     /// Type checking rules:
-    /// - Single-arm `IF` (no `ELSE`): body must be `Unit`, whole expr is `Unit`
-    /// - `IF/ELSE`: both branches must have matching types
+    /// - Single-arm `if` (no `else`): body must be `Unit`, whole expr is `Unit`
+    /// - `if/else`: both branches must have matching types
     ///
     /// Special handling for `is` conditions with bindings: if the condition is
     /// `expr is Pattern(bindings)`, the bindings are only visible in the then
@@ -212,12 +212,12 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let cond_val = self.eval(cond).await?;
                 let cond_true = match cond_val {
                     Value::Bool(b) => b,
-                    _ => typechecked!("IF condition", "Bool"),
+                    _ => typechecked!("if condition", "Bool"),
                 };
 
                 match else_br {
                     Some(else_id) => {
-                        // IF/ELSE: only evaluate the taken branch
+                        // if/else: only evaluate the taken branch
                         // Type checking deferred to static analysis; we can't
                         // evaluate both branches at runtime (side effects).
                         if cond_true {
@@ -227,7 +227,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                         }
                     }
                     None => {
-                        // Single-arm IF: body must be Unit (side-effect only).
+                        // Single-arm if: body must be Unit (side-effect only).
                         // Type checker guarantees body is Unit.
                         if cond_true {
                             self.eval(then_br).await?;
@@ -239,10 +239,10 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Handle `IF expr is Type.Variant(bindings) { then } ELSE { else }`.
+    /// Handle `if expr is Type.Variant(bindings) { then } else { else }`.
     ///
     /// Bindings are only visible in the then branch.
-    /// Type checking: same rules as regular `IF`.
+    /// Type checking: same rules as regular `if`.
     #[async_recursion]
     async fn if_with_bindings(
         &mut self,
@@ -261,7 +261,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
         match else_br {
             Some(else_id) => {
-                // IF/ELSE with bindings: only evaluate the taken branch
+                // if/else with bindings: only evaluate the taken branch
                 if matched {
                     self.eval_with_variant_bindings(
                         &val, ty_name, var_name, names, then_br, span,
@@ -272,7 +272,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 }
             }
             None => {
-                // Single-arm IF with bindings: body must be Unit.
+                // Single-arm if with bindings: body must be Unit.
                 // Type checker guarantees body is Unit.
                 if matched {
                     self.eval_with_variant_bindings(
@@ -320,7 +320,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         result
     }
 
-    /// Evaluate a `MATCH` expression.
+    /// Evaluate a `match` expression.
     ///
     /// Evaluates the scrutinee once, then tries each arm in order. The first
     /// arm whose pattern matches (and whose guard, if any, is `true`) has its
@@ -346,7 +346,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<Value> {
         match arms.split_first() {
             // Typechecker validates exhaustiveness
-            None => typechecked!("MATCH", "exhaustive"),
+            None => typechecked!("match", "exhaustive"),
             Some((arm, rest)) => {
                 // Try to match the pattern
                 match self.try_match_pattern(arm.pattern, val, span)? {
@@ -362,7 +362,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                                 let guard_val = self.eval(guard_expr).await?;
                                 match guard_val {
                                     Value::Bool(b) => b,
-                                    _ => typechecked!("MATCH guard", "Bool"),
+                                    _ => typechecked!("match guard", "Bool"),
                                 }
                             }
                         };
@@ -416,9 +416,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         })
     }
 
-    /// Evaluate a `CATCH` expression.
+    /// Evaluate a `catch` expression.
     ///
-    /// `expr CATCH e => handler` evaluates `expr`; if it raises a catchable
+    /// `expr catch e => handler` evaluates `expr`; if it raises a catchable
     /// runtime error, invokes `handler` with the `Error` value. Non-catchable
     /// errors (lex, parse, type) propagate.
     #[async_recursion]
@@ -460,7 +460,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                             )
                             .await
                         }
-                        _ => typechecked!("CATCH handler", "Closure"),
+                        _ => typechecked!("catch handler", "Closure"),
                     }
                 }
                 None => Err(e),
@@ -468,9 +468,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Evaluate a `FOREVER` loop expression.
+    /// Evaluate a `forever` loop expression.
     ///
-    /// `FOREVER seed (state, cont) => body` is a continuation-passing loop:
+    /// `forever seed (state, cont) => body` is a continuation-passing loop:
     /// - Evaluates `seed` to get initial state
     /// - Binds `state` and `cont` in scope for each iteration
     /// - If body returns `LoopContinue(new_state)`, loops with new state

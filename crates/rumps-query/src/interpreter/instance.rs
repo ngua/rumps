@@ -4,12 +4,12 @@
 //! there's a user-defined instance and dispatch to the generated function if so.
 //!
 //! User types can be:
-//! - `TYPE` (sum types): represented as `Value::Tagged`, TypeId available directly
-//! - `NEWTYPE` (type aliases): may be primitive values, TypeId from `instance_calls`
-//! - `UNION` (union types): member type values, TypeId from `instance_calls`
+//! - `type` (sum types): represented as `Value::Tagged`, TypeId available directly
+//! - `newtype` (type aliases): may be primitive values, TypeId from `instance_calls`
+//! - `union` (union types): member type values, TypeId from `instance_calls`
 //!
-//! For `TYPE`s, we can extract the TypeId from `Value::Tagged`. For `NEWTYPE`s
-//! and `UNION`s, the typechecker records the receiver type in `instance_calls`.
+//! For `type`s, we can extract the TypeId from `Value::Tagged`. For `newtype`s
+//! and `union`s, the typechecker records the receiver type in `instance_calls`.
 
 use std::collections::HashMap;
 
@@ -115,10 +115,10 @@ mod tests {
     /// Verify that two types with the same underlying representation but
     /// different TypeIds dispatch to different instances.
     ///
-    /// This simulates the NEWTYPE scenario:
+    /// This simulates the newtype scenario:
     /// ```rumps
-    /// NEWTYPE X = Int
-    /// NEWTYPE Y = Int
+    /// newtype X = Int
+    /// newtype Y = Int
     /// CLASS Numeric FOR X { ... }
     /// CLASS Numeric FOR Y { ... }
     /// ```
@@ -134,7 +134,7 @@ mod tests {
         let fn_x = interner.intern("__inst_Numeric_X_add");
         let fn_y = interner.intern("__inst_Numeric_Y_add");
 
-        // Two distinct TypeIds (simulating NEWTYPE X and NEWTYPE Y)
+        // Two distinct TypeIds (simulating newtype X and newtype Y)
         // Use builtin TypeIds as stand-ins for user types
         let type_x = TypeId::BOOL;
         let type_y = TypeId::INT;

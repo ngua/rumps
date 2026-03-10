@@ -38,10 +38,10 @@ impl Parser {
     ///
     /// This enables both inline and multi-line styles:
     /// ```text
-    /// LET x = 1, LET y = 2
-    /// LET z = x + y
+    /// let x = 1, let y = 2
+    /// let z = x + y
     ///
-    /// MATCH v { Foo => 1, Bar => 2 }
+    /// match v { Foo => 1, Bar => 2 }
     /// ```
     pub(super) fn item_sep(
     ) -> impl chumsky::Parser<Token, (), Error = ParseErr> + Clone {
@@ -93,7 +93,7 @@ impl Parser {
 
     /// Parse a B-tree variable reference (local or global with subscripts).
     ///
-    /// Returns `cst::DbRef` for use in `GET`, `SET`, `KILL`, `DATA`, `ORDER`, `QUERY`.
+    /// Returns `cst::DbRef` for use in `get`, `set`, `kill`, `data`, `order`, `query`.
     ///
     /// NOTE: Bare locals (`name`) are NOT valid; use `name{}` for root refs.
     /// Bare identifiers are parsed as variable references by `ref_arg`.

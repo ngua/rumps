@@ -125,7 +125,7 @@ impl TypeId {
     /// Builtin union: `Storable = Bool | Int | Float | Char | String | Json`.
     ///
     /// The set of types that can be stored in B-tree globals/locals.
-    /// `AS Storable` is infallible; `AS` to other unions requires `READ`.
+    /// `AS Storable` is infallible; `AS` to other unions requires `read`.
     pub(crate) const STORABLE: Self = Self(15);
     /// Builtin union: `Scalar = Bool | Int | Float | String`.
     ///
@@ -149,7 +149,7 @@ impl TypeId {
     pub(crate) const REGEX: Self = Self(20);
     /// Builtin enum: `DataStatus = NoData | HasValue | HasDescendants | Both`.
     ///
-    /// Result of `DATA` primitive; indicates node existence status.
+    /// Result of `data` primitive; indicates node existence status.
     pub(crate) const DATA_STATUS: Self = Self(21);
     /// Builtin union: `Subscript = Bool | Int | Float | Char | String | Json`.
     ///
@@ -479,7 +479,7 @@ pub(crate) enum Value {
     /// The unit value; represents "no meaningful value".
     ///
     /// Used for statements, blocks without trailing expressions, and
-    /// single-arm `IF` (side-effect only).
+    /// single-arm `if` (side-effect only).
     Unit,
 
     /// A boolean value.
@@ -568,7 +568,7 @@ pub(crate) enum Value {
 
     /// A value in a newtype context.
     ///
-    /// - `TypeExprId`: identifies the newtype (e.g., `UserId` if `NEWTYPE UserId = Int`)
+    /// - `TypeExprId`: identifies the newtype (e.g., `UserId` if `newtype UserId = Int`)
     /// - `ValueId`: the underlying value
     ///
     /// Class methods auto-derive by delegating to the wrapped type unless
@@ -664,7 +664,7 @@ pub(crate) enum Value {
     /// A database reference (local or global variable with subscripts).
     ///
     /// Created via `data{1, 2}` or `^global{key}` syntax.
-    /// Used with intrinsics: `@GET r`, `@SET r value`, etc.
+    /// Used with intrinsics: `@get r`, `@set r value`, etc.
     ///
     /// - `bool`: `true` for global (`^var`), `false` for local
     /// - `StringId`: the variable name
@@ -922,7 +922,7 @@ pub(crate) enum TypeDef {
     },
     /// Transparent type alias.
     ///
-    /// `NEWTYPE I = Int` makes `I` fully interchangeable with `Int`.
+    /// `newtype I = Int` makes `I` fully interchangeable with `Int`.
     /// The target is stored as an AST type expression to support
     /// type parameters; resolution happens at usage site with substitution.
     Alias {
@@ -934,7 +934,7 @@ pub(crate) enum TypeDef {
     /// Named union type definition.
     ///
     /// Union types represent a value that can be one of several types.
-    /// Used for `UNION Storable = Bool | Int | ...` declarations.
+    /// Used for `union Storable = Bool | Int | ...` declarations.
     /// At runtime, `IS` checks test against each member; `AS` casts are
     /// infallible only for `Storable` (special-cased).
     Union {
@@ -2049,7 +2049,7 @@ impl TypeRegistry {
 
     /// Pre-register user-defined types from AST before type checking.
     ///
-    /// Scans all statements for `TYPE` and `UNION` declarations (including
+    /// Scans all statements for `type` and `union` declarations (including
     /// those inside modules) and registers them so the type checker can
     /// resolve type names. Module-scoped types are registered with qualified
     /// names (e.g., `MyModule.MyType`).
@@ -2179,7 +2179,7 @@ impl TypeRegistry {
         );
     }
 
-    /// Register a single UNION declaration.
+    /// Register a single union declaration.
     ///
     /// If a type with the same name already exists, it is shadowed.
     fn register_union(
@@ -2215,7 +2215,7 @@ impl TypeRegistry {
         );
     }
 
-    /// Register a single NEWTYPE alias declaration.
+    /// Register a single newtype alias declaration.
     ///
     /// If a type with the same name already exists, it is shadowed.
     fn register_alias(

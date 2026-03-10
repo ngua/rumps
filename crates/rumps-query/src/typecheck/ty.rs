@@ -925,7 +925,7 @@ pub(crate) enum Ty {
     /// Anonymous union type; value is one of the member types.
     ///
     /// For inline `Int | String` syntax. Named unions (`Storable`, `Scalar`,
-    /// user-defined `UNION`) use `Named(TypeId, params)` instead.
+    /// user-defined `union`) use `Named(TypeId, params)` instead.
     ///
     /// # Why Named Unions Are Separate
     ///
@@ -935,7 +935,7 @@ pub(crate) enum Ty {
     ///    may fail at runtime with `Error::RuntimeType`. Anonymous unions don't
     ///    have this special case; `x AS T` on an anonymous union is a static error.
     ///
-    /// 2. **Type parameters**: Named unions can be generic (`UNION F[T] = Int | Option[T]`),
+    /// 2. **Type parameters**: Named unions can be generic (`union F[T] = Int | Option[T]`),
     ///    requiring parameter substitution during type checking.
     ///
     /// 3. **Error messages**: Named unions display their registered name (`Storable`)

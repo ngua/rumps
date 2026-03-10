@@ -112,7 +112,7 @@ impl InferCtx<'_> {
                 self.env.mark_non_import();
                 // Aliases are registered in the registry, but we still
                 // validate that the target type expression is fully
-                // saturated (e.g. `NEWTYPE G = Array` is invalid because
+                // saturated (e.g. `newtype G = Array` is invalid because
                 // `Array` expects a type argument).
                 let subst = self.type_param_subst(type_params);
                 self.ast_type_to_ty(target, &subst);
@@ -164,7 +164,7 @@ impl InferCtx<'_> {
 
     /// Infer types for a user-defined module.
     ///
-    /// Validates that only `FUN`, `LET`, and nested `MODULE` statements appear
+    /// Validates that only `fun`, `let`, and nested `module` statements appear
     /// inside, typechecks each item, and registers the module's types so they
     /// can be accessed via `ModuleName.fn(...)` or `ModuleName.const`.
     ///
@@ -228,7 +228,7 @@ impl InferCtx<'_> {
                     self.user_module(&nested_path, body, item_span);
                 }
 
-                // Invalid statements inside a module (SET/KILL/WRITE are now
+                // Invalid statements inside a module (SET/kill/write are now
                 // `Stmt::Expr` wrapping their expression forms)
                 Some(Stmt::Expr(..)) => {
                     self.error(TypeError::Custom {
@@ -576,7 +576,7 @@ impl InferCtx<'_> {
         self.env.bind(name, scheme);
     }
 
-    /// Infer types for a `LET` statement.
+    /// Infer types for a `let` statement.
     ///
     /// Infers the RHS type, optionally unifies with an annotation, then
     /// binds variables from the pattern with appropriate types.
@@ -655,7 +655,7 @@ impl InferCtx<'_> {
         }
     }
 
-    /// Default inference for `LET` with type annotation.
+    /// Default inference for `let` with type annotation.
     fn infer_default_let(
         &mut self,
         ann_ty: TyId,
@@ -751,13 +751,13 @@ impl InferCtx<'_> {
             }
 
             BindingPattern::Array(_, _) => {
-                // Array destructuring is only allowed in MATCH expressions
+                // Array destructuring is only allowed in match expressions
                 self.error(TypeError::ArrayPatternInLet(span));
             }
         }
     }
 
-    /// Validate a `SET` operation with a resolved `RefTarget`.
+    /// Validate a `set` operation with a resolved `RefTarget`.
     ///
     /// Global writes require transaction context.
     pub(super) fn set_validate(&mut self, rt: &RefTarget, span: Span) {
@@ -781,7 +781,7 @@ impl InferCtx<'_> {
         }
     }
 
-    /// Validate a `KILL` operation with a resolved `RefTarget`.
+    /// Validate a `kill` operation with a resolved `RefTarget`.
     ///
     /// Global writes require transaction context.
     pub(super) fn kill_validate(&mut self, rt: &RefTarget, span: Span) {
@@ -805,7 +805,7 @@ impl InferCtx<'_> {
         }
     }
 
-    /// Infer types for a `WRITE` statement or expression.
+    /// Infer types for a `write` statement or expression.
     ///
     /// Type-checks the expression and adds constraints based on format and target:
     /// - `Into[String]` for default format
@@ -855,7 +855,7 @@ impl InferCtx<'_> {
         }
     }
 
-    /// Infer types for a `CLASS ... FOR ...` instance declaration.
+    /// Infer types for a `class ... FOR ...` instance declaration.
     ///
     /// Validates:
     /// 1. The class name is a valid `BuiltinClassTag`
@@ -931,9 +931,9 @@ impl InferCtx<'_> {
         //
         // We allow implementing classes for builtin types IF the class has
         // type args that include user-defined types. For example:
-        //   - `CLASS Display FOR Int` is forbidden (builtin has Display)
-        //   - `CLASS Into[String] FOR Int` is forbidden (builtin has Into[String])
-        //   - `CLASS Into[UserId] FOR Int` is ALLOWED (no builtin Into[UserId])
+        //   - `class Display FOR Int` is forbidden (builtin has Display)
+        //   - `class Into[String] FOR Int` is forbidden (builtin has Into[String])
+        //   - `class Into[UserId] FOR Int` is ALLOWED (no builtin Into[UserId])
         //
         // The heuristic: if for_type is builtin AND all class args are builtin,
         // reject. If any class arg is a user type, we allow it.
@@ -1355,7 +1355,7 @@ impl InferCtx<'_> {
             .collect()
     }
 
-    /// Validate that all type expressions in a `TYPE` declaration body are
+    /// Validate that all type expressions in a `type` declaration body are
     /// fully saturated (no unsaturated type synonyms like bare `Array`).
     fn validate_type_decl_body(&mut self, tps: &[TypeParam], def: &TypeDefAst) {
         let subst = self.type_param_subst(tps);

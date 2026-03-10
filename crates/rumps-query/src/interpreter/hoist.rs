@@ -4,7 +4,7 @@
 //! and module definitions before executing any statements. This enables
 //! forward references and mutual recursion at runtime.
 //!
-//! Also hoists `CLASS` instance declarations, registering the generated methods
+//! Also hoists `class` instance declarations, registering the generated methods
 //! as functions and populating `user_instances` for runtime dispatch.
 
 use std::collections::HashMap;
@@ -24,7 +24,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// their lexical definition point. This enables forward references like:
     /// ```text
     /// id(10)
-    /// FUN id[T](x: T) -> T { x }
+    /// fun id[T](x: T) -> T { x }
     /// ```
     pub(crate) async fn hoist_declarations(
         &mut self,

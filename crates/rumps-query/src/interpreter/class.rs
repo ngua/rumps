@@ -1474,7 +1474,7 @@ impl Into {
                     .to_owned()
             }
             Value::Union(ty_expr, _) => {
-                // Unions can be either named (`UNION Result = Ok | Err`) or
+                // Unions can be either named (`union Result = Ok | Err`) or
                 // anonymous (`String | Int`). Named unions have a type name
                 // in the registry; anonymous unions need to be formatted as
                 // their type expression (e.g., `"String | Int"`).
@@ -1782,7 +1782,7 @@ impl TryInto {
     /// Try to convert a value to the target type.
     ///
     /// Returns `Result[U, String]` where `Err` contains an error message.
-    /// Mirrors the `READ` operator behavior exactly.
+    /// Mirrors the `read` operator behavior exactly.
     pub(crate) fn try_into(
         ctx: &mut ClassCtx<'_>,
         val: &Value,
@@ -1934,7 +1934,7 @@ impl TryInto {
                 Value::Json(Into::jsonify(ctx, val)),
             )),
 
-            // Int -> DataStatus (MUMPS @DATA values: 0, 1, 10, 11 -> variants)
+            // Int -> DataStatus (MUMPS @data values: 0, 1, 10, 11 -> variants)
             (Value::Int(n), Ty::DataStatus) => {
                 let (variant_idx, valid) = match *n {
                     0 => (0, true),  // NoData
@@ -2020,7 +2020,7 @@ impl TryInto {
     }
 }
 
-/// Display formatting: produces valid RUMPS syntax (for `WRITE`).
+/// Display formatting: produces valid RUMPS syntax (for `write`).
 pub(crate) struct Display;
 
 impl Class for Display {}

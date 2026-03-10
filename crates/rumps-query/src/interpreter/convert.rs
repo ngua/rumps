@@ -74,7 +74,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Convert a storage value to a runtime value.
     ///
-    /// JSON values are loaded as opaque `Value::Json`; use `READ` to convert.
+    /// JSON values are loaded as opaque `Value::Json`; use `read` to convert.
     pub(crate) fn load(&mut self, v: rumps_types::Value) -> Value {
         match v {
             rumps_types::Value::Boolean(b) => Value::Bool(b),
@@ -90,7 +90,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Convert a value to a human-readable display string.
     ///
-    /// Used for WRITE statements. Quotes strings and file paths so output
+    /// Used for `write` statements. Quotes strings and file paths so output
     /// is valid RUMPS syntax.
     pub(crate) fn display(&mut self, v: &Value) -> String {
         self.stringify(v)
@@ -98,7 +98,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Convert a value to display string with escape sequences preserved.
     ///
-    /// Used for `WRITE expr RAW`. Strings are quoted and special characters
+    /// Used for `write expr raw`. Strings are quoted and special characters
     /// (`\n`, `\t`, etc.) are shown as escape sequences rather than rendered.
     pub(crate) fn display_raw(&mut self, v: &Value) -> String {
         match v {
@@ -397,7 +397,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Convert a subscript from storage to a runtime value.
     ///
-    /// Inverse of `subscript`; used by `ORDER` to convert results.
+    /// Inverse of `subscript`; used by `order` to convert results.
     pub(crate) fn value_from_subscript(&mut self, sub: Subscript) -> Value {
         match sub {
             Subscript::Boolean(b) => Value::Bool(b),

@@ -1,7 +1,7 @@
 //! Variable environments for lexical scope and primitive functions.
 //!
-//! The `Environment` tracks lexical scope for `LET` bindings and callable names.
-//! `SET` variables (both local and global) go through the `Database`, not here.
+//! The `Environment` tracks lexical scope for `let` bindings and callable names.
+//! `set` variables (both local and global) go through the `Database`, not here.
 
 #![allow(dead_code)]
 
@@ -29,7 +29,7 @@ use crate::io::IoContext;
 use crate::value::{FunctionDef, TypeId, Value, ValueArena, ValueId};
 use crate::{Error, Result, Span};
 
-/// Stack of lexical scopes for `LET` bindings.
+/// Stack of lexical scopes for `let` bindings.
 ///
 /// Each frame is a `HashMap` mapping variable names to values.
 /// The stack grows downward; the top (last) frame is the current scope.
@@ -191,7 +191,7 @@ impl PrimCtx<'_> {
 /// etc. They take a context and arguments, returning a future that resolves
 /// to a `ValueId`.
 ///
-/// Note: database intrinsics (`@GET`, `@SET`, `@KILL`, etc.) have special
+/// Note: database intrinsics (`@get`, `@set`, `@kill`, etc.) have special
 /// syntax and are represented as `Expr::Intrinsic`, not primitives.
 pub(crate) type PrimFn =
     for<'a> fn(&'a mut PrimCtx<'a>, SmallVec<[ValueId; 4]>) -> PrimResult<'a>;
@@ -761,16 +761,16 @@ impl UserModule {
 /// Variable environment for the interpreter.
 ///
 /// Tracks:
-/// - Lexical scopes for `LET` bindings (via `Scopes`)
+/// - Lexical scopes for `let` bindings (via `Scopes`)
 /// - Built-in modules containing primitive functions (e.g., `Array`, `String`)
 /// - User-defined modules containing closures and constants
 /// - Module constants (e.g., `Math.pi`, `Math.e`)
 ///
-/// Note: `SET` variables (both local and global) are stored in the `Database`,
-/// not in the environment. Only `LET` bindings live here. You can `GET` a `SET`
-/// (local or global), but not a `LET`; `LET`s can be referenced by name directly.
+/// Note: `set` variables (both local and global) are stored in the `Database`,
+/// not in the environment. Only `let` bindings live here. You can `get` a `set`
+/// (local or global), but not a `let`; `let`s can be referenced by name directly.
 pub(crate) struct Environment {
-    /// Lexical scope stack for `LET` bindings.
+    /// Lexical scope stack for `let` bindings.
     pub(crate) scopes: Scopes,
 
     /// Built-in modules (e.g., `Object`, `Array`).

@@ -152,14 +152,14 @@ impl Parser {
 
     /// Parse transaction modifiers (contextual identifiers).
     ///
-    /// Syntax: `[ON CONFLICT ...] [WITH TIMEOUT expr] [WITH RETRIES n] [WITH ISOLATION ...]`
+    /// Syntax: `[on conflict ...] [with timeout expr] [with retries n] [with isolation ...]`
     pub(super) fn transaction_modifiers(
         expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::TransactionModifiers, Error = ParseErr>
            + Clone {
-        // ON CONFLICT (ABORT | OVERWRITE)
+        // on conflict (abort | overwrite)
         let conflict = Self::ctx_ident("on")
             .ignore_then(Self::ctx_ident("conflict"))
             .ignore_then(choice((
@@ -168,18 +168,18 @@ impl Parser {
                     .to(cst::ConflictModifier::Overwrite),
             )));
 
-        // WITH TIMEOUT expr
+        // with timeout expr
         let timeout = Self::ctx_ident("with")
             .ignore_then(Self::ctx_ident("timeout"))
             .ignore_then(expr)
             .map(Box::new);
 
-        // WITH RETRIES n
+        // with retries n
         let retries = Self::ctx_ident("with")
             .ignore_then(Self::ctx_ident("retries"))
             .ignore_then(select! { Token::Int(n) => n as u32 });
 
-        // WITH ISOLATION SNAPSHOT
+        // with isolation snapshot
         let isolation = Self::ctx_ident("with")
             .ignore_then(Self::ctx_ident("isolation"))
             .ignore_then(
@@ -753,7 +753,7 @@ impl Parser {
             just(Token::Question).to(UnOp::Wrap),
         ));
 
-        // Postfix operators for intrinsic expressions (e.g., `@GET d(1)!`).
+        // Postfix operators for intrinsic expressions (e.g., `@get d(1)!`).
         let postfix_ops = Self::postfix_ops(intrinsic_op.clone());
 
         recursive(move |unary| {
@@ -766,7 +766,7 @@ impl Parser {
                 },
             );
 
-            // Read intrinsics: @GET, @DATA, @ORDER, @QUERY (with optional postfix ops)
+            // Read intrinsics: @get, @data, @order, @query (with optional postfix ops)
             let read_intrinsic = choice((
                 just(Token::Get).to(Intrinsic::Get),
                 just(Token::Data).to(Intrinsic::Data),
@@ -796,7 +796,7 @@ impl Parser {
             // SET target = value
             let set = Self::set_expr(intrinsic_op.clone());
 
-            // KILL target
+            // kill target
             let kill = Self::kill_expr(intrinsic_op.clone());
 
             // RAISE expr
@@ -879,7 +879,7 @@ impl Parser {
         //
         // Creates a first-class `Ref` value. Uses `IdentBrace`/`GlobalBrace`
         // tokens which only form when there's NO space between name and `{`.
-        // This allows `IF cond { ... }` to work (space means block, not ref).
+        // This allows `if cond { ... }` to work (space means block, not ref).
         let ref_local = select! { Token::IdentBrace(name) => name }
             .then(Self::subscript_contents(expr.clone()))
             .map_with_span(|(name, subs), span| {

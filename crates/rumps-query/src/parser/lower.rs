@@ -36,7 +36,7 @@ struct Ctx {
     /// applications (`F[T]` -> `VarApp`) from type constructor applications
     /// (`Array[T]` -> `App`).
     type_params: HashSet<String>,
-    /// Known concrete type names (builtins + user-declared `TYPE`/`NEWTYPE`/`UNION`).
+    /// Known concrete type names (builtins + user-declared `type`/`newtype`/`union`).
     ///
     /// Used by `collect_type_vars` to distinguish type variables from concrete
     /// type constructors in `App` head position.
@@ -128,8 +128,8 @@ pub(crate) fn program_with_path(
 /// Lower a module from a file path.
 ///
 /// Reads the file, parses it, and merges the resulting statements into the
-/// target AST. The file should contain module body statements (`FUN`, `LET`,
-/// `MODULE`); this is enforced during typechecking.
+/// target AST. The file should contain module body statements (`fun`, `let`,
+/// `module`); this is enforced during typechecking.
 fn lower_module_from_file(
     ast: &mut Ast,
     ctx: &mut Ctx,

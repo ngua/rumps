@@ -141,7 +141,7 @@ impl InferCtx<'_> {
                 self.block(stmts, tail.as_ref().copied(), span)
             }
 
-            // Control flow: MATCH
+            // Control flow: match
             Expr::Match(scrutinee, arms) => {
                 self.r#match(*scrutinee, arms, span)
             }
@@ -165,7 +165,7 @@ impl InferCtx<'_> {
             // Fallible conversion: `expr READ Type`
             Expr::Read(inner, ty_id) => self.read_conv(*inner, *ty_id, span),
 
-            // Database intrinsics: `@GET`, `@SET`, `@KILL`, `@DATA`, `@ORDER`, `@QUERY`
+            // Database intrinsics: `@get`, `@set`, `@kill`, `@data`, `@order`, `@query`
             Expr::Intrinsic(op, ref rt, val, _) => {
                 self.intrinsic(id, *op, rt, val.as_ref().copied(), span)
             }
@@ -283,7 +283,7 @@ impl InferCtx<'_> {
                 expr_ty
             }
 
-            // Write expression: `WRITE expr [JSON] [TO target]`
+            // Write expression: `write expr [JSON] [TO target]`
             // Same typing as statement version, but returns `Unit`
             Expr::Write(output) => {
                 self.write(output, span);
@@ -314,7 +314,7 @@ impl InferCtx<'_> {
                 body,
             } => self.forever(*seed, state_param, cont_param, *body, span),
 
-            // Transaction block: `TRANSACTION { ... }`
+            // Transaction block: `transaction { ... }`
             Expr::Transaction(ref txn) => self.transaction(id, txn, span),
 
             // Mempty: `_` (monoid identity)
@@ -724,13 +724,13 @@ impl InferCtx<'_> {
                         self.emit_class_constraint(ty, class, span);
                     });
 
-                    // Track user instance calls for NEWTYPE/UNION dispatch.
+                    // Track user instance calls for newtype/union dispatch.
                     // For these types, the runtime value doesn't carry TypeId,
                     // so we record the mapping here for the interpreter.
                     // (TYPE/sum types use Value::Tagged which carries the TypeId.)
                     //
                     // Also track for builtin types with user instances (e.g.,
-                    // `CLASS Into[UserId] FOR Int`).
+                    // `class Into[UserId] FOR Int`).
                     //
                     // If the type is immediately resolvable (Named or primitive),
                     // check and insert now. Otherwise, defer to be resolved after
@@ -819,13 +819,13 @@ impl InferCtx<'_> {
             Literal::Numeric(NumericLit::Int(_)) => {
                 // Polymorphic integer literal: fresh var with Numeric constraint.
                 // The Numeric constraint prevents unification with incompatible
-                // types (e.g., Tuple in `LET (a, b) = 42`).
+                // types (e.g., Tuple in `let (a, b) = 42`).
                 //
                 // The constraint is checked after solving, allowing the type var
                 // to unify with unions containing numeric members. If it ends up
                 // bound to a non-numeric type, check_numeric will error.
                 //
-                // Note: join_types handles IF/MATCH branches specially, resolving
+                // Note: join_types handles IF/match branches specially, resolving
                 // numeric vars to Int for union creation (avoiding the var being
                 // bound to a sibling branch's type like String).
                 let ty = self.fresh_numeric();
@@ -1030,7 +1030,7 @@ impl InferCtx<'_> {
         // `Class:method(...)` calls.
         //
         // Skip when inside a class instance body for the same (class, type);
-        // otherwise operators like `a + b` inside `CLASS Numeric FOR MyInt`
+        // otherwise operators like `a + b` inside `class Numeric FOR MyInt`
         // would recurse infinitely instead of auto-deriving from the inner type.
         let class_tag = op.class_dispatch().map(|(tag, _)| tag);
 
@@ -1844,7 +1844,7 @@ impl InferCtx<'_> {
     /// For generic closures (`[T](x: T) -> T => x`), type parameters are bound
     /// as fresh type variables before inferring parameter/return types. The full
     /// type scheme (with quantified vars and constraints) is stored in
-    /// `closure_schemes` for proper generalization when bound via `LET`.
+    /// `closure_schemes` for proper generalization when bound via `let`.
     fn closure(
         &mut self,
         expr_id: ExprId,
@@ -1915,7 +1915,7 @@ impl InferCtx<'_> {
         let param_sv: SmallVec<[TyId; 4]> = param_tys.into_iter().collect();
         let fn_ty = self.ty_arena.func(param_sv, ret_ty);
 
-        // If there are type params, store the scheme for LET binding generalization
+        // If there are type params, store the scheme for let binding generalization
         if !type_params.is_empty() {
             let vars: Vec<_> = name_to_tv.values().copied().collect();
             let scheme = Scheme {
@@ -2130,7 +2130,7 @@ impl InferCtx<'_> {
         result_ty
     }
 
-    /// Infer type of a MATCH expression.
+    /// Infer type of a match expression.
     ///
     /// Evaluates the scrutinee once, then checks each arm. All arm bodies must
     /// have the same type (or be members of a common union). Also performs
@@ -2171,7 +2171,7 @@ impl InferCtx<'_> {
     ///
     /// Special case: type variables from integer literals (`numeric_vars`) are
     /// treated as storable for union creation. This allows patterns like
-    /// `IF cond { 42 } ELSE { "string" }` to produce `Int | String` instead
+    /// `if cond { 42 } ELSE { "string" }` to produce `Int | String` instead
     /// of incorrectly unifying the literal's var with `String`.
     fn join_types(&mut self, tys: &[TyId], span: Span) -> TyId {
         let first = tys.first().copied().unwrap_or(TyArena::ERROR);
@@ -2193,7 +2193,7 @@ impl InferCtx<'_> {
 
         // Only create anonymous unions for primitive storable types
         // (Bool, Int, Float, Char, String, Json) and numeric literal vars.
-        // This supports patterns like `IF cond { 42 } ELSE { "string" }`.
+        // This supports patterns like `if cond { 42 } ELSE { "string" }`.
         // For other types (Option, Result, user structs), unify normally.
         let all_storable_or_numeric_var =
             || tys.iter().all(is_storable_or_numeric_var);
@@ -2566,7 +2566,7 @@ impl InferCtx<'_> {
     /// - `Variant(ty, var)`: zero-arity variant check
     /// - `VariantWildcard(ty, var)`: variant check ignoring payload
     /// - `VariantBind(ty, var, names)`: variant check with payload bindings
-    ///   (bindings handled by enclosing `IF`)
+    ///   (bindings handled by enclosing `if`)
     /// - `Object(fields)`: structural object check
     fn is_check(
         &mut self,
@@ -2756,13 +2756,13 @@ impl InferCtx<'_> {
         }
     }
 
-    /// Infer type of `READ` conversion expression.
+    /// Infer type of `read` conversion expression.
     ///
     /// `expr READ T` returns `Result[T, String]`. The conversion is fallible;
     /// if the value cannot be converted to `T`, an error message is returned.
     ///
     /// Emits a `TryInto` constraint to validate that the conversion is possible
-    /// at compile time; function types, regex, and refs cannot be used with `READ`.
+    /// at compile time; function types, regex, and refs cannot be used with `read`.
     fn read_conv(
         &mut self,
         inner_id: ExprId,
@@ -2785,10 +2785,10 @@ impl InferCtx<'_> {
         self.ty_arena.result(target_ty, TyArena::STRING)
     }
 
-    /// Infer type of a database intrinsic (`@GET`, `@SET`, `@KILL`, etc.).
+    /// Infer type of a database intrinsic (`@get`, `@set`, `@kill`, etc.).
     ///
     /// Validates transaction requirements for mutating intrinsics, typechecks
-    /// the value expression for `@SET`, and populates the `TxnId` field in the
+    /// the value expression for `@set`, and populates the `TxnId` field in the
     /// AST based on current transaction context.
     ///
     /// When the target is `RefTarget::Inline(DbRef::Local(name, []))` and `name`

@@ -16,7 +16,7 @@ use crate::{Span, TypeId};
 
 /// An associated type definition within a class instance.
 ///
-/// Example: `NEWTYPE Index = Int` inside `CLASS Indexable[T] FOR MyVec[T] { ... }`
+/// Example: `newtype Index = Int` inside `class Indexable[T] FOR MyVec[T] { ... }`
 /// defines `.Index` for `MyVec[T]` to be `Int`.
 #[derive(Clone, Debug)]
 pub(crate) struct AssocTypeDef {
@@ -32,10 +32,10 @@ pub(crate) struct AssocTypeDef {
 
 /// A user-defined instance of a builtin class for a user type.
 ///
-/// Example: `CLASS Display FOR Point { ... }` creates an instance with
+/// Example: `class Display FOR Point { ... }` creates an instance with
 /// `class = Display`, `for_type = Point's TypeId`.
 ///
-/// For parameterized instances like `CLASS Display FOR Either[L, R] WHERE L: Display`,
+/// For parameterized instances like `class Display FOR Either[L, R] WHERE L: Display`,
 /// `type_params` holds `[L, R]` and `constraints` holds `[(L, Display)]`.
 #[derive(Clone, Debug)]
 pub(crate) struct Instance {
@@ -49,10 +49,10 @@ pub(crate) struct Instance {
     pub(crate) constraints: SmallVec<[(TyVar, BuiltinClass<TyId>); 2]>,
     /// Method implementations: method name -> generated function name.
     ///
-    /// Populated in Phase 5 (Resolution) when `CLASS` statements are lowered.
+    /// Populated in Phase 5 (Resolution) when `class` statements are lowered.
     /// The generated function name follows the pattern `__inst_{Class}_{Type}_{method}`.
     pub(crate) methods: HashMap<StringId, StringId>,
-    /// Associated type definitions for this instance (e.g., `NEWTYPE Index = Int`).
+    /// Associated type definitions for this instance (e.g., `newtype Index = Int`).
     ///
     /// Currently empty; will be populated when associated types are parsed (Phase 2).
     pub(crate) assoc_types: SmallVec<[AssocTypeDef; 1]>,

@@ -100,7 +100,7 @@ impl Parser {
             })
     }
 
-    /// `FUN name (params) { body }` or `FUN name[T](params) -> Type { body }`
+    /// `fun name (params) { body }` or `fun name[T](params) -> Type { body }`
     fn fun_stmt(
         stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
             + Clone
@@ -298,7 +298,7 @@ impl Parser {
             })
     }
 
-    /// `CLASS ClassName[ClassArgs] FOR TypeExpr [WHERE constraints] { methods }`
+    /// `class ClassName[ClassArgs] FOR TypeExpr [WHERE constraints] { methods }`
     ///
     /// User-defined class instance declaration. Implements a builtin class
     /// (e.g., `Display`, `Into`, `Ord`) for a user type.
@@ -351,7 +351,7 @@ impl Parser {
             .or_not()
             .map(|cs| cs.unwrap_or_default());
 
-        // Instance method: `FUN name(params) [-> Type] { body }`
+        // Instance method: `fun name(params) [-> Type] { body }`
         let method_param = Self::ident().then(
             just(Token::Colon)
                 .ignore_then(Self::opt_newlines())
@@ -395,7 +395,7 @@ impl Parser {
                 },
             );
 
-        // Associated type: `NEWTYPE Index = Int` or `NEWTYPE Index: Ord = Int`
+        // Associated type: `newtype Index = Int` or `newtype Index: Ord = Int`
         let assoc_type_constraint = just(Token::Colon)
             .ignore_then(Self::opt_newlines())
             .ignore_then(Self::constraint())
@@ -417,7 +417,7 @@ impl Parser {
                 }
             });
 
-        // Instance body item: either NEWTYPE or FUN
+        // Instance body item: either newtype or fun
         #[derive(Clone)]
         #[allow(clippy::large_enum_variant)]
         enum InstanceItem {
@@ -428,7 +428,7 @@ impl Parser {
             .map(InstanceItem::AssocType)
             .or(method.map(InstanceItem::Method));
 
-        // Instance body: `{ NEWTYPE ... FUN ... }`
+        // Instance body: `{ newtype ... fun ... }`
         let instance_body = just(Token::LBrace)
             .ignore_then(Self::opt_newlines())
             .ignore_then(
@@ -486,7 +486,7 @@ impl Parser {
     /// User-defined module declaration.
     ///
     /// Two forms are supported:
-    /// - Inline: `MODULE Name { ... }`
+    /// - Inline: `module Name { ... }`
     fn module_stmt(
         stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
             + Clone

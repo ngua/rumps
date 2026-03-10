@@ -160,9 +160,9 @@ impl InferCtx<'_> {
 
         // Generalize over ALL free type variables in both the function type
         // and the constraints. This includes:
-        // - Explicit type parameters (e.g., `T` in `FUN f[T](x: T) -> T`)
-        // - Inferred type variables from unannotated params/returns (e.g., `FUN id(x) { x }`)
-        // - Type variables that only appear in constraints (e.g., `T` in `FUN f[T, F: Fallible[T]](x: F)`)
+        // - Explicit type parameters (e.g., `T` in `fun f[T](x: T) -> T`)
+        // - Inferred type variables from unannotated params/returns (e.g., `fun id(x) { x }`)
+        // - Type variables that only appear in constraints (e.g., `T` in `fun f[T, F: Fallible[T]](x: F)`)
         let outer_free = self.env.free_vars(&self.ty_arena);
         let mut fn_free = self.ty_arena.free_vars(fn_ty);
 
@@ -212,7 +212,7 @@ impl InferCtx<'_> {
                     self.hoist_module(&nested_path, body, item_span);
                 }
 
-                // TYPE/UNION/NEWTYPE: register visibility for imports.
+                // TYPE/union/newtype: register visibility for imports.
                 // Type definitions are processed by registry; we only need
                 // to record visibility so imports can check access.
                 Some(Stmt::Type { ref name, vis, .. })
@@ -293,7 +293,7 @@ impl InferCtx<'_> {
                     }
                 }
 
-                // Module LET bindings: hoist with provisional type.
+                // Module let bindings: hoist with provisional type.
                 // Only simple bindings are valid; destructuring rejected in Pass 2.
                 Some(Stmt::Let(
                     BindingPattern::Var(ref const_name),
