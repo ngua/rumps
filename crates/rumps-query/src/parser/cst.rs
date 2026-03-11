@@ -46,6 +46,7 @@
 use smallvec::SmallVec;
 
 use crate::ast::{BinOp, Intrinsic, JsonAccessKind, Literal, UnOp};
+use crate::intern::StringId;
 use crate::typecheck::BuiltinClass;
 use crate::Span;
 
@@ -54,7 +55,7 @@ use crate::Span;
 /// Represents `T` or `T: Class1 + Class2` in type parameter lists.
 #[derive(Clone, Debug)]
 pub(crate) struct TypeParam {
-    pub name: String,
+    pub name: StringId,
     pub constraints: SmallVec<[BuiltinClass<TypeExpr>; 2]>,
 }
 
@@ -68,16 +69,16 @@ pub(crate) enum TypePattern {
     Type(TypeExpr),
 
     /// Variant check without payload: `is Option.None`.
-    Variant(String, String),
+    Variant(StringId, StringId),
 
     /// Variant check ignoring payload: `is Option.Some(_)`.
-    VariantWildcard(String, String),
+    VariantWildcard(StringId, StringId),
 
     /// Variant check with binding: `is Option.Some(val)`.
-    VariantBind(String, String, SmallVec<[String; 2]>),
+    VariantBind(StringId, StringId, SmallVec<[StringId; 2]>),
 
     /// Structural object check: `is { name: String, age: Int }`.
-    Object(Vec<(String, TypeExpr)>),
+    Object(Vec<(StringId, TypeExpr)>),
 }
 
 /// An array element: either a single expression or a spread.
@@ -93,7 +94,7 @@ pub(crate) enum ArrayElem {
 #[derive(Clone, Debug)]
 pub(crate) enum ObjectEntry {
     /// A key-value field: `key: expr`
-    Field(String, Expr),
+    Field(StringId, Expr),
     /// A spread: `...expr`
     Spread(Expr),
 }
@@ -118,9 +119,9 @@ pub(crate) enum SubscriptElem {
 #[derive(Clone, Debug)]
 pub(crate) enum DbRef {
     /// Local B-tree variable: `data{1}`, `data{...keys}`, `data{}`.
-    Local(String, Vec<SubscriptElem>),
+    Local(StringId, Vec<SubscriptElem>),
     /// Global B-tree variable: `^PATIENT`, `^DATA{1, ...rest}`.
-    Global(String, Vec<SubscriptElem>),
+    Global(StringId, Vec<SubscriptElem>),
 }
 
 /// A CST expression node with inline span.
@@ -162,7 +163,7 @@ pub(crate) enum ExprKind {
     Interpolation(Vec<String>),
 
     /// A lexical variable reference.
-    Var(String),
+    Var(StringId),
 
     /// Database intrinsic: `@get`, `@set`, `@kill`, `@data`, `@order`, `@query`.
     ///
@@ -202,10 +203,10 @@ pub(crate) enum ExprKind {
     OptionalIndex(Box<Expr>, Box<Expr>),
 
     /// Field access.
-    Field(Box<Expr>, String),
+    Field(Box<Expr>, StringId),
 
     /// Optional field access.
-    OptionalField(Box<Expr>, String),
+    OptionalField(Box<Expr>, StringId),
 
     /// Variant constructor.
     ///
@@ -213,7 +214,7 @@ pub(crate) enum ExprKind {
     /// future module support. The name resolution pass converts field access
     /// on registered types (`Type.Variant`) to `Expr::Variant`; the parser
     /// emits generic `Field` and `Call` nodes.
-    Variant(String, String, Vec<Expr>),
+    Variant(StringId, StringId, Vec<Expr>),
 
     /// Type check.
     Is(Box<Expr>, TypePattern),
@@ -233,7 +234,7 @@ pub(crate) enum ExprKind {
     /// Closure.
     Closure {
         type_params: Vec<TypeParam>,
-        params: SmallVec<[(String, Option<TypeExpr>); 4]>,
+        params: SmallVec<[(StringId, Option<TypeExpr>); 4]>,
         ret: Option<TypeExpr>,
         body: Box<Expr>,
     },
@@ -310,8 +311,8 @@ pub(crate) enum ExprKind {
     /// Forever loop: `FOREVER seed (state, cont) => body`.
     Forever {
         seed: Box<Expr>,
-        state_param: (String, Option<TypeExpr>),
-        cont_param: (String, Option<TypeExpr>),
+        state_param: (StringId, Option<TypeExpr>),
+        cont_param: (StringId, Option<TypeExpr>),
         body: Box<Expr>,
     },
 
@@ -342,7 +343,7 @@ pub(crate) enum ExprKind {
     /// - `Numeric:add(a, b)` (binary method)
     /// - `Fallible:unwrap(opt)` (unary method)
     /// - `Mappable:map(fn, arr)` (higher-order method)
-    ClassMethod(String, String, Vec<Expr>),
+    ClassMethod(StringId, StringId, Vec<Expr>),
 
     /// Class method reference: `Class:method` or `Class[T, ...]:method`.
     ///
@@ -352,14 +353,14 @@ pub(crate) enum ExprKind {
     /// The optional type arguments (`Vec<TypeExpr>`) are required for convert
     /// methods (`Fallible:wrap`, `Into:into`, `TryInto:try-into`) when used as
     /// first-class values, to specify the target type.
-    ClassMethodRef(String, Vec<TypeExpr>, String),
+    ClassMethodRef(StringId, Vec<TypeExpr>, StringId),
 }
 
 /// The key specification for JSON access (CST form).
 #[derive(Clone, Debug)]
 pub(crate) enum JsonAccessKey {
     /// Static field name: `data.field` or `data..field`
-    Field(String),
+    Field(StringId),
     /// Dynamic key expression: `data->"key"` or `data->>"key"`
     Expr(Box<Expr>),
 }
@@ -384,7 +385,7 @@ pub(crate) enum RestPattern {
     /// `..` ; ignore remaining elements
     Ignore,
     /// `...name` ; bind remaining elements to `name`
-    Bind(String),
+    Bind(StringId),
 }
 
 /// Visibility modifier for module members.
@@ -404,13 +405,13 @@ pub(crate) enum Visibility {
 #[derive(Clone, Debug)]
 pub(crate) enum BindingPattern {
     /// Simple variable binding: `x`
-    Var(String),
+    Var(StringId),
 
     /// Tuple destructuring: `(a, b, c)`
     Tuple(Vec<Self>),
 
     /// Object destructuring: `{ name, age }` or `{ name: n, age: a }`
-    Object(Vec<(String, Self)>),
+    Object(Vec<(StringId, Self)>),
 
     /// Array destructuring: `[a, b]`, `[a, b, ..]`, or `[head, ...tail]`
     Array(Vec<Self>, Option<RestPattern>),
@@ -422,8 +423,8 @@ pub(crate) enum BindingPattern {
 /// A method definition in a class instance (CST form).
 #[derive(Clone, Debug)]
 pub(crate) struct InstanceMethodDef {
-    pub(crate) name: String,
-    pub(crate) params: SmallVec<[(String, Option<TypeExpr>); 4]>,
+    pub(crate) name: StringId,
+    pub(crate) params: SmallVec<[(StringId, Option<TypeExpr>); 4]>,
     pub(crate) ret: Option<TypeExpr>,
     pub(crate) body: Expr,
     pub(crate) span: Span,
@@ -436,7 +437,7 @@ pub(crate) struct InstanceMethodDef {
 #[derive(Clone, Debug)]
 pub(crate) struct AssocTypeCst {
     /// Associated type name (e.g., `"Index"`).
-    pub(crate) name: String,
+    pub(crate) name: StringId,
     /// Optional constraint on the associated type.
     pub(crate) constraint: Option<BuiltinClass<TypeExpr>>,
     /// The concrete type this associated type maps to.
@@ -463,9 +464,9 @@ pub(crate) enum StmtKind {
     ///
     /// The visibility is only meaningful inside modules (`+fun` for public).
     Fun {
-        name: String,
+        name: StringId,
         type_params: Vec<TypeParam>,
-        params: SmallVec<[(String, Option<TypeExpr>); 4]>,
+        params: SmallVec<[(StringId, Option<TypeExpr>); 4]>,
         ret: Option<TypeExpr>,
         body: Expr,
         vis: Visibility,
@@ -475,7 +476,7 @@ pub(crate) enum StmtKind {
     ///
     /// The visibility is only meaningful inside modules (`+type` for public).
     Type {
-        name: String,
+        name: StringId,
         type_params: Vec<TypeParam>,
         def: TypeDefCst,
         vis: Visibility,
@@ -485,7 +486,7 @@ pub(crate) enum StmtKind {
     ///
     /// The visibility is only meaningful inside modules (`+newtype` for public).
     NewType {
-        name: String,
+        name: StringId,
         type_params: Vec<TypeParam>,
         target: TypeExpr,
         vis: Visibility,
@@ -498,7 +499,7 @@ pub(crate) enum StmtKind {
     ///
     /// The visibility is only meaningful inside modules (`+union` for public).
     Union {
-        name: String,
+        name: StringId,
         type_params: Vec<TypeParam>,
         members: Vec<TypeExpr>,
         vis: Visibility,
@@ -518,7 +519,10 @@ pub(crate) enum StmtKind {
     /// Two forms are supported:
     /// - Inline: `module Name { ... }`
     /// - File import: `module Name FROM "path/to/module.rumps"`
-    Module { name: String, source: ModuleSource },
+    Module {
+        name: StringId,
+        source: ModuleSource,
+    },
 
     /// Import members from a module.
     ///
@@ -536,7 +540,7 @@ pub(crate) enum StmtKind {
     /// - `class Display FOR Pair[A, B] WHERE A: Display, B: Display { ... }`
     ClassInstance {
         /// Class name (e.g., `"Display"`, `"Into"`, `"Ord"`).
-        class_name: String,
+        class_name: StringId,
         /// Class type arguments (e.g., `[String]` for `Into[String]`).
         class_args: Vec<TypeExpr>,
         /// Type parameters for polymorphic instances (e.g., `[A, B]` in `Pair[A, B]`).
@@ -546,7 +550,7 @@ pub(crate) enum StmtKind {
         /// WHERE clause constraints (e.g., `A: Display, B: Display`).
         ///
         /// Each entry is `(type_param_name, constraints)`.
-        constraints: Vec<(String, Vec<BuiltinClass<TypeExpr>>)>,
+        constraints: Vec<(StringId, Vec<BuiltinClass<TypeExpr>>)>,
         /// Associated type definitions (e.g., `newtype Index = Int`).
         assoc_types: Vec<AssocTypeCst>,
         /// Method implementations.
@@ -569,18 +573,21 @@ pub(crate) enum ModuleSource {
 #[derive(Clone, Debug)]
 pub(crate) enum ImportItem {
     /// Named import: `member` or `member AS alias`.
-    Named { name: String, alias: Option<String> },
+    Named {
+        name: StringId,
+        alias: Option<StringId>,
+    },
     /// Wildcard import: `...`.
     Wildcard,
     /// Exclusion (only valid after wildcard): `-member`.
-    Exclude(String),
+    Exclude(StringId),
 }
 
 /// Import statement.
 #[derive(Clone, Debug)]
 pub(crate) struct ImportStmt {
     /// Module path segments (e.g., `["Module", "Nested"]`).
-    pub(crate) path: Vec<String>,
+    pub(crate) path: Vec<StringId>,
     /// Import items.
     pub(crate) items: Vec<ImportItem>,
 }
@@ -606,10 +613,10 @@ pub(crate) enum TypeExprKind {
     Wildcard,
 
     /// Simple named type.
-    Named(String),
+    Named(Vec<StringId>),
 
     /// Parameterized type.
-    App(String, Vec<TypeExpr>),
+    App(Vec<StringId>, Vec<TypeExpr>),
 
     /// Function type.
     Fn(Vec<TypeExpr>, Box<TypeExpr>),
@@ -627,19 +634,22 @@ pub(crate) enum TypeExprKind {
     ///
     /// Anonymous structural object types in type position. Uses extensible
     /// record semantics: an object matches if it has at least these fields.
-    Object(Vec<(String, TypeExpr)>),
+    Object(Vec<(StringId, TypeExpr)>),
 
     /// Associated type reference: `:Index` (unqualified) or `Indexable:Index` (qualified).
     ///
     /// - `class: None`: unqualified `:Index`, resolved from class context
     /// - `class: Some("Indexable")`: qualified, names the class explicitly
-    AssocType { class: Option<String>, name: String },
+    AssocType {
+        class: Option<StringId>,
+        name: StringId,
+    },
 }
 
 /// A variant definition in a user-defined sum type (CST form).
 #[derive(Clone, Debug)]
 pub(crate) struct VariantCst {
-    pub name: String,
+    pub name: StringId,
     pub payloads: Vec<TypeExpr>,
 }
 
@@ -659,16 +669,16 @@ pub(crate) enum MatchPattern {
     Wildcard,
 
     /// Variable binding: `x`, `name`
-    Var(String),
+    Var(StringId),
 
     /// Literal: `0`, `"hello"`, `true`
     Literal(crate::ast::Literal),
 
     /// Variant with sub-patterns: `Option.Some(x)`, `Result.Err(e)`
-    Variant(String, String, Vec<Self>),
+    Variant(Vec<StringId>, StringId, Vec<Self>),
 
     /// Object destructuring: `{ name, age }`
-    Object(Vec<(String, Self)>),
+    Object(Vec<(StringId, Self)>),
 
     /// Tuple pattern: `(a, b, c)`
     Tuple(Vec<Self>),
@@ -682,7 +692,7 @@ pub(crate) enum MatchPattern {
     /// Type-narrowing pattern: `x IS Int`, `val IS String`
     ///
     /// Matches if the value is of the specified type and binds it to the name.
-    Is(String, TypeExpr),
+    Is(StringId, TypeExpr),
 }
 
 /// A match arm (CST form).

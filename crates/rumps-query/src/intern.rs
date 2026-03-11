@@ -67,4 +67,17 @@ impl StringInterner {
     pub(crate) fn len(&self) -> usize {
         self.strings.len()
     }
+
+    /// Resolve a `StringId` to an owned `String`.
+    pub(crate) fn resolve(&self, id: StringId) -> String {
+        self.get(id).unwrap_or_default().to_owned()
+    }
+
+    /// Join a slice of `StringId`s with `"."` separators.
+    pub(crate) fn join_path(&self, segs: &[StringId]) -> String {
+        segs.iter()
+            .filter_map(|id| self.get(*id))
+            .collect::<Vec<_>>()
+            .join(".")
+    }
 }

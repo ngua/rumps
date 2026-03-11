@@ -15,25 +15,45 @@ use chumsky::primitive::any;
 use nonempty::NonEmpty;
 use ordered_float::OrderedFloat;
 
+use crate::intern::{StringId, StringInterner};
 use crate::{Error, Result, Span, Token};
 
 /// A token paired with its source span.
+///
+/// The type parameter `S` is the string representation; use `StringId` (the
+/// default) for interned tokens and `String` for raw, pre-interning tokens.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Spanned {
-    pub(crate) tok: Token,
+pub(crate) struct Spanned<S = StringId> {
+    pub(crate) tok: Token<S>,
     pub(crate) span: Span,
 }
 
-impl Spanned {
-    fn new(tok: Token, span: Span) -> Self {
+impl<S> Spanned<S> {
+    fn new(tok: Token<S>, span: Span) -> Self {
         Self { tok, span }
     }
 
-    fn from_range(tok: Token, range: Range<usize>) -> Self {
+    fn from_range(tok: Token<S>, range: Range<usize>) -> Self {
         Self {
             tok,
             span: Span::from(range),
         }
+    }
+}
+
+impl<S: Clone + PartialEq> Spanned<S> {
+    /// Emits `Dedent` tokens to return to target indent level.
+    fn emit_dedents(
+        result: &mut Vec<Self>,
+        stack: &mut Vec<usize>,
+        target: usize,
+        span: Span,
+    ) {
+        let count = stack.iter().rev().take_while(|&&lvl| lvl > target).count();
+        (0..count).for_each(|_| {
+            stack.pop();
+            result.push(Self::new(Token::Dedent, span));
+        });
     }
 
     /// Post-processes tokens to convert `DotDot` to `DotDotNoSpace`.
@@ -55,6 +75,77 @@ impl Spanned {
             .collect()
     }
 
+    /// Post-processes tokens to add `Indent` and `Dedent` tokens.
+    ///
+    /// Uses iterative `fold` instead of recursion to avoid stack overflow
+    /// on large files.
+    fn process_indentation(tokens: Vec<Self>) -> Vec<Self> {
+        struct State<S> {
+            result: Vec<Spanned<S>>,
+            indent_stack: Vec<usize>,
+            after_newline: bool,
+            pending_span: Span,
+        }
+
+        let with_cols = TokenWithCol::from_spanned(&tokens);
+        let cap = tokens.len();
+
+        let st = with_cols.into_iter().fold(
+            State {
+                result: Vec::with_capacity(cap),
+                indent_stack: vec![0],
+                after_newline: false,
+                pending_span: Span::default(),
+            },
+            |mut st, t| {
+                match &t.tok {
+                    Token::Newline => {
+                        // Only push the first newline; skip consecutive ones
+                        if !st.after_newline {
+                            st.result.push(Spanned::new(t.tok.clone(), t.span));
+                            st.after_newline = true;
+                            st.pending_span = t.span;
+                        }
+                    }
+                    Token::Eof => {
+                        // Emit final dedents before EOF
+                        (1..st.indent_stack.len()).for_each(|_| {
+                            st.result.push(Spanned::new(Token::Dedent, t.span));
+                        });
+                        st.result.push(Spanned::new(t.tok.clone(), t.span));
+                    }
+                    _ => {
+                        if st.after_newline {
+                            let cur =
+                                st.indent_stack.last().copied().unwrap_or(0);
+                            if t.col > cur {
+                                st.indent_stack.push(t.col);
+                                st.result.push(Spanned::new(
+                                    Token::Indent,
+                                    st.pending_span,
+                                ));
+                            } else {
+                                Self::emit_dedents(
+                                    &mut st.result,
+                                    &mut st.indent_stack,
+                                    t.col,
+                                    st.pending_span,
+                                );
+                            }
+                            st.after_newline = false;
+                        }
+                        st.result.push(Spanned::new(t.tok.clone(), t.span));
+                    }
+                }
+                st
+            },
+        );
+
+        st.result
+    }
+}
+
+impl Spanned<String> {
     /// Converts `Colon` to `ColonNoSpace` for class method syntax.
     ///
     /// Only converts when `:` has NO space on either side AND immediately
@@ -158,88 +249,22 @@ impl Spanned {
         }
         acc
     }
+}
 
-    /// Post-processes tokens to add `Indent` and `Dedent` tokens.
-    ///
-    /// Uses iterative `fold` instead of recursion to avoid stack overflow
-    /// on large files.
-    fn process_indentation(tokens: Vec<Self>) -> Vec<Self> {
-        struct State {
-            result: Vec<Spanned>,
-            indent_stack: Vec<usize>,
-            after_newline: bool,
-            pending_span: Span,
-        }
-
-        let with_cols = TokenWithCol::from_spanned(&tokens);
-        let cap = tokens.len();
-
-        let st = with_cols.into_iter().fold(
-            State {
-                result: Vec::with_capacity(cap),
-                indent_stack: vec![0],
-                after_newline: false,
-                pending_span: Span::default(),
-            },
-            |mut st, t| {
-                match &t.tok {
-                    Token::Newline => {
-                        // Only push the first newline; skip consecutive ones
-                        if !st.after_newline {
-                            st.result.push(Self::new(t.tok.clone(), t.span));
-                            st.after_newline = true;
-                            st.pending_span = t.span;
-                        }
-                    }
-                    Token::Eof => {
-                        // Emit final dedents before EOF
-                        (1..st.indent_stack.len()).for_each(|_| {
-                            st.result.push(Self::new(Token::Dedent, t.span));
-                        });
-                        st.result.push(Self::new(t.tok.clone(), t.span));
-                    }
-                    _ => {
-                        if st.after_newline {
-                            let cur =
-                                st.indent_stack.last().copied().unwrap_or(0);
-                            if t.col > cur {
-                                st.indent_stack.push(t.col);
-                                st.result.push(Self::new(
-                                    Token::Indent,
-                                    st.pending_span,
-                                ));
-                            } else {
-                                Self::emit_dedents(
-                                    &mut st.result,
-                                    &mut st.indent_stack,
-                                    t.col,
-                                    st.pending_span,
-                                );
-                            }
-                            st.after_newline = false;
-                        }
-                        st.result.push(Self::new(t.tok.clone(), t.span));
-                    }
-                }
-                st
-            },
-        );
-
-        st.result
-    }
-
-    /// Emits `Dedent` tokens to return to target indent level.
-    fn emit_dedents(
-        result: &mut Vec<Self>,
-        stack: &mut Vec<usize>,
-        target: usize,
-        span: Span,
-    ) {
-        let count = stack.iter().rev().take_while(|&&lvl| lvl > target).count();
-        (0..count).for_each(|_| {
-            stack.pop();
-            result.push(Self::new(Token::Dedent, span));
-        });
+impl Spanned<String> {
+    /// Interns all string-carrying tokens, converting `Vec<Spanned<String>>` to
+    /// `Vec<Spanned<StringId>>`.
+    pub(crate) fn intern_all(
+        tokens: Vec<Self>,
+        interner: &mut StringInterner,
+    ) -> Vec<Spanned> {
+        tokens
+            .into_iter()
+            .map(|s| Spanned {
+                tok: s.tok.intern(interner),
+                span: s.span,
+            })
+            .collect()
     }
 }
 
@@ -254,8 +279,8 @@ impl<'a> Lexer<'a> {
         Self { src }
     }
 
-    /// Lexes source code into a stream of spanned tokens.
-    pub(crate) fn lex(self) -> Result<Vec<Spanned>> {
+    /// Lexes source code into a stream of raw (pre-interning) spanned tokens.
+    pub(crate) fn lex(self) -> Result<Vec<Spanned<String>>> {
         Self::lexer()
             .parse(self.src)
             .map(Spanned::process_dot_dot)
@@ -291,7 +316,7 @@ impl Lexer<'_> {
     }
 
     /// Main lexer combinator; parses all tokens from source.
-    fn lexer() -> impl Parser<char, Vec<Spanned>, Error = LexErr> {
+    fn lexer() -> impl Parser<char, Vec<Spanned<String>>, Error = LexErr> {
         let tok = Self::token().map(Some);
         let comment = Self::comment().to(None);
         let newline = Self::newline().map(Some);
@@ -329,13 +354,13 @@ impl Lexer<'_> {
     }
 
     /// Newline token.
-    fn newline() -> impl Parser<char, Spanned, Error = LexErr> + Clone {
+    fn newline() -> impl Parser<char, Spanned<String>, Error = LexErr> + Clone {
         just('\n')
             .map_with_span(|_, span| Spanned::from_range(Token::Newline, span))
     }
 
     /// A single token (not whitespace, not comment, not newline).
-    fn token() -> impl Parser<char, Spanned, Error = LexErr> {
+    fn token() -> impl Parser<char, Spanned<String>, Error = LexErr> {
         choice((
             Self::string_lit(),
             Self::char_lit(),
@@ -349,7 +374,8 @@ impl Lexer<'_> {
     }
 
     /// DB intrinsic: `@set`, `@get`, `@kill`, `@data`, `@order`, `@query`.
-    fn intrinsic() -> impl Parser<char, Spanned, Error = LexErr> + Clone {
+    fn intrinsic() -> impl Parser<char, Spanned<String>, Error = LexErr> + Clone
+    {
         just('@').ignore_then(Self::ident_chars()).map_with_span(
             |name, span| {
                 Token::intrinsic(&name)
@@ -371,7 +397,8 @@ impl Lexer<'_> {
     /// Handles escape sequences (`\/`, `\\`). Regex ends at unescaped `/`.
     /// Distinguished from division by requiring non-whitespace content
     /// immediately after the opening `/`.
-    fn regex_lit() -> impl Parser<char, Spanned, Error = LexErr> + Clone {
+    fn regex_lit() -> impl Parser<char, Spanned<String>, Error = LexErr> + Clone
+    {
         // Escape sequence: `\X` where X is any character except newline
         // Preserves the backslash in the output for the regex engine
         let escape_seq = just('\\')
@@ -405,7 +432,8 @@ impl Lexer<'_> {
             })
     }
 
-    fn string_lit() -> impl Parser<char, Spanned, Error = LexErr> + Clone {
+    fn string_lit() -> impl Parser<char, Spanned<String>, Error = LexErr> + Clone
+    {
         just('"')
             .ignore_then(Self::string_content())
             .then_ignore(just('"'))
@@ -572,7 +600,8 @@ impl Lexer<'_> {
         )
     }
 
-    fn char_lit() -> impl Parser<char, Spanned, Error = LexErr> + Clone {
+    fn char_lit() -> impl Parser<char, Spanned<String>, Error = LexErr> + Clone
+    {
         let escape = just('\\').ignore_then(choice((
             just('n').to('\n'),
             just('r').to('\r'),
@@ -591,7 +620,7 @@ impl Lexer<'_> {
             .map_with_span(|c, span| Spanned::from_range(Token::Char(c), span))
     }
 
-    fn number() -> impl Parser<char, Spanned, Error = LexErr> + Clone {
+    fn number() -> impl Parser<char, Spanned<String>, Error = LexErr> + Clone {
         let digits = filter(|c: &char| c.is_ascii_digit())
             .repeated()
             .at_least(1)
@@ -659,7 +688,7 @@ impl Lexer<'_> {
             })
     }
 
-    fn global() -> impl Parser<char, Spanned, Error = LexErr> + Clone {
+    fn global() -> impl Parser<char, Spanned<String>, Error = LexErr> + Clone {
         just('^').ignore_then(Self::ident_chars()).map_with_span(
             |name, span| Spanned::from_range(Token::Global(name), span),
         )
@@ -706,8 +735,8 @@ impl Lexer<'_> {
         })
     }
 
-    fn ident_or_keyword() -> impl Parser<char, Spanned, Error = LexErr> + Clone
-    {
+    fn ident_or_keyword(
+    ) -> impl Parser<char, Spanned<String>, Error = LexErr> + Clone {
         Self::ident_chars().map_with_span(|ident, span| {
             Token::keyword(&ident)
                 .map(|kw| Spanned::from_range(kw, span.clone()))
@@ -717,7 +746,8 @@ impl Lexer<'_> {
         })
     }
 
-    fn operator_or_punct() -> impl Parser<char, Spanned, Error = LexErr> {
+    fn operator_or_punct() -> impl Parser<char, Spanned<String>, Error = LexErr>
+    {
         // Split into groups to avoid tuple size limits
         let two_char = choice((
             just("++").to(Token::Concat),
@@ -779,15 +809,15 @@ impl Lexer<'_> {
 }
 
 /// Token with its column position (bytes from start of line).
-struct TokenWithCol {
-    tok: Token,
+struct TokenWithCol<S> {
+    tok: Token<S>,
     span: Span,
     col: usize,
 }
 
-impl TokenWithCol {
+impl<S: Clone + PartialEq> TokenWithCol<S> {
     /// Computes column positions for each token.
-    fn from_spanned(tokens: &[Spanned]) -> Vec<Self> {
+    fn from_spanned(tokens: &[Spanned<S>]) -> Vec<Self> {
         tokens
             .iter()
             .scan(0u32, |line_start, Spanned { tok, span }| {

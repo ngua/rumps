@@ -5,32 +5,35 @@ use chumsky::Parser as _;
 use smallvec::SmallVec;
 
 use super::{ParseErr, Parser};
+use crate::intern::StringInterner;
 use crate::parser::cst;
 use crate::Token;
 
 impl Parser {
     pub(super) fn stmt(
+        interner: &mut StringInterner,
     ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
-        recursive(|stmt| {
-            let import_stmt = Self::import_stmt();
-            let let_stmt = Self::let_stmt(stmt.clone());
-            let output_stmt = Self::output_stmt(stmt.clone());
-            let fun_stmt = Self::fun_stmt(stmt.clone());
-            let type_stmt = Self::type_stmt();
-            let newtype_stmt = Self::newtype_stmt();
-            let union_stmt = Self::union_stmt();
-            let class_stmt = Self::class_stmt(stmt.clone());
+        let import_stmt = Self::import_stmt();
+        let type_stmt = Self::type_stmt(interner);
+        let newtype_stmt = Self::newtype_stmt(interner);
+        let union_stmt = Self::union_stmt(interner);
+
+        recursive(move |stmt| {
+            let let_stmt = Self::let_stmt(interner, stmt.clone());
+            let output_stmt = Self::output_stmt(interner, stmt.clone());
+            let fun_stmt = Self::fun_stmt(interner, stmt.clone());
+            let class_stmt = Self::class_stmt(interner, stmt.clone());
             let module_stmt = Self::module_stmt(stmt.clone());
-            let expr_stmt = Self::expr_stmt(stmt);
+            let expr_stmt = Self::expr_stmt(interner, stmt);
 
             choice((
-                import_stmt,
+                import_stmt.clone(),
                 let_stmt,
                 output_stmt,
                 fun_stmt,
-                type_stmt,
-                newtype_stmt,
-                union_stmt,
+                type_stmt.clone(),
+                newtype_stmt.clone(),
+                union_stmt.clone(),
                 class_stmt,
                 module_stmt,
                 expr_stmt,
@@ -39,12 +42,16 @@ impl Parser {
     }
 
     fn let_stmt(
+        interner: &mut StringInterner,
         stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
-        let type_ann =
-            just(Token::Colon).ignore_then(Self::type_expr()).or_not();
+        let type_ann = just(Token::Colon)
+            .ignore_then(Self::type_expr(interner))
+            .or_not();
+
+        let pat = Self::binding_pattern(interner);
 
         // Optional `+` visibility prefix
         let vis = just(Token::Plus)
@@ -53,41 +60,48 @@ impl Parser {
             .map(|v| v.unwrap_or_default());
 
         vis.then_ignore(just(Token::Let))
-            .then(Self::binding_pattern())
+            .then(pat)
             .then(type_ann)
             .then_ignore(just(Token::Assign))
             .then_ignore(Self::opt_newlines())
-            .then(Self::expr(stmt))
+            .then(Self::expr(interner, stmt))
             .map_with_span(|(((vis, pat), ty_ann), val), span| {
                 cst::Stmt::new(cst::StmtKind::Let(pat, ty_ann, val, vis), span)
             })
     }
 
     fn output_stmt(
+        interner: &mut StringInterner,
         stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
-        let format = Self::ctx_ident("json")
+        let json = interner.intern("json");
+        let raw = interner.intern("raw");
+        let to = interner.intern("to");
+        let error = interner.intern("error");
+        let file = interner.intern("file");
+
+        let format = Self::ctx_ident(json)
             .to(cst::OutputFormat::Json)
-            .or(Self::ctx_ident("raw").to(cst::OutputFormat::Raw))
+            .or(Self::ctx_ident(raw).to(cst::OutputFormat::Raw))
             .or_not()
             .map(|f| f.unwrap_or_default());
 
-        let to_error = Self::ctx_ident("to")
-            .ignore_then(Self::ctx_ident("error"))
+        let to_error = Self::ctx_ident(to)
+            .ignore_then(Self::ctx_ident(error))
             .to(cst::OutputTarget::Stderr);
 
-        let to_file = Self::ctx_ident("to")
-            .ignore_then(Self::ctx_ident("file"))
-            .ignore_then(Self::expr(stmt.clone()))
+        let to_file = Self::ctx_ident(to)
+            .ignore_then(Self::ctx_ident(file))
+            .ignore_then(Self::expr(interner, stmt.clone()))
             .map(|e| cst::OutputTarget::File(Box::new(e)));
 
         let target =
             to_error.or(to_file).or_not().map(|t| t.unwrap_or_default());
 
         just(Token::Write)
-            .ignore_then(Self::expr(stmt))
+            .ignore_then(Self::expr(interner, stmt))
             .then(format)
             .then(target)
             .map_with_span(|((expr, format), target), span| {
@@ -102,6 +116,7 @@ impl Parser {
 
     /// `fun name (params) { body }` or `fun name[T](params) -> Type { body }`
     fn fun_stmt(
+        interner: &mut StringInterner,
         stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
             + Clone
             + 'static,
@@ -111,7 +126,7 @@ impl Parser {
             .then(
                 just(Token::Colon)
                     .ignore_then(Self::opt_newlines())
-                    .ignore_then(Self::type_expr())
+                    .ignore_then(Self::type_expr(interner))
                     .or_not(),
             )
             .map(|(name, ty)| (name, ty));
@@ -129,7 +144,7 @@ impl Parser {
         let ret_ty = Self::opt_newlines()
             .ignore_then(just(Token::Arrow))
             .ignore_then(Self::opt_newlines())
-            .ignore_then(Self::type_expr())
+            .ignore_then(Self::type_expr(interner))
             .or_not();
 
         // Body block
@@ -145,7 +160,7 @@ impl Parser {
             .then_ignore(Self::opt_newlines())
             .then(Self::ident())
             .then_ignore(Self::opt_newlines())
-            .then(Self::type_params())
+            .then(Self::type_params(interner))
             .then_ignore(Self::opt_newlines())
             .then(params)
             .then(ret_ty)
@@ -173,22 +188,24 @@ impl Parser {
             )
     }
 
-    fn type_stmt() -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
+    fn type_stmt(
+        interner: &mut StringInterner,
+    ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> + Clone {
         // Variant: `Name` or `Name(Type, Type, ...)`
         let payload_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
         let payloads = just(Token::LParen)
             .ignore_then(Self::opt_newlines())
             .ignore_then(
-                Self::type_expr().separated_by(payload_sep).allow_trailing(),
+                Self::type_expr(interner)
+                    .separated_by(payload_sep)
+                    .allow_trailing(),
             )
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::RParen))
             .or_not()
             .map(|ps| ps.unwrap_or_default());
 
-        // Uses `ident_or_contextual_keyword` because variant names like `Raise` may
-        // also be keywords
-        let variant = Self::ident_or_contextual_keyword()
+        let variant = Self::ident()
             .then(payloads)
             .map(|(name, payloads)| cst::VariantCst { name, payloads });
 
@@ -212,7 +229,7 @@ impl Parser {
         vis.then_ignore(just(Token::Type))
             .then_ignore(Self::opt_newlines())
             .then(Self::ident())
-            .then(Self::type_params())
+            .then(Self::type_params(interner))
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::Assign))
             .then_ignore(Self::opt_newlines())
@@ -230,8 +247,9 @@ impl Parser {
             })
     }
 
-    fn newtype_stmt() -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
-    {
+    fn newtype_stmt(
+        interner: &mut StringInterner,
+    ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> + Clone {
         // Optional `+` visibility prefix
         let vis = just(Token::Plus)
             .to(cst::Visibility::Public)
@@ -241,11 +259,11 @@ impl Parser {
         vis.then_ignore(just(Token::NewType))
             .then_ignore(Self::opt_newlines())
             .then(Self::ident())
-            .then(Self::type_params())
+            .then(Self::type_params(interner))
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::Assign))
             .then_ignore(Self::opt_newlines())
-            .then(Self::type_expr())
+            .then(Self::type_expr(interner))
             .map_with_span(|(((vis, name), type_params), target), span| {
                 cst::Stmt::new(
                     cst::StmtKind::NewType {
@@ -259,14 +277,15 @@ impl Parser {
             })
     }
 
-    fn union_stmt() -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
-    {
+    fn union_stmt(
+        interner: &mut StringInterner,
+    ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> + Clone {
         // Type members separated by `|`
         let member_sep = Self::opt_newlines()
             .ignore_then(just(Token::SinglePipe))
             .then_ignore(Self::opt_newlines());
 
-        let members = Self::type_expr_atom()
+        let members = Self::type_expr_atom(interner)
             .separated_by(member_sep)
             .at_least(2)
             .allow_leading();
@@ -280,7 +299,7 @@ impl Parser {
         vis.then_ignore(just(Token::Union))
             .then_ignore(Self::opt_newlines())
             .then(Self::ident())
-            .then(Self::type_params())
+            .then(Self::type_params(interner))
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::Assign))
             .then_ignore(Self::opt_newlines())
@@ -303,15 +322,19 @@ impl Parser {
     /// User-defined class instance declaration. Implements a builtin class
     /// (e.g., `Display`, `Into`, `Ord`) for a user type.
     fn class_stmt(
+        interner: &mut StringInterner,
         stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
+        let where_ = interner.intern("where");
+        let for_ = interner.intern("for");
+
         // Optional class type arguments: `[String]` for `Into[String]`
         let class_args = just(Token::LBracket)
             .ignore_then(Self::opt_newlines())
             .ignore_then(
-                Self::type_expr()
+                Self::type_expr(interner)
                     .separated_by(
                         just(Token::Comma).then_ignore(Self::opt_newlines()),
                     )
@@ -328,7 +351,7 @@ impl Parser {
             .then_ignore(just(Token::Colon))
             .then_ignore(Self::opt_newlines())
             .then(
-                Self::constraint()
+                Self::constraint(interner)
                     .separated_by(
                         Self::opt_newlines()
                             .ignore_then(just(Token::Plus))
@@ -338,7 +361,7 @@ impl Parser {
             );
 
         // Optional WHERE clause: `WHERE A: Display, B: Display`
-        let where_clause = Self::ctx_ident("where")
+        let where_clause = Self::ctx_ident(where_)
             .ignore_then(Self::opt_newlines())
             .ignore_then(
                 where_constraint
@@ -355,7 +378,7 @@ impl Parser {
         let method_param = Self::ident().then(
             just(Token::Colon)
                 .ignore_then(Self::opt_newlines())
-                .ignore_then(Self::type_expr())
+                .ignore_then(Self::type_expr(interner))
                 .or_not(),
         );
         let method_param_sep =
@@ -370,7 +393,7 @@ impl Parser {
         let method_ret = Self::opt_newlines()
             .ignore_then(just(Token::Arrow))
             .ignore_then(Self::opt_newlines())
-            .ignore_then(Self::type_expr())
+            .ignore_then(Self::type_expr(interner))
             .or_not();
         let method_body = Self::block(stmt.clone());
 
@@ -398,7 +421,7 @@ impl Parser {
         // Associated type: `newtype Index = Int` or `newtype Index: Ord = Int`
         let assoc_type_constraint = just(Token::Colon)
             .ignore_then(Self::opt_newlines())
-            .ignore_then(Self::constraint())
+            .ignore_then(Self::constraint(interner))
             .or_not();
         let assoc_type = just(Token::NewType)
             .ignore_then(Self::opt_newlines())
@@ -407,7 +430,7 @@ impl Parser {
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::Assign))
             .then_ignore(Self::opt_newlines())
-            .then(Self::type_expr())
+            .then(Self::type_expr(interner))
             .map_with_span(|((name, constraint), target), span| {
                 cst::AssocTypeCst {
                     name,
@@ -454,9 +477,9 @@ impl Parser {
             .ignore_then(Self::ident())
             .then(class_args)
             .then_ignore(Self::opt_newlines())
-            .then_ignore(Self::ctx_ident("for"))
+            .then_ignore(Self::ctx_ident(for_))
             .then_ignore(Self::opt_newlines())
-            .then(Self::type_expr())
+            .then(Self::type_expr(interner))
             .then_ignore(Self::opt_newlines())
             .then(where_clause)
             .then_ignore(Self::opt_newlines())
@@ -517,8 +540,8 @@ impl Parser {
     /// `IMPORT Module.{ member, ... }` or `IMPORT Module.{ ... }`.
     ///
     /// Imports members from a module into the current scope.
-    fn import_stmt() -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
-    {
+    fn import_stmt(
+    ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> + Clone {
         // Module path: idents separated by `.`
         let path = Self::ident().separated_by(just(Token::Dot)).at_least(1);
 
@@ -556,11 +579,12 @@ impl Parser {
     }
 
     fn expr_stmt(
+        interner: &mut StringInterner,
         stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
-        Self::expr(stmt).map_with_span(|expr, span| {
+        Self::expr(interner, stmt).map_with_span(|expr, span| {
             cst::Stmt::new(cst::StmtKind::Expr(expr), span)
         })
     }

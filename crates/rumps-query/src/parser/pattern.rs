@@ -6,21 +6,25 @@ use ordered_float::OrderedFloat;
 
 use super::{ParseErr, Parser};
 use crate::ast::{Literal, NumericLit};
+use crate::intern::{StringId, StringInterner};
 use crate::parser::cst;
 use crate::{Span, Token};
 
 impl Parser {
     /// Parse a binding pattern for destructuring.
     pub(super) fn binding_pattern(
+        interner: &mut StringInterner,
     ) -> impl chumsky::Parser<Token, cst::BindingPattern, Error = ParseErr> + Clone
     {
-        recursive(|pat| {
+        let underscore = interner.intern("_");
+
+        recursive(move |pat| {
             // Wildcard: `_`
-            let wildcard = select! { Token::Ident(s) if s == "_" => () }
+            let wildcard = select! { Token::Ident(s) if s == underscore => () }
                 .to(cst::BindingPattern::Wildcard);
 
             // Simple variable: any identifier except `_`
-            let var = select! { Token::Ident(s) if s != "_" => s }
+            let var = select! { Token::Ident(s) if s != underscore => s }
                 .map(cst::BindingPattern::Var);
 
             // Tuple pattern: `(a, b, c)` or `(a, b,)`
@@ -39,7 +43,7 @@ impl Parser {
                 .map(cst::BindingPattern::Tuple);
 
             // Object field pattern: `name` (shorthand) or `name: pattern`
-            let obj_field = select! { Token::Ident(s) if s != "_" => s }
+            let obj_field = select! { Token::Ident(s) if s != underscore => s }
                 .then(
                     just(Token::Colon)
                         .ignore_then(Self::opt_newlines())
@@ -47,9 +51,8 @@ impl Parser {
                         .or_not(),
                 )
                 .map(|(name, maybe_pat)| {
-                    let p = maybe_pat.unwrap_or_else(|| {
-                        cst::BindingPattern::Var(name.clone())
-                    });
+                    let p = maybe_pat
+                        .unwrap_or_else(|| cst::BindingPattern::Var(name));
                     (name, p)
                 });
 
@@ -69,7 +72,9 @@ impl Parser {
 
             // Rest patterns: `..` (ignore) or `...name` (bind)
             let rest_bind = just(Token::DotDotDot)
-                .ignore_then(select! { Token::Ident(s) if s != "_" => s })
+                .ignore_then(
+                    select! { Token::Ident(s) if s != underscore => s },
+                )
                 .map(ArrayPatElem::RestBind);
             let rest_ignore = just(Token::DotDot).to(ArrayPatElem::RestIgnore);
 
@@ -145,11 +150,15 @@ impl Parser {
     /// Patterns include wildcards, variables, literals, variants, objects, and
     /// tuples. This is recursive to handle nested patterns.
     pub(super) fn match_pattern(
+        interner: &mut StringInterner,
     ) -> impl chumsky::Parser<Token, cst::MatchPattern, Error = ParseErr> + Clone
     {
-        recursive(|pat| {
+        let underscore = interner.intern("_");
+        let ty = Self::type_expr(interner);
+
+        recursive(move |pat| {
             // Wildcard: `_`
-            let wildcard = select! { Token::Ident(s) if s == "_" => () }
+            let wildcard = select! { Token::Ident(s) if s == underscore => () }
                 .to(cst::MatchPattern::Wildcard);
 
             // Literals
@@ -191,9 +200,7 @@ impl Parser {
             // Variant pattern: `Type.Variant` or `Module.Type.Variant`
             // Parse a path of at least two segments; the last is the variant,
             // everything else (joined by `.`) is the type path.
-            // Uses `ident_or_contextual_keyword` because variant names like `Raise`
-            // may also be keywords.
-            let variant_pat = Self::ident_or_contextual_keyword()
+            let variant_pat = Self::ident()
                 .separated_by(just(Token::Dot))
                 .at_least(2)
                 .then(variant_args.or_not())
@@ -202,8 +209,8 @@ impl Parser {
                         .split_last()
                         .map(|(var, type_path)| {
                             cst::MatchPattern::Variant(
-                                type_path.join("."),
-                                var.clone(),
+                                type_path.to_vec(),
+                                *var,
                                 args.unwrap_or_default(),
                             )
                         })
@@ -236,9 +243,8 @@ impl Parser {
                         .or_not(),
                 )
                 .map(|(name, maybe_pat)| {
-                    let p = maybe_pat.unwrap_or_else(|| {
-                        cst::MatchPattern::Var(name.clone())
-                    });
+                    let p = maybe_pat
+                        .unwrap_or_else(|| cst::MatchPattern::Var(name));
                     (name, p)
                 });
 
@@ -253,7 +259,9 @@ impl Parser {
 
             // Rest patterns for arrays: `..` (ignore) or `...name` (bind)
             let arr_rest_bind = just(Token::DotDotDot)
-                .ignore_then(select! { Token::Ident(s) if s != "_" => s })
+                .ignore_then(
+                    select! { Token::Ident(s) if s != underscore => s },
+                )
                 .map(MatchArrayPatElem::RestBind);
             // Accept both DotDot and DotDotNoSpace for rest ignore in patterns
             let arr_rest_ignore = just(Token::DotDot)
@@ -275,15 +283,15 @@ impl Parser {
                 .try_map(Self::build_match_array_pattern);
 
             // Variable: any identifier except `_`
-            let var_pat = select! { Token::Ident(s) if s != "_" => s }
+            let var_pat = select! { Token::Ident(s) if s != underscore => s }
                 .map(cst::MatchPattern::Var);
 
             // Type-narrowing pattern: `name IS Type`
-            let is_pat = select! { Token::Ident(s) if s != "_" => s }
+            let is_pat = select! { Token::Ident(s) if s != underscore => s }
                 .then_ignore(Self::opt_newlines())
                 .then_ignore(just(Token::Is))
                 .then_ignore(Self::opt_newlines())
-                .then(Self::type_expr())
+                .then(ty.clone())
                 .map(|(name, ty)| cst::MatchPattern::Is(name, ty));
 
             // Order: is_pat before var (so `x IS Type` is parsed correctly)
@@ -353,12 +361,13 @@ impl Parser {
 
     /// Parse a match arm: `pattern => body` or `pattern IF guard => body`.
     pub(super) fn match_arm(
+        interner: &mut StringInterner,
         expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::MatchArm, Error = ParseErr> + Clone
     {
-        Self::match_pattern()
+        Self::match_pattern(interner)
             .then(
                 Self::opt_newlines()
                     .ignore_then(just(Token::If))
@@ -386,7 +395,7 @@ pub(super) enum ArrayPatElem {
     /// Rest ignore: `..`
     RestIgnore,
     /// Rest bind: `...name`
-    RestBind(String),
+    RestBind(StringId),
 }
 
 /// Helper enum for match array pattern elements during parsing.
@@ -397,5 +406,5 @@ pub(super) enum MatchArrayPatElem {
     /// Rest ignore: `..`
     RestIgnore,
     /// Rest bind: `...name`
-    RestBind(String),
+    RestBind(StringId),
 }

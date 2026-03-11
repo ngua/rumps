@@ -4,6 +4,7 @@ use chumsky::prelude::{choice, just, select};
 use chumsky::Parser as _;
 
 use super::{ParseErr, Parser};
+use crate::intern::StringId;
 use crate::parser::cst;
 use crate::{Span, Token};
 
@@ -19,8 +20,6 @@ impl Parser {
     ) -> impl chumsky::Parser<Token, Vec<PostfixOp>, Error = ParseErr> + Clone
     {
         // Field access: `.field` or tuple index `.0`, `.1`, etc.
-        // Uses `ident_or_contextual_keyword` so keywords work as variant names
-        // (e.g., `Action.Raise`)
         let field_or_tuple_idx = just(Token::Dot).ignore_then(
             // Try tuple index first (integer literal)
             select! { Token::Int(n) => n }
@@ -34,13 +33,12 @@ impl Parser {
                 })
                 .map_with_span(PostfixOp::TupleIndex)
                 // Otherwise, it's a field access
-                .or(Self::ident_or_contextual_keyword()
-                    .map_with_span(PostfixOp::Field)),
+                .or(Self::ident().map_with_span(PostfixOp::Field)),
         );
 
         // Optional field access: `?.field`
         let opt_field = just(Token::QuestionDot)
-            .ignore_then(Self::ident_or_contextual_keyword())
+            .ignore_then(Self::ident())
             .map_with_span(PostfixOp::OptionalField);
 
         // Index: `[expr]`
@@ -202,8 +200,8 @@ impl Parser {
 
 /// Helper enum for postfix operations during folding.
 pub(super) enum PostfixOp {
-    Field(String, Span),
-    OptionalField(String, Span),
+    Field(StringId, Span),
+    OptionalField(StringId, Span),
     TupleIndex(u32, Span),
     Index(Box<cst::Expr>, Span),
     /// Safe index access: `?[expr]` (returns `Option[T]`).
@@ -211,7 +209,7 @@ pub(super) enum PostfixOp {
     Call(Vec<cst::Expr>, Span),
     Unwrap(Span),
     /// JSON scalar static field: `..field` (returns `Option[T]`).
-    JsonScalarField(String, Span),
+    JsonScalarField(StringId, Span),
     /// JSON access with dynamic key: `->(expr)` (returns `Json`).
     JsonArrow(Box<cst::Expr>, Span),
     /// JSON scalar access with dynamic key: `->>(expr)` (returns `Option[T]`).

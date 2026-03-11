@@ -5,6 +5,7 @@ use chumsky::Parser as _;
 use smallvec::SmallVec;
 
 use super::{ParseErr, Parser};
+use crate::intern::{StringId, StringInterner};
 use crate::parser::cst;
 use crate::typecheck::{BuiltinClass, BuiltinClassTag, ClassShape};
 use crate::{Span, Token};
@@ -12,8 +13,11 @@ use crate::{Span, Token};
 impl Parser {
     /// Parse a type expression.
     pub(super) fn type_expr(
+        interner: &mut StringInterner,
     ) -> impl chumsky::Parser<Token, cst::TypeExpr, Error = ParseErr> + Clone
     {
+        let underscore = interner.intern("_");
+
         recursive(|ty| {
             // Type parameters: `[T]` or `[T, E]`
             let type_params = ty
@@ -23,7 +27,7 @@ impl Parser {
                 .delimited_by(just(Token::LBracket), just(Token::RBracket));
 
             // Wildcard: `_` (represents "any type" in type argument position)
-            let wildcard = select! { Token::Ident(s) if s == "_" => () }
+            let wildcard = select! { Token::Ident(s) if s == underscore => () }
                 .map_with_span(|(), span| {
                     TypeAtomOrParams::Single(cst::TypeExpr::new(
                         cst::TypeExprKind::Wildcard,
@@ -63,10 +67,9 @@ impl Parser {
                 .at_least(1)
                 .then(type_params.or_not())
                 .map_with_span(|(segments, params), span| {
-                    let name = segments.join(".");
                     let kind = match params {
-                        None => cst::TypeExprKind::Named(name),
-                        Some(ps) => cst::TypeExprKind::App(name, ps),
+                        None => cst::TypeExprKind::Named(segments),
+                        Some(ps) => cst::TypeExprKind::App(segments, ps),
                     };
                     TypeAtomOrParams::Single(cst::TypeExpr::new(kind, span))
                 });
@@ -162,16 +165,19 @@ impl Parser {
     /// Does not parse unions or function types; used for simple contexts.
     /// Supports qualified names like `Module.Type` and wildcards (`_`).
     pub(super) fn type_expr_atom(
+        interner: &mut StringInterner,
     ) -> impl chumsky::Parser<Token, cst::TypeExpr, Error = ParseErr> + Clone
     {
+        let underscore = interner.intern("_");
+
         // Type parameters: `[T]` or `[T, E]`
-        let type_params = Self::type_expr()
+        let type_params = Self::type_expr(interner)
             .separated_by(just(Token::Comma))
             .at_least(1)
             .delimited_by(just(Token::LBracket), just(Token::RBracket));
 
         // Wildcard: `_`
-        let wildcard = select! { Token::Ident(s) if s == "_" => () }
+        let wildcard = select! { Token::Ident(s) if s == underscore => () }
             .map_with_span(|(), span| {
                 cst::TypeExpr::new(cst::TypeExprKind::Wildcard, span)
             });
@@ -182,10 +188,9 @@ impl Parser {
             .at_least(1)
             .then(type_params.or_not())
             .map_with_span(|(segments, params), span| {
-                let name = segments.join(".");
                 let kind = match params {
-                    None => cst::TypeExprKind::Named(name),
-                    Some(ps) => cst::TypeExprKind::App(name, ps),
+                    None => cst::TypeExprKind::Named(segments),
+                    Some(ps) => cst::TypeExprKind::App(segments, ps),
                 };
                 cst::TypeExpr::new(kind, span)
             });
@@ -202,10 +207,13 @@ impl Parser {
     /// overflow when combined with the expression parser's recursive structure.
     /// Types nested deeper than 6 levels will produce a parse error.
     pub(super) fn simple_type_expr(
+        interner: &mut StringInterner,
     ) -> impl chumsky::Parser<Token, cst::TypeExpr, Error = ParseErr> + Clone
     {
+        let underscore = interner.intern("_");
+
         // Wildcard: `_`
-        let wildcard = select! { Token::Ident(s) if s == "_" => () }
+        let wildcard = select! { Token::Ident(s) if s == underscore => () }
             .map_with_span(|(), span| {
                 cst::TypeExpr::new(cst::TypeExprKind::Wildcard, span)
             });
@@ -221,8 +229,8 @@ impl Parser {
                 let named = Self::ident().then(params.or_not()).map_with_span(
                     |(name, params), span| {
                         let kind = match params {
-                            None => cst::TypeExprKind::Named(name),
-                            Some(ps) => cst::TypeExprKind::App(name, ps),
+                            None => cst::TypeExprKind::Named(vec![name]),
+                            Some(ps) => cst::TypeExprKind::App(vec![name], ps),
                         };
                         cst::TypeExpr::new(kind, span)
                     },
@@ -233,7 +241,7 @@ impl Parser {
 
         // Level 0: leaf (wildcard or simple named, no params)
         let named_leaf = Self::ident().map_with_span(|name, span| {
-            cst::TypeExpr::new(cst::TypeExprKind::Named(name), span)
+            cst::TypeExpr::new(cst::TypeExprKind::Named(vec![name]), span)
         });
         let level0 = wildcard.or(named_leaf);
 
@@ -284,13 +292,16 @@ impl Parser {
 
     /// Parse a type pattern for the `is` operator.
     pub(super) fn type_pattern(
+        interner: &mut StringInterner,
     ) -> impl chumsky::Parser<Token, cst::TypePattern, Error = ParseErr> + Clone
     {
+        let underscore = interner.intern("_");
+
         // Wildcard: `_`
-        let wildcard = select! { Token::Ident(s) if s == "_" => () };
+        let wildcard = select! { Token::Ident(s) if s == underscore => () };
 
         // Binding name (any identifier except `_`)
-        let binding = select! { Token::Ident(s) if s != "_" => s };
+        let binding = select! { Token::Ident(s) if s != underscore => s };
 
         // Pattern arguments: `(name)`, `(name1, name2)`, or `(_)`
         let pattern_args = just(Token::LParen)
@@ -310,11 +321,9 @@ impl Parser {
             .then_ignore(just(Token::RParen));
 
         // Type.Variant pattern (with optional args)
-        // Uses `ident_or_contextual_keyword` because variant names like `Raise` may
-        // also be keywords
-        let variant_pattern = Self::ident_or_contextual_keyword()
+        let variant_pattern = Self::ident()
             .then_ignore(just(Token::Dot))
-            .then(Self::ident_or_contextual_keyword())
+            .then(Self::ident())
             .then(pattern_args.or_not())
             .map(|((ty, var), args)| match args {
                 None => cst::TypePattern::Variant(ty, var),
@@ -330,7 +339,7 @@ impl Parser {
         // Using boxed() to reduce stack pressure from parser construction
         let field = Self::ident()
             .then_ignore(just(Token::Colon))
-            .then(Self::type_expr())
+            .then(Self::type_expr(interner))
             .boxed();
         let struct_pat = just(Token::LBrace)
             .ignore_then(
@@ -340,7 +349,8 @@ impl Parser {
             .map(cst::TypePattern::Object);
 
         // Simple type pattern: `Int`, `Array[String]`, `Map[Int, String]`
-        let simple_type = Self::simple_type_expr().map(cst::TypePattern::Type);
+        let simple_type =
+            Self::simple_type_expr(interner).map(cst::TypePattern::Type);
 
         variant_pattern.or(struct_pat).or(simple_type)
     }
@@ -351,11 +361,23 @@ impl Parser {
     /// the element type is specified at usage sites (`F[T]`).
     /// Parameterized classes (`Into[T]`, `TryInto[T]`, `Indexable[E]`) require them.
     pub(super) fn constraint(
+        interner: &mut StringInterner,
     ) -> impl chumsky::Parser<Token, BuiltinClass<cst::TypeExpr>, Error = ParseErr>
            + Clone {
+        // Intern class names locally for `StringId` comparison at parse time.
+        let class_tags = {
+            use BuiltinClassTag::*;
+            [
+                Numeric, Iterable, Monoid, BitLike, Negatable, Fallible, Into,
+                TryInto, Indexable, Ord, Mappable, Foldable, Filterable,
+                Display, Eq,
+            ]
+            .map(|t| (interner.intern(t.name()), t))
+        };
+
         let type_args = just(Token::LBracket)
             .ignore_then(
-                Self::type_expr_atom()
+                Self::type_expr_atom(interner)
                     .separated_by(just(Token::Comma))
                     .at_least(1),
             )
@@ -363,16 +385,17 @@ impl Parser {
 
         select! { Token::Ident(s) => s }
             .then(type_args.or_not())
-            .try_map(|(name, args), span| {
-                let tag = BuiltinClassTag::from_str(&name)
+            .try_map(move |(name, args), span| {
+                let tag = class_tags
+                    .iter()
+                    .find(|(s, _)| *s == name)
+                    .map(|(_, t)| *t)
                     .ok_or_else(|| chumsky::error::Simple::custom(
                         span,
-                        format!(
-                            "unknown class `{name}`; valid classes are: \
-                             Numeric, Negatable, Iterable, Monoid, BitLike, \
-                             Fallible, Into[T], TryInto[T], Indexable[E], \
-                             Ord, Eq, Mappable, Foldable, Filterable, Display"
-                        ),
+                        "unknown class; valid classes are: \
+                         Numeric, Negatable, Iterable, Monoid, BitLike, \
+                         Fallible, Into[T], TryInto[T], Indexable[E], \
+                         Ord, Eq, Mappable, Foldable, Filterable, Display",
                     ))?;
 
                 let has_args = args.is_some();
@@ -435,12 +458,13 @@ impl Parser {
 
     /// Parse a type parameter with optional constraints: `T` or `T: C1 + C2`.
     pub(super) fn type_param(
+        interner: &mut StringInterner,
     ) -> impl chumsky::Parser<Token, cst::TypeParam, Error = ParseErr> + Clone
     {
         let constraints = just(Token::Colon)
             .ignore_then(Self::opt_newlines())
             .ignore_then(
-                Self::constraint()
+                Self::constraint(interner)
                     .separated_by(
                         Self::opt_newlines()
                             .ignore_then(just(Token::Plus))
@@ -458,13 +482,14 @@ impl Parser {
 
     /// Parse a type parameter list: `[T]`, `[T, U]`, or `[T: C1, U: C2 + C3]`.
     pub(super) fn type_params(
+        interner: &mut StringInterner,
     ) -> impl chumsky::Parser<Token, Vec<cst::TypeParam>, Error = ParseErr> + Clone
     {
         let sep = just(Token::Comma).then_ignore(Self::opt_newlines());
         just(Token::LBracket)
             .ignore_then(Self::opt_newlines())
             .ignore_then(
-                Self::type_param()
+                Self::type_param(interner)
                     .separated_by(sep)
                     .at_least(1)
                     .allow_trailing(),
@@ -541,5 +566,5 @@ pub(super) enum TypeAtomOrParams {
 #[derive(Clone)]
 enum PatternArgs {
     Wildcard,
-    Bindings(SmallVec<[String; 2]>),
+    Bindings(SmallVec<[StringId; 2]>),
 }

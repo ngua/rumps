@@ -9,6 +9,7 @@ use miette::{Diagnostic, LabeledSpan};
 use nonempty::NonEmpty;
 use thiserror::Error;
 
+use crate::intern::StringInterner;
 use crate::typecheck::{FormattedTypeError, TypeError};
 use crate::{Span, Token};
 
@@ -176,26 +177,31 @@ impl Error {
         }
     }
 
+    /// Create a parse error from a chumsky error, using `interner` to display
+    /// actual token content instead of generic labels.
+    pub(crate) fn from_parse_rich(
+        e: Simple<Token, Span>,
+        interner: &StringInterner,
+    ) -> Self {
+        let span = e.span();
+        let msg = e
+            .found()
+            .map(|t| format!("unexpected `{}`", t.display_resolved(interner)))
+            .unwrap_or_else(|| "unexpected end of input".into());
+        let expected = e
+            .expected()
+            .filter_map(|exp| {
+                exp.as_ref().map(|t| t.display_resolved(interner))
+            })
+            .collect();
+        Self::parse(span, msg, expected)
+    }
+
     pub(crate) fn display_with_source<'a>(
         &'a self,
         src: &'a str,
     ) -> ErrorDisplay<'a> {
         ErrorDisplay { err: self, src }
-    }
-}
-
-impl From<Simple<Token, Span>> for Error {
-    fn from(e: Simple<Token, Span>) -> Self {
-        let span = e.span();
-        let msg = e
-            .found()
-            .map(|t| format!("unexpected `{t}`"))
-            .unwrap_or_else(|| "unexpected end of input".into());
-        let expected = e
-            .expected()
-            .filter_map(|exp| exp.as_ref().map(|t| t.to_string()))
-            .collect();
-        Self::parse(span, msg, expected)
     }
 }
 

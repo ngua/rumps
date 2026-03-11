@@ -1,9 +1,10 @@
 //! Common parser utilities and helpers.
 
-use chumsky::prelude::{choice, filter_map, just, select};
+use chumsky::prelude::{choice, just, select};
 use chumsky::Parser as _;
 
 use super::{ParseErr, Parser};
+use crate::intern::StringId;
 use crate::parser::cst;
 use crate::{Span, Token};
 
@@ -55,39 +56,23 @@ impl Parser {
 
     /// Parse an identifier token.
     pub(super) fn ident(
-    ) -> impl chumsky::Parser<Token, String, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, StringId, Error = ParseErr> + Clone {
         select! { Token::Ident(s) => s }
     }
 
-    /// Parse an identifier or contextual keyword that can appear as a variant
-    /// name. Keywords like `Raise`, `Catch`, `Write` can be used as enum
-    /// variant names (e.g., `Error.Raise`).
-    ///
-    /// Uses `Token::as_contextual_ident` to stay synchronized with the token
-    /// definitions.
-    pub(super) fn ident_or_contextual_keyword(
-    ) -> impl chumsky::Parser<Token, String, Error = ParseErr> + Clone {
-        filter_map(|span, tok: Token| match tok {
-            Token::Ident(s) => Ok(s),
-            _ => tok.as_contextual_ident().map(|s| s.to_owned()).ok_or_else(
-                || chumsky::error::Simple::custom(span, "expected identifier"),
-            ),
-        })
-    }
-
-    /// Parse a contextual identifier (exact lowercase match).
+    /// Parse a contextual identifier by `StringId` comparison.
     ///
     /// Used for output modifiers (`json`, `to`, `error`, `file`) which are not
     /// keywords but recognized contextually after `write expr`.
     pub(super) fn ctx_ident(
-        expected: &'static str,
+        expected: StringId,
     ) -> impl chumsky::Parser<Token, (), Error = ParseErr> + Clone {
         select! { Token::Ident(s) if s == expected => () }
     }
 
     /// Parse a global variable name.
     pub(super) fn global_name(
-    ) -> impl chumsky::Parser<Token, String, Error = ParseErr> + Clone {
+    ) -> impl chumsky::Parser<Token, StringId, Error = ParseErr> + Clone {
         select! { Token::Global(s) => s }
     }
 
@@ -138,15 +123,12 @@ impl Parser {
         ref_lit.or(var)
     }
 
-    /// Parse subscripts: `{expr, expr, ...}` with optional spread.
+    /// Parse subscript contents (after the opening `{`) and closing `}`.
     ///
     /// Supports both regular subscript elements and spread syntax:
     /// - `d{1, "key"}` uses `Elem` for each subscript
     /// - `d{...keys}` uses `Spread` to expand an `Array[Subscript]`
     /// - `d{1, ...rest}` mixes both
-    ///
-    /// Note: Uses `{}` to distinguish from function calls `f(args)`.
-    /// Parse subscript contents (after the opening `{`) and closing `}`.
     ///
     /// Used with `IdentBrace`/`GlobalBrace` tokens where `{` is already consumed.
     pub(super) fn subscript_contents(

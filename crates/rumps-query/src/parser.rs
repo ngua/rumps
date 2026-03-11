@@ -30,6 +30,15 @@
 //! - **Delimited constructs**: Inside `[]`, `()`, and `{}` for multi-line arrays,
 //!   function calls, objects, and blocks
 //!
+//! # String Interning in Parsers
+//!
+//! Parser-building functions receive `&mut StringInterner` and intern contextual
+//! keywords (e.g. `"where"`, `"for"`, `"json"`) locally at their point of use.
+//! This is necessary because chumsky's `Clone` constraint on parsers means
+//! closures cannot capture `&mut StringInterner`; they must capture the
+//! resulting `StringId` values (which are `Copy`) instead. Interning happens
+//! once during parser construction, not during parsing.
+//!
 //! # Module Organization
 //!
 //! - `common`: Whitespace handling, identifiers, subscripts, blocks
@@ -62,16 +71,18 @@ mod postfix;
 mod stmt;
 mod types;
 
-use crate::{Ast, Error, Lexer, Result, Span, Spanned, StmtId, Token};
+use crate::lexer::Spanned;
+use crate::{Ast, Error, Lexer, Result, Span, StmtId, StringInterner, Token};
 
 /// Parser error type for token-based parsing.
 type ParseErr = Simple<Token, Span>;
 
-/// The result of parsing: the AST arena and the top-level statements.
+/// The result of parsing: the AST arena, top-level statement IDs, and string interner.
 #[derive(Debug)]
 pub(crate) struct ParseResult {
     pub ast: Ast,
     pub stmts: Vec<StmtId>,
+    pub interner: StringInterner,
 }
 
 /// Parses source code into an AST.
@@ -79,11 +90,11 @@ pub(crate) struct Parser;
 
 impl Parser {
     /// Parse source code into an AST.
-    ///
-    /// Returns the AST arena and a list of top-level statement IDs.
     pub(crate) fn parse(src: &str) -> Result<ParseResult> {
-        let tokens = Lexer::new(src).lex()?;
-        Self::parse_tokens(&tokens)
+        let raw = Lexer::new(src).lex()?;
+        let mut interner = StringInterner::new();
+        let tokens = Spanned::intern_all(raw, &mut interner);
+        Self::parse_interned(&tokens, None, interner)
     }
 
     /// Parse source code with a source file path for resolving relative imports.
@@ -91,33 +102,34 @@ impl Parser {
         src: &str,
         src_path: &std::path::Path,
     ) -> Result<ParseResult> {
-        let tokens = Lexer::new(src).lex()?;
-        Self::parse_tokens_with_path(&tokens, Some(src_path))
+        let raw = Lexer::new(src).lex()?;
+        let mut interner = StringInterner::new();
+        let tokens = Spanned::intern_all(raw, &mut interner);
+        Self::parse_interned(&tokens, Some(src_path), interner)
     }
 
-    /// Parse a token stream into an AST.
-    ///
-    /// This is the two-pass entry point:
-    /// 1. Parse tokens into CST (this module)
-    /// 2. Lower CST to AST (`lower.rs`)
-    pub(crate) fn parse_tokens(tokens: &[Spanned]) -> Result<ParseResult> {
-        Self::parse_tokens_with_path(tokens, None)
+    /// Parse a raw (pre-interning) token stream into an AST.
+    pub(crate) fn parse_tokens(
+        tokens: Vec<Spanned<String>>,
+    ) -> Result<ParseResult> {
+        let mut interner = StringInterner::new();
+        let interned = Spanned::intern_all(tokens, &mut interner);
+        Self::parse_interned(&interned, None, interner)
     }
 
-    /// Parse a token stream into an AST with optional source file context.
-    fn parse_tokens_with_path(
+    /// Core parse function: takes interned tokens, produces a `ParseResult`.
+    fn parse_interned(
         tokens: &[Spanned],
         src_path: Option<&std::path::Path>,
+        mut interner: StringInterner,
     ) -> Result<ParseResult> {
-        let parser = Self::program();
+        let parser = Self::program(&mut interner);
 
-        // Find EOF span for chumsky's end-of-input handling
         let eof_span = tokens
             .iter()
             .find_map(|s| matches!(s.tok, Token::Eof).then_some(s.span))
             .unwrap_or_default();
 
-        // Filter out EOF token; chumsky handles end-of-input separately
         let stream = chumsky::Stream::from_iter(
             eof_span,
             tokens
@@ -129,54 +141,72 @@ impl Parser {
         parser
             .parse(stream)
             .map_err(|errs| {
-                NonEmpty::collect(errs.into_iter().map(Into::into))
-                    .map(Error::multiple)
-                    .unwrap_or_else(|| {
-                        Error::runtime_no_span("unknown parse error")
-                    })
+                NonEmpty::collect(
+                    errs.into_iter()
+                        .map(|e| Error::from_parse_rich(e, &interner)),
+                )
+                .map(Error::multiple)
+                .unwrap_or_else(|| {
+                    Error::runtime_no_span("unknown parse error")
+                })
             })
             .and_then(|cst_stmts| {
-                let (ast, stmts) =
-                    lower::program_with_path(cst_stmts, src_path)?;
-                Ok(ParseResult { ast, stmts })
+                let (ast, stmts) = lower::program_with_path(
+                    cst_stmts,
+                    src_path,
+                    &mut interner,
+                )?;
+                Ok(ParseResult {
+                    ast,
+                    stmts,
+                    interner,
+                })
             })
     }
 
-    /// Parse a token stream into CST (without lowering to AST).
+    /// Parse a raw token stream into CST (without lowering to AST).
     ///
     /// Used by `lower_module_from_file` to parse imported module files
     /// with the calling module's context for relative path resolution.
-    pub(super) fn parse_to_cst(tokens: &[Spanned]) -> Result<Vec<cst::Stmt>> {
-        let parser = Self::program();
+    pub(super) fn parse_to_cst(
+        tokens: Vec<Spanned<String>>,
+        interner: &mut StringInterner,
+    ) -> Result<Vec<cst::Stmt>> {
+        let interned = Spanned::intern_all(tokens, interner);
+        let parser = Self::program(interner);
 
-        let eof_span = tokens
+        let eof_span = interned
             .iter()
             .find_map(|s| matches!(s.tok, Token::Eof).then_some(s.span))
             .unwrap_or_default();
 
         let stream = chumsky::Stream::from_iter(
             eof_span,
-            tokens
+            interned
                 .iter()
                 .filter(|s| !matches!(s.tok, Token::Eof))
                 .map(|s| (s.tok.clone(), s.span)),
         );
 
         parser.parse(stream).map_err(|errs| {
-            NonEmpty::collect(errs.into_iter().map(Into::into))
-                .map(Error::multiple)
-                .unwrap_or_else(|| {
-                    Error::runtime_no_span("unknown parse error")
-                })
+            NonEmpty::collect(
+                errs.into_iter()
+                    .map(|e| Error::from_parse_rich(e, interner)),
+            )
+            .map(Error::multiple)
+            .unwrap_or_else(|| Error::runtime_no_span("unknown parse error"))
         })
     }
 
     /// Program: zero or more statements separated by newlines or commas.
-    fn program() -> impl chumsky::Parser<Token, Vec<cst::Stmt>, Error = ParseErr>
-    {
+    fn program(
+        interner: &mut StringInterner,
+    ) -> impl chumsky::Parser<Token, Vec<cst::Stmt>, Error = ParseErr> {
         Self::opt_newlines()
             .ignore_then(
-                Self::stmt().separated_by(Self::item_sep()).allow_trailing(),
+                Self::stmt(interner)
+                    .separated_by(Self::item_sep())
+                    .allow_trailing(),
             )
             .then_ignore(Self::opt_newlines())
             .then_ignore(end())

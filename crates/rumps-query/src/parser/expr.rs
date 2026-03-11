@@ -7,27 +7,35 @@ use smallvec::SmallVec;
 
 use super::{ParseErr, Parser};
 use crate::ast::{BinOp, Intrinsic, Literal, NumericLit, UnOp};
+use crate::intern::{StringId, StringInterner};
 use crate::parser::cst::{self, TypePattern};
 use crate::{Span, Token};
 
 impl Parser {
     fn write_expr(
+        interner: &mut StringInterner,
         expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
-        let format = Self::ctx_ident("json")
+        let json = interner.intern("json");
+        let raw = interner.intern("raw");
+        let to = interner.intern("to");
+        let error = interner.intern("error");
+        let file = interner.intern("file");
+
+        let format = Self::ctx_ident(json)
             .to(cst::OutputFormat::Json)
-            .or(Self::ctx_ident("raw").to(cst::OutputFormat::Raw))
+            .or(Self::ctx_ident(raw).to(cst::OutputFormat::Raw))
             .or_not()
             .map(|f| f.unwrap_or_default());
 
-        let to_error = Self::ctx_ident("to")
-            .ignore_then(Self::ctx_ident("error"))
+        let to_error = Self::ctx_ident(to)
+            .ignore_then(Self::ctx_ident(error))
             .to(cst::OutputTarget::Stderr);
 
-        let to_file = Self::ctx_ident("to")
-            .ignore_then(Self::ctx_ident("file"))
+        let to_file = Self::ctx_ident(to)
+            .ignore_then(Self::ctx_ident(file))
             .ignore_then(expr.clone())
             .map(|e| cst::OutputTarget::File(Box::new(e)));
 
@@ -101,6 +109,7 @@ impl Parser {
     }
 
     fn forever_expr(
+        interner: &mut StringInterner,
         primary: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
@@ -112,7 +121,7 @@ impl Parser {
         let param = Self::ident().then(
             just(Token::Colon)
                 .ignore_then(Self::opt_newlines())
-                .ignore_then(Self::type_expr())
+                .ignore_then(Self::type_expr(interner))
                 .or_not(),
         );
 
@@ -154,47 +163,56 @@ impl Parser {
     ///
     /// Syntax: `[on conflict ...] [with timeout expr] [with retries n] [with isolation ...]`
     pub(super) fn transaction_modifiers(
+        interner: &mut StringInterner,
         expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::TransactionModifiers, Error = ParseErr>
            + Clone {
+        let on = interner.intern("on");
+        let conflict = interner.intern("conflict");
+        let abort = interner.intern("abort");
+        let overwrite = interner.intern("overwrite");
+        let with = interner.intern("with");
+        let timeout = interner.intern("timeout");
+        let retries = interner.intern("retries");
+        let isolation = interner.intern("isolation");
+        let snapshot = interner.intern("snapshot");
+
         // on conflict (abort | overwrite)
-        let conflict = Self::ctx_ident("on")
-            .ignore_then(Self::ctx_ident("conflict"))
+        let conflict_mod = Self::ctx_ident(on)
+            .ignore_then(Self::ctx_ident(conflict))
             .ignore_then(choice((
-                Self::ctx_ident("abort").to(cst::ConflictModifier::Abort),
-                Self::ctx_ident("overwrite")
-                    .to(cst::ConflictModifier::Overwrite),
+                Self::ctx_ident(abort).to(cst::ConflictModifier::Abort),
+                Self::ctx_ident(overwrite).to(cst::ConflictModifier::Overwrite),
             )));
 
         // with timeout expr
-        let timeout = Self::ctx_ident("with")
-            .ignore_then(Self::ctx_ident("timeout"))
+        let timeout_mod = Self::ctx_ident(with)
+            .ignore_then(Self::ctx_ident(timeout))
             .ignore_then(expr)
             .map(Box::new);
 
         // with retries n
-        let retries = Self::ctx_ident("with")
-            .ignore_then(Self::ctx_ident("retries"))
+        let retries_mod = Self::ctx_ident(with)
+            .ignore_then(Self::ctx_ident(retries))
             .ignore_then(select! { Token::Int(n) => n as u32 });
 
         // with isolation snapshot
-        let isolation = Self::ctx_ident("with")
-            .ignore_then(Self::ctx_ident("isolation"))
+        let isolation_mod = Self::ctx_ident(with)
+            .ignore_then(Self::ctx_ident(isolation))
             .ignore_then(
-                Self::ctx_ident("snapshot")
-                    .to(cst::IsolationModifier::Snapshot),
+                Self::ctx_ident(snapshot).to(cst::IsolationModifier::Snapshot),
             );
 
         // Modifiers must appear in this fixed order: conflict, timeout, retries,
         // isolation. Each modifier can appear at most once. Out-of-order or
         // duplicate modifiers will produce a parse error.
-        conflict
+        conflict_mod
             .or_not()
-            .then(timeout.or_not())
-            .then(retries.or_not())
-            .then(isolation.or_not())
+            .then(timeout_mod.or_not())
+            .then(retries_mod.or_not())
+            .then(isolation_mod.or_not())
             .map(|(((conflict, timeout), retries), isolation)| {
                 cst::TransactionModifiers {
                     conflict,
@@ -206,6 +224,7 @@ impl Parser {
     }
 
     fn transaction_expr(
+        interner: &mut StringInterner,
         stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
             + Clone
             + 'static,
@@ -215,7 +234,7 @@ impl Parser {
     ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
         just(Token::Transaction)
             .ignore_then(Self::block(stmt))
-            .then(Self::transaction_modifiers(expr))
+            .then(Self::transaction_modifiers(interner, expr))
             .map_with_span(|((stmts, _blk_span), modifiers), span| {
                 // Split trailing expr statement from regular statements
                 let has_tail = stmts
@@ -250,14 +269,15 @@ impl Parser {
     }
 
     pub(super) fn expr(
+        interner: &mut StringInterner,
         stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
         // Construct type_expr and type_pattern once BEFORE the recursive block.
         // Parser construction inside recursive() can cause stack overflow.
-        let ty = Self::type_expr();
-        let ty_pat = Self::type_pattern();
+        let ty = Self::type_expr(interner);
+        let ty_pat = Self::type_pattern(interner);
 
         recursive(move |expr| {
             // Define `pipe` (expr without CATCH) using nested recursive.
@@ -268,13 +288,17 @@ impl Parser {
                 let ty = ty.clone();
                 let ty_pat = ty_pat.clone();
                 move |pipe| {
-                    let primary =
-                        Self::primary_expr(expr.clone(), stmt.clone());
+                    let primary = Self::primary_expr(
+                        interner,
+                        expr.clone(),
+                        stmt.clone(),
+                    );
                     let postfix =
                         Self::postfix_expr(expr.clone(), primary.clone())
                             .boxed();
                     // Pass `pipe` to `unary_expr` for intrinsic operands
-                    let unary = Self::unary_expr(pipe, primary, postfix);
+                    let unary =
+                        Self::unary_expr(interner, pipe, primary, postfix);
                     let annotate = Self::annotate_expr(unary, ty.clone());
                     let pow = Self::pow_expr(annotate);
                     let mul = Self::mul_expr(pow).boxed();
@@ -736,6 +760,7 @@ impl Parser {
     }
 
     fn unary_expr(
+        interner: &mut StringInterner,
         intrinsic_op: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
@@ -755,6 +780,14 @@ impl Parser {
 
         // Postfix operators for intrinsic expressions (e.g., `@get d(1)!`).
         let postfix_ops = Self::postfix_ops(intrinsic_op.clone());
+
+        // OUTPUT expr [JSON] [TO target]
+        let output = Self::write_expr(interner, intrinsic_op.clone());
+
+        // FOREVER seed (state, cont) => body
+        // Use primary for seed (no postfix ops) to avoid parsing (state, cont) as a call
+        let forever =
+            Self::forever_expr(interner, primary, intrinsic_op.clone());
 
         recursive(move |unary| {
             let with_op = op.clone().then(unary.clone()).map_with_span(
@@ -790,9 +823,6 @@ impl Parser {
                 })
             });
 
-            // OUTPUT expr [JSON] [TO target]
-            let output = Self::write_expr(intrinsic_op.clone());
-
             // SET target = value
             let set = Self::set_expr(intrinsic_op.clone());
 
@@ -802,12 +832,16 @@ impl Parser {
             // RAISE expr
             let raise = Self::raise_expr(intrinsic_op.clone());
 
-            // FOREVER seed (state, cont) => body
-            // Use primary for seed (no postfix ops) to avoid parsing (state, cont) as a call
-            let forever = Self::forever_expr(primary, intrinsic_op);
-
-            choice((with_op, read_intrinsic, output, set, kill, raise, forever))
-                .or(operand.clone())
+            choice((
+                with_op,
+                read_intrinsic,
+                output.clone(),
+                set,
+                kill,
+                raise,
+                forever.clone(),
+            ))
+            .or(operand.clone())
         })
     }
 
@@ -835,6 +869,7 @@ impl Parser {
     }
 
     fn primary_expr(
+        interner: &mut StringInterner,
         expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
@@ -842,6 +877,11 @@ impl Parser {
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::Expr, Error = ParseErr> + Clone {
+        let unit = interner.intern("Unit");
+        let underscore = interner.intern("_");
+        let ty = Self::type_expr(interner);
+        let ty_params = Self::type_params(interner);
+
         // Literals
         let int_lit =
             select! { Token::Int(n) => Literal::Numeric(NumericLit::Int(n)) };
@@ -854,7 +894,7 @@ impl Parser {
         ));
         let null_lit = just(Token::Null).to(Literal::Null);
         let unit_lit =
-            select! { Token::Ident(s) if s == "Unit" => Literal::Unit };
+            select! { Token::Ident(s) if s == unit => Literal::Unit };
 
         let literal = choice((
             int_lit, float_lit, char_lit, str_lit, bool_lit, null_lit, unit_lit,
@@ -938,7 +978,8 @@ impl Parser {
         //
         // The optional type arguments are required for convert methods
         // (`Fallible`, `Into`, `TryInto`) when used as first-class values.
-        let class_type_args = Self::type_expr()
+        let class_type_args = ty
+            .clone()
             .separated_by(just(Token::Comma))
             .at_least(1)
             .delimited_by(just(Token::LBracket), just(Token::RBracket));
@@ -958,8 +999,8 @@ impl Parser {
             });
 
         // Lexical variable or mempty (`_`)
-        let var = Self::ident().map_with_span(|name, span| {
-            if name == "_" {
+        let var = Self::ident().map_with_span(move |name, span| {
+            if name == underscore {
                 cst::Expr::new(cst::ExprKind::Mempty, span)
             } else {
                 cst::Expr::new(cst::ExprKind::Var(name), span)
@@ -1055,30 +1096,29 @@ impl Parser {
         // Mixed quoted/unquoted keys produce a parse error.
         // Spreads are only valid in Object context (not JSON).
 
-        // Field entry: either quoted or unquoted key
-        let unquoted_key = Self::ident().map(|s| (s, false));
-        let quoted_key = select! { Token::String(s) => (s, true) };
-        let obj_key = quoted_key.or(unquoted_key);
-
-        // Entry kind: Spread, or Field(key, quoted)
+        // Entry kind: Spread, UnquotedField, or QuotedField
         #[derive(Clone)]
         enum ObjEntryKind {
-            Field(String, cst::Expr, bool), // (key, value, quoted)
+            UnquotedField(StringId, cst::Expr),
+            QuotedField(String, cst::Expr),
             Spread(cst::Expr),
         }
 
-        let obj_field = obj_key
+        let unquoted_field = Self::ident()
             .then_ignore(just(Token::Colon))
             .then(expr.clone())
-            .map(|((key, quoted), value)| {
-                ObjEntryKind::Field(key, value, quoted)
-            });
+            .map(|(key, value)| ObjEntryKind::UnquotedField(key, value));
+
+        let quoted_field = select! { Token::String(s) => s }
+            .then_ignore(just(Token::Colon))
+            .then(expr.clone())
+            .map(|(key, value)| ObjEntryKind::QuotedField(key, value));
 
         let obj_spread = just(Token::DotDotDot)
             .ignore_then(expr.clone())
             .map(ObjEntryKind::Spread);
 
-        let obj_entry = obj_spread.or(obj_field);
+        let obj_entry = obj_spread.or(quoted_field).or(unquoted_field);
 
         let obj_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
         let object_or_json = just(Token::LBrace)
@@ -1087,26 +1127,18 @@ impl Parser {
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::RBrace))
             .map_with_span(|entries: Vec<ObjEntryKind>, span| {
-                // Collect fields and spreads
                 let has_spread = entries
                     .iter()
                     .any(|e| matches!(e, ObjEntryKind::Spread(_)));
-                let fields: Vec<_> = entries
+                let has_quoted = entries
                     .iter()
-                    .filter_map(|e| match e {
-                        ObjEntryKind::Field(k, _, q) => Some((k.clone(), *q)),
-                        ObjEntryKind::Spread(_) => None,
-                    })
-                    .collect();
+                    .any(|e| matches!(e, ObjEntryKind::QuotedField(..)));
+                let has_unquoted = entries
+                    .iter()
+                    .any(|e| matches!(e, ObjEntryKind::UnquotedField(..)));
+                let has_mixed = has_quoted && has_unquoted;
 
-                let all_quoted =
-                    !fields.is_empty() && fields.iter().all(|(_, q)| *q);
-                let all_unquoted = fields.iter().all(|(_, q)| !*q);
-                let has_mixed =
-                    !all_quoted && !all_unquoted && !fields.is_empty();
-
-                // Spread with quoted keys is an error
-                if has_spread && all_quoted {
+                if has_spread && has_quoted {
                     cst::Expr::new(
                         cst::ExprKind::Error(
                             "cannot use spread in JSON object (quoted keys)"
@@ -1122,13 +1154,13 @@ impl Parser {
                         ),
                         span,
                     )
-                } else if all_quoted && !fields.is_empty() {
+                } else if has_quoted {
                     // JSON (all quoted, no spreads)
                     let json_fields: Vec<(String, cst::Expr)> = entries
                         .into_iter()
                         .filter_map(|e| match e {
-                            ObjEntryKind::Field(k, v, _) => Some((k, v)),
-                            ObjEntryKind::Spread(_) => None, // unreachable
+                            ObjEntryKind::QuotedField(k, v) => Some((k, v)),
+                            _ => None,
                         })
                         .collect();
                     cst::Expr::new(cst::ExprKind::Json(json_fields), span)
@@ -1137,12 +1169,13 @@ impl Parser {
                     let obj_entries: Vec<cst::ObjectEntry> = entries
                         .into_iter()
                         .map(|e| match e {
-                            ObjEntryKind::Field(k, v, _) => {
+                            ObjEntryKind::UnquotedField(k, v) => {
                                 cst::ObjectEntry::Field(k, v)
                             }
                             ObjEntryKind::Spread(e) => {
                                 cst::ObjectEntry::Spread(e)
                             }
+                            ObjEntryKind::QuotedField(..) => unreachable!(),
                         })
                         .collect();
                     cst::Expr::new(cst::ExprKind::Object(obj_entries), span)
@@ -1181,7 +1214,7 @@ impl Parser {
                 });
 
         // Transaction expression
-        let txn_expr = Self::transaction_expr(stmt, expr.clone());
+        let txn_expr = Self::transaction_expr(interner, stmt, expr.clone());
 
         // IF expression
         let if_expr = just(Token::If)
@@ -1234,7 +1267,7 @@ impl Parser {
             .then(
                 just(Token::Colon)
                     .ignore_then(Self::opt_newlines())
-                    .ignore_then(Self::type_expr())
+                    .ignore_then(ty.clone())
                     .or_not(),
             )
             .map(|(name, ty)| (name, ty));
@@ -1248,7 +1281,7 @@ impl Parser {
                 .allow_trailing()
                 .then_ignore(Self::opt_newlines())
                 .then_ignore(just(Token::RParen)));
-        let closure_multi = Self::type_params()
+        let closure_multi = ty_params
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::LParen))
             .then_ignore(Self::opt_newlines())
@@ -1257,7 +1290,7 @@ impl Parser {
             .then(
                 just(Token::Arrow)
                     .ignore_then(Self::opt_newlines())
-                    .ignore_then(Self::type_expr())
+                    .ignore_then(ty)
                     .or_not(),
             )
             .then_ignore(Self::opt_newlines())
@@ -1278,7 +1311,7 @@ impl Parser {
             });
 
         // Match expression
-        let match_expr = Self::match_expr(expr);
+        let match_expr = Self::match_expr(interner, expr);
 
         // Order matters: ref literals before var (IdentBrace is distinct from
         // Ident so they won't conflict). Closures before var since both can
@@ -1308,6 +1341,7 @@ impl Parser {
     }
 
     fn match_expr(
+        interner: &mut StringInterner,
         expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
             + 'static,
@@ -1315,7 +1349,7 @@ impl Parser {
         let arms = just(Token::LBrace)
             .ignore_then(Self::opt_newlines())
             .ignore_then(
-                Self::match_arm(expr.clone())
+                Self::match_arm(interner, expr.clone())
                     .separated_by(Self::item_sep())
                     .allow_leading()
                     .allow_trailing(),
