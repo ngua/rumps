@@ -40,6 +40,9 @@ pub(crate) struct LowerCtx<'a> {
     /// applications (`F[T]` -> `VarApp`) from type constructor applications
     /// (`Array[T]` -> `App`).
     type_params: HashSet<StringId>,
+    /// Stack of ids added per scope; used by `push_type_params`/`pop_type_params`
+    /// to avoid cloning the `HashSet`.
+    tp_stack: Vec<SmallVec<[StringId; 4]>>,
     /// Known concrete type names (builtins + user-declared `type`/`newtype`/`union`).
     ///
     /// Used by `collect_type_vars` to distinguish type variables from concrete
@@ -64,6 +67,7 @@ impl<'a> LowerCtx<'a> {
             base_dir,
             in_progress: HashSet::new(),
             type_params: HashSet::new(),
+            tp_stack: Vec::new(),
             known_types,
             interner,
         }
@@ -223,86 +227,39 @@ impl<'a> LowerCtx<'a> {
         ids
     }
 
-    /// Recursively collect type variable names from a CST type expression.
-    ///
-    /// Used to bring type params from `for_type` into `self.type_params` before
-    /// lowering class instance methods. Concrete type names like `Int` appearing
-    /// as `Named` are harmless (`Named` does not check `tps`). For `App` heads,
-    /// `known_types` is consulted to avoid treating concrete constructors (e.g.
-    /// `Array`, `Pair`) as type variables.
-    fn collect_type_vars(&mut self, ty: &cst::TypeExpr) {
-        match &ty.kind {
-            cst::TypeExprKind::Named(segs) => {
-                if let [id] = segs.as_slice() {
-                    self.type_params.insert(*id);
-                }
-            }
-            cst::TypeExprKind::App(segs, args) => {
-                // Check the last segment (for module-qualified names like `Container.Pair`).
-                let last = segs.last();
-                let is_known =
-                    last.is_some_and(|id| self.known_types.contains(id));
-                if !is_known {
-                    if let Some(id) = last.filter(|_| segs.len() == 1) {
-                        self.type_params.insert(*id);
-                    }
-                }
-                args.iter().for_each(|a| {
-                    Self::collect_type_vars_inner(
-                        a,
-                        &self.known_types,
-                        &mut self.type_params,
-                    )
-                });
-            }
-            cst::TypeExprKind::Fn(ps, ret) => {
-                ps.iter().for_each(|p| {
-                    Self::collect_type_vars_inner(
-                        p,
-                        &self.known_types,
-                        &mut self.type_params,
-                    )
-                });
-                Self::collect_type_vars_inner(
-                    ret,
-                    &self.known_types,
-                    &mut self.type_params,
-                );
-            }
-            cst::TypeExprKind::Tuple(es) | cst::TypeExprKind::Union(es) => {
-                es.iter().for_each(|e| {
-                    Self::collect_type_vars_inner(
-                        e,
-                        &self.known_types,
-                        &mut self.type_params,
-                    )
-                });
-            }
-            cst::TypeExprKind::Object(fs) => {
-                fs.iter().for_each(|(_, t)| {
-                    Self::collect_type_vars_inner(
-                        t,
-                        &self.known_types,
-                        &mut self.type_params,
-                    )
-                });
-            }
-            cst::TypeExprKind::Wildcard
-            | cst::TypeExprKind::AssocType { .. } => {}
+    /// Push type params into scope, recording which ids were newly inserted
+    /// so `pop_type_params` can remove exactly those without cloning the set.
+    fn push_type_params(&mut self, params: impl Iterator<Item = StringId>) {
+        let added: SmallVec<[StringId; 4]> =
+            params.filter(|id| self.type_params.insert(*id)).collect();
+        self.tp_stack.push(added);
+    }
+
+    /// Remove the type params added by the most recent `push_type_params`.
+    fn pop_type_params(&mut self) {
+        if let Some(added) = self.tp_stack.pop() {
+            added.iter().for_each(|id| {
+                self.type_params.remove(id);
+            });
         }
     }
 
-    /// Inner recursive helper for `collect_type_vars` (avoids re-borrowing
-    /// `&mut self` on recursive calls from the `App` branch).
-    fn collect_type_vars_inner(
+    /// Recursively collect type variable names from a CST type expression.
+    ///
+    /// Used to bring type params from `for_type` into scope before lowering
+    /// class instance methods. Concrete type names like `Int` appearing as
+    /// `Named` are harmless (`Named` does not check `tps`). For `App` heads,
+    /// `known_types` is consulted to avoid treating concrete constructors
+    /// (e.g. `Array`, `Pair`) as type variables.
+    fn collect_type_vars(
         ty: &cst::TypeExpr,
         known: &HashSet<StringId>,
-        out: &mut HashSet<StringId>,
+        out: &mut SmallVec<[StringId; 4]>,
     ) {
         match &ty.kind {
             cst::TypeExprKind::Named(segs) => {
                 if let [id] = segs.as_slice() {
-                    out.insert(*id);
+                    out.push(*id);
                 }
             }
             cst::TypeExprKind::App(segs, args) => {
@@ -310,25 +267,24 @@ impl<'a> LowerCtx<'a> {
                 let is_known = last.is_some_and(|id| known.contains(id));
                 if !is_known {
                     if let Some(id) = last.filter(|_| segs.len() == 1) {
-                        out.insert(*id);
+                        out.push(*id);
                     }
                 }
                 args.iter()
-                    .for_each(|a| Self::collect_type_vars_inner(a, known, out));
+                    .for_each(|a| Self::collect_type_vars(a, known, out));
             }
             cst::TypeExprKind::Fn(ps, ret) => {
                 ps.iter()
-                    .for_each(|p| Self::collect_type_vars_inner(p, known, out));
-                Self::collect_type_vars_inner(ret, known, out);
+                    .for_each(|p| Self::collect_type_vars(p, known, out));
+                Self::collect_type_vars(ret, known, out);
             }
             cst::TypeExprKind::Tuple(es) | cst::TypeExprKind::Union(es) => {
                 es.iter()
-                    .for_each(|e| Self::collect_type_vars_inner(e, known, out));
+                    .for_each(|e| Self::collect_type_vars(e, known, out));
             }
             cst::TypeExprKind::Object(fs) => {
-                fs.iter().for_each(|(_, t)| {
-                    Self::collect_type_vars_inner(t, known, out)
-                });
+                fs.iter()
+                    .for_each(|(_, t)| Self::collect_type_vars(t, known, out));
             }
             cst::TypeExprKind::Wildcard
             | cst::TypeExprKind::AssocType { .. } => {}
@@ -381,9 +337,7 @@ impl<'a> LowerCtx<'a> {
                 vis,
             } => {
                 // Push type param names into scope
-                let saved = self.type_params.clone();
-                self.type_params
-                    .extend(type_params.iter().map(|tp| tp.name));
+                self.push_type_params(type_params.iter().map(|tp| tp.name));
 
                 let params_lowered = params
                     .into_iter()
@@ -399,7 +353,7 @@ impl<'a> LowerCtx<'a> {
                 // Lower body (may contain nested closures that see outer type params)
                 let body_id = self.expr(body)?;
 
-                self.type_params = saved;
+                self.pop_type_params();
                 Stmt::Fun {
                     name,
                     type_params: tp_lowered,
@@ -416,12 +370,10 @@ impl<'a> LowerCtx<'a> {
                 vis,
             } => {
                 self.known_types.insert(name);
-                let saved = self.type_params.clone();
-                self.type_params
-                    .extend(type_params.iter().map(|tp| tp.name));
+                self.push_type_params(type_params.iter().map(|tp| tp.name));
                 let def_lowered = self.type_def(def)?;
                 let tp_lowered = self.type_param_list(type_params)?;
-                self.type_params = saved;
+                self.pop_type_params();
                 Stmt::Type {
                     name,
                     type_params: tp_lowered,
@@ -436,12 +388,10 @@ impl<'a> LowerCtx<'a> {
                 vis,
             } => {
                 self.known_types.insert(name);
-                let saved = self.type_params.clone();
-                self.type_params
-                    .extend(type_params.iter().map(|tp| tp.name));
+                self.push_type_params(type_params.iter().map(|tp| tp.name));
                 let target_id = self.type_expr(target)?;
                 let tp_lowered = self.type_param_list(type_params)?;
-                self.type_params = saved;
+                self.pop_type_params();
                 Stmt::NewType {
                     name,
                     type_params: tp_lowered,
@@ -456,15 +406,13 @@ impl<'a> LowerCtx<'a> {
                 vis,
             } => {
                 self.known_types.insert(name);
-                let saved = self.type_params.clone();
-                self.type_params
-                    .extend(type_params.iter().map(|tp| tp.name));
+                self.push_type_params(type_params.iter().map(|tp| tp.name));
                 let member_ids = members
                     .into_iter()
                     .map(|t| self.type_expr(t))
                     .collect::<Result<SmallVec<_>>>()?;
                 let tp_lowered = self.type_param_list(type_params)?;
-                self.type_params = saved;
+                self.pop_type_params();
                 Stmt::Union {
                     name,
                     type_params: tp_lowered,
@@ -513,10 +461,16 @@ impl<'a> LowerCtx<'a> {
                 assoc_types,
                 methods,
             } => {
-                let saved = self.type_params.clone();
-                self.type_params
-                    .extend(type_params.iter().map(|tp| tp.name));
-                self.collect_type_vars(&for_type);
+                // Collect explicit type params + inferred type vars
+                // from `for_type` into scope as two stack frames.
+                self.push_type_params(type_params.iter().map(|tp| tp.name));
+                let mut tvars = SmallVec::new();
+                Self::collect_type_vars(
+                    &for_type,
+                    &self.known_types,
+                    &mut tvars,
+                );
+                self.push_type_params(tvars.into_iter());
 
                 // Lower type-level items
                 let class_args_ids = class_args
@@ -546,7 +500,8 @@ impl<'a> LowerCtx<'a> {
                     .map(|m| self.instance_method(m))
                     .collect::<Result<SmallVec<_>>>()?;
 
-                self.type_params = saved;
+                self.pop_type_params();
+                self.pop_type_params();
                 Stmt::ClassInstance {
                     class_name,
                     class_args: class_args_ids,
@@ -725,9 +680,9 @@ impl<'a> LowerCtx<'a> {
                 body,
             } => {
                 // Push closure type params into scope
-                let saved = self.type_params.clone();
-                self.type_params
-                    .extend(type_params.iter().map(|tp| tp.name));
+                self.push_type_params(
+                    type_params.iter().map(|tp| tp.name),
+                );
 
                 let params_lowered = params
                     .into_iter()
@@ -745,7 +700,7 @@ impl<'a> LowerCtx<'a> {
 
                 let body_id = self.expr(*body)?;
 
-                self.type_params = saved;
+                self.pop_type_params();
                 Expr::Closure {
                     type_params: tp_lowered,
                     params: params_lowered,
