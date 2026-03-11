@@ -349,7 +349,7 @@ impl<'a> ResolveCtx<'a> {
                     self.arena.strings.get(*class_name).unwrap_or_default();
                 let class = BuiltinClassTag::from_str(cn)?;
                 let raw_name =
-                    Self::extract_type_name(self.ast, &self.arena, *for_type)?;
+                    Self::extract_type_name(self.ast, self.arena, *for_type)?;
 
                 let type_name = match module {
                     Some(m) if !raw_name.contains('.') => {

@@ -1305,12 +1305,8 @@ impl<'a> MergeCtx<'a> {
                     .collect()
             };
         match dbref {
-            DbRef::Local(name, subs) => {
-                Ok(DbRef::Local(name.clone(), merge(subs)?))
-            }
-            DbRef::Global(name, subs) => {
-                Ok(DbRef::Global(name.clone(), merge(subs)?))
-            }
+            DbRef::Local(name, subs) => Ok(DbRef::Local(*name, merge(subs)?)),
+            DbRef::Global(name, subs) => Ok(DbRef::Global(*name, merge(subs)?)),
         }
     }
 
@@ -1452,24 +1448,20 @@ impl<'a> MergeCtx<'a> {
                 Ok(TypePattern::Type(new_ty))
             }
             TypePattern::Variant(ty, var) => {
-                Ok(TypePattern::Variant(ty.clone(), var.clone()))
+                Ok(TypePattern::Variant(*ty, *var))
             }
             TypePattern::VariantWildcard(ty, var) => {
-                Ok(TypePattern::VariantWildcard(ty.clone(), var.clone()))
+                Ok(TypePattern::VariantWildcard(*ty, *var))
             }
             TypePattern::VariantBind(ty, var, binds) => {
-                Ok(TypePattern::VariantBind(
-                    ty.clone(),
-                    var.clone(),
-                    binds.clone(),
-                ))
+                Ok(TypePattern::VariantBind(*ty, *var, binds.clone()))
             }
             TypePattern::Object(fields) => {
                 let new_fields: Result<SmallVec<_>> = fields
                     .iter()
                     .map(|(name, ty_id)| {
                         self.type_expr(*ty_id, span)
-                            .map(|new_id| (name.clone(), new_id))
+                            .map(|new_id| (*name, new_id))
                     })
                     .collect();
                 Ok(TypePattern::Object(new_fields?))
@@ -1612,14 +1604,14 @@ impl<'a> MergeCtx<'a> {
                 let new_for_type = self.type_expr(for_type, span)?;
                 let new_constraints: Result<SmallVec<_>> = constraints
                     .iter()
-                    .map(|(name, cs)| Ok((name.clone(), cs.clone())))
+                    .map(|(name, cs)| Ok((*name, cs.clone())))
                     .collect();
                 let new_assoc_types: Result<SmallVec<_>> = assoc_types
                     .iter()
                     .map(|a| {
                         let new_target = self.type_expr(a.target, span)?;
                         Ok(ast::AssocTypeDef {
-                            name: a.name.clone(),
+                            name: a.name,
                             constraint: a.constraint.clone(),
                             target: new_target,
                             span: a.span,
@@ -1636,7 +1628,7 @@ impl<'a> MergeCtx<'a> {
                                 let new_ty = ty_opt
                                     .map(|t| self.type_expr(t, span))
                                     .transpose()?;
-                                Ok((n.clone(), new_ty))
+                                Ok((*n, new_ty))
                             })
                             .collect();
                         let new_ret = m
@@ -1645,7 +1637,7 @@ impl<'a> MergeCtx<'a> {
                             .transpose()?;
                         let new_body = self.expr(m.body, span)?;
                         Ok(ast::InstanceMethodDef {
-                            name: m.name.clone(),
+                            name: m.name,
                             params: new_params?,
                             ret: new_ret,
                             body: new_body,

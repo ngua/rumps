@@ -29,7 +29,7 @@ struct Scope {
     /// Modules imported in this scope.
     ///
     /// Used to track which module instances are available.
-    imported_modules: HashSet<String>,
+    imported_modules: HashSet<StringId>,
 }
 
 /// Scoped type environment mapping names to type schemes.
@@ -41,18 +41,18 @@ pub(crate) struct TypeEnv {
     /// Builtin class definitions, indexed by `BuiltinClassTag as usize`.
     class_defs: BuiltinClassDefs,
     /// User-defined module names registered during typechecking.
-    user_modules: HashSet<String>,
+    user_modules: HashSet<StringId>,
     /// User module member types and visibility: `module_path -> member_name -> ModuleMember`.
-    user_module_members: HashMap<String, HashMap<String, ModuleMember>>,
+    user_module_members: HashMap<StringId, HashMap<StringId, ModuleMember>>,
     /// User module type visibility: qualified type name (e.g., `Mod.Type`) -> visibility.
     ///
     /// Used to enforce visibility for `type`, `newtype`, `union` inside modules.
-    user_module_type_vis: HashMap<String, Visibility>,
+    user_module_type_vis: HashMap<StringId, Visibility>,
     /// Imported type aliases: unqualified name -> qualified name.
     ///
     /// When `IMPORT M.{ MyType }` is processed, maps `"MyType"` -> `"M.MyType"`.
     /// Checked first during type name resolution.
-    imported_types: HashMap<String, String>,
+    imported_types: HashMap<StringId, StringId>,
 }
 
 impl TypeEnv {
@@ -87,13 +87,13 @@ impl TypeEnv {
     ///
     /// This tracks that a module with this name has been defined so that
     /// paths like `ModuleName.fn` can be resolved.
-    pub(crate) fn register_user_module(&mut self, name: &str) {
-        self.user_modules.insert(name.to_string());
+    pub(crate) fn register_user_module(&mut self, name: StringId) {
+        self.user_modules.insert(name);
     }
 
     /// Check if a name is a registered user module.
-    pub(crate) fn is_user_module(&self, name: &str) -> bool {
-        self.user_modules.contains(name)
+    pub(crate) fn is_user_module(&self, name: StringId) -> bool {
+        self.user_modules.contains(&name)
     }
 
     /// Register a member (function or constant) of a user module.
@@ -101,35 +101,28 @@ impl TypeEnv {
     /// Called when typechecking `fun` and `let` inside a `module` block.
     pub(crate) fn register_user_module_member(
         &mut self,
-        module: &str,
-        member: &str,
+        module: StringId,
+        member: StringId,
         scheme: Scheme,
         vis: Visibility,
     ) {
         self.user_module_members
-            .entry(module.to_string())
+            .entry(module)
             .or_default()
-            .insert(member.to_string(), ModuleMember { scheme, vis });
+            .insert(member, ModuleMember { scheme, vis });
     }
 
-    /// Look up a user module member by path.
-    ///
-    /// Path should be like `["Counter", "new"]` for `Counter.new`, or
-    /// `["Outer", "Inner", "fn"]` for `Outer.Inner.fn`.
+    /// Look up a user module member by module path and member name.
     ///
     /// Returns the member (scheme + visibility) if found.
     pub(crate) fn lookup_user_module_member(
         &self,
-        path: &[&str],
+        module: StringId,
+        member: StringId,
     ) -> Option<&ModuleMember> {
-        // Split into module path (all but last) and member (last)
-        path.split_last().and_then(|(member, mod_path)| {
-            // Join module path with dots (e.g., `["Outer", "Inner"]` -> `"Outer.Inner"`)
-            let mod_key = mod_path.join(".");
-            self.user_module_members
-                .get(&mod_key)
-                .and_then(|m| m.get(*member))
-        })
+        self.user_module_members
+            .get(&module)
+            .and_then(|m| m.get(&member))
     }
 
     /// Register visibility for a type inside a user module.
@@ -138,10 +131,10 @@ impl TypeEnv {
     /// The `qname` is the qualified name (e.g., `Mod.MyType`).
     pub(crate) fn register_user_module_type_vis(
         &mut self,
-        qname: &str,
+        qname: StringId,
         vis: Visibility,
     ) {
-        self.user_module_type_vis.insert(qname.to_string(), vis);
+        self.user_module_type_vis.insert(qname, vis);
     }
 
     /// Look up visibility for a module-qualified type name.
@@ -149,25 +142,25 @@ impl TypeEnv {
     /// Returns `Some(vis)` if this is a user module type, `None` otherwise.
     pub(crate) fn lookup_user_module_type_vis(
         &self,
-        qname: &str,
+        qname: StringId,
     ) -> Option<Visibility> {
-        self.user_module_type_vis.get(qname).copied()
+        self.user_module_type_vis.get(&qname).copied()
     }
 
     /// Get all public members of a user module.
     ///
-    /// Returns `(name, scheme)` pairs for all public members.
+    /// Returns `(name_id, scheme)` pairs for all public members.
     pub(crate) fn get_public_user_module_members(
         &self,
-        mod_path: &str,
-    ) -> Vec<(String, Scheme)> {
+        mod_path: StringId,
+    ) -> Vec<(StringId, Scheme)> {
         self.user_module_members
-            .get(mod_path)
+            .get(&mod_path)
             .map(|members| {
                 members
                     .iter()
                     .filter(|(_, m)| m.vis == Visibility::Public)
-                    .map(|(name, m)| (name.clone(), m.scheme.clone()))
+                    .map(|(&name, m)| (name, m.scheme.clone()))
                     .collect()
             })
             .unwrap_or_default()
@@ -175,22 +168,40 @@ impl TypeEnv {
 
     /// Get all public types in a user module.
     ///
-    /// Returns `(local_name, qualified_name)` pairs for direct children only.
+    /// Returns `(local_name_id, qualified_name_id)` pairs for direct children only.
+    /// Uses `intern` rather than `lookup` for the local name so that types whose
+    /// unqualified name was never independently interned are still returned
+    /// (e.g., a type registered only as `"Mod.Type"` where `"Type"` alone was
+    /// never interned).
     pub(crate) fn get_public_user_module_types(
-        &self,
-        mod_path: &str,
-    ) -> Vec<(String, String)> {
-        let prefix = format!("{}.", mod_path);
-        self.user_module_type_vis
-            .iter()
-            .filter_map(|(qname, vis)| {
-                qname
-                    .strip_prefix(&prefix)
-                    .filter(|local| {
-                        !local.contains('.') && *vis == Visibility::Public
+        &mut self,
+        mod_path: StringId,
+    ) -> Vec<(StringId, StringId)> {
+        let prefix = self.strings.get(mod_path).map(|s| format!("{}.", s));
+        // Collect `(local_name_string, qname_id)` pairs first, then intern
+        // the local names; this avoids borrowing `self.strings` mutably while
+        // iterating `self.user_module_type_vis`.
+        let pairs: Vec<(String, StringId)> = prefix
+            .map(|prefix| {
+                self.user_module_type_vis
+                    .iter()
+                    .filter_map(|(&qname_id, &vis)| {
+                        self.strings.get(qname_id).and_then(|qname| {
+                            qname
+                                .strip_prefix(&prefix)
+                                .filter(|local| {
+                                    !local.contains('.')
+                                        && vis == Visibility::Public
+                                })
+                                .map(|local| (local.to_owned(), qname_id))
+                        })
                     })
-                    .map(|local| (local.to_string(), qname.clone()))
+                    .collect()
             })
+            .unwrap_or_default();
+        pairs
+            .into_iter()
+            .map(|(local, qname_id)| (self.strings.intern(&local), qname_id))
             .collect()
     }
 
@@ -198,16 +209,18 @@ impl TypeEnv {
     ///
     /// Maps a local (unqualified) name to its qualified name. Used when
     /// processing `IMPORT M.{ MyType }`.
-    pub(crate) fn import_type(&mut self, local: &str, qualified: &str) {
-        self.imported_types
-            .insert(local.to_string(), qualified.to_string());
+    pub(crate) fn import_type(&mut self, local: StringId, qualified: StringId) {
+        self.imported_types.insert(local, qualified);
     }
 
-    /// Look up an imported type by its local name.
+    /// Look up an imported type by its local `StringId`.
     ///
-    /// Returns the qualified name if this type was imported.
-    pub(crate) fn lookup_imported_type(&self, local: &str) -> Option<&str> {
-        self.imported_types.get(local).map(String::as_str)
+    /// Returns the qualified `StringId` if this type was imported.
+    pub(crate) fn lookup_imported_type(
+        &self,
+        local: StringId,
+    ) -> Option<StringId> {
+        self.imported_types.get(&local).copied()
     }
 
     /// Push a new scope (e.g., entering a function body or block).
@@ -240,47 +253,29 @@ impl TypeEnv {
     }
 
     /// Mark a module as imported in the current scope.
-    pub(crate) fn mark_module_imported(&mut self, module: &str) {
+    pub(crate) fn mark_module_imported(&mut self, module: StringId) {
         if let Some(scope) = self.scopes.last_mut() {
-            scope.imported_modules.insert(module.to_string());
+            scope.imported_modules.insert(module);
         }
     }
 
     /// Check if a module has been imported in any enclosing scope.
-    pub(crate) fn is_module_imported(&self, module: &str) -> bool {
+    pub(crate) fn is_module_imported(&self, module: StringId) -> bool {
         self.scopes
             .iter()
             .rev()
-            .any(|s| s.imported_modules.contains(module))
-    }
-
-    /// Bind a name to a type scheme in the current scope.
-    pub(crate) fn bind(&mut self, name: &str, scheme: Scheme) {
-        let id = self.strings.intern(name);
-        if let Some(scope) = self.scopes.last_mut() {
-            scope.bindings.insert(id, scheme);
-        }
+            .any(|s| s.imported_modules.contains(&module))
     }
 
     /// Bind a `StringId` to a type scheme in the current scope.
-    pub(crate) fn bind_id(&mut self, id: StringId, scheme: Scheme) {
+    pub(crate) fn bind(&mut self, id: StringId, scheme: Scheme) {
         if let Some(scope) = self.scopes.last_mut() {
             scope.bindings.insert(id, scheme);
         }
     }
 
-    /// Look up a name, searching from innermost to outermost scope.
-    pub(crate) fn lookup(&self, name: &str) -> Option<&Scheme> {
-        self.strings.lookup(name).and_then(|id| {
-            self.scopes
-                .iter()
-                .rev()
-                .find_map(|scope| scope.bindings.get(&id))
-        })
-    }
-
     /// Look up by `StringId`, searching from innermost to outermost scope.
-    pub(crate) fn lookup_id(&self, id: StringId) -> Option<&Scheme> {
+    pub(crate) fn lookup(&self, id: StringId) -> Option<&Scheme> {
         self.scopes
             .iter()
             .rev()
@@ -371,32 +366,37 @@ mod tests {
     fn bind_and_lookup() {
         let mut arena = TyArena::new();
         let mut env = TypeEnv::new(StringInterner::new(), &mut arena);
-        env.bind("x", Scheme::mono(TyArena::INT));
-        assert_eq!(env.lookup("x"), Some(&Scheme::mono(TyArena::INT)));
-        assert_eq!(env.lookup("y"), None);
+        let x = env.intern("x");
+        let y = env.intern("y");
+        env.bind(x, Scheme::mono(TyArena::INT));
+        assert_eq!(env.lookup(x), Some(&Scheme::mono(TyArena::INT)));
+        assert_eq!(env.lookup(y), None);
     }
 
     #[test]
     fn shadowing() {
         let mut arena = TyArena::new();
         let mut env = TypeEnv::new(StringInterner::new(), &mut arena);
-        env.bind("x", Scheme::mono(TyArena::INT));
+        let x = env.intern("x");
+        env.bind(x, Scheme::mono(TyArena::INT));
         env.push_scope();
-        env.bind("x", Scheme::mono(TyArena::STRING));
-        assert_eq!(env.lookup("x"), Some(&Scheme::mono(TyArena::STRING)));
+        env.bind(x, Scheme::mono(TyArena::STRING));
+        assert_eq!(env.lookup(x), Some(&Scheme::mono(TyArena::STRING)));
         env.pop_scope();
-        assert_eq!(env.lookup("x"), Some(&Scheme::mono(TyArena::INT)));
+        assert_eq!(env.lookup(x), Some(&Scheme::mono(TyArena::INT)));
     }
 
     #[test]
     fn inner_scope_sees_outer() {
         let mut arena = TyArena::new();
         let mut env = TypeEnv::new(StringInterner::new(), &mut arena);
-        env.bind("x", Scheme::mono(TyArena::INT));
+        let x = env.intern("x");
+        let y = env.intern("y");
+        env.bind(x, Scheme::mono(TyArena::INT));
         env.push_scope();
-        env.bind("y", Scheme::mono(TyArena::STRING));
-        assert_eq!(env.lookup("x"), Some(&Scheme::mono(TyArena::INT)));
-        assert_eq!(env.lookup("y"), Some(&Scheme::mono(TyArena::STRING)));
+        env.bind(y, Scheme::mono(TyArena::STRING));
+        assert_eq!(env.lookup(x), Some(&Scheme::mono(TyArena::INT)));
+        assert_eq!(env.lookup(y), Some(&Scheme::mono(TyArena::STRING)));
     }
 
     #[test]
@@ -407,9 +407,11 @@ mod tests {
         let b = TyVar::new(1);
         let va = arena.var(0);
         let vb = arena.var(1);
-        env.bind("x", Scheme::mono(va));
+        let x = env.intern("x");
+        let y = env.intern("y");
+        env.bind(x, Scheme::mono(va));
         env.push_scope();
-        env.bind("y", Scheme::mono(vb));
+        env.bind(y, Scheme::mono(vb));
         let fv = env.free_vars(&arena);
         assert!(fv.contains(&a));
         assert!(fv.contains(&b));
@@ -434,7 +436,8 @@ mod tests {
         let b = TyVar::new(1);
         let va = arena.var(0);
         let vb = arena.var(1);
-        env.bind("existing", Scheme::mono(va));
+        let existing = env.intern("existing");
+        env.bind(existing, Scheme::mono(va));
         // `b` is free in ty but not in env; `a` is in both
         let ty = arena.func(smallvec::smallvec![va], vb);
         let scheme = env.generalize(ty, &arena);

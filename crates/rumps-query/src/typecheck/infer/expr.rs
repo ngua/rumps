@@ -58,10 +58,7 @@ impl InferCtx<'_> {
             Expr::Tuple(elems) if elems.is_empty() => TyArena::UNIT,
 
             // Variable reference
-            Expr::Var(name) => {
-                let n = self.env.get_str(*name).unwrap_or_default().to_owned();
-                self.var(&n, span)
-            }
+            Expr::Var(name) => self.var(*name, span),
 
             // Binary operations
             Expr::Binary(lhs, op, rhs) => {
@@ -209,50 +206,49 @@ impl InferCtx<'_> {
                         .instantiate(&mut self.next_var, &mut self.ty_arena);
                     self.emit_class_constraints(constraints, span);
                     ty
-                } else if let Some(member) =
-                    self.env.lookup_user_module_member(&path)
-                {
-                    // Check visibility; private members cannot be accessed
-                    // from outside the module
-                    if member.vis == Visibility::Private {
-                        let module = path
-                            .iter()
-                            .take(path.len().saturating_sub(1))
-                            .copied()
-                            .collect::<Vec<_>>()
-                            .join(".");
-                        let name =
-                            path.last().copied().unwrap_or("").to_string();
-                        self.error(TypeError::PrivateAccess {
-                            module,
-                            name,
-                            span,
-                        });
-                        TyArena::ERROR
-                    } else {
-                        // Public member; instantiate and use
-                        let (ty, constraints) = member.scheme.instantiate(
-                            &mut self.next_var,
-                            &mut self.ty_arena,
-                        );
-                        self.emit_class_constraints(constraints, span);
-                        ty
-                    }
                 } else {
-                    // Path resolved as module but member not found
-                    let module = path
-                        .iter()
-                        .take(path.len().saturating_sub(1))
-                        .copied()
-                        .collect::<Vec<_>>()
-                        .join(".");
-                    let name = path.last().copied().unwrap_or("").to_string();
-                    self.error(TypeError::NotFoundInModule {
-                        module,
-                        name,
-                        span,
-                    });
-                    TyArena::ERROR
+                    // Split segments into module path (all but last) and member (last)
+                    let mod_id = self.env.strings.intern_joined(
+                        &segments[..segments.len().saturating_sub(1)],
+                    );
+                    let member_id = segments.last().copied().unwrap_or(mod_id);
+                    match self.env.lookup_user_module_member(mod_id, member_id)
+                    {
+                        Some(member) => {
+                            // Check visibility; private members cannot be accessed
+                            // from outside the module
+                            if member.vis == Visibility::Private {
+                                let module = self.env.resolve_string(mod_id);
+                                let name = self.env.resolve_string(member_id);
+                                self.error(TypeError::PrivateAccess {
+                                    module,
+                                    name,
+                                    span,
+                                });
+                                TyArena::ERROR
+                            } else {
+                                // Public member; instantiate and use
+                                let (ty, constraints) =
+                                    member.scheme.instantiate(
+                                        &mut self.next_var,
+                                        &mut self.ty_arena,
+                                    );
+                                self.emit_class_constraints(constraints, span);
+                                ty
+                            }
+                        }
+                        None => {
+                            // Path resolved as module but member not found
+                            let module = self.env.resolve_string(mod_id);
+                            let name = self.env.resolve_string(member_id);
+                            self.error(TypeError::NotFoundInModule {
+                                module,
+                                name,
+                                span,
+                            });
+                            TyArena::ERROR
+                        }
+                    }
                 }
             }
 
@@ -329,23 +325,7 @@ impl InferCtx<'_> {
                 state_param,
                 cont_param,
                 body,
-            } => {
-                let sp = (
-                    self.env
-                        .get_str(state_param.0)
-                        .unwrap_or_default()
-                        .to_owned(),
-                    state_param.1,
-                );
-                let cp = (
-                    self.env
-                        .get_str(cont_param.0)
-                        .unwrap_or_default()
-                        .to_owned(),
-                    cont_param.1,
-                );
-                self.forever(*seed, &sp, &cp, *body, span)
-            }
+            } => self.forever(*seed, state_param, cont_param, *body, span),
 
             // Transaction block: `transaction { ... }`
             Expr::Transaction(ref txn) => self.transaction(id, txn, span),
@@ -679,14 +659,13 @@ impl InferCtx<'_> {
         match inst.module {
             None => Some(inst),
             Some(mod_id) => {
-                let mod_path = self.env.get_str(mod_id).unwrap_or("<unknown>");
-                if self.env.is_module_imported(mod_path) {
+                if self.env.is_module_imported(mod_id) {
                     Some(inst)
                 } else {
                     self.error(TypeError::InstanceNotImported {
                         class,
                         type_id,
-                        module: mod_path.to_string(),
+                        module: self.env.resolve_string(mod_id),
                         span,
                     });
                     None
@@ -947,7 +926,7 @@ impl InferCtx<'_> {
     /// Looks up the variable in the type environment and instantiates its
     /// scheme with fresh type variables. If undefined, records an error
     /// and returns `Ty::Error`.
-    fn var(&mut self, name: &str, span: Span) -> TyId {
+    fn var(&mut self, name: StringId, span: Span) -> TyId {
         match self.env.lookup(name) {
             Some(scheme) => {
                 let (ty, constraints) =
@@ -956,7 +935,10 @@ impl InferCtx<'_> {
                 ty
             }
             None => {
-                self.error(TypeError::UndefinedVar(name.to_string(), span));
+                self.error(TypeError::UndefinedVar(
+                    self.env.resolve_string(name),
+                    span,
+                ));
                 TyArena::ERROR
             }
         }
@@ -1407,7 +1389,7 @@ impl InferCtx<'_> {
         //
         // Extract type name first to avoid borrow issues.
         let ty_name_opt = self.ast.get_expr(base_id).and_then(|e| match e {
-            Expr::Var(name) => Some(name.clone()),
+            Expr::Var(name) => Some(*name),
             _ => None,
         });
 
@@ -1873,8 +1855,7 @@ impl InferCtx<'_> {
         tys: &[TyId],
     ) {
         params.iter().zip(tys.iter()).for_each(|((name, _), &ty)| {
-            let n = self.env.get_str(*name).unwrap_or_default().to_owned();
-            self.env.bind(&n, Scheme::mono(ty));
+            self.env.bind(*name, Scheme::mono(ty));
         });
     }
 
@@ -2007,7 +1988,7 @@ impl InferCtx<'_> {
         let variant_info = callee_expr.and_then(|e| match e {
             Expr::Field(base_id, field) => {
                 self.ast.get_expr(base_id).and_then(|base| match base {
-                    Expr::Var(ty_name) => Some((ty_name.clone(), field)),
+                    Expr::Var(ty_name) => Some((*ty_name, field)),
                     _ => None,
                 })
             }
@@ -2137,12 +2118,7 @@ impl InferCtx<'_> {
                     .iter()
                     .zip(payload_tys.iter())
                     .for_each(|(name, &ty)| {
-                        let n = self
-                            .env
-                            .get_str(*name)
-                            .unwrap_or_default()
-                            .to_owned();
-                        self.env.bind(&n, Scheme::mono(ty));
+                        self.env.bind(*name, Scheme::mono(ty));
                     });
                 let ty = self.expr(then_id);
                 self.env.pop_scope();
@@ -2905,8 +2881,7 @@ impl InferCtx<'_> {
                 match dbref {
                     DbRef::Local(name, subs) if subs.is_empty() => {
                         // Check if name is a variable of type Ref
-                        let n = self.env.get_str(*name).unwrap_or_default();
-                        let ref_ty = self.env.lookup(n).and_then(|s| {
+                        let ref_ty = self.env.lookup(*name).and_then(|s| {
                             let (ty, _) = s.instantiate(
                                 &mut self.next_var,
                                 &mut self.ty_arena,
@@ -3131,8 +3106,8 @@ impl InferCtx<'_> {
     pub(super) fn forever(
         &mut self,
         seed: ExprId,
-        state_param: &(String, Option<AstTypeExprId>),
-        cont_param: &(String, Option<AstTypeExprId>),
+        state_param: &(StringId, Option<AstTypeExprId>),
+        cont_param: &(StringId, Option<AstTypeExprId>),
         body: ExprId,
         span: Span,
     ) -> TyId {
@@ -3162,8 +3137,8 @@ impl InferCtx<'_> {
 
         // Push scope, bind parameters, infer body
         self.env.push_scope();
-        self.env.bind(&state_param.0, Scheme::mono(state_ty));
-        self.env.bind(&cont_param.0, Scheme::mono(cont_ty));
+        self.env.bind(state_param.0, Scheme::mono(state_ty));
+        self.env.bind(cont_param.0, Scheme::mono(cont_ty));
         let inferred_body_ty = self.expr(body);
         self.env.pop_scope();
 

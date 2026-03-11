@@ -671,7 +671,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Expr::Var(ty_name) => {
                 self.registry.lookup(*ty_name).and_then(|type_id| {
                     self.registry.lookup_variant(type_id, *field).and_then(
-                        |v| (v.arity == 0).then(|| (*ty_name, *field)),
+                        |v| (v.arity == 0).then_some((*ty_name, *field)),
                     )
                 })
             }

@@ -57,8 +57,7 @@ impl InferCtx<'_> {
                 ..
             }) => {
                 self.env.mark_non_import();
-                let n = self.env.get_str(name).unwrap_or_default().to_owned();
-                self.fun(&n, &type_params, &params, ret.as_ref(), body, span);
+                self.fun(name, &type_params, &params, ret.as_ref(), body, span);
             }
 
             Some(Stmt::Let(pattern, ann, rhs, _)) => {
@@ -114,8 +113,7 @@ impl InferCtx<'_> {
 
             Some(Stmt::Module { name, body }) => {
                 self.env.mark_non_import();
-                let n = self.env.get_str(name).unwrap_or_default().to_owned();
-                self.user_module_with_path(&n, &body, span);
+                self.user_module_with_path(name, &body, span);
             }
 
             Some(Stmt::ClassInstance {
@@ -128,10 +126,8 @@ impl InferCtx<'_> {
                 methods,
             }) => {
                 self.env.mark_non_import();
-                let cn =
-                    self.env.get_str(class_name).unwrap_or_default().to_owned();
                 self.class_instance(ClassInstanceInput {
-                    class_name: &cn,
+                    class_name,
                     class_args: &class_args,
                     type_params: &type_params,
                     for_type,
@@ -152,7 +148,7 @@ impl InferCtx<'_> {
     /// Delegates to `user_module` with an empty path prefix.
     fn user_module_with_path(
         &mut self,
-        mod_name: &str,
+        mod_name: StringId,
         body: &[StmtId],
         span: Span,
     ) {
@@ -167,13 +163,13 @@ impl InferCtx<'_> {
     ///
     /// The `mod_path` is the fully-qualified module path (e.g., `"Outer.Inner"`
     /// for a nested module).
-    fn user_module(&mut self, mod_path: &str, body: &[StmtId], span: Span) {
+    fn user_module(&mut self, mod_path: StringId, body: &[StmtId], span: Span) {
         // Register the module name FIRST so self-references like
         // `Geometry.pi` from within `Geometry.area` resolve correctly.
         self.env.register_user_module(mod_path);
 
         // Save and set current module for unqualified type resolution
-        let prev_module = self.current_module.replace(mod_path.to_string());
+        let prev_module = self.current_module.replace(mod_path);
 
         // Typecheck each statement and validate it's an allowed item type.
         // We also collect type information for registration.
@@ -183,14 +179,12 @@ impl InferCtx<'_> {
 
             match item {
                 Some(Stmt::Fun { ref name, vis, .. }) => {
-                    let n =
-                        self.env.get_str(*name).unwrap_or_default().to_owned();
                     // Typecheck the function (binds it in current scope)
                     self.stmt(id);
                     // Register as module member with visibility
-                    if let Some(scheme) = self.env.lookup(&n).cloned() {
+                    if let Some(scheme) = self.env.lookup(*name).cloned() {
                         self.env.register_user_module_member(
-                            mod_path, &n, scheme, vis,
+                            mod_path, *name, scheme, vis,
                         );
                     }
                 }
@@ -199,17 +193,16 @@ impl InferCtx<'_> {
                     // Module constants must be simple bindings (not destructuring)
                     match pat {
                         BindingPattern::Var(ref const_name) => {
-                            let cn = self
-                                .env
-                                .get_str(*const_name)
-                                .unwrap_or_default()
-                                .to_owned();
                             self.stmt(id);
                             // Register as module member with visibility
-                            if let Some(scheme) = self.env.lookup(&cn).cloned()
+                            if let Some(scheme) =
+                                self.env.lookup(*const_name).cloned()
                             {
                                 self.env.register_user_module_member(
-                                    mod_path, &cn, scheme, vis,
+                                    mod_path,
+                                    *const_name,
+                                    scheme,
+                                    vis,
                                 );
                             }
                         }
@@ -227,9 +220,13 @@ impl InferCtx<'_> {
 
                 Some(Stmt::Module { ref name, ref body }) => {
                     // Nested module; recurse with qualified path
-                    let n = self.env.get_str(*name).unwrap_or_default();
-                    let nested_path = format!("{}.{}", mod_path, n);
-                    self.user_module(&nested_path, body, item_span);
+                    let nested = format!(
+                        "{}.{}",
+                        self.env.resolve_str(mod_path),
+                        self.env.resolve_str(*name)
+                    );
+                    let nested_id = self.env.intern(&nested);
+                    self.user_module(nested_id, body, item_span);
                 }
 
                 // Invalid statements inside a module (SET/kill/write are now
@@ -248,9 +245,13 @@ impl InferCtx<'_> {
                     ref type_params,
                     ref def,
                 }) => {
-                    let n = self.env.get_str(*name).unwrap_or_default();
-                    let qname = format!("{}.{}", mod_path, n);
-                    self.env.register_user_module_type_vis(&qname, vis);
+                    let qname = format!(
+                        "{}.{}",
+                        self.env.resolve_str(mod_path),
+                        self.env.resolve_str(*name)
+                    );
+                    let qname_id = self.env.intern(&qname);
+                    self.env.register_user_module_type_vis(qname_id, vis);
                     self.validate_type_decl_body(type_params, def);
                 }
                 Some(Stmt::Union {
@@ -259,9 +260,13 @@ impl InferCtx<'_> {
                     ref type_params,
                     ref members,
                 }) => {
-                    let n = self.env.get_str(*name).unwrap_or_default();
-                    let qname = format!("{}.{}", mod_path, n);
-                    self.env.register_user_module_type_vis(&qname, vis);
+                    let qname = format!(
+                        "{}.{}",
+                        self.env.resolve_str(mod_path),
+                        self.env.resolve_str(*name)
+                    );
+                    let qname_id = self.env.intern(&qname);
+                    self.env.register_user_module_type_vis(qname_id, vis);
                     let subst = self.type_param_subst(type_params);
                     members.iter().for_each(|m| {
                         self.ast_type_to_ty(*m, &subst);
@@ -273,9 +278,13 @@ impl InferCtx<'_> {
                     ref type_params,
                     target,
                 }) => {
-                    let n = self.env.get_str(*name).unwrap_or_default();
-                    let qname = format!("{}.{}", mod_path, n);
-                    self.env.register_user_module_type_vis(&qname, vis);
+                    let qname = format!(
+                        "{}.{}",
+                        self.env.resolve_str(mod_path),
+                        self.env.resolve_str(*name)
+                    );
+                    let qname_id = self.env.intern(&qname);
+                    self.env.register_user_module_type_vis(qname_id, vis);
                     let subst = self.type_param_subst(type_params);
                     self.ast_type_to_ty(target, &subst);
                 }
@@ -292,21 +301,15 @@ impl InferCtx<'_> {
                     ref assoc_types,
                     ref methods,
                 }) => {
-                    let cn = self
-                        .env
-                        .get_str(*class_name)
-                        .unwrap_or_default()
-                        .to_owned();
-                    let mod_id = self.env.intern(mod_path);
                     self.class_instance(ClassInstanceInput {
-                        class_name: &cn,
+                        class_name: *class_name,
                         class_args,
                         type_params,
                         for_type,
                         constraints,
                         methods,
                         assoc_types,
-                        module: Some(mod_id),
+                        module: Some(mod_path),
                         span: item_span,
                     });
                 }
@@ -326,7 +329,8 @@ impl InferCtx<'_> {
     /// Called during both hoisting (for type imports) and Pass 2 (for full
     /// processing). Visibility is `pub(super)` so `hoist.rs` can call it.
     pub(super) fn import_stmt(&mut self, import: &Import, span: Span) {
-        let mod_path = self.env.strings.join_path(&import.path);
+        let mod_path_str = self.env.strings.join_path(&import.path);
+        let mod_path_id = self.env.intern(&mod_path_str);
         let path_strs: Vec<String> = import
             .path
             .iter()
@@ -339,11 +343,11 @@ impl InferCtx<'_> {
         let is_builtin = path_segs
             .first()
             .is_some_and(|&name| self.runtime_env.is_builtin_module(name));
-        let is_user = self.env.is_user_module(&mod_path);
+        let is_user = self.env.is_user_module(mod_path_id);
 
         if !is_builtin && !is_user {
             self.error(TypeError::Custom {
-                msg: format!("unknown module `{}`", mod_path),
+                msg: format!("unknown module `{}`", mod_path_str),
                 span,
             });
             // Continue to gather more errors
@@ -351,12 +355,12 @@ impl InferCtx<'_> {
 
         // Mark valid modules as imported (enables class instance lookup)
         if is_builtin || is_user {
-            self.env.mark_module_imported(&mod_path);
+            self.env.mark_module_imported(mod_path_id);
         }
 
         // Collect exclusions and check for wildcard
         let mut has_wildcard = false;
-        let mut exclusions: HashSet<String> = HashSet::new();
+        let mut exclusions: HashSet<StringId> = HashSet::new();
 
         import.items.iter().for_each(|item| match item {
             ImportItem::Wildcard => has_wildcard = true,
@@ -368,9 +372,7 @@ impl InferCtx<'_> {
                         span,
                     });
                 }
-                if let Some(s) = self.env.get_str(*name) {
-                    exclusions.insert(s.to_owned());
-                }
+                exclusions.insert(*name);
             }
             ImportItem::Named { .. } => {}
         });
@@ -383,31 +385,35 @@ impl InferCtx<'_> {
                     .first()
                     .and_then(|&name| self.runtime_env.get_builtin_module(name))
                 {
-                    m.public_members()
-                        .into_iter()
-                        .filter(|(name, _)| !exclusions.contains(name.as_str()))
-                        .for_each(|(name, scheme)| {
-                            self.env.bind(&name, scheme);
-                        });
+                    m.public_members().into_iter().for_each(
+                        |(name, scheme)| {
+                            let id = self.env.intern(&name);
+                            if !exclusions.contains(&id) {
+                                self.env.bind(id, scheme);
+                            }
+                        },
+                    );
                 }
             }
             // Get public members from user module
             if is_user {
                 self.env
-                    .get_public_user_module_members(&mod_path)
+                    .get_public_user_module_members(mod_path_id)
                     .into_iter()
-                    .filter(|(name, _)| !exclusions.contains(name.as_str()))
-                    .for_each(|(name, scheme)| {
-                        self.env.bind(&name, scheme);
+                    .for_each(|(name_id, scheme)| {
+                        if !exclusions.contains(&name_id) {
+                            self.env.bind(name_id, scheme);
+                        }
                     });
 
                 // Import public types
                 self.env
-                    .get_public_user_module_types(&mod_path)
+                    .get_public_user_module_types(mod_path_id)
                     .into_iter()
-                    .filter(|(name, _)| !exclusions.contains(name.as_str()))
-                    .for_each(|(local, qname)| {
-                        self.env.import_type(&local, &qname);
+                    .for_each(|(local_id, qname_id)| {
+                        if !exclusions.contains(&local_id) {
+                            self.env.import_type(local_id, qname_id);
+                        }
                     });
             }
         }
@@ -415,10 +421,8 @@ impl InferCtx<'_> {
         // Process named imports
         import.items.iter().for_each(|item| {
             if let ImportItem::Named { name, alias } = item {
-                let n = self.env.get_str(*name).unwrap_or_default().to_owned();
-                let bn = alias
-                    .map(|a| self.env.get_str(a).unwrap_or_default().to_owned())
-                    .unwrap_or_else(|| n.clone());
+                let bind_id = alias.unwrap_or(*name);
+                let n = self.env.resolve_str(*name).to_owned();
                 let mut full_path = path_segs.clone();
                 full_path.push(&n);
 
@@ -434,35 +438,37 @@ impl InferCtx<'_> {
                     });
 
                 // Then try user module (check visibility)
-                let user = self.env.lookup_user_module_member(&full_path);
+                let user =
+                    self.env.lookup_user_module_member(mod_path_id, *name);
 
                 match (builtin, user) {
-                    (Some(s), _) => self.env.bind(&bn, s),
+                    (Some(s), _) => self.env.bind(bind_id, s),
                     (None, Some(m)) if m.vis == Visibility::Public => {
-                        self.env.bind(&bn, m.scheme.clone());
+                        self.env.bind(bind_id, m.scheme.clone());
                     }
                     (None, Some(_)) => {
                         self.error(TypeError::Custom {
                             msg: format!(
                                 "member `{}` is private in module `{}`",
-                                n, mod_path
+                                n, mod_path_str
                             ),
                             span,
                         });
                     }
                     (None, None) => {
                         // Check if it's a type
-                        let qname = format!("{}.{}", mod_path, n);
-                        match self.env.lookup_user_module_type_vis(&qname) {
+                        let qname = format!("{}.{}", mod_path_str, n);
+                        let qname_id = self.env.intern(&qname);
+                        match self.env.lookup_user_module_type_vis(qname_id) {
                             Some(Visibility::Public) => {
                                 // Register as imported type
-                                self.env.import_type(&bn, &qname);
+                                self.env.import_type(bind_id, qname_id);
                             }
                             Some(Visibility::Private) => {
                                 self.error(TypeError::Custom {
                                     msg: format!(
                                         "type `{}` is private in module `{}`",
-                                        n, mod_path
+                                        n, mod_path_str
                                     ),
                                     span,
                                 });
@@ -471,7 +477,7 @@ impl InferCtx<'_> {
                                 self.error(TypeError::Custom {
                                     msg: format!(
                                         "member `{}` not found in module `{}`",
-                                        n, mod_path
+                                        n, mod_path_str
                                     ),
                                     span,
                                 });
@@ -493,7 +499,7 @@ impl InferCtx<'_> {
     /// are bound as fresh type variables before inferring parameter/return types.
     fn fun(
         &mut self,
-        name: &str,
+        name: StringId,
         type_params: &SmallVec<[TypeParam; 2]>,
         params: &SmallVec<[(StringId, Option<AstTypeExprId>); 4]>,
         ret: Option<&AstTypeExprId>,
@@ -669,9 +675,7 @@ impl InferCtx<'_> {
             // For polymorphic closures, use the stored scheme directly
             match (&pattern, closure_scheme) {
                 (BindingPattern::Var(name), Some(scheme)) => {
-                    let n =
-                        self.env.get_str(*name).unwrap_or_default().to_owned();
-                    self.env.bind(&n, scheme);
+                    self.env.bind(*name, scheme);
                 }
                 _ => self.bind_pattern(pattern, ty, span),
             }
@@ -724,8 +728,7 @@ impl InferCtx<'_> {
     ) {
         match pattern {
             BindingPattern::Var(name) => {
-                let n = self.env.get_str(*name).unwrap_or_default().to_owned();
-                self.env.bind(&n, Scheme::mono(ty));
+                self.env.bind(*name, Scheme::mono(ty));
             }
 
             BindingPattern::Wildcard => {
@@ -908,14 +911,11 @@ impl InferCtx<'_> {
         } = input;
 
         // 1. Resolve class name to BuiltinClassTag
-        let class =
-            BuiltinClassTag::from_str(class_name).unwrap_or_else(|| {
-                self.error(TypeError::UnknownClass(
-                    class_name.to_string(),
-                    span,
-                ));
-                BuiltinClassTag::Display // Default to `Display` to avoid cascading errors
-            });
+        let cn = self.env.resolve_str(class_name).to_owned();
+        let class = BuiltinClassTag::from_str(&cn).unwrap_or_else(|| {
+            self.error(TypeError::UnknownClass(cn.clone(), span));
+            BuiltinClassTag::Display // Default to `Display` to avoid cascading errors
+        });
 
         // 2. Build type parameter substitution map (BEFORE resolving for_type)
         //    If `type_params` is empty, extract type param names from the
@@ -1030,17 +1030,16 @@ impl InferCtx<'_> {
         });
 
         // 7. Collect provided method names
-        let provided_methods: HashSet<String> = methods
-            .iter()
-            .filter_map(|m| self.env.get_str(m.name).map(|s| s.to_owned()))
-            .collect();
+        let provided_methods: HashSet<StringId> =
+            methods.iter().map(|m| m.name).collect();
 
         // 8. Check all required methods are present
         let required: Vec<&str> =
             self.env.class_def(class).method_names().collect();
         let required_hint = required.join(", ");
         required.iter().for_each(|req| {
-            if !provided_methods.contains(*req) {
+            let req_id = self.env.intern(req);
+            if !provided_methods.contains(&req_id) {
                 self.error(TypeError::MissingInstanceMethod {
                     class,
                     method: req.to_string(),
@@ -1071,7 +1070,7 @@ impl InferCtx<'_> {
             let method_map: HashMap<_, _> = methods
                 .iter()
                 .map(|m| {
-                    let mn = self.env.get_str(m.name).unwrap_or_default();
+                    let mn = self.env.resolve_str(m.name);
                     let fn_name =
                         crate::interpreter::instance::instance_fn_name(
                             class, &type_name, mn,
@@ -1155,7 +1154,7 @@ impl InferCtx<'_> {
         let m_span = method.span;
 
         // Get expected method signature from class
-        let mn = self.env.get_str(method.name).unwrap_or_default().to_owned();
+        let mn = self.env.resolve_str(method.name).to_owned();
         let expected = self.env.class_def(class).method(&mn, m_span).cloned();
 
         // Handle unknown method error

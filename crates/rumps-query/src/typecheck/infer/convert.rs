@@ -353,7 +353,7 @@ impl InferCtx<'_> {
                         // Extract resolution data; only allocate when rewrite needed
                         let resolved = self.resolve_type_name(&name_s).map(
                             |(tid, cow)| {
-                                let rewrite = &*cow != &*name_s;
+                                let rewrite = *cow != *name_s;
                                 // Only allocate on rewrite; otherwise use `None`
                                 // and reference `name_s` later
                                 let qname = if rewrite {
@@ -445,7 +445,7 @@ impl InferCtx<'_> {
                     // Only allocate when rewrite needed
                     let resolved =
                         self.resolve_type_name(&name_s).map(|(tid, cow)| {
-                            let rewrite = &*cow != &*name_s;
+                            let rewrite = *cow != *name_s;
                             let qname = if rewrite {
                                 Some(cow.into_owned())
                             } else {
@@ -758,28 +758,25 @@ impl InferCtx<'_> {
         // Only check visibility for module-qualified types
         name.contains('.')
             .then(|| {
-                self.env
-                    .lookup_user_module_type_vis(name)
-                    .is_none_or(|vis| {
-                        if vis == Visibility::Private {
-                            // Extract module path and type name for error
-                            let parts: Vec<_> = name.split('.').collect();
-                            let (type_name, module_parts) = parts
-                                .split_last()
-                                .map_or(("", vec![]), |(t, m)| {
-                                    (*t, m.to_vec())
-                                });
-                            let module = module_parts.join(".");
-                            self.error(TypeError::PrivateAccess {
-                                module,
-                                name: type_name.to_string(),
-                                span,
-                            });
-                            false
-                        } else {
-                            true
-                        }
-                    })
+                let id = self.env.intern(name);
+                self.env.lookup_user_module_type_vis(id).is_none_or(|vis| {
+                    if vis == Visibility::Private {
+                        // Extract module path and type name for error
+                        let parts: Vec<_> = name.split('.').collect();
+                        let (type_name, module_parts) = parts
+                            .split_last()
+                            .map_or(("", vec![]), |(t, m)| (*t, m.to_vec()));
+                        let module = module_parts.join(".");
+                        self.error(TypeError::PrivateAccess {
+                            module,
+                            name: type_name.to_string(),
+                            span,
+                        });
+                        false
+                    } else {
+                        true
+                    }
+                })
             })
             .unwrap_or(true)
     }
@@ -929,11 +926,13 @@ impl InferCtx<'_> {
         name: &'a str,
     ) -> Option<(TypeId, Cow<'a, str>)> {
         // 1. Check imported types
-        let effective: Cow<str> = self
+        let imported = self
             .env
-            .lookup_imported_type(name)
-            .map(Cow::Borrowed)
-            .unwrap_or(Cow::Borrowed(name));
+            .lookup_str(name)
+            .and_then(|id| self.env.lookup_imported_type(id))
+            .and_then(|qid| self.env.get_str(qid));
+        let effective: Cow<str> =
+            imported.map(Cow::Borrowed).unwrap_or(Cow::Borrowed(name));
 
         // 2. Try exact lookup
         self.try_lookup_type(&effective)
@@ -943,8 +942,9 @@ impl InferCtx<'_> {
                 if effective.contains('.') {
                     None
                 } else {
-                    self.current_module.as_ref().and_then(|mod_path| {
-                        std::iter::successors(Some(mod_path.as_str()), |p| {
+                    self.current_module.and_then(|mod_id| {
+                        let mod_path = self.env.resolve_str(mod_id);
+                        std::iter::successors(Some(mod_path), |p| {
                             p.rsplit_once('.').map(|(parent, _)| parent)
                         })
                         .find_map(|prefix| {

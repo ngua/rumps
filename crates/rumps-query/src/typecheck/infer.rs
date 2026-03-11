@@ -55,7 +55,7 @@ use crate::Span;
 /// The type parameter `A` distinguishes hoisting (where associated types are
 /// not yet processed) from full type checking (where they are).
 pub(super) struct ClassInstanceInput<'a, A = ()> {
-    pub(super) class_name: &'a str,
+    pub(super) class_name: StringId,
     pub(super) class_args: &'a SmallVec<[AstTypeExprId; 2]>,
     pub(super) type_params: &'a SmallVec<[TypeParam; 2]>,
     pub(super) for_type: AstTypeExprId,
@@ -275,15 +275,17 @@ pub(crate) struct InferCtx<'a> {
     pub(super) class_context: Option<ClassContext>,
     /// Current module path during typechecking (e.g., `"Outer.Inner"`).
     ///
-    /// `None` when at top-level; `Some(path)` inside a module.
+    /// `None` when at top-level; `Some(path_id)` inside a module.
     /// Used to resolve unqualified type names within modules.
-    pub(super) current_module: Option<String>,
+    pub(super) current_module: Option<StringId>,
     /// Whether running in interactive mode (no `main` required).
     ///
     /// In interactive mode, top-level expression statements are allowed and
     /// executed sequentially. In normal mode, a `main` function is required
     /// and top-level expressions are rejected.
     interactive: bool,
+    /// Pre-interned `StringId` for `"main"`.
+    main_id: StringId,
     /// Type variables representing polymorphic parameters.
     ///
     /// When entering a function body with type parameters (e.g., `[T, F: Fallible[T]]`),
@@ -316,7 +318,8 @@ impl<'a> InferCtx<'a> {
         // builtin module schemes remain valid; inference will extend this
         // copy with its own type allocations.
         let mut ty_arena = runtime_env.ty_arena.clone();
-        let env = TypeEnv::new(strings, &mut ty_arena);
+        let mut env = TypeEnv::new(strings, &mut ty_arena);
+        let main_id = env.intern("main");
         Self {
             ast,
             registry,
@@ -344,6 +347,7 @@ impl<'a> InferCtx<'a> {
             class_context: None,
             current_module: None,
             interactive,
+            main_id,
             poly_param_vars: HashSet::new(),
         }
     }
@@ -638,7 +642,7 @@ impl<'a> InferCtx<'a> {
             let file_span = Span::new(0, 0);
             let expected =
                 self.ty_arena.func(smallvec::smallvec![], TyArena::UNIT);
-            let main_err = self.env.lookup("main").map_or_else(
+            let main_err = self.env.lookup(self.main_id).map_or_else(
                 || Some(TypeError::MissingMain(file_span)),
                 |scheme| {
                     if scheme.ty == expected {

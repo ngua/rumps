@@ -114,7 +114,7 @@ impl InferCtx<'_> {
                 MatchPattern::Wildcard => {}
 
                 MatchPattern::Var(name) => {
-                    self.env.bind_id(*name, Scheme::mono(scrutinee_ty));
+                    self.env.bind(*name, Scheme::mono(scrutinee_ty));
                 }
 
                 MatchPattern::Literal(lit) => {
@@ -239,7 +239,7 @@ impl InferCtx<'_> {
                     if let Some(crate::ast::RestPattern::Bind(name)) = rest {
                         // Rest has type `Array[T]` where `T` is the element type
                         let rest_ty = self.ty_arena.array(elem_ty);
-                        self.env.bind_id(*name, Scheme::mono(rest_ty));
+                        self.env.bind(*name, Scheme::mono(rest_ty));
                     }
                 }
 
@@ -260,7 +260,7 @@ impl InferCtx<'_> {
                         });
                     }
 
-                    self.env.bind_id(*name, Scheme::mono(narrowed_ty));
+                    self.env.bind(*name, Scheme::mono(narrowed_ty));
                 }
             }
         }
