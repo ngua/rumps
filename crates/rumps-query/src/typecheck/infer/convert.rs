@@ -343,30 +343,31 @@ impl InferCtx<'_> {
             Some(te) => match &te {
                 AstTypeExpr::Wildcard => self.fresh(),
                 AstTypeExpr::Named(name) => {
-                    let name_id = self.env.intern(name);
                     // Check substitution first (for type params)
-                    subst.get(&name_id).copied().unwrap_or_else(|| {
+                    subst.get(name).copied().unwrap_or_else(|| {
                         let span =
                             self.ast.type_expr_span(id).unwrap_or_default();
+                        let name_s = self.env.resolve_string(*name);
 
                         // Try module-aware resolution for user types
                         // Extract resolution data; only allocate when rewrite needed
-                        let resolved =
-                            self.resolve_type_name(name).map(|(tid, cow)| {
-                                let rewrite = &*cow != name;
+                        let resolved = self.resolve_type_name(&name_s).map(
+                            |(tid, cow)| {
+                                let rewrite = &*cow != &*name_s;
                                 // Only allocate on rewrite; otherwise use `None`
-                                // and reference `name` later
+                                // and reference `name_s` later
                                 let qname = if rewrite {
                                     Some(cow.into_owned())
                                 } else {
                                     None
                                 };
                                 (tid, qname)
-                            });
+                            },
+                        );
                         match resolved {
                             Some((type_id, qname)) => {
                                 // Effective name for checks (borrow or owned)
-                                let eff = qname.as_deref().unwrap_or(name);
+                                let eff = qname.as_deref().unwrap_or(&name_s);
                                 // Check visibility
                                 if !self.check_type_visibility(eff, span) {
                                     TyArena::ERROR
@@ -375,7 +376,9 @@ impl InferCtx<'_> {
                                     if let Some(ref q) = qname {
                                         self.ast.set_type_expr(
                                             id,
-                                            AstTypeExpr::Named(q.clone()),
+                                            AstTypeExpr::Named(
+                                                self.env.intern(q),
+                                            ),
                                         );
                                     }
                                     // Check arity; builtins use expected_type_arity
@@ -389,9 +392,7 @@ impl InferCtx<'_> {
                                     if exp > 0 {
                                         self.error(
                                             TypeError::TypeArityMismatch {
-                                                name: qname.unwrap_or_else(
-                                                    || name.to_string(),
-                                                ),
+                                                name: qname.unwrap_or(name_s),
                                                 expected: exp,
                                                 got: 0,
                                                 span,
@@ -405,12 +406,13 @@ impl InferCtx<'_> {
                             }
                             None => {
                                 // Try builtin types
-                                let expected = Self::expected_type_arity(name);
+                                let expected =
+                                    Self::expected_type_arity(&name_s);
                                 if let Some(exp) = expected {
                                     if exp > 0 {
                                         self.error(
                                             TypeError::TypeArityMismatch {
-                                                name: name.clone(),
+                                                name: name_s,
                                                 expected: exp,
                                                 got: 0,
                                                 span,
@@ -418,14 +420,13 @@ impl InferCtx<'_> {
                                         );
                                         TyArena::ERROR
                                     } else {
-                                        self.named_type_to_ty(name)
+                                        self.named_type_to_ty(&name_s)
                                     }
                                 } else {
-                                    let ty = self.named_type_to_ty(name);
+                                    let ty = self.named_type_to_ty(&name_s);
                                     if ty == TyArena::UNKNOWN {
                                         self.error(TypeError::UnknownType(
-                                            name.clone(),
-                                            span,
+                                            name_s, span,
                                         ));
                                         TyArena::ERROR
                                     } else {
@@ -438,12 +439,13 @@ impl InferCtx<'_> {
                 }
                 AstTypeExpr::App(name, args) => {
                     let span = self.ast.type_expr_span(id).unwrap_or_default();
+                    let name_s = self.env.resolve_string(*name);
 
                     // Try module-aware resolution for user types
                     // Only allocate when rewrite needed
                     let resolved =
-                        self.resolve_type_name(name).map(|(tid, cow)| {
-                            let rewrite = &*cow != name;
+                        self.resolve_type_name(&name_s).map(|(tid, cow)| {
+                            let rewrite = &*cow != &*name_s;
                             let qname = if rewrite {
                                 Some(cow.into_owned())
                             } else {
@@ -454,7 +456,7 @@ impl InferCtx<'_> {
                     // Check for user-defined type (not builtin)
                     let user_def =
                         resolved.as_ref().and_then(|(tid, qname)| {
-                            let eff = qname.as_deref().unwrap_or(name);
+                            let eff = qname.as_deref().unwrap_or(&name_s);
                             self.registry
                                 .type_param_count(*tid)
                                 .map(|exp| (*tid, eff, qname.clone(), exp))
@@ -470,7 +472,7 @@ impl InferCtx<'_> {
                                     self.ast.set_type_expr(
                                         id,
                                         AstTypeExpr::App(
-                                            q.clone(),
+                                            self.env.intern(q),
                                             args.clone(),
                                         ),
                                     );
@@ -478,9 +480,7 @@ impl InferCtx<'_> {
                                 // Check arity
                                 if args.len() != exp {
                                     self.error(TypeError::TypeArityMismatch {
-                                        name: qname.unwrap_or_else(|| {
-                                            name.to_string()
-                                        }),
+                                        name: qname.unwrap_or(name_s),
                                         expected: exp,
                                         got: args.len(),
                                         span,
@@ -498,11 +498,11 @@ impl InferCtx<'_> {
                         }
                         None => {
                             // Builtin or unknown parameterized type
-                            let expected = Self::expected_type_arity(name);
+                            let expected = Self::expected_type_arity(&name_s);
                             if let Some(exp) = expected {
                                 if args.len() != exp {
                                     self.error(TypeError::TypeArityMismatch {
-                                        name: name.clone(),
+                                        name: name_s,
                                         expected: exp,
                                         got: args.len(),
                                         span,
@@ -513,7 +513,9 @@ impl InferCtx<'_> {
                                         .iter()
                                         .map(|a| self.ast_type_to_ty(*a, subst))
                                         .collect();
-                                    self.parameterized_type_to_ty(name, arg_tys)
+                                    self.parameterized_type_to_ty(
+                                        &name_s, arg_tys,
+                                    )
                                 }
                             } else {
                                 let arg_tys: SmallVec<[TyId; 4]> = args
@@ -521,11 +523,10 @@ impl InferCtx<'_> {
                                     .map(|a| self.ast_type_to_ty(*a, subst))
                                     .collect();
                                 let ty = self
-                                    .parameterized_type_to_ty(name, arg_tys);
+                                    .parameterized_type_to_ty(&name_s, arg_tys);
                                 if ty == TyArena::UNKNOWN {
                                     self.error(TypeError::UnknownType(
-                                        name.clone(),
-                                        span,
+                                        name_s, span,
                                     ));
                                     TyArena::ERROR
                                 } else {
@@ -568,24 +569,22 @@ impl InferCtx<'_> {
                     let field_tys = fields
                         .iter()
                         .map(|(name, ty_id)| {
-                            let name_id = self.env.intern(name);
                             let ty = self.ast_type_to_ty(*ty_id, subst);
-                            (name_id, ty)
+                            (*name, ty)
                         })
                         .collect();
                     self.ty_arena.alloc(Ty::Object(field_tys))
                 }
                 AstTypeExpr::VarApp(name, args) => {
-                    let name_id = self.env.intern(name);
                     let span = self.ast.type_expr_span(id).unwrap_or_default();
                     let arg_tys: SmallVec<[TyId; 4]> = args
                         .iter()
                         .map(|&a| self.ast_type_to_ty(a, subst))
                         .collect();
-                    match subst.get(&name_id).copied() {
+                    match subst.get(name).copied() {
                         None => {
                             self.error(TypeError::UnknownType(
-                                name.clone(),
+                                self.env.resolve_string(*name),
                                 span,
                             ));
                             TyArena::ERROR
@@ -601,19 +600,16 @@ impl InferCtx<'_> {
                 }
                 AstTypeExpr::AssocType { class, name } => {
                     let span = self.ast.type_expr_span(id).unwrap_or_default();
-                    let name_id = self.env.intern(name);
 
                     match class {
                         // Unqualified `:Index`: resolve from class context
                         None => self
                             .class_context
                             .as_ref()
-                            .and_then(|ctx| {
-                                ctx.assoc_types.get(&name_id).copied()
-                            })
+                            .and_then(|ctx| ctx.assoc_types.get(name).copied())
                             .unwrap_or_else(|| {
                                 self.error(TypeError::AssocTypeOutsideClass {
-                                    name: name.clone(),
+                                    name: self.env.resolve_string(*name),
                                     span,
                                 });
                                 TyArena::ERROR
@@ -622,16 +618,16 @@ impl InferCtx<'_> {
                         // Qualified `Indexable:Index`: create AssocType
                         // Validation happens during resolution in unify.rs
                         Some(class_name) => {
-                            BuiltinClassTag::from_str(class_name)
+                            let cls_s = self.env.resolve_string(*class_name);
+                            BuiltinClassTag::from_str(&cls_s)
                                 .map(|kind| {
                                     let tv = self.fresh_var();
                                     self.ty_arena
-                                        .alloc(Ty::AssocType(tv, kind, name_id))
+                                        .alloc(Ty::AssocType(tv, kind, *name))
                                 })
                                 .unwrap_or_else(|| {
                                     self.error(TypeError::UnknownClass(
-                                        class_name.clone(),
-                                        span,
+                                        cls_s, span,
                                     ));
                                     TyArena::ERROR
                                 })
@@ -831,9 +827,7 @@ impl InferCtx<'_> {
                                 // Find field in object
                                 let field_ty_id = fields
                                     .iter()
-                                    .find(|(n, _)| {
-                                        self.env.intern(n) == field_id
-                                    })
+                                    .find(|(n, _)| *n == field_id)
                                     .map(|(_, ty)| *ty);
                                 match field_ty_id {
                                     Some(ty_id) => {
@@ -1020,12 +1014,12 @@ impl InferCtx<'_> {
         if let Some(te) = self.ast.get_type_expr(id).cloned() {
             match te {
                 AstTypeExpr::Named(name) => {
-                    if !self.is_known_type_name(&name) {
-                        out.push(name);
+                    if !self.is_known_type_name(self.env.resolve_str(name)) {
+                        out.push(self.env.resolve_string(name));
                     }
                 }
                 AstTypeExpr::VarApp(name, args) => {
-                    out.push(name);
+                    out.push(self.env.resolve_string(name));
                     args.iter()
                         .for_each(|a| self.collect_type_vars_rec(*a, out));
                 }

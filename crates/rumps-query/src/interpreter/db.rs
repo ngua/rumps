@@ -20,12 +20,11 @@ impl<I: IoContext> Interpreter<'_, I> {
         dbref: &DbRef,
         span: Span,
     ) -> Result<Value> {
-        let (is_global, name) = match dbref {
-            DbRef::Local(n, _) => (false, n.as_str()),
-            DbRef::Global(n, _) => (true, n.as_str()),
+        let (is_global, name_id) = match dbref {
+            DbRef::Local(n, _) => (false, *n),
+            DbRef::Global(n, _) => (true, *n),
         };
-        let name_id = self.arena.intern(name);
-        let (_, subs) = dbref.split();
+        let (_, subs) = dbref.split(&self.arena.strings);
 
         // Evaluate subscripts and store them
         let sub_ids = self.eval_subscripts(subs, span).await?;
@@ -113,7 +112,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<(Name, Key)> {
         match rt {
             RefTarget::Inline(dbref) => {
-                let (name, subs) = dbref.split();
+                let (name, subs) = dbref.split(&self.arena.strings);
                 let key = self.build_key(subs).await?;
                 Ok((name, key))
             }

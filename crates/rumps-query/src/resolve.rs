@@ -33,6 +33,7 @@ use smallvec::{smallvec, SmallVec};
 
 use crate::ast::{Ast, AstTypeExpr, Expr, ExprId, Stmt, StmtId};
 use crate::env::BUILTIN_MODULE_NAMES;
+use crate::intern::StringId;
 use crate::typecheck::BuiltinClassTag;
 use crate::value::{TypeRegistry, ValueArena};
 
@@ -61,7 +62,7 @@ pub(crate) struct ResolveCtx<'a> {
     ast: &'a mut Ast,
     arena: &'a mut ValueArena,
     registry: &'a TypeRegistry,
-    user_modules: HashSet<String>,
+    user_modules: HashSet<StringId>,
 }
 
 impl<'a> ResolveCtx<'a> {
@@ -107,14 +108,14 @@ impl<'a> ResolveCtx<'a> {
     }
 
     /// Collect all user-defined module names from the AST.
-    fn collect_user_modules(ast: &Ast) -> HashSet<String> {
+    fn collect_user_modules(ast: &Ast) -> HashSet<StringId> {
         fn collect_from_stmt(
             ast: &Ast,
             stmt: &Stmt,
-            names: &mut HashSet<String>,
+            names: &mut HashSet<StringId>,
         ) {
             if let Stmt::Module { name, body } = stmt {
-                names.insert(name.clone());
+                names.insert(*name);
                 body.iter()
                     .filter_map(|&id| ast.get_stmt(id))
                     .for_each(|s| collect_from_stmt(ast, s, names));
@@ -134,13 +135,13 @@ impl<'a> ResolveCtx<'a> {
     fn collect_path_segments(
         &self,
         id: ExprId,
-    ) -> Option<SmallVec<[String; 4]>> {
+    ) -> Option<SmallVec<[StringId; 4]>> {
         self.ast.get_expr(id).and_then(|e| match e {
-            Expr::Var(name) => Some(smallvec![name.clone()]),
+            Expr::Var(name) => Some(smallvec![*name]),
             Expr::Field(base_id, field) => self
                 .collect_path_segments(*base_id)
-                .map(|mut segs: SmallVec<[String; 4]>| {
-                    segs.push(field.clone());
+                .map(|mut segs: SmallVec<[StringId; 4]>| {
+                    segs.push(*field);
                     segs
                 }),
             _ => None,
@@ -159,7 +160,7 @@ impl<'a> ResolveCtx<'a> {
             // Type variants take priority over module paths. This allows
             // `Option.None` and `Result.Err` to work even though `Option` and
             // `Result` are also module names.
-            Expr::Field(base_id, ref field) => {
+            Expr::Field(base_id, field) => {
                 self.resolve_field_expr(id, base_id, field)
             }
 
@@ -178,7 +179,7 @@ impl<'a> ResolveCtx<'a> {
         &mut self,
         id: ExprId,
         base_id: ExprId,
-        field: &str,
+        field: StringId,
     ) -> Option<Expr> {
         // First check if it's a simple Type.Variant pattern (takes priority)
         let variant_expr =
@@ -187,19 +188,12 @@ impl<'a> ResolveCtx<'a> {
                 .cloned()
                 .and_then(|base| match base {
                     Expr::Var(name) => {
-                        let name_id = self.arena.intern(&name);
-                        let field_id = self.arena.intern(field);
-
-                        self.registry.lookup(name_id).and_then(|type_id| {
+                        self.registry.lookup(name).and_then(|type_id| {
                             self.registry
-                                .lookup_variant(type_id, field_id)
+                                .lookup_variant(type_id, field)
                                 .and_then(|v| {
                                     (v.arity == 0).then(|| {
-                                        Expr::Variant(
-                                            name,
-                                            field.to_owned(),
-                                            smallvec![],
-                                        )
+                                        Expr::Variant(name, field, smallvec![])
                                     })
                                 })
                         })
@@ -210,18 +204,13 @@ impl<'a> ResolveCtx<'a> {
         // Check for module-qualified type variant: Module.Type.Variant
         let qualified_variant_expr = variant_expr.or_else(|| {
             let base_path = self.collect_path_segments(base_id)?;
-            let qtype = base_path.join(".");
-            let qtype_id = self.arena.intern(&qtype);
-            let field_id = self.arena.intern(field);
+            let qtype_id = self.arena.strings.intern_joined(&base_path);
 
             self.registry.lookup(qtype_id).and_then(|type_id| {
-                self.registry
-                    .lookup_variant(type_id, field_id)
-                    .and_then(|v| {
-                        (v.arity == 0).then(|| {
-                            Expr::Variant(qtype, field.to_owned(), smallvec![])
-                        })
-                    })
+                self.registry.lookup_variant(type_id, field).and_then(|v| {
+                    (v.arity == 0)
+                        .then(|| Expr::Variant(qtype_id, field, smallvec![]))
+                })
             })
         });
 
@@ -231,9 +220,12 @@ impl<'a> ResolveCtx<'a> {
 
             let is_module_path = full_path
                 .as_ref()
-                .and_then(|segs: &SmallVec<[String; 4]>| segs.first())
+                .and_then(|segs: &SmallVec<[StringId; 4]>| segs.first())
                 .is_some_and(|first| {
-                    BUILTIN_MODULE_NAMES.contains(&first.as_str())
+                    self.arena
+                        .strings
+                        .get(*first)
+                        .is_some_and(|s| BUILTIN_MODULE_NAMES.contains(&s))
                         || self.user_modules.contains(first)
                 });
 
@@ -255,23 +247,20 @@ impl<'a> ResolveCtx<'a> {
                     let simple_variant =
                         self.ast.get_expr(base_id).cloned().and_then(|base| {
                             match base {
-                                Expr::Var(ty_name) => {
-                                    let ty_id = self.arena.intern(&ty_name);
-                                    let var_id = self.arena.intern(&var_name);
-                                    self.registry.lookup(ty_id).and_then(
-                                        |type_id| {
-                                            self.registry
-                                                .lookup_variant(type_id, var_id)
-                                                .map(|_| {
-                                                    Expr::Variant(
-                                                        ty_name,
-                                                        var_name.clone(),
-                                                        args.clone(),
-                                                    )
-                                                })
-                                        },
-                                    )
-                                }
+                                Expr::Var(ty_name) => self
+                                    .registry
+                                    .lookup(ty_name)
+                                    .and_then(|type_id| {
+                                        self.registry
+                                            .lookup_variant(type_id, var_name)
+                                            .map(|_| {
+                                                Expr::Variant(
+                                                    ty_name,
+                                                    var_name,
+                                                    args.clone(),
+                                                )
+                                            })
+                                    }),
                                 _ => None,
                             }
                         });
@@ -279,14 +268,17 @@ impl<'a> ResolveCtx<'a> {
                     // Try module-qualified type: Module.Type.Variant(args)
                     simple_variant.or_else(|| {
                         let base_path = self.collect_path_segments(base_id)?;
-                        let qtype = base_path.join(".");
-                        let qtype_id = self.arena.intern(&qtype);
-                        let var_id = self.arena.intern(&var_name);
+                        let qtype_id =
+                            self.arena.strings.intern_joined(&base_path);
 
                         self.registry.lookup(qtype_id).and_then(|type_id| {
-                            self.registry.lookup_variant(type_id, var_id).map(
+                            self.registry.lookup_variant(type_id, var_name).map(
                                 |_| {
-                                    Expr::Variant(qtype, var_name, args.clone())
+                                    Expr::Variant(
+                                        qtype_id,
+                                        var_name,
+                                        args.clone(),
+                                    )
                                 },
                             )
                         })
@@ -325,9 +317,10 @@ impl<'a> ResolveCtx<'a> {
                     _ => None,
                 })
                 .for_each(|(name, body)| {
+                    let n = self.arena.strings.get(*name).unwrap_or_default();
                     let mod_path = module.map_or_else(
-                        || name.clone(),
-                        |m| format!("{}.{}", m, name),
+                        || n.to_owned(),
+                        |m| format!("{}.{}", m, n),
                     );
                     self.resolve_class_instances_rec(
                         body,
@@ -352,8 +345,11 @@ impl<'a> ResolveCtx<'a> {
                 methods,
                 ..
             } => {
-                let class = BuiltinClassTag::from_str(class_name)?;
-                let raw_name = Self::extract_type_name(self.ast, *for_type)?;
+                let cn =
+                    self.arena.strings.get(*class_name).unwrap_or_default();
+                let class = BuiltinClassTag::from_str(cn)?;
+                let raw_name =
+                    Self::extract_type_name(self.ast, &self.arena, *for_type)?;
 
                 let type_name = match module {
                     Some(m) if !raw_name.contains('.') => {
@@ -365,11 +361,13 @@ impl<'a> ResolveCtx<'a> {
                 let mappings: Vec<(String, String)> = methods
                     .iter()
                     .map(|m| {
+                        let mn =
+                            self.arena.strings.get(m.name).unwrap_or_default();
                         let fn_name =
                             crate::interpreter::instance::instance_fn_name(
-                                class, &type_name, &m.name,
+                                class, &type_name, mn,
                             );
-                        (m.name.clone(), fn_name)
+                        (mn.to_owned(), fn_name)
                     })
                     .collect();
 
@@ -386,11 +384,12 @@ impl<'a> ResolveCtx<'a> {
     /// Extract the type name from an `AstTypeExpr`.
     fn extract_type_name(
         ast: &Ast,
+        arena: &ValueArena,
         id: crate::ast::AstTypeExprId,
     ) -> Option<String> {
         ast.get_type_expr(id).and_then(|te| match te {
-            AstTypeExpr::Named(name) => Some(name.clone()),
-            AstTypeExpr::App(name, _) => Some(name.clone()),
+            AstTypeExpr::Named(name) => Some(arena.strings.resolve(*name)),
+            AstTypeExpr::App(name, _) => Some(arena.strings.resolve(*name)),
             _ => None,
         })
     }
@@ -402,25 +401,28 @@ mod tests {
     use crate::parser::Parser;
     use crate::value::TypeExprArena;
 
-    fn parse_and_resolve(src: &str) -> Ast {
-        let mut result = Parser::parse(src).expect("parse failed");
-        let mut arena = ValueArena::new();
+    fn parse_and_resolve(src: &str) -> (Ast, ValueArena) {
+        let mut interner = crate::StringInterner::new();
+        let mut result =
+            Parser::parse(src, &mut interner).expect("parse failed");
+        let mut arena = ValueArena::with_interner(interner);
         let mut type_exprs = TypeExprArena::new();
         let registry = TypeRegistry::new(&mut arena, &mut type_exprs);
         let _ =
             ResolveCtx::new(&mut result.ast, &mut arena, &registry).resolve();
-        result.ast
+        (result.ast, arena)
     }
 
     #[test]
     fn resolve_option_none() {
-        let ast = parse_and_resolve("let x = Option.None");
-        let has_variant = ast.expr_ids().any(|id| {
-            matches!(
-                ast.get_expr(id),
-                Some(Expr::Variant(ty, var, args))
-                    if ty == "Option" && var == "None" && args.is_empty()
-            )
+        let (ast, arena) = parse_and_resolve("let x = Option.None");
+        let has_variant = ast.expr_ids().any(|id| match ast.get_expr(id) {
+            Some(Expr::Variant(ty, var, args)) => {
+                arena.strings.get(*ty) == Some("Option")
+                    && arena.strings.get(*var) == Some("None")
+                    && args.is_empty()
+            }
+            _ => false,
         });
         assert!(
             has_variant,
@@ -430,74 +432,82 @@ mod tests {
 
     #[test]
     fn resolve_option_some_becomes_variant() {
-        let ast = parse_and_resolve("let x = Option.Some(42)");
-        let has_variant = ast.expr_ids().any(|id| {
-            matches!(
-                ast.get_expr(id),
-                Some(Expr::Variant(ty, var, _)) if ty == "Option" && var == "Some"
-            )
+        let (ast, arena) = parse_and_resolve("let x = Option.Some(42)");
+        let has_variant = ast.expr_ids().any(|id| match ast.get_expr(id) {
+            Some(Expr::Variant(ty, var, _)) => {
+                arena.strings.get(*ty) == Some("Option")
+                    && arena.strings.get(*var) == Some("Some")
+            }
+            _ => false,
         });
         assert!(has_variant, "Option.Some(42) should become Variant");
     }
 
     #[test]
     fn resolve_result_ok_becomes_variant() {
-        let ast = parse_and_resolve("let x = Result.Ok(42)");
-        let has_variant = ast.expr_ids().any(|id| {
-            matches!(
-                ast.get_expr(id),
-                Some(Expr::Variant(ty, var, _)) if ty == "Result" && var == "Ok"
-            )
+        let (ast, arena) = parse_and_resolve("let x = Result.Ok(42)");
+        let has_variant = ast.expr_ids().any(|id| match ast.get_expr(id) {
+            Some(Expr::Variant(ty, var, _)) => {
+                arena.strings.get(*ty) == Some("Result")
+                    && arena.strings.get(*var) == Some("Ok")
+            }
+            _ => false,
         });
         assert!(has_variant, "Result.Ok(42) should become Variant");
     }
 
     #[test]
     fn resolve_result_err_becomes_variant() {
-        let ast = parse_and_resolve("let x = Result.Err(\"oops\")");
-        let has_variant = ast.expr_ids().any(|id| {
-            matches!(
-                ast.get_expr(id),
-                Some(Expr::Variant(ty, var, _)) if ty == "Result" && var == "Err"
-            )
+        let (ast, arena) = parse_and_resolve("let x = Result.Err(\"oops\")");
+        let has_variant = ast.expr_ids().any(|id| match ast.get_expr(id) {
+            Some(Expr::Variant(ty, var, _)) => {
+                arena.strings.get(*ty) == Some("Result")
+                    && arena.strings.get(*var) == Some("Err")
+            }
+            _ => false,
         });
         assert!(has_variant, "Result.Err(\"oops\") should become Variant");
     }
 
     #[test]
     fn resolve_field_access_not_converted() {
-        let ast = parse_and_resolve("let obj = { x: 1 }\nlet y = obj.x");
+        let (ast, arena) =
+            parse_and_resolve("let obj = { x: 1 }\nlet y = obj.x");
         // obj.x should remain as Field, not become Variant
-        let has_variant_obj_x = ast.expr_ids().any(|id| {
-            matches!(
-                ast.get_expr(id),
-                Some(Expr::Variant(ty, var, _)) if ty == "obj" && var == "x"
-            )
-        });
+        let has_variant_obj_x =
+            ast.expr_ids().any(|id| match ast.get_expr(id) {
+                Some(Expr::Variant(ty, var, _)) => {
+                    arena.strings.get(*ty) == Some("obj")
+                        && arena.strings.get(*var) == Some("x")
+                }
+                _ => false,
+            });
         assert!(!has_variant_obj_x, "obj.x should not become Variant");
     }
 
     #[test]
     fn resolve_unknown_type_not_converted() {
-        let ast = parse_and_resolve("let x = Unknown.Foo");
+        let (ast, arena) = parse_and_resolve("let x = Unknown.Foo");
         // Unknown.Foo should remain as Field since Unknown is not a registered type
-        let has_variant = ast.expr_ids().any(|id| {
-            matches!(
-                ast.get_expr(id),
-                Some(Expr::Variant(ty, _, _)) if ty == "Unknown"
-            )
+        let has_variant = ast.expr_ids().any(|id| match ast.get_expr(id) {
+            Some(Expr::Variant(ty, _, _)) => {
+                arena.strings.get(*ty) == Some("Unknown")
+            }
+            _ => false,
         });
         assert!(!has_variant, "Unknown.Foo should not become Variant");
     }
 
     #[test]
     fn resolve_array_push_becomes_path() {
-        let ast = parse_and_resolve("let r = Array.push([1, 2], 3)");
-        let has_path = ast.expr_ids().any(|id| {
-            matches!(
-                ast.get_expr(id),
-                Some(Expr::Path(segs)) if segs.as_slice() == ["Array", "push"]
-            )
+        let (ast, arena) = parse_and_resolve("let r = Array.push([1, 2], 3)");
+        let has_path = ast.expr_ids().any(|id| match ast.get_expr(id) {
+            Some(Expr::Path(segs)) => {
+                segs.len() == 2
+                    && arena.strings.get(segs[0]) == Some("Array")
+                    && arena.strings.get(segs[1]) == Some("push")
+            }
+            _ => false,
         });
         assert!(has_path, "Array.push should become Path([Array, push])");
     }
@@ -505,25 +515,28 @@ mod tests {
     #[test]
     fn resolve_module_fn_without_call() {
         // Module function used as value (e.g., for pipeline)
-        let ast = parse_and_resolve("let f = String.length");
-        let has_path = ast.expr_ids().any(|id| {
-            matches!(
-                ast.get_expr(id),
-                Some(Expr::Path(segs)) if segs.as_slice() == ["String", "length"]
-            )
+        let (ast, arena) = parse_and_resolve("let f = String.length");
+        let has_path = ast.expr_ids().any(|id| match ast.get_expr(id) {
+            Some(Expr::Path(segs)) => {
+                segs.len() == 2
+                    && arena.strings.get(segs[0]) == Some("String")
+                    && arena.strings.get(segs[1]) == Some("length")
+            }
+            _ => false,
         });
         assert!(has_path, "String.length (no call) should become Path");
     }
 
     #[test]
     fn resolve_unknown_module_not_converted() {
-        let ast = parse_and_resolve("let x = Foo.bar(1)");
+        let (ast, arena) = parse_and_resolve("let x = Foo.bar(1)");
         // Foo.bar should remain as Field since Foo is not a known module
-        let has_path = ast.expr_ids().any(|id| {
-            matches!(
-                ast.get_expr(id),
-                Some(Expr::Path(segs)) if segs.first() == Some(&"Foo".to_string())
-            )
+        let has_path = ast.expr_ids().any(|id| match ast.get_expr(id) {
+            Some(Expr::Path(segs)) => segs
+                .first()
+                .and_then(|s| arena.strings.get(*s))
+                .is_some_and(|s| s == "Foo"),
+            _ => false,
         });
         assert!(!has_path, "Foo.bar should not become Path");
     }

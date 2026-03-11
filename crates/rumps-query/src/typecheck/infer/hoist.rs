@@ -11,6 +11,7 @@ use smallvec::{smallvec, SmallVec};
 
 use super::{ClassInstanceInput, InferCtx};
 use crate::ast::{AstTypeExprId, BindingPattern, Stmt, StmtId, TypeParam};
+use crate::intern::StringId;
 use crate::typecheck::error::TypeError;
 use crate::typecheck::instance::Instance;
 use crate::typecheck::ty::{
@@ -37,7 +38,8 @@ impl InferCtx<'_> {
             let stmt = self.ast.get_stmt(id).cloned();
             if let Some(Stmt::Module { ref name, ref body }) = stmt {
                 let span = self.ast.stmt_span(id).unwrap_or_default();
-                self.hoist_module(name, body, span);
+                let n = self.env.get_str(*name).unwrap_or_default().to_owned();
+                self.hoist_module(&n, body, span);
             }
         });
 
@@ -69,7 +71,8 @@ impl InferCtx<'_> {
                 ret,
                 ..
             }) => {
-                self.hoist_fun(&name, &type_params, &params, ret.as_ref(), span)
+                let n = self.env.get_str(name).unwrap_or_default().to_owned();
+                self.hoist_fun(&n, &type_params, &params, ret.as_ref(), span)
             }
 
             Some(Stmt::ClassInstance {
@@ -80,17 +83,21 @@ impl InferCtx<'_> {
                 constraints,
                 assoc_types: _,
                 methods,
-            }) => self.hoist_class_instance(ClassInstanceInput {
-                class_name: &class_name,
-                class_args: &class_args,
-                type_params: &type_params,
-                for_type,
-                constraints: &constraints,
-                methods: &methods,
-                assoc_types: (),
-                module: None,
-                span,
-            }),
+            }) => {
+                let cn =
+                    self.env.get_str(class_name).unwrap_or_default().to_owned();
+                self.hoist_class_instance(ClassInstanceInput {
+                    class_name: &cn,
+                    class_args: &class_args,
+                    type_params: &type_params,
+                    for_type,
+                    constraints: &constraints,
+                    methods: &methods,
+                    assoc_types: (),
+                    module: None,
+                    span,
+                })
+            }
 
             // Modules already hoisted in Phase 1; imports processed in Phase 2;
             // other statements don't need hoisting
@@ -108,7 +115,7 @@ impl InferCtx<'_> {
         &mut self,
         name: &str,
         type_params: &SmallVec<[TypeParam; 2]>,
-        params: &SmallVec<[(String, Option<AstTypeExprId>); 4]>,
+        params: &SmallVec<[(StringId, Option<AstTypeExprId>); 4]>,
         ret: Option<&AstTypeExprId>,
         _span: Span,
     ) {
@@ -124,7 +131,7 @@ impl InferCtx<'_> {
         let type_param_subst: IndexMap<_, _> = type_param_vars
             .iter()
             .map(|(tp, tv)| {
-                let id = self.env.intern(&tp.name);
+                let id = tp.name;
                 let ty_id = self.ty_arena.alloc(Ty::Var(*tv));
                 (id, ty_id)
             })
@@ -208,7 +215,8 @@ impl InferCtx<'_> {
             match item {
                 Some(Stmt::Module { ref name, ref body }) => {
                     // Nested module; recurse with qualified path
-                    let nested_path = format!("{}.{}", mod_path, name);
+                    let n = self.env.get_str(*name).unwrap_or_default();
+                    let nested_path = format!("{}.{}", mod_path, n);
                     self.hoist_module(&nested_path, body, item_span);
                 }
 
@@ -218,12 +226,13 @@ impl InferCtx<'_> {
                 Some(Stmt::Type { ref name, vis, .. })
                 | Some(Stmt::Union { ref name, vis, .. })
                 | Some(Stmt::NewType { ref name, vis, .. }) => {
+                    let n = self.env.get_str(*name).unwrap_or_default().to_owned();
                     // Check for shadowing of builtin types
-                    if self.named_type_to_ty(name) != TyArena::UNKNOWN {
+                    if self.named_type_to_ty(&n) != TyArena::UNKNOWN {
                         self.error(TypeError::Custom {
                             msg: format!(
                                 "type `{}` shadows a builtin type",
-                                name
+                                n
                             ),
                             span: item_span,
                         });
@@ -233,18 +242,18 @@ impl InferCtx<'_> {
                     {
                         // Temporarily set current_module to parent for lookup
                         let saved = self.current_module.replace(parent.to_string());
-                        if self.resolve_type_name(name).is_some() {
+                        if self.resolve_type_name(&n).is_some() {
                             self.error(TypeError::Custom {
                                 msg: format!(
                                     "type `{}` already in scope from outer module",
-                                    name
+                                    n
                                 ),
                                 span: item_span,
                             });
                         }
                         self.current_module = saved;
                     }
-                    let qname = format!("{}.{}", mod_path, name);
+                    let qname = format!("{}.{}", mod_path, n);
                     self.env.register_user_module_type_vis(&qname, vis);
                 }
 
@@ -276,9 +285,11 @@ impl InferCtx<'_> {
                     vis,
                     ..
                 }) => {
+                    let n =
+                        self.env.get_str(*name).unwrap_or_default().to_owned();
                     // Hoist the function
                     self.hoist_fun(
-                        name,
+                        &n,
                         type_params,
                         params,
                         ret.as_ref(),
@@ -286,9 +297,9 @@ impl InferCtx<'_> {
                     );
 
                     // Register as module member with provisional type
-                    if let Some(scheme) = self.env.lookup(name).cloned() {
+                    if let Some(scheme) = self.env.lookup(&n).cloned() {
                         self.env.register_user_module_member(
-                            mod_path, name, scheme, vis,
+                            mod_path, &n, scheme, vis,
                         );
                     }
                 }
@@ -301,15 +312,20 @@ impl InferCtx<'_> {
                     _,
                     vis,
                 )) => {
+                    let cn = self
+                        .env
+                        .get_str(*const_name)
+                        .unwrap_or_default()
+                        .to_owned();
                     // Use annotation if present, else fresh type variable
                     let ty = match ann {
                         Some(id) => self.ast_type_to_ty(*id, &IndexMap::new()),
                         None => self.fresh(),
                     };
                     let scheme = Scheme::mono(ty);
-                    self.env.bind(const_name, scheme.clone());
+                    self.env.bind(&cn, scheme.clone());
                     self.env.register_user_module_member(
-                        mod_path, const_name, scheme, vis,
+                        mod_path, &cn, scheme, vis,
                     );
                 }
 
@@ -322,9 +338,14 @@ impl InferCtx<'_> {
                     ref methods,
                     ..
                 }) => {
+                    let cn = self
+                        .env
+                        .get_str(*class_name)
+                        .unwrap_or_default()
+                        .to_owned();
                     let mod_id = self.env.intern(mod_path);
                     self.hoist_class_instance(ClassInstanceInput {
-                        class_name,
+                        class_name: &cn,
                         class_args,
                         type_params,
                         for_type,
@@ -374,20 +395,18 @@ impl InferCtx<'_> {
                 constraints
                     .iter()
                     .map(|(name, _)| {
-                        let id = self.env.intern(name);
                         let tv = self.fresh_var();
                         let ty_id = self.ty_arena.alloc(Ty::Var(tv));
-                        (id, ty_id)
+                        (*name, ty_id)
                     })
                     .collect()
             } else {
                 type_params
                     .iter()
                     .map(|tp| {
-                        let id = self.env.intern(&tp.name);
                         let tv = self.fresh_var();
                         let ty_id = self.ty_arena.alloc(Ty::Var(tv));
-                        (id, ty_id)
+                        (tp.name, ty_id)
                     })
                     .collect()
             };
@@ -457,9 +476,8 @@ impl InferCtx<'_> {
                     > = SmallVec::new();
                     constraints.iter().for_each(
                         |(param_name, param_constraints)| {
-                            let param_id = self.env.intern(param_name);
                             let ty_id = type_param_subst
-                                .get(&param_id)
+                                .get(param_name)
                                 .copied()
                                 .unwrap_or(TyArena::UNKNOWN);
                             let tv = match self.ty_arena.get(ty_id) {
@@ -501,15 +519,16 @@ impl InferCtx<'_> {
                     let method_map: HashMap<_, _> = methods
                         .iter()
                         .map(|m| {
-                            let method_id = self.env.intern(&m.name);
+                            let mn =
+                                self.env.get_str(m.name).unwrap_or_default();
                             let fn_name =
                                 crate::interpreter::instance::instance_fn_name(
                                     class,
                                     &type_name_for_fn,
-                                    &m.name,
+                                    mn,
                                 );
                             let fn_name_id = self.env.intern(&fn_name);
-                            (method_id, fn_name_id)
+                            (m.name, fn_name_id)
                         })
                         .collect();
 

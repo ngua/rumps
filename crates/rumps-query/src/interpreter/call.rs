@@ -149,28 +149,29 @@ impl<I: IoContext> Interpreter<'_, I> {
 
         // For variable callees, use name-based resolution (functions first)
         match callee_expr {
-            Expr::Var(ref name) => self.call_by_name(name, args, span).await,
+            Expr::Var(ref name) => {
+                let n = self.arena.strings.resolve(*name);
+                self.call_by_name(&n, args, span).await
+            }
             // Check if this is a variant constructor for a user-defined type
             Expr::Field(base_id, ref var_name) => {
                 let maybe_variant =
                     self.ast.get_expr(base_id).and_then(|e| match e {
                         Expr::Var(ty_name) => {
-                            let ty_id = self.arena.intern(ty_name);
-                            self.registry.lookup(ty_id).and_then(|type_id| {
-                                let var_id = self.arena.intern(var_name);
+                            self.registry.lookup(*ty_name).and_then(|type_id| {
                                 self.registry
-                                    .lookup_variant(type_id, var_id)
-                                    .map(|_| {
-                                        (ty_name.clone(), var_name.clone())
-                                    })
+                                    .lookup_variant(type_id, *var_name)
+                                    .map(|_| (*ty_name, *var_name))
                             })
                         }
                         _ => None,
                     });
 
-                if let Some((ty_name, var_name)) = maybe_variant {
+                if let Some((ty_id, var_id)) = maybe_variant {
                     // Handle as variant constructor
-                    self.variant(&ty_name, &var_name, args, span).await
+                    let ty_s = self.arena.strings.resolve(ty_id);
+                    let var_s = self.arena.strings.resolve(var_id);
+                    self.variant(&ty_s, &var_s, args, span).await
                 } else {
                     // Evaluate callee expression and call the result
                     let callee_val = self.eval(callee).await?;
@@ -378,21 +379,28 @@ impl<I: IoContext> Interpreter<'_, I> {
     pub(super) async fn class_method_expr(
         &mut self,
         expr_id: ExprId,
-        class: &str,
-        method: &str,
+        class: StringId,
+        method: StringId,
         args: &SmallVec<[ExprId; 4]>,
         span: Span,
     ) -> Result<Value> {
         use crate::typecheck::BuiltinClassTag;
 
-        let kind = BuiltinClassTag::from_str(class).unwrap_or_else(|| {
+        let cs = self.arena.strings.get(class).unwrap_or_default();
+        let ms = self
+            .arena
+            .strings
+            .get(method)
+            .unwrap_or_default()
+            .to_owned();
+        let kind = BuiltinClassTag::from_str(cs).unwrap_or_else(|| {
             typechecked!("class method class", "known class")
         });
 
         // Evaluate arguments
         let arg_ids = self.eval_args(args).await?;
 
-        self.dispatch_class_method(Some(expr_id), kind, method, &arg_ids, span)
+        self.dispatch_class_method(Some(expr_id), kind, &ms, &arg_ids, span)
             .await
     }
 

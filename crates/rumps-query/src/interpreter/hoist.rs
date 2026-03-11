@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use async_recursion::async_recursion;
 
 use crate::ast::{InstanceMethodDef, Stmt, StmtId};
+use crate::intern::StringId;
 use crate::interpreter::instance::RuntimeInstance;
 use crate::interpreter::Interpreter;
 use crate::io::IoContext;
@@ -57,10 +58,21 @@ impl<I: IoContext> Interpreter<'_, I> {
                 ret,
                 body,
                 ..
-            }) => self.hoist_fun(&name, &params, ret, body, span),
+            }) => {
+                let n = self.arena.strings.resolve(name);
+                let p: Vec<(String, Option<crate::ast::AstTypeExprId>)> =
+                    params
+                        .iter()
+                        .map(|(pid, ty)| {
+                            (self.arena.strings.resolve(*pid), *ty)
+                        })
+                        .collect();
+                self.hoist_fun(&n, &p, ret, body, span)
+            }
 
             Some(Stmt::Module { name, body }) => {
-                self.hoist_module(&name, &body, span).await
+                let n = self.arena.strings.resolve(name);
+                self.hoist_module(&n, &body, span).await
             }
 
             Some(Stmt::ClassInstance {
@@ -127,34 +139,40 @@ impl<I: IoContext> Interpreter<'_, I> {
                     None => Ok(()),
                     Some(type_id) => {
                         // Build method lookup map for O(1) access
-                        let method_map: HashMap<&str, &InstanceMethodDef> =
-                            methods
-                                .iter()
-                                .map(|m| (m.name.as_str(), m))
-                                .collect();
+                        let method_map: HashMap<StringId, &InstanceMethodDef> =
+                            methods.iter().map(|m| (m.name, m)).collect();
 
                         // Register each method as a function
                         let mut runtime_inst = RuntimeInstance::default();
 
                         let result: Result<()> = mappings.iter().try_for_each(
                             |(method_name, fn_name)| {
-                                let method_def = method_map
-                                    .get(method_name.as_str())
-                                    .unwrap_or_else(|| {
+                                let mid = self.arena.intern(method_name);
+                                let method_def =
+                                    method_map.get(&mid).unwrap_or_else(|| {
                                         invariant!("resolved method not in AST")
                                     });
 
+                                let p: Vec<(
+                                    String,
+                                    Option<crate::ast::AstTypeExprId>,
+                                )> = method_def
+                                    .params
+                                    .iter()
+                                    .map(|(pid, ty)| {
+                                        (self.arena.strings.resolve(*pid), *ty)
+                                    })
+                                    .collect();
                                 self.fun(
                                     fn_name,
-                                    &method_def.params,
+                                    &p,
                                     method_def.ret,
                                     method_def.body,
                                     span,
                                 )?;
 
-                                let method_id = self.arena.intern(method_name);
                                 let fn_id = self.arena.intern(fn_name);
-                                runtime_inst.methods.insert(method_id, fn_id);
+                                runtime_inst.methods.insert(mid, fn_id);
 
                                 Ok(())
                             },

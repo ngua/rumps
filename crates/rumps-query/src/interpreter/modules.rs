@@ -44,17 +44,18 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// at runtime).
     pub(super) fn path(
         &mut self,
-        segments: &[String],
+        segments: &[StringId],
         span: Span,
     ) -> Result<Value> {
         // Need at least two segments: module + function (or type + variant)
         // Typechecker validates path structure
-        let (first, _) = segments
+        let (&first, _) = segments
             .split_first()
             .unwrap_or_else(|| typechecked!("path", "non-empty"));
 
+        let first_s = self.arena.strings.resolve(first);
         // Check if the first segment is a module
-        if self.env.has_module(first) {
+        if self.env.has_module(&first_s) {
             self.module_path(segments)
         } else {
             // Fall back to type + variant interpretation
@@ -67,18 +68,21 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// The path must have at least two segments. The last segment is the
     /// function/constant name; all preceding segments form the module path.
     /// Checks both builtin and user-defined modules.
-    fn module_path(&mut self, segments: &[String]) -> Result<Value> {
-        let path_strs: SmallVec<[&str; 4]> =
-            segments.iter().map(String::as_str).collect();
+    fn module_path(&mut self, segments: &[StringId]) -> Result<Value> {
+        let path_strs: SmallVec<[String; 4]> = segments
+            .iter()
+            .map(|s| self.arena.strings.resolve(*s))
+            .collect();
+        let path_refs: SmallVec<[&str; 4]> =
+            path_strs.iter().map(String::as_str).collect();
 
         // Check for builtin module function first
-        if self.env.module_fn_exists(&path_strs) {
-            let path: SmallVec<[StringId; 4]> =
-                segments.iter().map(|s| self.arena.intern(s)).collect();
+        if self.env.module_fn_exists(&path_refs) {
+            let path: SmallVec<[StringId; 4]> = segments.into();
             Ok(Value::ModuleFn { path })
         }
         // Check for builtin module constant
-        else if let Some(const_id) = self.env.get_module_const(&path_strs) {
+        else if let Some(const_id) = self.env.get_module_const(&path_refs) {
             Ok(self
                 .env
                 .consts
@@ -87,16 +91,15 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .unwrap_or_else(|| invariant!("ConstId in consts map")))
         }
         // Check for user module function
-        else if self.env.user_module_fn_exists(&path_strs) {
+        else if self.env.user_module_fn_exists(&path_refs) {
             // Return ModuleFn; actual FunctionDef is looked up at call time
             // so siblings can be bound then (enabling mutual recursion).
-            let path: SmallVec<[StringId; 4]> =
-                segments.iter().map(|s| self.arena.intern(s)).collect();
+            let path: SmallVec<[StringId; 4]> = segments.into();
             Ok(Value::ModuleFn { path })
         }
         // Check for user module constant
         else if let Some(const_id) =
-            self.env.get_user_module_const(&path_strs)
+            self.env.get_user_module_const(&path_refs)
         {
             Ok(self
                 .arena
@@ -116,24 +119,21 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// runtime via `type` declarations.
     fn type_variant_path(
         &mut self,
-        segments: &[String],
+        segments: &[StringId],
         _span: Span,
     ) -> Result<Value> {
         match segments {
             [ty_name, var_name] => {
-                let ty_id = self.arena.intern(ty_name);
-                let var_id = self.arena.intern(var_name);
-
                 // Typechecker validates type names
                 let type_id = self
                     .registry
-                    .lookup(ty_id)
+                    .lookup(*ty_name)
                     .unwrap_or_else(|| typechecked!("type path", "known type"));
 
                 // Typechecker validates variant names
                 let v = self
                     .registry
-                    .lookup_variant(type_id, var_id)
+                    .lookup_variant(type_id, *var_name)
                     .unwrap_or_else(|| {
                         typechecked!("type path", "known variant")
                     });

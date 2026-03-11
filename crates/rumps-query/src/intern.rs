@@ -80,4 +80,10 @@ impl StringInterner {
             .collect::<Vec<_>>()
             .join(".")
     }
+
+    /// Join a slice of `StringId`s with `"."` and intern the result.
+    pub(crate) fn intern_joined(&mut self, segs: &[StringId]) -> StringId {
+        let joined = self.join_path(segs);
+        self.intern(&joined)
+    }
 }

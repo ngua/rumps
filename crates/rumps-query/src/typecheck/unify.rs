@@ -845,10 +845,7 @@ impl<'a> InferCtx<'a> {
                         // Pre-intern field names before the fold
                         let fields_with_ids: Vec<_> = alias_fields
                             .iter()
-                            .map(|(name, ty)| {
-                                let id = self.env_mut().intern(name);
-                                (name.clone(), id, *ty)
-                            })
+                            .map(|(name, ty)| (*name, *ty))
                             .collect();
 
                         // Check that object has all required fields
@@ -856,24 +853,29 @@ impl<'a> InferCtx<'a> {
                             .iter()
                             .try_fold(
                                 Subst::empty(),
-                                |acc, (field_name, field_name_id, field_ty_id)| {
+                                |acc, (field_name, field_ty_id)| {
                                     let expected_ty = self.ast_type_to_ty(
                                         *field_ty_id,
                                         &param_subst,
                                     );
-                                    let expected_ty = self.ty_arena.apply(expected_ty, &acc);
+                                    let expected_ty =
+                                        self.ty_arena.apply(expected_ty, &acc);
 
-                                    match obj_fields.get(field_name_id) {
+                                    match obj_fields.get(field_name) {
                                         Some(&obj_ty) => {
-                                            let obj_ty = self.ty_arena.apply(obj_ty, &acc);
+                                            let obj_ty = self
+                                                .ty_arena
+                                                .apply(obj_ty, &acc);
                                             match self.unify_inner(
                                                 expected_ty,
                                                 obj_ty,
                                                 span,
                                             ) {
-                                                UnifyResult::Ok(s) => {
-                                                    Ok(acc.compose(&s, &mut self.ty_arena))
-                                                }
+                                                UnifyResult::Ok(s) => Ok(acc
+                                                    .compose(
+                                                        &s,
+                                                        &mut self.ty_arena,
+                                                    )),
                                                 UnifyResult::Err(e) => Err(e),
                                             }
                                         }
@@ -881,7 +883,11 @@ impl<'a> InferCtx<'a> {
                                             // Missing required field
                                             Err(TypeError::MissingField {
                                                 ty: type_id,
-                                                field: field_name.clone(),
+                                                field: self
+                                                    .env()
+                                                    .resolve_string(
+                                                        *field_name,
+                                                    ),
                                                 span,
                                             })
                                         }
@@ -2811,7 +2817,7 @@ impl<'a> InferCtx<'a> {
                                     self.env().get_str(field).unwrap_or("");
                                 let field_ty_id = alias_fields
                                     .iter()
-                                    .find(|(n, _)| n == field_str)
+                                    .find(|(n, _)| *n == field)
                                     .map(|(_, ty)| *ty);
                                 match field_ty_id {
                                     Some(ast_ty_id) => {

@@ -122,7 +122,7 @@ use crate::ast::{
     TypePattern, UnOp, WriteExpr,
 };
 use crate::env::Environment;
-use crate::intern::StringId;
+use crate::intern::{StringId, StringInterner};
 use crate::io::IoContext;
 use crate::resolve::ResolveCtx;
 use crate::value::{
@@ -255,8 +255,9 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         db: Database,
         io: I,
         interactive: bool,
+        interner: StringInterner,
     ) -> Result<Self> {
-        let mut arena = ValueArena::new();
+        let mut arena = ValueArena::with_interner(interner);
         let mut type_exprs = TypeExprArena::new();
         let mut registry = TypeRegistry::new(&mut arena, &mut type_exprs);
 
@@ -365,14 +366,18 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                         type_params,
                         def,
                         ..
-                    } => self.type_decl(&name, &type_params, &def, span)?,
+                    } => {
+                        let n = self.arena.strings.resolve(name);
+                        self.type_decl(&n, &type_params, &def, span)?
+                    }
                     Stmt::NewType {
                         name,
                         type_params,
                         target,
                         ..
                     } => {
-                        self.newtype_decl(&name, &type_params, target, span)?
+                        let n = self.arena.strings.resolve(name);
+                        self.newtype_decl(&n, &type_params, target, span)?
                     }
                     Stmt::Union {
                         name,
@@ -380,7 +385,8 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                         members,
                         ..
                     } => {
-                        self.union_decl(&name, &type_params, &members, span)?
+                        let n = self.arena.strings.resolve(name);
+                        self.union_decl(&n, &type_params, &members, span)?
                     }
                     Stmt::Import(ref import) => self.import(import, span)?,
                 };
@@ -462,7 +468,10 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         match expr {
             Expr::Literal(lit) => Ok(self.literal(id, &lit)),
             Expr::Interpolation(parts) => self.interpolation(&parts).await,
-            Expr::Var(name) => Ok(self.var(&name, span)),
+            Expr::Var(name) => {
+                let n = self.arena.strings.resolve(name);
+                Ok(self.var(&n, span))
+            }
             Expr::Intrinsic(op, ref rt, val, txn_id) => {
                 self.intrinsic(op, rt, val, txn_id, span).await
             }
@@ -487,9 +496,11 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 self.optional_field(base, &field, span).await
             }
             Expr::Variant(ty, var, args) => {
-                self.variant(&ty, &var, &args, span).await
+                let ty_s = self.arena.strings.resolve(ty);
+                let var_s = self.arena.strings.resolve(var);
+                self.variant(&ty_s, &var_s, &args, span).await
             }
-            Expr::Path(segments) => self.path(&segments, span),
+            Expr::Path(ref segments) => self.path(segments, span),
             Expr::Is(expr, pattern) => self.is(expr, &pattern, span).await,
             Expr::As(expr, ty) => self.r#as(expr, ty, span).await,
             Expr::Read(expr, ty) => self.read(expr, ty, span).await,
@@ -502,7 +513,13 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             }
             Expr::Closure {
                 params, ret, body, ..
-            } => self.closure(&params, ret, body),
+            } => {
+                let p: Vec<(String, Option<AstTypeExprId>)> = params
+                    .iter()
+                    .map(|(pid, ty)| (self.arena.strings.resolve(*pid), *ty))
+                    .collect();
+                self.closure(&p, ret, body)
+            }
             Expr::Postfix(op, inner) => {
                 let val = self.eval(inner).await?;
                 self.postfix(op, val, span)
@@ -554,14 +571,13 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::Mempty => self.mempty(id, span),
             Expr::Ref(ref dbref) => self.ref_lit(dbref, span).await,
             Expr::ClassMethod(ref class, ref method, ref args) => {
-                self.class_method_expr(id, class, method, args, span).await
+                self.class_method_expr(id, *class, *method, args, span)
+                    .await
             }
             Expr::ClassMethodRef(ref class, _, ref method) => {
-                let class = self.arena.intern(class);
-                let method = self.arena.intern(method);
                 Ok(Value::ClassMethodFn {
-                    class,
-                    method,
+                    class: *class,
+                    method: *method,
                     expr_id: Some(id),
                 })
             }
@@ -609,27 +625,44 @@ impl<I: IoContext> Interpreter<'_, I> {
                 ret,
                 body,
                 ..
-            } => self.fun(&name, &params, ret, body, span),
+            } => {
+                let n = self.arena.strings.resolve(name);
+                let p: Vec<(String, Option<AstTypeExprId>)> = params
+                    .iter()
+                    .map(|(pid, ty)| (self.arena.strings.resolve(*pid), *ty))
+                    .collect();
+                self.fun(&n, &p, ret, body, span)
+            }
             Stmt::Type {
                 name,
                 type_params,
                 def,
                 ..
-            } => self.type_decl(&name, &type_params, &def, span),
+            } => {
+                let n = self.arena.strings.resolve(name);
+                self.type_decl(&n, &type_params, &def, span)
+            }
             Stmt::NewType {
                 name,
                 type_params,
                 target,
                 ..
-            } => self.newtype_decl(&name, &type_params, target, span),
+            } => {
+                let n = self.arena.strings.resolve(name);
+                self.newtype_decl(&n, &type_params, target, span)
+            }
             Stmt::Union {
                 name,
                 type_params,
                 members,
                 ..
-            } => self.union_decl(&name, &type_params, &members, span),
+            } => {
+                let n = self.arena.strings.resolve(name);
+                self.union_decl(&n, &type_params, &members, span)
+            }
             Stmt::Module { name, body } => {
-                self.user_module(&name, &body, span).await
+                let n = self.arena.strings.resolve(name);
+                self.user_module(&n, &body, span).await
             }
             Stmt::Import(ref import) => self.import(import, span),
             Stmt::ClassInstance { .. } => {
@@ -688,13 +721,12 @@ impl<I: IoContext> Interpreter<'_, I> {
                         } => {
                             // Create FunctionDef (not closure) so siblings are
                             // bound at call time, enabling mutual recursion.
-                            let name_id = self.arena.intern(&fn_name);
+                            let fn_name_s = self.arena.strings.resolve(fn_name);
                             let resolved_params: Result<
                                 SmallVec<[(StringId, Option<TypeExprId>); 4]>,
                             > = params
                                 .iter()
                                 .map(|(pname, ty)| {
-                                    let pid = self.arena.intern(pname);
                                     let tid = ty
                                         .map(|ast_id| {
                                             let s = self
@@ -707,7 +739,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                                         })
                                         .transpose()?
                                         .flatten();
-                                    Ok((pid, tid))
+                                    Ok((*pname, tid))
                                 })
                                 .collect();
                             let resolved_ret = ret
@@ -721,9 +753,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                                 .transpose()?
                                 .flatten();
                             module.functions.insert(
-                                fn_name.clone(),
+                                fn_name_s,
                                 FunctionDef {
-                                    name: name_id,
+                                    name: fn_name,
                                     params: resolved_params?,
                                     ret: resolved_ret,
                                     body: fn_body,
@@ -735,13 +767,12 @@ impl<I: IoContext> Interpreter<'_, I> {
                             let val = self.eval(expr_id).await?;
                             let val_id = self.arena.add(val, item_span);
                             if let BindingPattern::Var(ref const_name) = pat {
-                                module
-                                    .constants
-                                    .insert(const_name.clone(), val_id);
+                                let cs =
+                                    self.arena.strings.resolve(*const_name);
+                                module.constants.insert(cs, val_id);
                                 // Bind in scope so later `let` initializers can
                                 // reference earlier constants.
-                                let name_id = self.arena.intern(const_name);
-                                self.env.scopes.bind(name_id, val_id);
+                                self.env.scopes.bind(*const_name, val_id);
                             }
                         }
 
@@ -749,8 +780,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                             name: sub_name,
                             body: sub_body,
                         } => {
+                            let sub_name_s =
+                                self.arena.strings.resolve(sub_name);
                             let mut sub = crate::env::UserModule::default();
-                            let sub_path = format!("{}.{}", mod_path, sub_name);
+                            let sub_path =
+                                format!("{}.{}", mod_path, sub_name_s);
                             // Push scope for nested module so its bindings
                             // don't leak into parent
                             self.env.scopes.push();
@@ -761,7 +795,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                                 .await;
                             self.env.scopes.pop();
                             res?;
-                            module.submodules.insert(sub_name, sub);
+                            module.submodules.insert(sub_name_s, sub);
                         }
 
                         Stmt::Type {
@@ -773,7 +807,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                             // Types are already registered with qualified names
                             // by register_from_ast. The idempotent type_decl
                             // will skip if already present.
-                            let qname = format!("{}.{}", mod_path, type_name);
+                            let tn = self.arena.strings.resolve(type_name);
+                            let qname = format!("{}.{}", mod_path, tn);
                             self.type_decl(
                                 &qname,
                                 &type_params,
@@ -791,7 +826,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                             // Aliases are already registered with qualified names
                             // by register_from_ast. The idempotent newtype_decl
                             // will skip if already present.
-                            let qname = format!("{}.{}", mod_path, alias_name);
+                            let an = self.arena.strings.resolve(alias_name);
+                            let qname = format!("{}.{}", mod_path, an);
                             self.newtype_decl(
                                 &qname,
                                 &type_params,
@@ -809,7 +845,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                             // Unions are already registered with qualified names
                             // by register_from_ast. The idempotent union_decl
                             // will skip if already present.
-                            let qname = format!("{}.{}", mod_path, union_name);
+                            let un = self.arena.strings.resolve(union_name);
+                            let qname = format!("{}.{}", mod_path, un);
                             self.union_decl(
                                 &qname,
                                 &type_params,
@@ -841,18 +878,27 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// validated that the module exists, members exist, and there are no
     /// conflicts, so no runtime errors are possible.
     fn import(&mut self, import: &Import, span: Span) -> Result<()> {
+        let path_strs: Vec<String> = import
+            .path
+            .iter()
+            .map(|s| self.arena.strings.resolve(*s))
+            .collect();
         let path_refs: Vec<&str> =
-            import.path.iter().map(|s| s.as_str()).collect();
+            path_strs.iter().map(String::as_str).collect();
 
         // Collect exclusions for wildcard imports
-        let excludes: HashSet<&str> = import
+        let exclude_strs: Vec<String> = import
             .items
             .iter()
             .filter_map(|item| match item {
-                ImportItem::Exclude(name) => Some(name.as_str()),
+                ImportItem::Exclude(name) => {
+                    Some(self.arena.strings.resolve(*name))
+                }
                 _ => None,
             })
             .collect();
+        let excludes: HashSet<&str> =
+            exclude_strs.iter().map(String::as_str).collect();
 
         // Check for wildcard
         let has_wildcard = import
@@ -880,8 +926,11 @@ impl<I: IoContext> Interpreter<'_, I> {
             // Process named imports
             import.items.iter().for_each(|item| {
                 if let ImportItem::Named { name, alias } = item {
-                    let bind_as = alias.as_ref().unwrap_or(name);
-                    self.bind_module_member(&import.path, name, bind_as, span);
+                    let ns = self.arena.strings.resolve(*name);
+                    let bs = alias
+                        .map(|a| self.arena.strings.resolve(a))
+                        .unwrap_or_else(|| ns.clone());
+                    self.bind_module_member(&import.path, &ns, &bs, span);
                 }
             });
         } else {
@@ -920,17 +969,20 @@ impl<I: IoContext> Interpreter<'_, I> {
             // Process named imports
             import.items.iter().for_each(|item| {
                 if let ImportItem::Named { name, alias } = item {
-                    let bind_as = alias.as_ref().unwrap_or(name);
+                    let ns = self.arena.strings.resolve(*name);
+                    let bs = alias
+                        .map(|a| self.arena.strings.resolve(a))
+                        .unwrap_or_else(|| ns.clone());
                     // Check if it's a function or constant
                     let is_fn = self
                         .env
                         .get_user_module(&path_refs)
-                        .map(|m| m.functions.contains_key(name))
+                        .map(|m| m.functions.contains_key(&ns))
                         .unwrap_or(false);
                     self.bind_user_module_member(
                         &import.path,
-                        name,
-                        bind_as,
+                        &ns,
+                        &bs,
                         is_fn,
                         span,
                     );
@@ -944,13 +996,18 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Bind a builtin module member to the current scope.
     fn bind_module_member(
         &mut self,
-        path: &[String],
+        path: &[StringId],
         name: &str,
         bind_as: &str,
         span: Span,
     ) {
         let bind_id = self.arena.intern(bind_as);
-        let path_refs: Vec<&str> = path.iter().map(|s| s.as_str()).collect();
+        let path_strs: Vec<String> = path
+            .iter()
+            .map(|s| self.arena.strings.resolve(*s))
+            .collect();
+        let path_refs: Vec<&str> =
+            path_strs.iter().map(String::as_str).collect();
         let full_path_refs: Vec<&str> = path_refs
             .iter()
             .copied()
@@ -958,8 +1015,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             .collect();
 
         // Build the interned path
-        let mut full_path: SmallVec<[StringId; 4]> =
-            path.iter().map(|s| self.arena.intern(s)).collect();
+        let mut full_path: SmallVec<[StringId; 4]> = path.into();
         full_path.push(self.arena.intern(name));
 
         // Check if it's a constant or function and create appropriate value
@@ -975,7 +1031,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Bind a user module member to the current scope.
     fn bind_user_module_member(
         &mut self,
-        path: &[String],
+        path: &[StringId],
         name: &str,
         bind_as: &str,
         is_fn: bool,
@@ -984,16 +1040,19 @@ impl<I: IoContext> Interpreter<'_, I> {
         let bind_id = self.arena.intern(bind_as);
         if is_fn {
             // For functions, create a ModuleFn reference
-            let mut full_path: SmallVec<[StringId; 4]> =
-                path.iter().map(|s| self.arena.intern(s)).collect();
+            let mut full_path: SmallVec<[StringId; 4]> = path.into();
             full_path.push(self.arena.intern(name));
             let val = Value::ModuleFn { path: full_path };
             let val_id = self.arena.add(val, span);
             self.env.scopes.bind(bind_id, val_id);
         } else {
             // For constants, look up the ValueId and bind it directly
+            let path_strs: Vec<String> = path
+                .iter()
+                .map(|s| self.arena.strings.resolve(*s))
+                .collect();
             let path_refs: Vec<&str> =
-                path.iter().map(|s| s.as_str()).collect();
+                path_strs.iter().map(String::as_str).collect();
             let full_path: Vec<&str> = path_refs
                 .iter()
                 .copied()
@@ -1092,22 +1151,17 @@ impl<I: IoContext> Interpreter<'_, I> {
                 variants
                     .iter()
                     .enumerate()
-                    .map(|(idx, v)| {
-                        let vname_id = self.arena.intern(&v.name);
-                        crate::value::VariantDef {
-                            name: vname_id,
-                            idx: idx as u8,
-                            arity: v.payloads.len() as u8,
-                            payloads: v.payloads.clone(),
-                        }
+                    .map(|(idx, v)| crate::value::VariantDef {
+                        name: v.name,
+                        idx: idx as u8,
+                        arity: v.payloads.len() as u8,
+                        payloads: v.payloads.clone(),
                     })
                     .collect();
 
-            // Intern type parameters (constraints are ignored at runtime)
-            let type_param_ids: SmallVec<[StringId; 2]> = type_params
-                .iter()
-                .map(|tp| self.arena.intern(&tp.name))
-                .collect();
+            // Type parameters already have `StringId` names
+            let type_param_ids: SmallVec<[StringId; 2]> =
+                type_params.iter().map(|tp| tp.name).collect();
 
             // Register the type
             self.registry.register(
@@ -1142,11 +1196,9 @@ impl<I: IoContext> Interpreter<'_, I> {
             // Validate target type references only declared type params
             self.validate_type_params(target, type_params, span)?;
 
-            // Intern type parameters
-            let type_param_ids: SmallVec<[StringId; 2]> = type_params
-                .iter()
-                .map(|tp| self.arena.intern(&tp.name))
-                .collect();
+            // Type parameters already have `StringId` names
+            let type_param_ids: SmallVec<[StringId; 2]> =
+                type_params.iter().map(|tp| tp.name).collect();
 
             // Register the alias
             self.registry.register(
@@ -1190,11 +1242,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .map(|&m| self.resolve_type_expr(m, span))
                 .collect();
 
-            // Intern type parameters (constraints are ignored at runtime)
-            let type_param_ids: SmallVec<[StringId; 2]> = type_params
-                .iter()
-                .map(|tp| self.arena.intern(&tp.name))
-                .collect();
+            // Type parameters already have `StringId` names
+            let type_param_ids: SmallVec<[StringId; 2]> =
+                type_params.iter().map(|tp| tp.name).collect();
 
             // Register the union type
             self.registry.register(
@@ -1224,8 +1274,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             // Wildcard doesn't need validation
             AstTypeExpr::Wildcard => Ok(()),
             AstTypeExpr::Named(n) => {
-                let name_id = self.arena.intern(n);
-                let is_registered = self.registry.lookup(name_id).is_some();
+                let is_registered = self.registry.lookup(*n).is_some();
                 let is_declared = declared.iter().any(|tp| tp.name == *n);
                 if is_registered || is_declared {
                     Ok(())
@@ -2020,7 +2069,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
         // Get the key string
         let key_str = match key {
-            JsonAccessKey::Field(name) => name.clone(),
+            JsonAccessKey::Field(name) => self.arena.strings.resolve(*name),
             JsonAccessKey::Expr(expr_id) => {
                 let key_val = self.eval(*expr_id).await?;
                 match key_val {

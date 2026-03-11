@@ -59,7 +59,7 @@ pub(super) struct ClassInstanceInput<'a, A = ()> {
     pub(super) class_args: &'a SmallVec<[AstTypeExprId; 2]>,
     pub(super) type_params: &'a SmallVec<[TypeParam; 2]>,
     pub(super) for_type: AstTypeExprId,
-    pub(super) constraints: &'a SmallVec<[(String, AstClassConstraints); 2]>,
+    pub(super) constraints: &'a SmallVec<[(StringId, AstClassConstraints); 2]>,
     pub(super) methods: &'a SmallVec<[InstanceMethodDef; 4]>,
     pub(super) assoc_types: A,
     pub(super) module: Option<StringId>,

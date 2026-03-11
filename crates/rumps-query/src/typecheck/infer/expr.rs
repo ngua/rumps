@@ -58,7 +58,10 @@ impl InferCtx<'_> {
             Expr::Tuple(elems) if elems.is_empty() => TyArena::UNIT,
 
             // Variable reference
-            Expr::Var(name) => self.var(name, span),
+            Expr::Var(name) => {
+                let n = self.env.get_str(*name).unwrap_or_default().to_owned();
+                self.var(&n, span)
+            }
 
             // Binary operations
             Expr::Binary(lhs, op, rhs) => {
@@ -90,11 +93,15 @@ impl InferCtx<'_> {
             Expr::MapLit(entries) => self.map_lit(entries, span),
 
             // Field access: obj.field
-            Expr::Field(base, field) => self.field(id, *base, field, span),
+            Expr::Field(base, field) => {
+                let f = self.env.get_str(*field).unwrap_or_default().to_owned();
+                self.field(id, *base, &f, span)
+            }
 
             // Optional field access: obj?.field
             Expr::OptionalField(base, field) => {
-                self.optional_field(*base, field, span)
+                let f = self.env.get_str(*field).unwrap_or_default().to_owned();
+                self.optional_field(*base, &f, span)
             }
 
             // Tuple index: tuple.0, tuple.1, etc.
@@ -148,7 +155,11 @@ impl InferCtx<'_> {
 
             // Variant constructors
             Expr::Variant(ty_name, var_name, args) => {
-                self.variant(id, ty_name, var_name, args, span)
+                let tn =
+                    self.env.get_str(*ty_name).unwrap_or_default().to_owned();
+                let vn =
+                    self.env.get_str(*var_name).unwrap_or_default().to_owned();
+                self.variant(id, &tn, &vn, args, span)
             }
 
             // Postfix operators: `!`
@@ -177,8 +188,14 @@ impl InferCtx<'_> {
             Expr::Path(segments) => {
                 // Look up the type from the runtime environment;
                 // first check constants, then functions
+                let strs: SmallVec<[String; 4]> = segments
+                    .iter()
+                    .map(|s| {
+                        self.env.get_str(*s).unwrap_or_default().to_owned()
+                    })
+                    .collect();
                 let path: SmallVec<[&str; 4]> =
-                    segments.iter().map(String::as_str).collect();
+                    strs.iter().map(String::as_str).collect();
 
                 // Check builtin module constants first (no constraints)
                 if let Some(ty) = self.runtime_env.get_module_const_type(&path)
@@ -312,7 +329,23 @@ impl InferCtx<'_> {
                 state_param,
                 cont_param,
                 body,
-            } => self.forever(*seed, state_param, cont_param, *body, span),
+            } => {
+                let sp = (
+                    self.env
+                        .get_str(state_param.0)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    state_param.1,
+                );
+                let cp = (
+                    self.env
+                        .get_str(cont_param.0)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    cont_param.1,
+                );
+                self.forever(*seed, &sp, &cp, *body, span)
+            }
 
             // Transaction block: `transaction { ... }`
             Expr::Transaction(ref txn) => self.transaction(id, txn, span),
@@ -348,12 +381,18 @@ impl InferCtx<'_> {
 
             // Class method call: `Class:method(args)`
             Expr::ClassMethod(class, method, args) => {
-                self.class_method(id, class, method, args, span)
+                let c = self.env.get_str(*class).unwrap_or_default().to_owned();
+                let m =
+                    self.env.get_str(*method).unwrap_or_default().to_owned();
+                self.class_method(id, &c, &m, args, span)
             }
 
             // Class method reference: `Class:method` or `Class[T]:method`
             Expr::ClassMethodRef(class, type_args, method) => {
-                self.class_method_ref(id, class, type_args, method, span)
+                let c = self.env.get_str(*class).unwrap_or_default().to_owned();
+                let m =
+                    self.env.get_str(*method).unwrap_or_default().to_owned();
+                self.class_method_ref(id, &c, type_args, &m, span)
             }
         }
     }
@@ -1222,9 +1261,8 @@ impl InferCtx<'_> {
         entries.iter().for_each(|entry| match entry {
             ObjectEntry::Field(name, expr_id) => {
                 let field_ty = self.expr(*expr_id);
-                let field_id = self.env.intern(name);
                 // Override or add field
-                acc.insert(field_id, field_ty);
+                acc.insert(*name, field_ty);
             }
             ObjectEntry::Spread(expr_id) => {
                 let spread_ty = self.expr(*expr_id);
@@ -1265,10 +1303,9 @@ impl InferCtx<'_> {
                             // Merge fields (convert AstTypeExprId -> TyId)
                             let empty_subst = IndexMap::new();
                             fields.iter().for_each(|(name, ast_ty_id)| {
-                                let k = self.env.intern(name);
                                 let field_ty = self
                                     .ast_type_to_ty(*ast_ty_id, &empty_subst);
-                                acc.insert(k, field_ty);
+                                acc.insert(*name, field_ty);
                             });
                         } else {
                             self.error(TypeError::NotAnObjectSpread(
@@ -1375,36 +1412,41 @@ impl InferCtx<'_> {
         });
 
         // Try to resolve as a type with a variant (any arity)
-        let variant_lookup = ty_name_opt.and_then(|ty_name| {
-            let field_id = self.env.intern(field);
-            self.resolve_type_name(&ty_name).and_then(
-                |(type_id, resolved_name)| {
-                    self.registry
-                        .lookup_variant(type_id, field_id)
-                        .map(|v| (type_id, resolved_name.into_owned(), v.arity))
-                },
-            )
+        let field_id = self.env.intern(field);
+        let variant_lookup = ty_name_opt.and_then(|ty_name_id| {
+            let tn =
+                self.env.get_str(ty_name_id).unwrap_or_default().to_owned();
+            let resolved = self
+                .resolve_type_name(&tn)
+                .map(|(id, name)| (id, name.into_owned()));
+            resolved.and_then(|(type_id, rn)| {
+                let rn_id = self.env.intern(&rn);
+                self.registry
+                    .lookup_variant(type_id, field_id)
+                    .map(|v| (type_id, rn_id, v.arity))
+            })
         });
 
         match variant_lookup {
-            Some((type_id, resolved_name, 0)) => {
+            Some((type_id, resolved_id, 0)) => {
                 // Zero-arity variant: rewrite AST to Variant expression
                 self.ast.set_expr(
                     expr_id,
-                    Expr::Variant(
-                        resolved_name,
-                        field.to_string(),
-                        smallvec![],
-                    ),
+                    Expr::Variant(resolved_id, field_id, smallvec![]),
                 );
                 // Return the variant type
                 self.variant_type_for_nullary(type_id)
             }
-            Some((type_id, resolved_name, _arity)) => {
+            Some((type_id, resolved_id, _arity)) => {
                 // Non-zero-arity variant: return a function type for the
                 // constructor. The AST will be rewritten to `Variant` by
                 // `call` when this is invoked.
-                self.variant_ctor_fn_type(type_id, &resolved_name, field, span)
+                let rn = self
+                    .env
+                    .get_str(resolved_id)
+                    .unwrap_or_default()
+                    .to_owned();
+                self.variant_ctor_fn_type(type_id, &rn, field, span)
             }
             None => {
                 // Regular field access
@@ -1801,7 +1843,7 @@ impl InferCtx<'_> {
     /// For each parameter: uses annotation if present, otherwise fresh type var.
     pub(super) fn param_tys(
         &mut self,
-        params: &SmallVec<[(String, Option<AstTypeExprId>); 4]>,
+        params: &SmallVec<[(StringId, Option<AstTypeExprId>); 4]>,
     ) -> Vec<TyId> {
         self.param_tys_with_subst(params, &IndexMap::new())
     }
@@ -1812,7 +1854,7 @@ impl InferCtx<'_> {
     /// explicit type parameters (e.g., `T` in `fn foo[T](x: T)`).
     pub(super) fn param_tys_with_subst(
         &mut self,
-        params: &SmallVec<[(String, Option<AstTypeExprId>); 4]>,
+        params: &SmallVec<[(StringId, Option<AstTypeExprId>); 4]>,
         subst: &IndexMap<StringId, TyId>,
     ) -> Vec<TyId> {
         params
@@ -1827,11 +1869,12 @@ impl InferCtx<'_> {
     /// Bind parameters in the current scope with their inferred types.
     pub(super) fn bind_params(
         &mut self,
-        params: &SmallVec<[(String, Option<AstTypeExprId>); 4]>,
+        params: &SmallVec<[(StringId, Option<AstTypeExprId>); 4]>,
         tys: &[TyId],
     ) {
         params.iter().zip(tys.iter()).for_each(|((name, _), &ty)| {
-            self.env.bind(name, Scheme::mono(ty));
+            let n = self.env.get_str(*name).unwrap_or_default().to_owned();
+            self.env.bind(&n, Scheme::mono(ty));
         });
     }
 
@@ -1849,7 +1892,7 @@ impl InferCtx<'_> {
         &mut self,
         expr_id: ExprId,
         type_params: &SmallVec<[TypeParam; 2]>,
-        params: &SmallVec<[(String, Option<AstTypeExprId>); 4]>,
+        params: &SmallVec<[(StringId, Option<AstTypeExprId>); 4]>,
         ret: Option<&AstTypeExprId>,
         body: ExprId,
         span: Span,
@@ -1857,17 +1900,16 @@ impl InferCtx<'_> {
         // Two-pass approach: first create all type variables, then emit
         // constraints (needed for Iterable[T] where T references another param)
         // Keep track of name -> TyVar for scheme building
-        let name_to_tv: HashMap<&str, TyVar> = type_params
+        let name_to_tv: HashMap<StringId, TyVar> = type_params
             .iter()
-            .map(|tp| (tp.name.as_str(), self.fresh_var()))
+            .map(|tp| (tp.name, self.fresh_var()))
             .collect();
 
         let type_param_subst: IndexMap<_, _> = type_params
             .iter()
             .map(|tp| {
-                let id = self.env.intern(&tp.name);
-                let tv = name_to_tv[tp.name.as_str()];
-                (id, self.ty_arena.alloc(Ty::Var(tv)))
+                let tv = name_to_tv[&tp.name];
+                (tp.name, self.ty_arena.alloc(Ty::Var(tv)))
             })
             .collect();
 
@@ -1877,7 +1919,7 @@ impl InferCtx<'_> {
 
         // Emit constraints for each user-specified bound
         type_params.iter().for_each(|tp| {
-            let tv = name_to_tv[tp.name.as_str()];
+            let tv = name_to_tv[&tp.name];
             let ty = self.ty_arena.alloc(Ty::Var(tv));
 
             tp.constraints.iter().for_each(|c| {
@@ -1973,30 +2015,39 @@ impl InferCtx<'_> {
         });
 
         // Try to resolve as variant constructor
-        let resolved = variant_info.and_then(|(ty_name, var_name)| {
-            let var_id = self.env.intern(&var_name);
-            self.resolve_type_name(&ty_name)
-                .and_then(|(type_id, qname)| {
-                    self.registry
-                        .lookup_variant(type_id, var_id)
-                        .filter(|v| v.arity > 0)
-                        .map(|_| (qname.into_owned(), var_name))
-                })
+        let resolved = variant_info.and_then(|(ty_name_id, var_name_id)| {
+            let tn =
+                self.env.get_str(ty_name_id).unwrap_or_default().to_owned();
+            let res = self
+                .resolve_type_name(&tn)
+                .map(|(id, name)| (id, name.into_owned()));
+            res.and_then(|(type_id, qname)| {
+                self.registry
+                    .lookup_variant(type_id, var_name_id)
+                    .filter(|v| v.arity > 0)
+                    .map(|_| {
+                        let qn_id = self.env.intern(&qname);
+                        (qn_id, var_name_id)
+                    })
+            })
         });
 
         match resolved {
-            Some((qname, var_name)) => {
+            Some((qname_id, var_name_id)) => {
                 // Rewrite AST to Variant expression
                 self.ast.set_expr(
                     expr_id,
-                    Expr::Variant(
-                        qname.clone(),
-                        var_name.clone(),
-                        args.clone(),
-                    ),
+                    Expr::Variant(qname_id, var_name_id, args.clone()),
                 );
                 // Delegate to variant method
-                self.variant(expr_id, &qname, &var_name, args, span)
+                let qn =
+                    self.env.get_str(qname_id).unwrap_or_default().to_owned();
+                let vn = self
+                    .env
+                    .get_str(var_name_id)
+                    .unwrap_or_default()
+                    .to_owned();
+                self.variant(expr_id, &qn, &vn, args, span)
             }
             None => self.call(callee_id, args, span),
         }
@@ -2056,24 +2107,22 @@ impl InferCtx<'_> {
             )) => {
                 // IS with variant bindings: bindings only visible in then branch
                 let scrutinee_ty = self.expr(scrutinee_id);
+                let tn =
+                    self.env.get_str(ty_name).unwrap_or_default().to_owned();
+                let vn =
+                    self.env.get_str(var_name).unwrap_or_default().to_owned();
 
                 // Check scrutinee is compatible with variant pattern
-                if !self
-                    .scrutinee_compatible_with_variant(scrutinee_ty, &ty_name)
-                {
+                if !self.scrutinee_compatible_with_variant(scrutinee_ty, &tn) {
                     self.error(TypeError::IncompatibleVariantPattern {
-                        pattern_ty: ty_name.clone(),
+                        pattern_ty: tn.clone(),
                         scrutinee_ty,
                         span,
                     });
                 }
 
-                let payload_tys = self.variant_payload_types(
-                    &ty_name,
-                    &var_name,
-                    scrutinee_ty,
-                    span,
-                );
+                let payload_tys =
+                    self.variant_payload_types(&tn, &vn, scrutinee_ty, span);
 
                 if payload_tys.len() != names.len() {
                     self.error(TypeError::ArityMismatch {
@@ -2088,7 +2137,12 @@ impl InferCtx<'_> {
                     .iter()
                     .zip(payload_tys.iter())
                     .for_each(|(name, &ty)| {
-                        self.env.bind(name, Scheme::mono(ty));
+                        let n = self
+                            .env
+                            .get_str(*name)
+                            .unwrap_or_default()
+                            .to_owned();
+                        self.env.bind(&n, Scheme::mono(ty));
                     });
                 let ty = self.expr(then_id);
                 self.env.pop_scope();
@@ -2281,13 +2335,10 @@ impl InferCtx<'_> {
 
                 // Rewrite AST if name was resolved differently
                 if qname != ty_name {
+                    let qn_id = self.env.intern(&qname);
                     self.ast.set_expr(
                         expr_id,
-                        Expr::Variant(
-                            qname.clone(),
-                            var_name.to_string(),
-                            args.clone(),
-                        ),
+                        Expr::Variant(qn_id, var_name_id, args.clone()),
                     );
                 }
 
@@ -2597,61 +2648,63 @@ impl InferCtx<'_> {
             }
             TypePattern::Variant(ty_name, var_name)
             | TypePattern::VariantWildcard(ty_name, var_name) => {
+                let tn =
+                    self.env.get_str(*ty_name).unwrap_or_default().to_owned();
+                let vn =
+                    self.env.get_str(*var_name).unwrap_or_default().to_owned();
                 // Check scrutinee is compatible with variant pattern
-                if !self
-                    .scrutinee_compatible_with_variant(scrutinee_ty, ty_name)
-                {
+                if !self.scrutinee_compatible_with_variant(scrutinee_ty, &tn) {
                     self.error(TypeError::IncompatibleVariantPattern {
-                        pattern_ty: ty_name.clone(),
+                        pattern_ty: tn.clone(),
                         scrutinee_ty,
                         span,
                     });
                 }
 
                 // Validate that the variant exists
-                let var_name_id = self.env.intern(var_name);
                 let exists = self
                     .env
-                    .lookup_str(ty_name)
+                    .lookup_str(&tn)
                     .and_then(|id| self.registry.lookup(id))
                     .and_then(|type_id| {
-                        self.registry.lookup_variant(type_id, var_name_id)
+                        self.registry.lookup_variant(type_id, *var_name)
                     })
                     .is_some();
                 if !exists {
                     self.error(TypeError::UnknownType(
-                        format!("{ty_name}.{var_name}"),
+                        format!("{tn}.{vn}"),
                         span,
                     ));
                 }
             }
             TypePattern::VariantBind(ty_name, var_name, names) => {
+                let tn =
+                    self.env.get_str(*ty_name).unwrap_or_default().to_owned();
+                let vn =
+                    self.env.get_str(*var_name).unwrap_or_default().to_owned();
                 // Check scrutinee is compatible with variant pattern
-                if !self
-                    .scrutinee_compatible_with_variant(scrutinee_ty, ty_name)
-                {
+                if !self.scrutinee_compatible_with_variant(scrutinee_ty, &tn) {
                     self.error(TypeError::IncompatibleVariantPattern {
-                        pattern_ty: ty_name.clone(),
+                        pattern_ty: tn.clone(),
                         scrutinee_ty,
                         span,
                     });
                 }
 
                 // Validate variant and arity; bindings are handled by IF
-                let var_name_id = self.env.intern(var_name);
                 let lookup = self
                     .env
-                    .lookup_str(ty_name)
+                    .lookup_str(&tn)
                     .and_then(|id| self.registry.lookup(id))
                     .and_then(|type_id| {
                         self.registry
-                            .lookup_variant(type_id, var_name_id)
+                            .lookup_variant(type_id, *var_name)
                             .map(|v| (type_id, v))
                     });
                 match lookup {
                     None => {
                         self.error(TypeError::UnknownType(
-                            format!("{ty_name}.{var_name}"),
+                            format!("{tn}.{vn}"),
                             span,
                         ));
                     }
@@ -2852,7 +2905,8 @@ impl InferCtx<'_> {
                 match dbref {
                     DbRef::Local(name, subs) if subs.is_empty() => {
                         // Check if name is a variable of type Ref
-                        let ref_ty = self.env.lookup(name).and_then(|s| {
+                        let n = self.env.get_str(*name).unwrap_or_default();
+                        let ref_ty = self.env.lookup(n).and_then(|s| {
                             let (ty, _) = s.instantiate(
                                 &mut self.next_var,
                                 &mut self.ty_arena,
@@ -2864,9 +2918,7 @@ impl InferCtx<'_> {
                             || Cow::Borrowed(rt),
                             |ty| {
                                 // Create a Var expression and rewrite to Expr
-                                match self
-                                    .ast
-                                    .add_expr(Expr::Var(name.clone()), span)
+                                match self.ast.add_expr(Expr::Var(*name), span)
                                 {
                                     Ok(var_id) => {
                                         self.record_type(var_id, ty);

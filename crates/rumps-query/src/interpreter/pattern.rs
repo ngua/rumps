@@ -3,7 +3,9 @@
 use smallvec::SmallVec;
 
 use super::Interpreter;
-use crate::ast::{BindingPattern, MatchPattern, MatchPatternId, TypePattern};
+use crate::ast::{
+    BindingPattern, MatchPattern, MatchPatternId, RestPattern, TypePattern,
+};
 use crate::intern::StringId;
 use crate::io::IoContext;
 use crate::value::{TypeId, Value, ValueId};
@@ -54,17 +56,19 @@ impl<I: IoContext> Interpreter<'_, I> {
                 }
             }
             TypePattern::Variant(ty_name, var_name) => {
-                // Variant check (zero-arity only): `is Option.None`
-                // Variants with payloads must use `(_)` or `(name)`
-                self.check_variant_zero_arity(v, ty_name, var_name, span)
+                let ty_s = self.arena.strings.resolve(*ty_name);
+                let var_s = self.arena.strings.resolve(*var_name);
+                self.check_variant_zero_arity(v, &ty_s, &var_s, span)
             }
             TypePattern::VariantWildcard(ty_name, var_name) => {
-                // Variant check ignoring payload: `is Option.Some(_)`
-                self.check_variant(v, ty_name, var_name, span)
+                let ty_s = self.arena.strings.resolve(*ty_name);
+                let var_s = self.arena.strings.resolve(*var_name);
+                self.check_variant(v, &ty_s, &var_s, span)
             }
             TypePattern::VariantBind(ty_name, var_name, _) => {
-                // Variant check (bindings handled elsewhere): `is Option.Some(val)`
-                self.check_variant(v, ty_name, var_name, span)
+                let ty_s = self.arena.strings.resolve(*ty_name);
+                let var_s = self.arena.strings.resolve(*var_name);
+                self.check_variant(v, &ty_s, &var_s, span)
             }
             TypePattern::Object(fields) => {
                 // Structural object check: `is { name: String, age: Int }`
@@ -74,17 +78,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                         let obj = obj.clone();
                         fields.iter().try_fold(true, |acc, (name, ty_id)| {
                             let ty = self.resolve_type_expr(*ty_id, span)?;
-                            let name_id = self.arena.intern(name);
-                            let matches =
-                                obj.get(&name_id).is_some_and(|&vid| {
-                                    self.arena.get(vid).cloned().is_some_and(
-                                        |fv| {
-                                            self.value_matches_type_expr(
-                                                &fv, ty,
-                                            )
-                                        },
-                                    )
-                                });
+                            let matches = obj.get(name).is_some_and(|&vid| {
+                                self.arena.get(vid).cloned().is_some_and(|fv| {
+                                    self.value_matches_type_expr(&fv, ty)
+                                })
+                            });
                             Ok(acc && matches)
                         })
                     }
@@ -183,12 +181,12 @@ impl<I: IoContext> Interpreter<'_, I> {
             .iter()
             .zip(payloads.iter())
             .for_each(|(name, &val_id)| {
-                let name_id = self.arena.intern(name);
+                let nid = self.arena.intern(name);
                 // Re-add the value to get a fresh ValueId in case it matters
                 let val =
                     self.arena.get(val_id).cloned().unwrap_or(fallback.clone());
                 let new_val_id = self.arena.add(val, span);
-                self.env.scopes.bind(name_id, new_val_id);
+                self.env.scopes.bind(nid, new_val_id);
             });
     }
 
@@ -215,9 +213,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             // Wildcard and Var bind the ORIGINAL value (preserving wrapper)
             MatchPattern::Wildcard => Ok(Some(vec![])),
             MatchPattern::Var(name) => {
-                let name_id = self.arena.intern(name);
                 let val_id = self.arena.add(val.clone(), span);
-                Ok(Some(vec![(name_id, val_id)]))
+                Ok(Some(vec![(*name, val_id)]))
             }
             // Literal uses unwrapped value for comparison
             MatchPattern::Literal(lit) => {
@@ -226,10 +223,16 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             // Structural patterns use unwrapped value
             MatchPattern::Variant(ty_name, var_name, sub_pats) => {
-                self.try_match_variant(ty_name, var_name, sub_pats, v, span)
+                let ty_s = self.arena.strings.resolve(*ty_name);
+                let var_s = self.arena.strings.resolve(*var_name);
+                self.try_match_variant(&ty_s, &var_s, sub_pats, v, span)
             }
             MatchPattern::Object(fields) => {
-                self.try_match_object(fields, v, span)
+                let fs: SmallVec<[(String, MatchPatternId); 4]> = fields
+                    .iter()
+                    .map(|(n, p)| (self.arena.strings.resolve(*n), *p))
+                    .collect();
+                self.try_match_object(&fs, v, span)
             }
             MatchPattern::Tuple(pats) => self.try_match_tuple(pats, v, span),
             MatchPattern::Array(pats, rest) => {
@@ -237,7 +240,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             // Is pattern uses original value (value_matches_type_expr handles unwrapping)
             MatchPattern::Is(name, ty_id) => {
-                self.try_match_is(name, *ty_id, val, span)
+                let ns = self.arena.strings.resolve(*name);
+                self.try_match_is(&ns, *ty_id, val, span)
             }
         }
     }
@@ -381,12 +385,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                             maybe_bindings.map(|mut bindings| {
                                 // Handle rest pattern
                                 match rest {
-                                    None
-                                    | Some(crate::ast::RestPattern::Ignore) => {
-                                    }
-                                    Some(crate::ast::RestPattern::Bind(
-                                        name,
-                                    )) => {
+                                    None | Some(RestPattern::Ignore) => {}
+                                    Some(RestPattern::Bind(name)) => {
                                         // Bind remaining elements to `name`
                                         let rest_elems: SmallVec<_> = elems
                                             .iter()
@@ -395,10 +395,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                                             .collect();
                                         let rest_arr =
                                             Value::Array(*ty_id, rest_elems);
-                                        let name_id = self.arena.intern(name);
                                         let val_id =
                                             self.arena.add(rest_arr, span);
-                                        bindings.push((name_id, val_id));
+                                        bindings.push((*name, val_id));
                                     }
                                 }
                                 bindings
@@ -486,9 +485,8 @@ impl<I: IoContext> Interpreter<'_, I> {
         match pat {
             // Var binds the ORIGINAL value (preserving wrapper)
             BindingPattern::Var(name) => {
-                let name_id = self.arena.intern(name);
                 let val_id = self.arena.add(val.clone(), span);
-                self.env.scopes.bind(name_id, val_id);
+                self.env.scopes.bind(*name, val_id);
                 Ok(())
             }
             BindingPattern::Wildcard => Ok(()),
@@ -511,8 +509,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 Value::Object(obj) => {
                     let obj = obj.clone();
                     fields.iter().try_for_each(|(name, pat)| {
-                        let fid = self.arena.intern(name);
-                        let vid = obj.get(&fid).copied().unwrap_or_else(|| {
+                        let vid = obj.get(name).copied().unwrap_or_else(|| {
                             typechecked!("object field", "exists")
                         });
                         let fval =

@@ -114,7 +114,7 @@ impl InferCtx<'_> {
                 MatchPattern::Wildcard => {}
 
                 MatchPattern::Var(name) => {
-                    self.env.bind(name, Scheme::mono(scrutinee_ty));
+                    self.env.bind_id(*name, Scheme::mono(scrutinee_ty));
                 }
 
                 MatchPattern::Literal(lit) => {
@@ -126,10 +126,11 @@ impl InferCtx<'_> {
                     // Check scrutinee is compatible with variant pattern
                     if !self.scrutinee_compatible_with_variant(
                         scrutinee_ty,
-                        ty_name,
+                        self.env.resolve_str(*ty_name),
                     ) {
+                        let pat_ty = self.env.resolve_string(*ty_name);
                         self.error(TypeError::IncompatibleVariantPattern {
-                            pattern_ty: ty_name.clone(),
+                            pattern_ty: pat_ty,
                             scrutinee_ty,
                             span,
                         });
@@ -137,26 +138,29 @@ impl InferCtx<'_> {
 
                     // Resolve type name using module-aware lookup; extract owned
                     // string only if it differs (avoids allocation in common case)
+                    let ty_str = self.env.resolve_str(*ty_name);
                     let qname = self
-                        .resolve_type_name(ty_name)
+                        .resolve_type_name(ty_str)
                         .map(|(_, cow)| cow.into_owned())
-                        .filter(|q| q != ty_name);
+                        .filter(|q| q != ty_str);
 
                     // Rewrite AST if name was resolved differently
                     if let Some(q) = &qname {
                         self.ast.set_pattern(
                             pat_id,
                             MatchPattern::Variant(
-                                q.clone(),
-                                var_name.clone(),
+                                self.env.intern(q),
+                                *var_name,
                                 sub_pats.clone(),
                             ),
                         );
                     }
 
+                    let var_s = self.env.resolve_string(*var_name);
+                    let ty_s = self.env.resolve_string(*ty_name);
                     let payload_tys = self.variant_payload_types(
-                        qname.as_deref().unwrap_or(ty_name),
-                        var_name,
+                        qname.as_deref().unwrap_or(&ty_s),
+                        &var_s,
                         scrutinee_ty,
                         span,
                     );
@@ -173,8 +177,8 @@ impl InferCtx<'_> {
 
                 MatchPattern::Object(fields) => {
                     fields.iter().for_each(|(field_name, sub_pat_id)| {
-                        let field_ty =
-                            self.field_type(scrutinee_ty, field_name, span);
+                        let f = self.env.resolve_string(*field_name);
+                        let field_ty = self.field_type(scrutinee_ty, &f, span);
                         self.pattern_bindings(*sub_pat_id, field_ty, span);
                     });
                 }
@@ -235,7 +239,7 @@ impl InferCtx<'_> {
                     if let Some(crate::ast::RestPattern::Bind(name)) = rest {
                         // Rest has type `Array[T]` where `T` is the element type
                         let rest_ty = self.ty_arena.array(elem_ty);
-                        self.env.bind(name, Scheme::mono(rest_ty));
+                        self.env.bind_id(*name, Scheme::mono(rest_ty));
                     }
                 }
 
@@ -256,7 +260,7 @@ impl InferCtx<'_> {
                         });
                     }
 
-                    self.env.bind(name, Scheme::mono(narrowed_ty));
+                    self.env.bind_id(*name, Scheme::mono(narrowed_ty));
                 }
             }
         }
@@ -299,13 +303,10 @@ impl InferCtx<'_> {
                                             _,
                                             var_name,
                                             _,
-                                        ) => {
-                                            let var_id =
-                                                self.env.intern(var_name);
-                                            self.registry
-                                                .lookup_variant(type_id, var_id)
-                                                .map(|v| v.idx)
-                                        }
+                                        ) => self
+                                            .registry
+                                            .lookup_variant(type_id, *var_name)
+                                            .map(|v| v.idx),
                                         _ => None,
                                     },
                                 )
@@ -320,14 +321,10 @@ impl InferCtx<'_> {
 
                 Ty::Option(_) => {
                     let has_some = unguarded.iter().any(|arm| {
-                        self.ast.get_pattern(arm.pattern).is_some_and(|p| {
-                            matches!(p, MatchPattern::Variant(ty, var, _) if ty == "Option" && var == "Some")
-                        })
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if self.env.resolve_str(*ty) == "Option" && self.env.resolve_str(*var) == "Some"))
                     });
                     let has_none = unguarded.iter().any(|arm| {
-                        self.ast.get_pattern(arm.pattern).is_some_and(|p| {
-                            matches!(p, MatchPattern::Variant(ty, var, _) if ty == "Option" && var == "None")
-                        })
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if self.env.resolve_str(*ty) == "Option" && self.env.resolve_str(*var) == "None"))
                     });
                     if !has_some || !has_none {
                         self.error(TypeError::NonExhaustiveMatch(span));
@@ -336,14 +333,10 @@ impl InferCtx<'_> {
 
                 Ty::Result(_, _) => {
                     let has_ok = unguarded.iter().any(|arm| {
-                        self.ast.get_pattern(arm.pattern).is_some_and(|p| {
-                            matches!(p, MatchPattern::Variant(ty, var, _) if ty == "Result" && var == "Ok")
-                        })
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if self.env.resolve_str(*ty) == "Result" && self.env.resolve_str(*var) == "Ok"))
                     });
                     let has_err = unguarded.iter().any(|arm| {
-                        self.ast.get_pattern(arm.pattern).is_some_and(|p| {
-                            matches!(p, MatchPattern::Variant(ty, var, _) if ty == "Result" && var == "Err")
-                        })
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if self.env.resolve_str(*ty) == "Result" && self.env.resolve_str(*var) == "Err"))
                     });
                     if !has_ok || !has_err {
                         self.error(TypeError::NonExhaustiveMatch(span));
@@ -374,19 +367,13 @@ impl InferCtx<'_> {
 
                 Ty::Ordering => {
                     let has_lt = unguarded.iter().any(|arm| {
-                        self.ast.get_pattern(arm.pattern).is_some_and(|p| {
-                            matches!(p, MatchPattern::Variant(ty, var, _) if ty == "Ordering" && var == "Lt")
-                        })
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if self.env.resolve_str(*ty) == "Ordering" && self.env.resolve_str(*var) == "Lt"))
                     });
                     let has_eq = unguarded.iter().any(|arm| {
-                        self.ast.get_pattern(arm.pattern).is_some_and(|p| {
-                            matches!(p, MatchPattern::Variant(ty, var, _) if ty == "Ordering" && var == "Eq")
-                        })
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if self.env.resolve_str(*ty) == "Ordering" && self.env.resolve_str(*var) == "Eq"))
                     });
                     let has_gt = unguarded.iter().any(|arm| {
-                        self.ast.get_pattern(arm.pattern).is_some_and(|p| {
-                            matches!(p, MatchPattern::Variant(ty, var, _) if ty == "Ordering" && var == "Gt")
-                        })
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if self.env.resolve_str(*ty) == "Ordering" && self.env.resolve_str(*var) == "Gt"))
                     });
                     if !has_lt || !has_eq || !has_gt {
                         self.error(TypeError::NonExhaustiveMatch(span));
@@ -395,24 +382,16 @@ impl InferCtx<'_> {
 
                 Ty::DataStatus => {
                     let has_no_data = unguarded.iter().any(|arm| {
-                        self.ast.get_pattern(arm.pattern).is_some_and(|p| {
-                            matches!(p, MatchPattern::Variant(ty, var, _) if ty == "DataStatus" && var == "NoData")
-                        })
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if self.env.resolve_str(*ty) == "DataStatus" && self.env.resolve_str(*var) == "NoData"))
                     });
                     let has_value = unguarded.iter().any(|arm| {
-                        self.ast.get_pattern(arm.pattern).is_some_and(|p| {
-                            matches!(p, MatchPattern::Variant(ty, var, _) if ty == "DataStatus" && var == "HasValue")
-                        })
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if self.env.resolve_str(*ty) == "DataStatus" && self.env.resolve_str(*var) == "HasValue"))
                     });
                     let has_desc = unguarded.iter().any(|arm| {
-                        self.ast.get_pattern(arm.pattern).is_some_and(|p| {
-                            matches!(p, MatchPattern::Variant(ty, var, _) if ty == "DataStatus" && var == "HasDescendants")
-                        })
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if self.env.resolve_str(*ty) == "DataStatus" && self.env.resolve_str(*var) == "HasDescendants"))
                     });
                     let has_both = unguarded.iter().any(|arm| {
-                        self.ast.get_pattern(arm.pattern).is_some_and(|p| {
-                            matches!(p, MatchPattern::Variant(ty, var, _) if ty == "DataStatus" && var == "Both")
-                        })
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if self.env.resolve_str(*ty) == "DataStatus" && self.env.resolve_str(*var) == "Both"))
                     });
                     if !has_no_data || !has_value || !has_desc || !has_both {
                         self.error(TypeError::NonExhaustiveMatch(span));
@@ -424,7 +403,7 @@ impl InferCtx<'_> {
                         ["Runtime", "Raise", "Type", "Coerce"].iter().all(|v| {
                             unguarded.iter().any(|arm| {
                                 self.ast.get_pattern(arm.pattern).is_some_and(
-                                    |p| matches!(p, MatchPattern::Variant(ty, var, _) if ty == "Error" && var == v),
+                                    |p| matches!(p, MatchPattern::Variant(ty, var, _) if self.env.resolve_str(*ty) == "Error" && self.env.resolve_str(*var) == *v),
                                 )
                             })
                         });

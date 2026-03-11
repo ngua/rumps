@@ -282,6 +282,15 @@ impl ValueArena {
         }
     }
 
+    /// Create a value arena with a pre-populated string interner.
+    pub(crate) fn with_interner(interner: StringInterner) -> Self {
+        Self {
+            values: Vec::new(),
+            value_spans: Vec::new(),
+            strings: interner,
+        }
+    }
+
     /// Add a value to the arena.
     pub(crate) fn add(&mut self, v: Value, span: Span) -> ValueId {
         let id = ValueId(self.values.len() as u32);
@@ -2085,10 +2094,12 @@ impl TypeRegistry {
                     def,
                     ..
                 } => {
-                    let qname = prefix.map_or_else(
-                        || name.clone(),
-                        |p| format!("{}.{}", p, name),
-                    );
+                    let n = ctx.arena.strings.get(*name).unwrap_or_default();
+                    let qname = if let Some(p) = prefix {
+                        format!("{}.{}", p, n)
+                    } else {
+                        n.to_owned()
+                    };
                     self.register_type(&qname, type_params, def, ctx.arena);
                 }
                 Stmt::Union {
@@ -2097,10 +2108,12 @@ impl TypeRegistry {
                     members,
                     ..
                 } => {
-                    let qname = prefix.map_or_else(
-                        || name.clone(),
-                        |p| format!("{}.{}", p, name),
-                    );
+                    let n = ctx.arena.strings.get(*name).unwrap_or_default();
+                    let qname = if let Some(p) = prefix {
+                        format!("{}.{}", p, n)
+                    } else {
+                        n.to_owned()
+                    };
                     self.register_union(&qname, type_params, members, ctx);
                 }
                 Stmt::NewType {
@@ -2109,10 +2122,12 @@ impl TypeRegistry {
                     target,
                     ..
                 } => {
-                    let qname = prefix.map_or_else(
-                        || name.clone(),
-                        |p| format!("{}.{}", p, name),
-                    );
+                    let n = ctx.arena.strings.get(*name).unwrap_or_default();
+                    let qname = if let Some(p) = prefix {
+                        format!("{}.{}", p, n)
+                    } else {
+                        n.to_owned()
+                    };
                     self.register_alias(
                         &qname,
                         type_params,
@@ -2121,10 +2136,12 @@ impl TypeRegistry {
                     );
                 }
                 Stmt::Module { name, body } => {
-                    let new_prefix = prefix.map_or_else(
-                        || name.clone(),
-                        |p| format!("{}.{}", p, name),
-                    );
+                    let n = ctx.arena.strings.get(*name).unwrap_or_default();
+                    let new_prefix = if let Some(p) = prefix {
+                        format!("{}.{}", p, n)
+                    } else {
+                        n.to_owned()
+                    };
                     self.register_stmts_with_prefix(
                         body,
                         Some(&new_prefix),
@@ -2148,24 +2165,19 @@ impl TypeRegistry {
     ) {
         let name_id = arena.intern(name);
 
-        // Intern type parameters (constraints are ignored at runtime)
-        let type_param_ids: SmallVec<[StringId; 2]> = type_params
-            .iter()
-            .map(|tp| arena.intern(&tp.name))
-            .collect();
+        // Type parameters already have `StringId`; use directly
+        let type_param_ids: SmallVec<[StringId; 2]> =
+            type_params.iter().map(|tp| tp.name).collect();
 
         let TypeDefAst::Sum(variants) = def;
         let variant_defs: SmallVec<[VariantDef; 4]> = variants
             .iter()
             .enumerate()
-            .map(|(idx, v)| {
-                let vname_id = arena.intern(&v.name);
-                VariantDef {
-                    name: vname_id,
-                    idx: idx as u8,
-                    arity: v.payloads.len() as u8,
-                    payloads: v.payloads.clone(),
-                }
+            .map(|(idx, v)| VariantDef {
+                name: v.name,
+                idx: idx as u8,
+                arity: v.payloads.len() as u8,
+                payloads: v.payloads.clone(),
             })
             .collect();
 
@@ -2191,11 +2203,9 @@ impl TypeRegistry {
     ) {
         let name_id = ctx.arena.intern(name);
 
-        // Intern type parameters (constraints are ignored at runtime)
-        let type_param_ids: SmallVec<[StringId; 2]> = type_params
-            .iter()
-            .map(|tp| ctx.arena.intern(&tp.name))
-            .collect();
+        // Type parameters already have `StringId`; use directly
+        let type_param_ids: SmallVec<[StringId; 2]> =
+            type_params.iter().map(|tp| tp.name).collect();
 
         // Convert AST type expressions to TypeExprIds
         let members: SmallVec<[TypeExprId; 8]> = ast_members
@@ -2227,11 +2237,9 @@ impl TypeRegistry {
     ) {
         let name_id = arena.intern(name);
 
-        // Intern type parameters (constraints are ignored at runtime)
-        let type_param_ids: SmallVec<[StringId; 2]> = type_params
-            .iter()
-            .map(|tp| arena.intern(&tp.name))
-            .collect();
+        // Type parameters already have `StringId`; use directly
+        let type_param_ids: SmallVec<[StringId; 2]> =
+            type_params.iter().map(|tp| tp.name).collect();
 
         self.register(
             TypeDef::Alias {
@@ -2274,15 +2282,13 @@ fn resolve_type_expr(
             typechecked!("type resolution", "no wildcard at runtime")
         }
         AstTypeExpr::Named(name) => {
-            let name_id = arena.intern(name);
-            let ty_id = registry.lookup(name_id).unwrap_or_else(|| {
+            let ty_id = registry.lookup(*name).unwrap_or_else(|| {
                 typechecked!("type reference", "type is defined")
             });
             type_exprs.named(ty_id)
         }
         AstTypeExpr::App(name, args) => {
-            let name_id = arena.intern(name);
-            let base = registry.lookup(name_id).unwrap_or_else(|| {
+            let base = registry.lookup(*name).unwrap_or_else(|| {
                 typechecked!("type reference", "type is defined")
             });
             let arg_ids: SmallVec<[TypeExprId; 2]> = args
@@ -2326,11 +2332,10 @@ fn resolve_type_expr(
             let field_ids: IndexMap<StringId, TypeExprId> = fields
                 .iter()
                 .map(|(name, ty)| {
-                    let name_id = arena.intern(name);
                     let ty_id = resolve_type_expr(
                         ast, arena, registry, type_exprs, *ty,
                     );
-                    (name_id, ty_id)
+                    (*name, ty_id)
                 })
                 .collect();
             type_exprs.object(field_ids)

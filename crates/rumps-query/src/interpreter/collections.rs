@@ -41,9 +41,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                         let expr_span =
                             self.ast.expr_span(*expr_id).unwrap_or(span);
                         let val = self.eval(*expr_id).await?;
-                        let key_id = self.arena.intern(key);
                         let val_id = self.arena.add(val, expr_span);
-                        acc.insert(key_id, val_id);
+                        acc.insert(*key, val_id);
                     }
                     ObjectEntry::Spread(expr_id) => {
                         let val = self.eval(*expr_id).await?;
@@ -664,28 +663,23 @@ impl<I: IoContext> Interpreter<'_, I> {
     pub(super) async fn field(
         &mut self,
         base: ExprId,
-        field: &str,
+        field: &StringId,
         span: Span,
     ) -> Result<Value> {
         // Check if base is a type name (for user-defined types registered at runtime)
         let maybe_type_path = self.ast.get_expr(base).and_then(|e| match e {
             Expr::Var(ty_name) => {
-                let ty_id = self.arena.intern(ty_name);
-                self.registry.lookup(ty_id).and_then(|type_id| {
-                    let var_id = self.arena.intern(field);
-                    self.registry.lookup_variant(type_id, var_id).and_then(
-                        |v| {
-                            (v.arity == 0)
-                                .then(|| (ty_name.clone(), field.to_string()))
-                        },
+                self.registry.lookup(*ty_name).and_then(|type_id| {
+                    self.registry.lookup_variant(type_id, *field).and_then(
+                        |v| (v.arity == 0).then(|| (*ty_name, *field)),
                     )
                 })
             }
             _ => None,
         });
 
-        if let Some((ty_name, var_name)) = maybe_type_path {
-            self.path(&[ty_name, var_name], span)
+        if let Some((ty_id, var_id)) = maybe_type_path {
+            self.path(&[ty_id, var_id], span)
         } else {
             let base_val = self.eval(base).await?;
             // Unwrap Union/Newtype to find the inner Object/Json
@@ -693,19 +687,17 @@ impl<I: IoContext> Interpreter<'_, I> {
             let v = unwrapped.as_ref().unwrap_or(&base_val);
 
             match v {
-                Value::Object(obj) => {
-                    let field_id = self.arena.intern(field);
-                    Ok(obj
-                        .get(&field_id)
-                        .and_then(|id| self.arena.get(*id).cloned())
-                        .unwrap_or_else(|| {
-                            typechecked!(".field", "field exists")
-                        }))
-                }
+                Value::Object(obj) => Ok(obj
+                    .get(field)
+                    .and_then(|id| self.arena.get(*id).cloned())
+                    .unwrap_or_else(|| typechecked!(".field", "field exists"))),
                 // JSON field access returns Json (null for missing)
-                Value::Json(j) => Ok(Value::Json(
-                    j.get(field).cloned().unwrap_or(serde_json::Value::Null),
-                )),
+                Value::Json(j) => {
+                    let fs = self.arena.strings.get(*field).unwrap_or_default();
+                    Ok(Value::Json(
+                        j.get(fs).cloned().unwrap_or(serde_json::Value::Null),
+                    ))
+                }
                 // Type checker guarantees field access is on Object or Json
                 _ => typechecked!(".field", "Object | Json"),
             }
@@ -721,7 +713,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     pub(super) async fn optional_field(
         &mut self,
         base: ExprId,
-        field: &str,
+        field: &StringId,
         span: Span,
     ) -> Result<Value> {
         let base_val = self.eval(base).await?;
@@ -759,14 +751,16 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Helper for field access on a value (without wrapping in Option).
     ///
     /// Type checker guarantees val is Object and field exists.
-    pub(super) fn field_access(&mut self, val: &Value, field: &str) -> Value {
+    pub(super) fn field_access(
+        &mut self,
+        val: &Value,
+        field: &StringId,
+    ) -> Value {
         match val {
-            Value::Object(obj) => {
-                let field_id = self.arena.intern(field);
-                obj.get(&field_id)
-                    .and_then(|id| self.arena.get(*id).cloned())
-                    .unwrap_or_else(|| typechecked!(".field", "field exists"))
-            }
+            Value::Object(obj) => obj
+                .get(field)
+                .and_then(|id| self.arena.get(*id).cloned())
+                .unwrap_or_else(|| typechecked!(".field", "field exists")),
             // Type checker guarantees field access is on Object
             _ => typechecked!(".field", "Object"),
         }
@@ -778,20 +772,18 @@ impl<I: IoContext> Interpreter<'_, I> {
     fn try_field_access(
         &mut self,
         val: &Value,
-        field: &str,
+        field: &StringId,
         span: Span,
     ) -> Result<Value> {
         match val {
-            Value::Object(obj) => {
-                let field_id = self.arena.intern(field);
-                obj.get(&field_id)
-                    .and_then(|id| self.arena.get(*id).cloned())
-                    .map(|v| {
-                        let id = self.arena.add(v, span);
-                        self.make_some(id)
-                    })
-                    .map_or_else(|| Ok(self.make_none()), Ok)
-            }
+            Value::Object(obj) => obj
+                .get(field)
+                .and_then(|id| self.arena.get(*id).cloned())
+                .map(|v| {
+                    let id = self.arena.add(v, span);
+                    self.make_some(id)
+                })
+                .map_or_else(|| Ok(self.make_none()), Ok),
             _ => typechecked!("?.field", "Object"),
         }
     }

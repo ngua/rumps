@@ -262,6 +262,13 @@ impl TypeEnv {
         }
     }
 
+    /// Bind a `StringId` to a type scheme in the current scope.
+    pub(crate) fn bind_id(&mut self, id: StringId, scheme: Scheme) {
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.bindings.insert(id, scheme);
+        }
+    }
+
     /// Look up a name, searching from innermost to outermost scope.
     pub(crate) fn lookup(&self, name: &str) -> Option<&Scheme> {
         self.strings.lookup(name).and_then(|id| {
@@ -270,6 +277,14 @@ impl TypeEnv {
                 .rev()
                 .find_map(|scope| scope.bindings.get(&id))
         })
+    }
+
+    /// Look up by `StringId`, searching from innermost to outermost scope.
+    pub(crate) fn lookup_id(&self, id: StringId) -> Option<&Scheme> {
+        self.scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.bindings.get(&id))
     }
 
     /// Intern a string, returning its ID.
@@ -285,6 +300,18 @@ impl TypeEnv {
     /// Get a string by its interned ID.
     pub(crate) fn get_str(&self, id: StringId) -> Option<&str> {
         self.strings.get(id)
+    }
+
+    /// Resolve a `StringId` to `&str`, panicking if not found.
+    pub(crate) fn resolve_str(&self, id: StringId) -> &str {
+        self.strings
+            .get(id)
+            .unwrap_or_else(|| invariant!("StringId lookup"))
+    }
+
+    /// Resolve a `StringId` to an owned `String`.
+    pub(crate) fn resolve_string(&self, id: StringId) -> String {
+        self.strings.resolve(id)
     }
 
     /// Collect all free type variables in the environment.

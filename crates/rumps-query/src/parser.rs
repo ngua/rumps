@@ -77,12 +77,11 @@ use crate::{Ast, Error, Lexer, Result, Span, StmtId, StringInterner, Token};
 /// Parser error type for token-based parsing.
 type ParseErr = Simple<Token, Span>;
 
-/// The result of parsing: the AST arena, top-level statement IDs, and string interner.
+/// The result of parsing: the AST arena and top-level statement IDs.
 #[derive(Debug)]
 pub(crate) struct ParseResult {
     pub ast: Ast,
     pub stmts: Vec<StmtId>,
-    pub interner: StringInterner,
 }
 
 /// Parses source code into an AST.
@@ -90,10 +89,12 @@ pub(crate) struct Parser;
 
 impl Parser {
     /// Parse source code into an AST.
-    pub(crate) fn parse(src: &str) -> Result<ParseResult> {
+    pub(crate) fn parse(
+        src: &str,
+        interner: &mut StringInterner,
+    ) -> Result<ParseResult> {
         let raw = Lexer::new(src).lex()?;
-        let mut interner = StringInterner::new();
-        let tokens = Spanned::intern_all(raw, &mut interner);
+        let tokens = Spanned::intern_all(raw, interner);
         Self::parse_interned(&tokens, None, interner)
     }
 
@@ -101,19 +102,19 @@ impl Parser {
     pub(crate) fn parse_with_path(
         src: &str,
         src_path: &std::path::Path,
+        interner: &mut StringInterner,
     ) -> Result<ParseResult> {
         let raw = Lexer::new(src).lex()?;
-        let mut interner = StringInterner::new();
-        let tokens = Spanned::intern_all(raw, &mut interner);
+        let tokens = Spanned::intern_all(raw, interner);
         Self::parse_interned(&tokens, Some(src_path), interner)
     }
 
     /// Parse a raw (pre-interning) token stream into an AST.
     pub(crate) fn parse_tokens(
         tokens: Vec<Spanned<String>>,
+        interner: &mut StringInterner,
     ) -> Result<ParseResult> {
-        let mut interner = StringInterner::new();
-        let interned = Spanned::intern_all(tokens, &mut interner);
+        let interned = Spanned::intern_all(tokens, interner);
         Self::parse_interned(&interned, None, interner)
     }
 
@@ -121,9 +122,9 @@ impl Parser {
     fn parse_interned(
         tokens: &[Spanned],
         src_path: Option<&std::path::Path>,
-        mut interner: StringInterner,
+        interner: &mut StringInterner,
     ) -> Result<ParseResult> {
-        let parser = Self::program(&mut interner);
+        let parser = Self::program(interner);
 
         let eof_span = tokens
             .iter()
@@ -143,7 +144,7 @@ impl Parser {
             .map_err(|errs| {
                 NonEmpty::collect(
                     errs.into_iter()
-                        .map(|e| Error::from_parse_rich(e, &interner)),
+                        .map(|e| Error::from_parse_rich(e, interner)),
                 )
                 .map(Error::multiple)
                 .unwrap_or_else(|| {
@@ -152,15 +153,9 @@ impl Parser {
             })
             .and_then(|cst_stmts| {
                 let (ast, stmts) = lower::LowerCtx::program_with_path(
-                    cst_stmts,
-                    src_path,
-                    &mut interner,
+                    cst_stmts, src_path, interner,
                 )?;
-                Ok(ParseResult {
-                    ast,
-                    stmts,
-                    interner,
-                })
+                Ok(ParseResult { ast, stmts })
             })
     }
 

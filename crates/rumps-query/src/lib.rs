@@ -145,10 +145,17 @@ async fn run_with_io<I: IoContext>(
     db: Database,
     io: I,
 ) -> Result<I> {
-    let mut result = Parser::parse_with_path(src, src_path)?;
+    let mut interner = StringInterner::new();
+    let mut result = Parser::parse_with_path(src, src_path, &mut interner)?;
     let interactive = false;
-    let interp =
-        Interpreter::new(&mut result.ast, &result.stmts, db, io, interactive)?;
+    let interp = Interpreter::new(
+        &mut result.ast,
+        &result.stmts,
+        db,
+        io,
+        interactive,
+        interner,
+    )?;
     let interp = interp.run(&result.stmts, interactive).await?;
     Ok(interp.into_io())
 }

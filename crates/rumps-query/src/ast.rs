@@ -9,6 +9,7 @@
 use rumps_types::Name;
 use smallvec::SmallVec;
 
+use crate::intern::{StringId, StringInterner};
 use crate::typecheck::{BuiltinClass, BuiltinClassTag};
 use crate::{Error, Result, Span};
 
@@ -139,7 +140,7 @@ pub(crate) type AstClassConstraints =
 /// Represents `T` or `T: Class1 + Class2` in type parameter lists.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TypeParam {
-    pub name: String,
+    pub name: StringId,
     pub constraints: AstClassConstraints,
 }
 
@@ -296,16 +297,16 @@ pub(crate) enum AstTypeExpr {
     Wildcard,
 
     /// Simple named type: `Int`, `String`, `Option`, etc.
-    Named(String),
+    Named(StringId),
 
     /// Parameterized type: `Array[Int]`, `Option[String]`, `Result[Int, String]`.
-    App(String, SmallVec<[AstTypeExprId; 2]>),
+    App(StringId, SmallVec<[AstTypeExprId; 2]>),
 
     /// Type variable application: `F[T]` where `F` is a type parameter.
     ///
     /// Distinguished from `App` during lowering when the name is a known type
     /// parameter. Converted to `Ty::Apply` during typechecking.
-    VarApp(String, SmallVec<[AstTypeExprId; 2]>),
+    VarApp(StringId, SmallVec<[AstTypeExprId; 2]>),
 
     /// Function type: `(Int, Int) -> Int`, `Int -> Int`, `() -> String`.
     ///
@@ -329,13 +330,16 @@ pub(crate) enum AstTypeExpr {
     ///
     /// Anonymous structural object type in type position. Uses extensible
     /// record semantics: a value matches if it has at least the specified fields.
-    Object(SmallVec<[(String, AstTypeExprId); 4]>),
+    Object(SmallVec<[(StringId, AstTypeExprId); 4]>),
 
     /// Associated type reference: `:Index` (unqualified) or `Indexable:Index` (qualified).
     ///
     /// - `class: None`: unqualified `:Index`, resolved from class context
     /// - `class: Some("Indexable")`: qualified, names the class explicitly
-    AssocType { class: Option<String>, name: String },
+    AssocType {
+        class: Option<StringId>,
+        name: StringId,
+    },
 }
 
 /// Binary operators.
@@ -440,7 +444,7 @@ pub(crate) enum RestPattern {
     /// `..` ; ignore remaining elements
     Ignore,
     /// `...name` ; bind remaining elements to `name`
-    Bind(String),
+    Bind(StringId),
 }
 
 /// A binding pattern for destructuring in `let` statements.
@@ -450,7 +454,7 @@ pub(crate) enum RestPattern {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum BindingPattern {
     /// Simple variable binding: `x`
-    Var(String),
+    Var(StringId),
 
     /// Tuple destructuring: `(a, b, c)`
     Tuple(Vec<Self>),
@@ -459,7 +463,7 @@ pub(crate) enum BindingPattern {
     ///
     /// Each entry is `(field_name, pattern)`. Shorthand `{ name }` is lowered to
     /// `{ name: name }` (i.e., `("name", Var("name"))`).
-    Object(Vec<(String, Self)>),
+    Object(Vec<(StringId, Self)>),
 
     /// Array destructuring: `[a, b]`, `[a, b, ..]`, or `[head, ...tail]`
     ///
@@ -471,14 +475,8 @@ pub(crate) enum BindingPattern {
     Wildcard,
 }
 
-impl From<&str> for BindingPattern {
-    fn from(s: &str) -> Self {
-        Self::Var(s.into())
-    }
-}
-
-impl From<String> for BindingPattern {
-    fn from(s: String) -> Self {
+impl From<StringId> for BindingPattern {
+    fn from(s: StringId) -> Self {
         Self::Var(s)
     }
 }
@@ -492,20 +490,20 @@ pub(crate) enum TypePattern {
     Type(AstTypeExprId),
 
     /// Variant check without payload: `is Option.None`.
-    Variant(String, String),
+    Variant(StringId, StringId),
 
     /// Variant check ignoring payload: `is Option.Some(_)`.
-    VariantWildcard(String, String),
+    VariantWildcard(StringId, StringId),
 
     /// Variant check with binding: `is Option.Some(val)`.
     ///
     /// Bindings are only visible in the `then` branch of an `if`.
-    VariantBind(String, String, SmallVec<[String; 2]>),
+    VariantBind(StringId, StringId, SmallVec<[StringId; 2]>),
 
     /// Structural object check: `is { name: String, age: Int }`.
     ///
     /// Extensible record semantics: value matches if it has at least these fields.
-    Object(SmallVec<[(String, AstTypeExprId); 4]>),
+    Object(SmallVec<[(StringId, AstTypeExprId); 4]>),
 }
 
 /// A match pattern for the `match` expression.
@@ -523,7 +521,7 @@ pub(crate) enum MatchPattern {
     /// Variable binding: `x`, `name`
     ///
     /// Matches any value and binds it to the given name.
-    Var(String),
+    Var(StringId),
 
     /// Literal: `0`, `"hello"`, `true`
     ///
@@ -534,14 +532,14 @@ pub(crate) enum MatchPattern {
     ///
     /// Matches a tagged value if the type and variant match, then recursively
     /// matches the payloads against the sub-patterns.
-    Variant(String, String, SmallVec<[MatchPatternId; 2]>),
+    Variant(StringId, StringId, SmallVec<[MatchPatternId; 2]>),
 
     /// Object destructuring: `{ name, age }`, `{ name, role: "admin" }`
     ///
     /// Each entry is `(field_name, pattern)`. Shorthand `{ name }` desugars to
     /// `{ name: name }` (i.e., match field and bind to same-named variable).
     /// Additional fields in the value are allowed (partial matching).
-    Object(SmallVec<[(String, MatchPatternId); 4]>),
+    Object(SmallVec<[(StringId, MatchPatternId); 4]>),
 
     /// Tuple pattern: `(a, b, c)`
     ///
@@ -561,7 +559,7 @@ pub(crate) enum MatchPattern {
     /// Type-narrowing pattern: `x IS Int`, `val IS String`
     ///
     /// Matches if the value is of the specified type and binds it to the name.
-    Is(String, AstTypeExprId),
+    Is(StringId, AstTypeExprId),
 }
 
 /// A match arm in a `match` expression.
@@ -592,7 +590,7 @@ pub(crate) struct MatchArm {
 /// Examples: `None` (arity 0), `Some(Int)` (arity 1), `Pair(Int, String)` (arity 2).
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct VariantAst {
-    pub name: String,
+    pub name: StringId,
     pub payloads: SmallVec<[AstTypeExprId; 2]>,
 }
 
@@ -620,7 +618,7 @@ pub(crate) enum ArrayElem {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ObjectEntry {
     /// A key-value field: `key: expr`
-    Field(String, ExprId),
+    Field(StringId, ExprId),
     /// A spread: `...expr`
     Spread(ExprId),
 }
@@ -646,17 +644,26 @@ pub(crate) enum SubscriptElem {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum DbRef {
     /// Local B-tree variable: `data`, `data(1)`, `data(...keys)`.
-    Local(String, SmallVec<[SubscriptElem; 4]>),
+    Local(StringId, SmallVec<[SubscriptElem; 4]>),
     /// Global B-tree variable: `^PATIENT`, `^DATA(1, ...rest)`.
-    Global(String, SmallVec<[SubscriptElem; 4]>),
+    Global(StringId, SmallVec<[SubscriptElem; 4]>),
 }
 
 impl DbRef {
     /// Splits into the storage `Name` and subscript elements.
-    pub(crate) fn split(&self) -> (Name, &SmallVec<[SubscriptElem; 4]>) {
+    ///
+    /// Requires the interner to resolve `StringId` to `&str` for `Name`.
+    pub(crate) fn split(
+        &self,
+        interner: &StringInterner,
+    ) -> (Name, &SmallVec<[SubscriptElem; 4]>) {
         match self {
-            Self::Local(n, s) => (Name::local(n), s),
-            Self::Global(n, s) => (Name::global(n), s),
+            Self::Local(n, s) => {
+                (Name::local(interner.get(*n).unwrap_or_default()), s)
+            }
+            Self::Global(n, s) => {
+                (Name::global(interner.get(*n).unwrap_or_default()), s)
+            }
         }
     }
 }
@@ -753,7 +760,7 @@ pub(crate) enum Expr {
     ///
     /// `x` becomes `Var("x")`. Only looks up in lexical scope; does not
     /// fall back to B-tree locals.
-    Var(String),
+    Var(StringId),
 
     /// Database intrinsic: `@get`, `@set`, `@kill`, `@data`, `@order`, `@query`.
     ///
@@ -827,13 +834,13 @@ pub(crate) enum Expr {
     OptionalIndex(ExprId, ExprId),
 
     /// Field access: `expr.field`.
-    Field(ExprId, String),
+    Field(ExprId, StringId),
 
     /// Optional field access: `expr?.field`.
     ///
     /// Short-circuits to `Option.None` if base is `None`; otherwise wraps
     /// the field value in `Option.Some`.
-    OptionalField(ExprId, String),
+    OptionalField(ExprId, StringId),
 
     /// Variant constructor: `Type.Variant(args...)` or `Type.Variant`.
     ///
@@ -842,7 +849,7 @@ pub(crate) enum Expr {
     /// for variants with arguments.
     ///
     /// Examples: `Option.None` (no args), `Option.Some(1)`, `Result.Ok(42)`
-    Variant(String, String, SmallVec<[ExprId; 4]>),
+    Variant(StringId, StringId, SmallVec<[ExprId; 4]>),
 
     /// Namespace path for module functions and constants.
     ///
@@ -853,7 +860,7 @@ pub(crate) enum Expr {
     ///
     /// When evaluated, produces a `Value::ModuleFn` that can be called directly
     /// or used as a first-class value (e.g., in pipelines).
-    Path(SmallVec<[String; 4]>),
+    Path(SmallVec<[StringId; 4]>),
 
     /// Class method call: `Class:method(args)`.
     ///
@@ -861,7 +868,7 @@ pub(crate) enum Expr {
     /// during typechecking.
     ///
     /// Examples: `Numeric:add(a, b)`, `Fallible:unwrap(opt)`, `Mappable:map(fn, arr)`
-    ClassMethod(String, String, SmallVec<[ExprId; 4]>),
+    ClassMethod(StringId, StringId, SmallVec<[ExprId; 4]>),
 
     /// Class method reference: `Class:method` or `Class[T, ...]:method`.
     ///
@@ -871,7 +878,7 @@ pub(crate) enum Expr {
     /// The type arguments (`SmallVec`) are required for convert methods
     /// (`Fallible:wrap`, `Into:into`, `TryInto:try-into`) when used as
     /// first-class values, to specify the target type.
-    ClassMethodRef(String, SmallVec<[AstTypeExprId; 2]>, String),
+    ClassMethodRef(StringId, SmallVec<[AstTypeExprId; 2]>, StringId),
 
     /// Type check: `expr is Pattern`.
     ///
@@ -925,7 +932,7 @@ pub(crate) enum Expr {
     /// Closures capture their lexical environment at creation time (by value).
     Closure {
         type_params: SmallVec<[TypeParam; 2]>,
-        params: SmallVec<[(String, Option<AstTypeExprId>); 4]>,
+        params: SmallVec<[(StringId, Option<AstTypeExprId>); 4]>,
         ret: Option<AstTypeExprId>,
         body: ExprId,
     },
@@ -1016,8 +1023,8 @@ pub(crate) enum Expr {
     /// without calling the continuation, the loop terminates and returns that value.
     Forever {
         seed: ExprId,
-        state_param: (String, Option<AstTypeExprId>),
-        cont_param: (String, Option<AstTypeExprId>),
+        state_param: (StringId, Option<AstTypeExprId>),
+        cont_param: (StringId, Option<AstTypeExprId>),
         body: ExprId,
     },
 
@@ -1053,7 +1060,7 @@ pub(crate) enum JsonAccessKind {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum JsonAccessKey {
     /// Static field name: `data.field` or `data..field`
-    Field(String),
+    Field(StringId),
     /// Dynamic key expression: `data->"key"` or `data->>"key"`
     Expr(ExprId),
 }
@@ -1131,18 +1138,21 @@ pub(crate) enum Visibility {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum ImportItem {
     /// Named import: `member` or `member as alias`.
-    Named { name: String, alias: Option<String> },
+    Named {
+        name: StringId,
+        alias: Option<StringId>,
+    },
     /// Wildcard import: `...`.
     Wildcard,
     /// Exclusion (only valid after wildcard): `-member`.
-    Exclude(String),
+    Exclude(StringId),
 }
 
 /// Import statement.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Import {
     /// Module path segments (e.g., `["Module", "Nested"]`).
-    pub(crate) path: Vec<String>,
+    pub(crate) path: Vec<StringId>,
     /// Import items.
     pub(crate) items: Vec<ImportItem>,
 }
@@ -1152,8 +1162,8 @@ pub(crate) struct Import {
 /// Represents `fun method(params) -> RetType { body }` inside a `class ... for ...` block.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct InstanceMethodDef {
-    pub(crate) name: String,
-    pub(crate) params: SmallVec<[(String, Option<AstTypeExprId>); 4]>,
+    pub(crate) name: StringId,
+    pub(crate) params: SmallVec<[(StringId, Option<AstTypeExprId>); 4]>,
     pub(crate) ret: Option<AstTypeExprId>,
     pub(crate) body: ExprId,
     pub(crate) span: Span,
@@ -1166,7 +1176,7 @@ pub(crate) struct InstanceMethodDef {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct AssocTypeDef {
     /// Associated type name (e.g., `"Index"`).
-    pub(crate) name: String,
+    pub(crate) name: StringId,
     /// Optional constraint on the associated type.
     pub(crate) constraint: Option<BuiltinClass<AstTypeExprId>>,
     /// The concrete type this associated type maps to.
@@ -1212,9 +1222,9 @@ pub(crate) enum Stmt {
     ///
     /// The visibility is only meaningful inside modules (`+fun` for public).
     Fun {
-        name: String,
+        name: StringId,
         type_params: SmallVec<[TypeParam; 2]>,
-        params: SmallVec<[(String, Option<AstTypeExprId>); 4]>,
+        params: SmallVec<[(StringId, Option<AstTypeExprId>); 4]>,
         ret: Option<AstTypeExprId>,
         body: ExprId,
         vis: Visibility,
@@ -1229,7 +1239,7 @@ pub(crate) enum Stmt {
     ///
     /// The visibility is only meaningful inside modules (`+type` for public).
     Type {
-        name: String,
+        name: StringId,
         type_params: SmallVec<[TypeParam; 2]>,
         def: TypeDefAst,
         vis: Visibility,
@@ -1247,7 +1257,7 @@ pub(crate) enum Stmt {
     ///
     /// The visibility is only meaningful inside modules (`+newtype` for public).
     NewType {
-        name: String,
+        name: StringId,
         type_params: SmallVec<[TypeParam; 2]>,
         target: AstTypeExprId,
         vis: Visibility,
@@ -1265,7 +1275,7 @@ pub(crate) enum Stmt {
     ///
     /// The visibility is only meaningful inside modules (`+union` for public).
     Union {
-        name: String,
+        name: StringId,
         type_params: SmallVec<[TypeParam; 2]>,
         members: SmallVec<[AstTypeExprId; 4]>,
         vis: Visibility,
@@ -1281,7 +1291,7 @@ pub(crate) enum Stmt {
     ///
     /// The body contains `StmtId`s; only `Fun`, `Let`, and `Module` are valid.
     /// This is enforced during parsing.
-    Module { name: String, body: Vec<StmtId> },
+    Module { name: StringId, body: Vec<StmtId> },
 
     /// Import members from a module: `import Module.{ member, ... }`.
     ///
@@ -1304,7 +1314,7 @@ pub(crate) enum Stmt {
     /// - `class Display for Pair[A, B] where A: Display, B: Display { ... }`
     ClassInstance {
         /// Class name (e.g., `"Display"`, `"Into"`, `"Ord"`).
-        class_name: String,
+        class_name: StringId,
         /// Class type arguments (e.g., `[String]` for `Into[String]`).
         class_args: SmallVec<[AstTypeExprId; 2]>,
         /// Type parameters for polymorphic instances (e.g., `[A, B]` in `Pair[A, B]`).
@@ -1314,7 +1324,7 @@ pub(crate) enum Stmt {
         /// `where` clause constraints (e.g., `A: Display, B: Display`).
         ///
         /// Each entry is `(type_param_name, constraints)`.
-        constraints: SmallVec<[(String, AstClassConstraints); 2]>,
+        constraints: SmallVec<[(StringId, AstClassConstraints); 2]>,
         /// Associated type definitions (e.g., `newtype Index = Int`).
         assoc_types: SmallVec<[AssocTypeDef; 2]>,
         /// Method implementations.

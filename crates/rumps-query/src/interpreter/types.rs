@@ -146,18 +146,16 @@ impl<I: IoContext> Interpreter<'_, I> {
             // Wildcard is unresolved (used for type matching with unknown params)
             AstTypeExpr::Wildcard => Ok(None),
             AstTypeExpr::Named(name) => {
-                let name_id = self.arena.intern(&name);
                 // If the type is not in the registry, it's likely a type parameter
                 // from a generic function; return None to indicate unresolved
                 Ok(self
                     .registry
-                    .lookup(name_id)
+                    .lookup(name)
                     .map(|ty_id| self.type_exprs.named(ty_id)))
             }
             AstTypeExpr::App(name, params) => {
-                let name_id = self.arena.intern(&name);
                 // If base type is not in registry, it's a type parameter
-                let ty_id = match self.registry.lookup(name_id) {
+                let ty_id = match self.registry.lookup(name) {
                     Some(id) => id,
                     None => {
                         // Unresolved type param in App position
@@ -200,13 +198,12 @@ impl<I: IoContext> Interpreter<'_, I> {
                 Ok(resolved.map(|r| self.type_exprs.union(r)))
             }
             AstTypeExpr::Object(fields) => {
-                // Resolve each field's type and intern field names; if any is None, return None
+                // Resolve each field's type; field names already `StringId`
                 let resolved: Option<IndexMap<StringId, TypeExprId>> = fields
                     .iter()
                     .map(|(name, ty_id)| {
-                        let name_id = self.arena.intern(name);
                         self.try_resolve_type_expr(*ty_id, span)
-                            .map(|opt| opt.map(|ty| (name_id, ty)))
+                            .map(|opt| opt.map(|ty| (*name, ty)))
                     })
                     .collect::<Result<Option<IndexMap<_, _>>>>()?;
                 Ok(resolved.map(|r| self.type_exprs.object(r)))
@@ -807,25 +804,22 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             AstTypeExpr::Named(name) => {
                 // Check if it's a type parameter
-                let name_id = self.arena.intern(&name);
-                if let Some(&ty) = subst.get(&name_id) {
+                if let Some(&ty) = subst.get(&name) {
                     Ok(ty)
                 } else {
                     // Regular type lookup; type checker guarantees it exists
                     let ty_id =
-                        self.registry.lookup(name_id).unwrap_or_else(|| {
+                        self.registry.lookup(name).unwrap_or_else(|| {
                             typechecked!("type lookup", "known type")
                         });
                     Ok(self.type_exprs.named(ty_id))
                 }
             }
             AstTypeExpr::App(name, params) => {
-                let name_id = self.arena.intern(&name);
                 // Type checker guarantees the type exists
-                let ty_id =
-                    self.registry.lookup(name_id).unwrap_or_else(|| {
-                        typechecked!("type lookup", "known type")
-                    });
+                let ty_id = self.registry.lookup(name).unwrap_or_else(|| {
+                    typechecked!("type lookup", "known type")
+                });
                 let resolved: Result<SmallVec<[TypeExprId; 2]>> = params
                     .iter()
                     .map(|&p| self.resolve_ast_type_with_subst(p, subst))
@@ -859,17 +853,15 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let resolved: Result<IndexMap<StringId, TypeExprId>> = fields
                     .iter()
                     .map(|(name, ty_id)| {
-                        let name_id = self.arena.intern(name);
                         self.resolve_ast_type_with_subst(*ty_id, subst)
-                            .map(|ty| (name_id, ty))
+                            .map(|ty| (*name, ty))
                     })
                     .collect();
                 Ok(self.type_exprs.object(resolved?))
             }
             // VarApp (`F[T]`) contains a type variable; check substitution
             AstTypeExpr::VarApp(name, params) => {
-                let name_id = self.arena.intern(&name);
-                if let Some(&ty) = subst.get(&name_id) {
+                if let Some(&ty) = subst.get(&name) {
                     // Substituted to concrete base; resolve args and apply
                     let base = self.type_exprs.base_type(ty);
                     let resolved: Result<SmallVec<[TypeExprId; 2]>> = params
@@ -1068,8 +1060,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             AstTypeExpr::Wildcard => Ok(true),
             // App(name, args): check base type and recursively check type args
             AstTypeExpr::App(name, ast_args) => {
-                let name_id = self.arena.intern(&name);
-                let type_id = match self.registry.lookup(name_id) {
+                let type_id = match self.registry.lookup(name) {
                     Some(id) => id,
                     None => invariant!("AST type to be known"),
                 };
@@ -1127,24 +1118,18 @@ impl<I: IoContext> Interpreter<'_, I> {
             });
         match ast_ty {
             AstTypeExpr::Wildcard => true,
-            AstTypeExpr::Named(name) => self
-                .arena
-                .strings
-                .lookup(&name)
-                .and_then(|name_id| self.registry.lookup(name_id))
-                .is_some_and(|expected| {
+            AstTypeExpr::Named(name) => {
+                self.registry.lookup(name).is_some_and(|expected| {
                     self.type_exprs.base_type(ty) == Some(expected)
                         && self.type_exprs.type_args(ty).is_none()
-                }),
-            AstTypeExpr::App(name, ast_args) => self
-                .arena
-                .strings
-                .lookup(&name)
-                .and_then(|name_id| self.registry.lookup(name_id))
-                .is_some_and(|expected| {
+                })
+            }
+            AstTypeExpr::App(name, ast_args) => {
+                self.registry.lookup(name).is_some_and(|expected| {
                     self.type_exprs.base_type(ty) == Some(expected)
                         && self.type_args_match_ast(ty, &ast_args)
-                }),
+                })
+            }
             // Tuple, Union, Fn, Object: not supported with wildcards yet
             _ => false,
         }
@@ -1195,7 +1180,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         &self,
         ty: TypeExprId,
     ) -> Option<(
-        SmallVec<[(String, AstTypeExprId); 4]>,
+        SmallVec<[(StringId, AstTypeExprId); 4]>,
         SmallVec<[StringId; 2]>,
         Option<SmallVec<[TypeExprId; 2]>>,
     )> {
@@ -1239,10 +1224,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         fields
             .iter()
             .map(|(fname, ast_ty)| {
-                let fname_id = self.arena.intern(fname);
                 self.resolve_ast_type_with_subst(*ast_ty, &subst)
                     .ok()
-                    .map(|resolved| (fname_id, resolved))
+                    .map(|resolved| (*fname, resolved))
             })
             .collect()
     }

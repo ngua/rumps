@@ -5,6 +5,7 @@ use smallvec::SmallVec;
 
 use super::Interpreter;
 use crate::ast::{Expr, ExprId, MatchArm, PostfixOp, StmtId, TypePattern};
+use crate::intern::StringId;
 use crate::io::IoContext;
 use crate::value::{TypeId, Value};
 use crate::{Error, Result, Span};
@@ -205,8 +206,16 @@ impl<I: IoContext> Interpreter<'_, I> {
         let cond_expr = self.ast.get_expr(cond).cloned();
         match cond_expr {
             Some(Expr::Is(expr, TypePattern::VariantBind(ty, var, names))) => {
-                self.if_with_bindings(expr, &ty, &var, &names, then_br, else_br)
-                    .await
+                let ty_s = self.arena.strings.resolve(ty);
+                let var_s = self.arena.strings.resolve(var);
+                let ns: Vec<String> = names
+                    .iter()
+                    .map(|n| self.arena.strings.resolve(*n))
+                    .collect();
+                self.if_with_bindings(
+                    expr, &ty_s, &var_s, &ns, then_br, else_br,
+                )
+                .await
             }
             _ => {
                 let cond_val = self.eval(cond).await?;
@@ -483,16 +492,16 @@ impl<I: IoContext> Interpreter<'_, I> {
     pub(super) async fn forever(
         &mut self,
         seed: ExprId,
-        state_param: (String, Option<crate::ast::AstTypeExprId>),
-        cont_param: (String, Option<crate::ast::AstTypeExprId>),
+        state_param: (StringId, Option<crate::ast::AstTypeExprId>),
+        cont_param: (StringId, Option<crate::ast::AstTypeExprId>),
         body: ExprId,
         span: Span,
     ) -> Result<Value> {
         let init = self.eval(seed).await?;
         let mut state_id = self.arena.add(init, span);
 
-        let state_name_id = self.arena.intern(&state_param.0);
-        let cont_name_id = self.arena.intern(&cont_param.0);
+        let state_name_id = state_param.0;
+        let cont_name_id = cont_param.0;
 
         loop {
             self.env.scopes.push();
