@@ -23,9 +23,12 @@ use crate::typecheck::BuiltinClass;
 use crate::value::TypeId;
 use crate::{Error, Result};
 
-/// Context for lowering; tracks base directory, files being parsed, and
-/// type parameters in scope (for distinguishing `VarApp` from `App`).
-struct Ctx<'a> {
+/// Context for lowering; owns the AST being built, tracks base directory,
+/// files being parsed, and type parameters in scope (for distinguishing
+/// `VarApp` from `App`).
+pub(crate) struct LowerCtx<'a> {
+    /// The AST being constructed.
+    ast: Ast,
     /// Base directory for resolving relative module paths.
     /// `None` means relative paths resolve against cwd.
     base_dir: Option<PathBuf>,
@@ -46,7 +49,7 @@ struct Ctx<'a> {
     interner: &'a mut StringInterner,
 }
 
-impl<'a> Ctx<'a> {
+impl<'a> LowerCtx<'a> {
     fn new(
         base_dir: Option<PathBuf>,
         interner: &'a mut StringInterner,
@@ -57,6 +60,7 @@ impl<'a> Ctx<'a> {
             .map(|n| interner.intern(n))
             .collect();
         Self {
+            ast: Ast::new(),
             base_dir,
             in_progress: HashSet::new(),
             type_params: HashSet::new(),
@@ -69,147 +73,126 @@ impl<'a> Ctx<'a> {
     fn sid_to_str(&self, id: StringId) -> String {
         self.interner.resolve(id)
     }
-}
 
-fn lower_visibility(vis: cst::Visibility) -> Visibility {
-    match vis {
-        cst::Visibility::Private => Visibility::Private,
-        cst::Visibility::Public => Visibility::Public,
-    }
-}
-
-/// Convert a CST class constraint to a `BuiltinClass<AstTypeExprId>`.
-fn lower_class(
-    ast: &mut Ast,
-    tps: &HashSet<StringId>,
-    interner: &StringInterner,
-    c: BuiltinClass<cst::TypeExpr>,
-) -> Result<BuiltinClass<AstTypeExprId>> {
-    c.try_map(|te| lower_type_expr(ast, tps, te, interner))
-}
-
-/// Convert a CST type parameter to an AST type parameter.
-fn lower_type_param(
-    ast: &mut Ast,
-    tps: &HashSet<StringId>,
-    interner: &StringInterner,
-    tp: cst::TypeParam,
-) -> Result<TypeParam> {
-    let constraints = tp
-        .constraints
-        .into_iter()
-        .map(|c| lower_class(ast, tps, interner, c))
-        .collect::<Result<_>>()?;
-    Ok(TypeParam {
-        name: interner.resolve(tp.name),
-        constraints,
-    })
-}
-
-/// Convert a list of CST type parameters to AST type parameters.
-fn lower_type_params(
-    ast: &mut Ast,
-    tps: &HashSet<StringId>,
-    interner: &StringInterner,
-    cst_tps: Vec<cst::TypeParam>,
-) -> Result<SmallVec<[TypeParam; 2]>> {
-    cst_tps
-        .into_iter()
-        .map(|tp| lower_type_param(ast, tps, interner, tp))
-        .collect()
-}
-
-/// Lower a CST program (list of statements) to AST.
-pub(crate) fn program(
-    stmts: Vec<cst::Stmt>,
-    interner: &mut StringInterner,
-) -> Result<(Ast, Vec<StmtId>)> {
-    program_with_path(stmts, None, interner)
-}
-
-/// Lower a CST program with source file context.
-///
-/// The `src_path` is used to resolve relative module imports.
-pub(crate) fn program_with_path(
-    stmts: Vec<cst::Stmt>,
-    src_path: Option<&Path>,
-    interner: &mut StringInterner,
-) -> Result<(Ast, Vec<StmtId>)> {
-    let base_dir = src_path.and_then(|p| p.parent().map(Path::to_path_buf));
-    let mut ctx = Ctx::new(base_dir, interner);
-    let mut ast = Ast::new();
-    let ids = stmts
-        .into_iter()
-        .map(|s| lower_stmt(&mut ast, &mut ctx, s))
-        .collect::<Result<Vec<_>>>()?;
-    Ok((ast, ids))
-}
-
-/// Lower a module from a file path.
-///
-/// Reads the file, parses it, and merges the resulting statements into the
-/// target AST. The file should contain module body statements (`fun`, `let`,
-/// `module`); this is enforced during typechecking.
-fn lower_module_from_file(
-    ast: &mut Ast,
-    ctx: &mut Ctx,
-    path: &str,
-    span: crate::Span,
-) -> Result<Vec<StmtId>> {
-    use crate::Lexer;
-
-    // Resolve path: if relative, resolve against base_dir; otherwise use as-is
-    let p = Path::new(path);
-    let resolved = if p.is_absolute() {
-        p.to_path_buf()
-    } else {
-        ctx.base_dir
-            .as_ref()
-            .map(|base| base.join(p))
-            .unwrap_or_else(|| p.to_path_buf())
-    };
-
-    // Canonicalize to absolute path
-    let canonical = resolved.canonicalize().map_err(|e| {
-        Error::parse(
-            span,
-            format!("cannot resolve module path `{path}`: {e}"),
-            vec![],
-        )
-    })?;
-
-    // Cycle detection
-    if ctx.in_progress.contains(&canonical) {
-        Err(Error::parse(
-            span,
-            format!("circular module import: `{}`", canonical.display()),
-            vec![],
-        ))?
+    /// Lower a CST program (list of statements) to AST.
+    pub(crate) fn program(
+        stmts: Vec<cst::Stmt>,
+        interner: &'a mut StringInterner,
+    ) -> Result<(Ast, Vec<StmtId>)> {
+        Self::program_with_path(stmts, None, interner)
     }
 
-    // Mark as in-progress
-    ctx.in_progress.insert(canonical.clone());
+    /// Lower a CST program with source file context.
+    ///
+    /// The `src_path` is used to resolve relative module imports.
+    pub(crate) fn program_with_path(
+        stmts: Vec<cst::Stmt>,
+        src_path: Option<&Path>,
+        interner: &'a mut StringInterner,
+    ) -> Result<(Ast, Vec<StmtId>)> {
+        let base_dir = src_path.and_then(|p| p.parent().map(Path::to_path_buf));
+        let mut ctx = Self::new(base_dir, interner);
+        let ids = stmts
+            .into_iter()
+            .map(|s| ctx.stmt(s))
+            .collect::<Result<Vec<_>>>()?;
+        Ok((ctx.ast, ids))
+    }
 
-    // Read file content
-    let content = std::fs::read_to_string(&canonical).map_err(|e| {
-        Error::parse(
-            span,
-            format!("cannot read module file `{}`: {e}", canonical.display()),
-            vec![],
-        )
-    })?;
+    fn vis(vis: cst::Visibility) -> Visibility {
+        match vis {
+            cst::Visibility::Private => Visibility::Private,
+            cst::Visibility::Public => Visibility::Public,
+        }
+    }
 
-    // Lex and parse to CST (not full AST, we need to lower with our context)
-    let tokens = Lexer::new(&content).lex().map_err(|e| {
-        Error::parse(
-            span,
-            format!("error in module file `{}`: {e}", canonical.display()),
-            vec![],
-        )
-    })?;
+    /// Convert a CST class constraint to a `BuiltinClass<AstTypeExprId>`.
+    fn class(
+        &mut self,
+        c: BuiltinClass<cst::TypeExpr>,
+    ) -> Result<BuiltinClass<AstTypeExprId>> {
+        c.try_map(|te| self.type_expr(te))
+    }
 
-    let cst_stmts =
-        super::Parser::parse_to_cst(tokens, ctx.interner).map_err(|e| {
+    /// Convert a CST type parameter to an AST type parameter.
+    fn type_param(&mut self, tp: cst::TypeParam) -> Result<TypeParam> {
+        let constraints = tp
+            .constraints
+            .into_iter()
+            .map(|c| self.class(c))
+            .collect::<Result<_>>()?;
+        Ok(TypeParam {
+            name: self.interner.resolve(tp.name),
+            constraints,
+        })
+    }
+
+    /// Convert a list of CST type parameters to AST type parameters.
+    fn type_param_list(
+        &mut self,
+        cst_tps: Vec<cst::TypeParam>,
+    ) -> Result<SmallVec<[TypeParam; 2]>> {
+        cst_tps.into_iter().map(|tp| self.type_param(tp)).collect()
+    }
+
+    /// Lower a module from a file path.
+    ///
+    /// Reads the file, parses it, and merges the resulting statements into the
+    /// target AST. The file should contain module body statements (`fun`, `let`,
+    /// `module`); this is enforced during typechecking.
+    fn module_from_file(
+        &mut self,
+        path: &str,
+        span: crate::Span,
+    ) -> Result<Vec<StmtId>> {
+        use crate::Lexer;
+
+        // Resolve path: if relative, resolve against base_dir; otherwise use as-is
+        let p = Path::new(path);
+        let resolved = if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            self.base_dir
+                .as_ref()
+                .map(|base| base.join(p))
+                .unwrap_or_else(|| p.to_path_buf())
+        };
+
+        // Canonicalize to absolute path
+        let canonical = resolved.canonicalize().map_err(|e| {
+            Error::parse(
+                span,
+                format!("cannot resolve module path `{path}`: {e}"),
+                vec![],
+            )
+        })?;
+
+        // Cycle detection
+        if self.in_progress.contains(&canonical) {
+            Err(Error::parse(
+                span,
+                format!("circular module import: `{}`", canonical.display()),
+                vec![],
+            ))?
+        }
+
+        // Mark as in-progress
+        self.in_progress.insert(canonical.clone());
+
+        // Read file content
+        let content = std::fs::read_to_string(&canonical).map_err(|e| {
+            Error::parse(
+                span,
+                format!(
+                    "cannot read module file `{}`: {e}",
+                    canonical.display()
+                ),
+                vec![],
+            )
+        })?;
+
+        // Lex and parse to CST (not full AST, we need to lower with our context)
+        let tokens = Lexer::new(&content).lex().map_err(|e| {
             Error::parse(
                 span,
                 format!("error in module file `{}`: {e}", canonical.display()),
@@ -217,1886 +200,1885 @@ fn lower_module_from_file(
             )
         })?;
 
-    // Lower with updated context (use this file's directory as new base)
-    let old_base = ctx.base_dir.take();
-    ctx.base_dir = canonical.parent().map(Path::to_path_buf);
+        let cst_stmts = super::Parser::parse_to_cst(tokens, self.interner)
+            .map_err(|e| {
+                Error::parse(
+                    span,
+                    format!(
+                        "error in module file `{}`: {e}",
+                        canonical.display()
+                    ),
+                    vec![],
+                )
+            })?;
 
-    let ids = cst_stmts
-        .into_iter()
-        .map(|s| lower_stmt(ast, ctx, s))
-        .collect::<Result<Vec<_>>>();
+        // Lower with updated context (use this file's directory as new base)
+        let old_base = self.base_dir.take();
+        self.base_dir = canonical.parent().map(Path::to_path_buf);
 
-    // Restore context
-    ctx.base_dir = old_base;
-    ctx.in_progress.remove(&canonical);
+        let ids = cst_stmts
+            .into_iter()
+            .map(|s| self.stmt(s))
+            .collect::<Result<Vec<_>>>();
 
-    ids
-}
+        // Restore context
+        self.base_dir = old_base;
+        self.in_progress.remove(&canonical);
 
-/// Recursively collect type variable names from a CST type expression.
-///
-/// Used to bring type params from `for_type` into `ctx.type_params` before
-/// lowering class instance methods. Concrete type names like `Int` appearing
-/// as `Named` are harmless (`Named` does not check `tps`). For `App` heads,
-/// `known_types` is consulted to avoid treating concrete constructors (e.g.
-/// `Array`, `Pair`) as type variables.
-fn collect_type_vars(
-    ty: &cst::TypeExpr,
-    known: &HashSet<StringId>,
-    out: &mut HashSet<StringId>,
-) {
-    match &ty.kind {
-        cst::TypeExprKind::Named(segs) => {
-            if let [id] = segs.as_slice() {
-                out.insert(*id);
+        ids
+    }
+
+    /// Recursively collect type variable names from a CST type expression.
+    ///
+    /// Used to bring type params from `for_type` into `self.type_params` before
+    /// lowering class instance methods. Concrete type names like `Int` appearing
+    /// as `Named` are harmless (`Named` does not check `tps`). For `App` heads,
+    /// `known_types` is consulted to avoid treating concrete constructors (e.g.
+    /// `Array`, `Pair`) as type variables.
+    fn collect_type_vars(&mut self, ty: &cst::TypeExpr) {
+        match &ty.kind {
+            cst::TypeExprKind::Named(segs) => {
+                if let [id] = segs.as_slice() {
+                    self.type_params.insert(*id);
+                }
             }
+            cst::TypeExprKind::App(segs, args) => {
+                // Check the last segment (for module-qualified names like `Container.Pair`).
+                let last = segs.last();
+                let is_known =
+                    last.is_some_and(|id| self.known_types.contains(id));
+                if !is_known {
+                    if let Some(id) = last.filter(|_| segs.len() == 1) {
+                        self.type_params.insert(*id);
+                    }
+                }
+                args.iter().for_each(|a| {
+                    Self::collect_type_vars_inner(
+                        a,
+                        &self.known_types,
+                        &mut self.type_params,
+                    )
+                });
+            }
+            cst::TypeExprKind::Fn(ps, ret) => {
+                ps.iter().for_each(|p| {
+                    Self::collect_type_vars_inner(
+                        p,
+                        &self.known_types,
+                        &mut self.type_params,
+                    )
+                });
+                Self::collect_type_vars_inner(
+                    ret,
+                    &self.known_types,
+                    &mut self.type_params,
+                );
+            }
+            cst::TypeExprKind::Tuple(es) | cst::TypeExprKind::Union(es) => {
+                es.iter().for_each(|e| {
+                    Self::collect_type_vars_inner(
+                        e,
+                        &self.known_types,
+                        &mut self.type_params,
+                    )
+                });
+            }
+            cst::TypeExprKind::Object(fs) => {
+                fs.iter().for_each(|(_, t)| {
+                    Self::collect_type_vars_inner(
+                        t,
+                        &self.known_types,
+                        &mut self.type_params,
+                    )
+                });
+            }
+            cst::TypeExprKind::Wildcard
+            | cst::TypeExprKind::AssocType { .. } => {}
         }
-        cst::TypeExprKind::App(segs, args) => {
-            // Check the last segment (for module-qualified names like `Container.Pair`).
-            let last = segs.last();
-            let is_known = last.is_some_and(|id| known.contains(id));
-            if !is_known {
-                if let Some(id) = last.filter(|_| segs.len() == 1) {
+    }
+
+    /// Inner recursive helper for `collect_type_vars` (avoids re-borrowing
+    /// `&mut self` on recursive calls from the `App` branch).
+    fn collect_type_vars_inner(
+        ty: &cst::TypeExpr,
+        known: &HashSet<StringId>,
+        out: &mut HashSet<StringId>,
+    ) {
+        match &ty.kind {
+            cst::TypeExprKind::Named(segs) => {
+                if let [id] = segs.as_slice() {
                     out.insert(*id);
                 }
             }
-            args.iter().for_each(|a| collect_type_vars(a, known, out));
-        }
-        cst::TypeExprKind::Fn(ps, ret) => {
-            ps.iter().for_each(|p| collect_type_vars(p, known, out));
-            collect_type_vars(ret, known, out);
-        }
-        cst::TypeExprKind::Tuple(es) | cst::TypeExprKind::Union(es) => {
-            es.iter().for_each(|e| collect_type_vars(e, known, out));
-        }
-        cst::TypeExprKind::Object(fs) => {
-            fs.iter()
-                .for_each(|(_, t)| collect_type_vars(t, known, out));
-        }
-        cst::TypeExprKind::Wildcard | cst::TypeExprKind::AssocType { .. } => {}
-    }
-}
-/// Lower a CST statement to AST.
-fn lower_stmt(ast: &mut Ast, ctx: &mut Ctx, stmt: cst::Stmt) -> Result<StmtId> {
-    let span = stmt.span;
-    let s = match stmt.kind {
-        cst::StmtKind::Let(pat, ty, expr, vis) => {
-            let pat = lower_binding_pattern(pat, ctx.interner);
-            let ty_id = ty
-                .map(|t| {
-                    lower_type_expr(ast, &ctx.type_params, t, ctx.interner)
-                })
-                .transpose()?;
-            let expr_id = lower_expr(ast, ctx, expr)?;
-            Stmt::Let(pat, ty_id, expr_id, lower_visibility(vis))
-        }
-        cst::StmtKind::Write(output) => {
-            let inner_id = lower_expr(ast, ctx, output.expr)?;
-            let format = match output.format {
-                cst::OutputFormat::Default => OutputFormat::Default,
-                cst::OutputFormat::Json => OutputFormat::Json,
-                cst::OutputFormat::Raw => OutputFormat::Raw,
-            };
-            let target = match output.target {
-                cst::OutputTarget::Stdout => OutputTarget::Stdout,
-                cst::OutputTarget::Stderr => OutputTarget::Stderr,
-                cst::OutputTarget::File(path_expr) => {
-                    let path_id = lower_expr(ast, ctx, *path_expr)?;
-                    OutputTarget::File(path_id)
+            cst::TypeExprKind::App(segs, args) => {
+                let last = segs.last();
+                let is_known = last.is_some_and(|id| known.contains(id));
+                if !is_known {
+                    if let Some(id) = last.filter(|_| segs.len() == 1) {
+                        out.insert(*id);
+                    }
                 }
-            };
-            let expr = Expr::Write(WriteExpr {
-                expr: inner_id,
-                format,
-                target,
-            });
-            let expr_id = ast.add_expr(expr, span)?;
-            Stmt::Expr(expr_id)
+                args.iter()
+                    .for_each(|a| Self::collect_type_vars_inner(a, known, out));
+            }
+            cst::TypeExprKind::Fn(ps, ret) => {
+                ps.iter()
+                    .for_each(|p| Self::collect_type_vars_inner(p, known, out));
+                Self::collect_type_vars_inner(ret, known, out);
+            }
+            cst::TypeExprKind::Tuple(es) | cst::TypeExprKind::Union(es) => {
+                es.iter()
+                    .for_each(|e| Self::collect_type_vars_inner(e, known, out));
+            }
+            cst::TypeExprKind::Object(fs) => {
+                fs.iter().for_each(|(_, t)| {
+                    Self::collect_type_vars_inner(t, known, out)
+                });
+            }
+            cst::TypeExprKind::Wildcard
+            | cst::TypeExprKind::AssocType { .. } => {}
         }
-        cst::StmtKind::Expr(expr) => {
-            let expr_id = lower_expr(ast, ctx, expr)?;
-            Stmt::Expr(expr_id)
-        }
-        cst::StmtKind::Fun {
-            name,
-            type_params,
-            params,
-            ret,
-            body,
-            vis,
-        } => {
-            // Push type param names into scope
-            let saved = ctx.type_params.clone();
-            ctx.type_params.extend(type_params.iter().map(|tp| tp.name));
+    }
 
-            // Lower type-level items first
-            let tps = &ctx.type_params;
-            let params_lowered = params
-                .into_iter()
-                .map(|(n, t)| {
-                    t.map(|te| lower_type_expr(ast, tps, te, ctx.interner))
-                        .transpose()
-                        .map(|ty_id| (ctx.sid_to_str(n), ty_id))
-                })
-                .collect::<Result<SmallVec<_>>>()?;
-            let ret_id = ret
-                .map(|t| lower_type_expr(ast, tps, t, ctx.interner))
-                .transpose()?;
-            let tp_lowered =
-                lower_type_params(ast, tps, ctx.interner, type_params)?;
+    /// Lower a CST statement to AST.
+    fn stmt(&mut self, stmt: cst::Stmt) -> Result<StmtId> {
+        let span = stmt.span;
+        let s = match stmt.kind {
+            cst::StmtKind::Let(pat, ty, expr, vis) => {
+                let pat = self.binding_pattern(pat);
+                let ty_id = ty.map(|t| self.type_expr(t)).transpose()?;
+                let expr_id = self.expr(expr)?;
+                Stmt::Let(pat, ty_id, expr_id, Self::vis(vis))
+            }
+            cst::StmtKind::Write(output) => {
+                let inner_id = self.expr(output.expr)?;
+                let format = match output.format {
+                    cst::OutputFormat::Default => OutputFormat::Default,
+                    cst::OutputFormat::Json => OutputFormat::Json,
+                    cst::OutputFormat::Raw => OutputFormat::Raw,
+                };
+                let target = match output.target {
+                    cst::OutputTarget::Stdout => OutputTarget::Stdout,
+                    cst::OutputTarget::Stderr => OutputTarget::Stderr,
+                    cst::OutputTarget::File(path_expr) => {
+                        let path_id = self.expr(*path_expr)?;
+                        OutputTarget::File(path_id)
+                    }
+                };
+                let expr = Expr::Write(WriteExpr {
+                    expr: inner_id,
+                    format,
+                    target,
+                });
+                let expr_id = self.ast.add_expr(expr, span)?;
+                Stmt::Expr(expr_id)
+            }
+            cst::StmtKind::Expr(expr) => {
+                let expr_id = self.expr(expr)?;
+                Stmt::Expr(expr_id)
+            }
+            cst::StmtKind::Fun {
+                name,
+                type_params,
+                params,
+                ret,
+                body,
+                vis,
+            } => {
+                // Push type param names into scope
+                let saved = self.type_params.clone();
+                self.type_params
+                    .extend(type_params.iter().map(|tp| tp.name));
 
-            // Lower body (may contain nested closures that see outer type params)
-            let body_id = lower_expr(ast, ctx, body)?;
-
-            ctx.type_params = saved;
-            Stmt::Fun {
-                name: ctx.sid_to_str(name),
-                type_params: tp_lowered,
-                params: params_lowered,
-                ret: ret_id,
-                body: body_id,
-                vis: lower_visibility(vis),
-            }
-        }
-        cst::StmtKind::Type {
-            name,
-            type_params,
-            def,
-            vis,
-        } => {
-            ctx.known_types.insert(name);
-            let saved = ctx.type_params.clone();
-            ctx.type_params.extend(type_params.iter().map(|tp| tp.name));
-            let tps = &ctx.type_params;
-            let def_lowered = lower_type_def(ast, tps, ctx.interner, def)?;
-            let tp_lowered =
-                lower_type_params(ast, tps, ctx.interner, type_params)?;
-            ctx.type_params = saved;
-            Stmt::Type {
-                name: ctx.sid_to_str(name),
-                type_params: tp_lowered,
-                def: def_lowered,
-                vis: lower_visibility(vis),
-            }
-        }
-        cst::StmtKind::NewType {
-            name,
-            type_params,
-            target,
-            vis,
-        } => {
-            ctx.known_types.insert(name);
-            let saved = ctx.type_params.clone();
-            ctx.type_params.extend(type_params.iter().map(|tp| tp.name));
-            let tps = &ctx.type_params;
-            let target_id = lower_type_expr(ast, tps, target, ctx.interner)?;
-            let tp_lowered =
-                lower_type_params(ast, tps, ctx.interner, type_params)?;
-            ctx.type_params = saved;
-            Stmt::NewType {
-                name: ctx.sid_to_str(name),
-                type_params: tp_lowered,
-                target: target_id,
-                vis: lower_visibility(vis),
-            }
-        }
-        cst::StmtKind::Union {
-            name,
-            type_params,
-            members,
-            vis,
-        } => {
-            ctx.known_types.insert(name);
-            let saved = ctx.type_params.clone();
-            ctx.type_params.extend(type_params.iter().map(|tp| tp.name));
-            let tps = &ctx.type_params;
-            let member_ids = members
-                .into_iter()
-                .map(|t| lower_type_expr(ast, tps, t, ctx.interner))
-                .collect::<Result<SmallVec<_>>>()?;
-            let tp_lowered =
-                lower_type_params(ast, tps, ctx.interner, type_params)?;
-            ctx.type_params = saved;
-            Stmt::Union {
-                name: ctx.sid_to_str(name),
-                type_params: tp_lowered,
-                members: member_ids,
-                vis: lower_visibility(vis),
-            }
-        }
-        cst::StmtKind::Module { name, source } => {
-            let body_ids = match source {
-                cst::ModuleSource::Inline(body) => body
+                let params_lowered = params
                     .into_iter()
-                    .map(|s| lower_stmt(ast, ctx, s))
-                    .collect::<Result<Vec<_>>>()?,
-                cst::ModuleSource::File(path) => {
-                    lower_module_from_file(ast, ctx, &path, span)?
-                }
-            };
-            Stmt::Module {
-                name: ctx.sid_to_str(name),
-                body: body_ids,
-            }
-        }
-        cst::StmtKind::Import(imp) => {
-            let items = imp
-                .items
-                .into_iter()
-                .map(|item| match item {
-                    cst::ImportItem::Named { name, alias } => {
-                        ImportItem::Named {
-                            name: ctx.sid_to_str(name),
-                            alias: alias.map(|a| ctx.sid_to_str(a)),
-                        }
-                    }
-                    cst::ImportItem::Wildcard => ImportItem::Wildcard,
-                    cst::ImportItem::Exclude(n) => {
-                        ImportItem::Exclude(ctx.sid_to_str(n))
-                    }
-                })
-                .collect();
-            Stmt::Import(Import {
-                path: imp.path.iter().map(|id| ctx.sid_to_str(*id)).collect(),
-                items,
-            })
-        }
-        cst::StmtKind::ClassInstance {
-            class_name,
-            class_args,
-            type_params,
-            for_type,
-            constraints,
-            assoc_types,
-            methods,
-        } => {
-            let saved = ctx.type_params.clone();
-            ctx.type_params.extend(type_params.iter().map(|tp| tp.name));
-            collect_type_vars(
-                &for_type,
-                &ctx.known_types,
-                &mut ctx.type_params,
-            );
-
-            // Lower type-level items
-            let tps = &ctx.type_params;
-            let class_args_ids = class_args
-                .into_iter()
-                .map(|t| lower_type_expr(ast, tps, t, ctx.interner))
-                .collect::<Result<SmallVec<_>>>()?;
-            let for_type_id =
-                lower_type_expr(ast, tps, for_type, ctx.interner)?;
-            let constraints_lowered = constraints
-                .into_iter()
-                .map(|(name, classes)| {
-                    classes
-                        .into_iter()
-                        .map(|c| lower_class(ast, tps, ctx.interner, c))
-                        .collect::<Result<SmallVec<_>>>()
-                        .map(|cs| (ctx.sid_to_str(name), cs))
-                })
-                .collect::<Result<SmallVec<_>>>()?;
-            let assoc_types_lowered = assoc_types
-                .into_iter()
-                .map(|a| lower_assoc_type_def(ast, tps, ctx.interner, a))
-                .collect::<Result<SmallVec<_>>>()?;
-            let tp_lowered =
-                lower_type_params(ast, tps, ctx.interner, type_params)?;
-
-            // Lower methods (contain bodies that need &mut ctx)
-            let methods_lowered = methods
-                .into_iter()
-                .map(|m| lower_instance_method(ast, ctx, m))
-                .collect::<Result<SmallVec<_>>>()?;
-
-            ctx.type_params = saved;
-            Stmt::ClassInstance {
-                class_name: ctx.sid_to_str(class_name),
-                class_args: class_args_ids,
-                type_params: tp_lowered,
-                for_type: for_type_id,
-                constraints: constraints_lowered,
-                assoc_types: assoc_types_lowered,
-                methods: methods_lowered,
-            }
-        }
-    };
-    ast.add_stmt(s, span)
-}
-
-/// Lower a CST instance method to AST.
-fn lower_instance_method(
-    ast: &mut Ast,
-    ctx: &mut Ctx,
-    m: cst::InstanceMethodDef,
-) -> Result<ast::InstanceMethodDef> {
-    let tps = &ctx.type_params;
-    let params = m
-        .params
-        .into_iter()
-        .map(|(n, t)| {
-            t.map(|te| lower_type_expr(ast, tps, te, ctx.interner))
-                .transpose()
-                .map(|ty_id| (ctx.sid_to_str(n), ty_id))
-        })
-        .collect::<Result<SmallVec<_>>>()?;
-    let ret = m
-        .ret
-        .map(|t| lower_type_expr(ast, tps, t, ctx.interner))
-        .transpose()?;
-    let body = lower_expr(ast, ctx, m.body)?;
-    Ok(ast::InstanceMethodDef {
-        name: ctx.sid_to_str(m.name),
-        params,
-        ret,
-        body,
-        span: m.span,
-    })
-}
-
-/// Lower a CST associated type definition to AST.
-fn lower_assoc_type_def(
-    ast: &mut Ast,
-    tps: &HashSet<StringId>,
-    interner: &StringInterner,
-    a: cst::AssocTypeCst,
-) -> Result<AssocTypeDef> {
-    let constraint = a
-        .constraint
-        .map(|c| lower_class(ast, tps, interner, c))
-        .transpose()?;
-    let target = lower_type_expr(ast, tps, a.target, interner)?;
-    Ok(AssocTypeDef {
-        name: interner.resolve(a.name),
-        constraint,
-        target,
-        span: a.span,
-    })
-}
-
-/// Lower a CST expression to AST.
-fn lower_expr(ast: &mut Ast, ctx: &mut Ctx, expr: cst::Expr) -> Result<ExprId> {
-    let span = expr.span;
-    let e = match expr.kind {
-        cst::ExprKind::Literal(lit) => Expr::Literal(lit),
-        cst::ExprKind::Interpolation(parts) => {
-            lower_interpolation(ast, ctx, parts, span)?
-        }
-        cst::ExprKind::Var(name) => Expr::Var(ctx.sid_to_str(name)),
-        cst::ExprKind::Intrinsic(op, r, value) => {
-            let rt = lower_ref_arg(ast, ctx, *r)?;
-            let val = value.map(|v| lower_expr(ast, ctx, *v)).transpose()?;
-            Expr::Intrinsic(op, rt, val, None)
-        }
-        cst::ExprKind::Binary(lhs, op, rhs) => {
-            let lhs_id = lower_expr(ast, ctx, *lhs)?;
-            let rhs_id = lower_expr(ast, ctx, *rhs)?;
-            Expr::Binary(lhs_id, op, rhs_id)
-        }
-        cst::ExprKind::Unary(op, operand) => {
-            let operand_id = lower_expr(ast, ctx, *operand)?;
-            Expr::Unary(op, operand_id)
-        }
-        cst::ExprKind::Call(callee, args) => {
-            let callee_id = lower_expr(ast, ctx, *callee)?;
-            let arg_ids = lower_exprs(ast, ctx, args)?;
-            Expr::Call(callee_id, arg_ids)
-        }
-        cst::ExprKind::Object(entries) => {
-            let lowered = entries
-                .into_iter()
-                .map(|e| lower_object_entry(ast, ctx, e))
-                .collect::<Result<Vec<_>>>()?;
-            Expr::Object(lowered)
-        }
-        cst::ExprKind::Array(elems) => {
-            let lowered = elems
-                .into_iter()
-                .map(|e| lower_array_elem(ast, ctx, e))
-                .collect::<Result<Vec<_>>>()?;
-            Expr::Array(lowered)
-        }
-        cst::ExprKind::Tuple(elems) => {
-            let elem_ids = elems
-                .into_iter()
-                .map(|e| lower_expr(ast, ctx, e))
-                .collect::<Result<SmallVec<_>>>()?;
-            Expr::Tuple(elem_ids)
-        }
-        cst::ExprKind::MapLit(entries) => {
-            let entry_ids = entries
-                .into_iter()
-                .map(|(k, v)| {
-                    let k_id = lower_expr(ast, ctx, k)?;
-                    let v_id = lower_expr(ast, ctx, v)?;
-                    Ok((k_id, v_id))
-                })
-                .collect::<Result<SmallVec<_>>>()?;
-            Expr::MapLit(entry_ids)
-        }
-        cst::ExprKind::TupleIndex(base, idx) => {
-            let base_id = lower_expr(ast, ctx, *base)?;
-            Expr::TupleIndex(base_id, idx)
-        }
-        cst::ExprKind::Index(base, idx) => {
-            let base_id = lower_expr(ast, ctx, *base)?;
-            let idx_id = lower_expr(ast, ctx, *idx)?;
-            Expr::Index(base_id, idx_id)
-        }
-        cst::ExprKind::OptionalIndex(base, idx) => {
-            let base_id = lower_expr(ast, ctx, *base)?;
-            let idx_id = lower_expr(ast, ctx, *idx)?;
-            Expr::OptionalIndex(base_id, idx_id)
-        }
-        cst::ExprKind::Field(base, field) => {
-            let base_id = lower_expr(ast, ctx, *base)?;
-            Expr::Field(base_id, ctx.sid_to_str(field))
-        }
-        cst::ExprKind::OptionalField(base, field) => {
-            let base_id = lower_expr(ast, ctx, *base)?;
-            Expr::OptionalField(base_id, ctx.sid_to_str(field))
-        }
-        cst::ExprKind::Variant(ty, var, args) => {
-            let arg_ids = lower_exprs(ast, ctx, args)?;
-            Expr::Variant(ctx.sid_to_str(ty), ctx.sid_to_str(var), arg_ids)
-        }
-        // NOTE: No `Path` case; `Expr::Path` will be used for modules (not yet implemented).
-        cst::ExprKind::Is(inner, pattern) => {
-            let inner_id = lower_expr(ast, ctx, *inner)?;
-            let lowered_pat =
-                lower_type_pattern(ast, &ctx.type_params, ctx.interner, pattern)?;
-            Expr::Is(inner_id, lowered_pat)
-        }
-        cst::ExprKind::As(inner, ty) => {
-            let inner_id = lower_expr(ast, ctx, *inner)?;
-            let ty_id = lower_type_expr(ast, &ctx.type_params, ty, ctx.interner)?;
-            Expr::As(inner_id, ty_id)
-        }
-        cst::ExprKind::Read(inner, ty) => {
-            let inner_id = lower_expr(ast, ctx, *inner)?;
-            let ty_id = lower_type_expr(ast, &ctx.type_params, ty, ctx.interner)?;
-            Expr::Read(inner_id, ty_id)
-        }
-        cst::ExprKind::Block(stmts, tail) => {
-            let stmt_ids = stmts
-                .into_iter()
-                .map(|s| lower_stmt(ast, ctx, s))
-                .collect::<Result<Vec<_>>>()?;
-            let tail_id = tail.map(|e| lower_expr(ast, ctx, *e)).transpose()?;
-            Expr::Block(stmt_ids, tail_id)
-        }
-        cst::ExprKind::If(cond, then_br, else_br) => {
-            let cond_id = lower_expr(ast, ctx, *cond)?;
-            let then_id = lower_expr(ast, ctx, *then_br)?;
-            let else_id =
-                else_br.map(|e| lower_expr(ast, ctx, *e)).transpose()?;
-            Expr::If(cond_id, then_id, else_id)
-        }
-        cst::ExprKind::Closure {
-            type_params,
-            params,
-            ret,
-            body,
-        } => {
-            // Push closure type params into scope
-            let saved = ctx.type_params.clone();
-            ctx.type_params
-                .extend(type_params.iter().map(|tp| tp.name));
-
-            let tps = &ctx.type_params;
-            let params_lowered = params
-                .into_iter()
-                .map(|(n, t)| {
-                    t.map(|te| lower_type_expr(ast, tps, te, ctx.interner))
-                        .transpose()
-                        .map(|ty_id| (ctx.sid_to_str(n), ty_id))
-                })
-                .collect::<Result<SmallVec<_>>>()?;
-            let ret_id =
-                ret.map(|t| lower_type_expr(ast, tps, t, ctx.interner)).transpose()?;
-            let tp_lowered = lower_type_params(ast, tps, ctx.interner, type_params)?;
-
-            let body_id = lower_expr(ast, ctx, *body)?;
-
-            ctx.type_params = saved;
-            Expr::Closure {
-                type_params: tp_lowered,
-                params: params_lowered,
-                ret: ret_id,
-                body: body_id,
-            }
-        }
-        cst::ExprKind::Match(scrutinee, arms) => {
-            let scrutinee_id = lower_expr(ast, ctx, *scrutinee)?;
-            let arms_lowered = arms
-                .into_iter()
-                .map(|arm| lower_match_arm(ast, ctx, arm))
-                .collect::<Result<Vec<_>>>()?;
-            Expr::Match(scrutinee_id, arms_lowered)
-        }
-        cst::ExprKind::Unwrap(inner) => {
-            let inner_id = lower_expr(ast, ctx, *inner)?;
-            Expr::Postfix(PostfixOp::Unwrap, inner_id)
-        }
-        cst::ExprKind::Range(start, end, inclusive) => {
-            let start_id = lower_expr(ast, ctx, *start)?;
-            let end_id = lower_expr(ast, ctx, *end)?;
-            Expr::Range(start_id, end_id, inclusive)
-        }
-        cst::ExprKind::Annotate(inner, ty) => {
-            let inner_id = lower_expr(ast, ctx, *inner)?;
-            let ty_id = lower_type_expr(ast, &ctx.type_params, ty, ctx.interner)?;
-            Expr::Annotate(inner_id, ty_id)
-        }
-        cst::ExprKind::Json(fields) => {
-            let field_ids = fields
-                .into_iter()
-                .map(|(k, v)| lower_expr(ast, ctx, v).map(|id| (k, id)))
-                .collect::<Result<Vec<_>>>()?;
-            Expr::Json(field_ids)
-        }
-        cst::ExprKind::JsonAccess(base, kind, key) => {
-            let base_id = lower_expr(ast, ctx, *base)?;
-            let key_lowered = match key {
-                cst::JsonAccessKey::Field(name) => JsonAccessKey::Field(ctx.sid_to_str(name)),
-                cst::JsonAccessKey::Expr(e) => {
-                    let e_id = lower_expr(ast, ctx, *e)?;
-                    JsonAccessKey::Expr(e_id)
-                }
-            };
-            Expr::JsonAccess(base_id, kind, key_lowered)
-        }
-        cst::ExprKind::Regex(pattern) => Expr::Regex(pattern, None),
-        cst::ExprKind::Matches(lhs, rhs) => {
-            let lhs_id = lower_expr(ast, ctx, *lhs)?;
-            let rhs_id = lower_expr(ast, ctx, *rhs)?;
-            Expr::Matches(lhs_id, rhs_id)
-        }
-        cst::ExprKind::Catch(expr, handler) => {
-            let expr_id = lower_expr(ast, ctx, *expr)?;
-            let handler_id = lower_expr(ast, ctx, *handler)?;
-            Expr::Catch(expr_id, handler_id)
-        }
-        cst::ExprKind::Write(output) => {
-            let expr_id = lower_expr(ast, ctx, output.expr)?;
-            let format = match output.format {
-                cst::OutputFormat::Default => OutputFormat::Default,
-                cst::OutputFormat::Json => OutputFormat::Json,
-                cst::OutputFormat::Raw => OutputFormat::Raw,
-            };
-            let target = match output.target {
-                cst::OutputTarget::Stdout => OutputTarget::Stdout,
-                cst::OutputTarget::Stderr => OutputTarget::Stderr,
-                cst::OutputTarget::File(path_expr) => {
-                    let path_id = lower_expr(ast, ctx, *path_expr)?;
-                    OutputTarget::File(path_id)
-                }
-            };
-            Expr::Write(WriteExpr {
-                expr: expr_id,
-                format,
-                target,
-            })
-        }
-        cst::ExprKind::Raise(inner) => {
-            let id = lower_expr(ast, ctx, *inner)?;
-            Expr::Raise(id)
-        }
-        cst::ExprKind::Forever {
-            seed,
-            state_param,
-            cont_param,
-            body,
-        } => {
-            let seed_id = lower_expr(ast, ctx, *seed)?;
-            let tps = &ctx.type_params;
-            let state_ty =
-                state_param.1.map(|t| lower_type_expr(ast, tps, t, ctx.interner)).transpose()?;
-            let cont_ty =
-                cont_param.1.map(|t| lower_type_expr(ast, tps, t, ctx.interner)).transpose()?;
-            let body_id = lower_expr(ast, ctx, *body)?;
-            Expr::Forever {
-                seed: seed_id,
-                state_param: (ctx.sid_to_str(state_param.0), state_ty),
-                cont_param: (ctx.sid_to_str(cont_param.0), cont_ty),
-                body: body_id,
-            }
-        }
-        cst::ExprKind::Transaction(txn) => {
-            let stmts = txn
-                .stmts
-                .into_iter()
-                .map(|s| lower_stmt(ast, ctx, s))
-                .collect::<Result<Vec<_>>>()?;
-            let expr =
-                txn.expr.map(|e| lower_expr(ast, ctx, *e)).transpose()?;
-            let modifiers = lower_txn_modifiers(ast, ctx, txn.modifiers)?;
-            Expr::Transaction(ast::TransactionExpr {
-                id: None,
-                stmts,
-                expr,
-                modifiers,
-            })
-        }
-        cst::ExprKind::Mempty => Expr::Mempty,
-        cst::ExprKind::RefLit(dbref) => {
-            let dbref = lower_db_ref(ast, ctx, dbref)?;
-            Expr::Ref(dbref)
-        }
-        cst::ExprKind::ClassMethod(class, method, args) => {
-            let arg_ids = lower_exprs(ast, ctx, args)?;
-            Expr::ClassMethod(ctx.sid_to_str(class), ctx.sid_to_str(method), arg_ids)
-        }
-        cst::ExprKind::ClassMethodRef(class, type_args, method) => {
-            let tps = &ctx.type_params;
-            let type_arg_ids = type_args
-                .into_iter()
-                .map(|t| lower_type_expr(ast, tps, t, ctx.interner))
-                .collect::<Result<SmallVec<_>>>()?;
-            Expr::ClassMethodRef(ctx.sid_to_str(class), type_arg_ids, ctx.sid_to_str(method))
-        }
-        cst::ExprKind::PipePlaceholder => {
-            Err(crate::Error::parse(
-                span,
-                "pipe placeholder `.` can only appear in call arguments on RHS of `|>`",
-                vec![],
-            ))?
-        }
-        cst::ExprKind::Error(msg) => {
-            Err(crate::Error::parse(span, msg, vec![]))?
-        }
-    };
-    ast.add_expr(e, span)
-}
-
-/// Lower a list of CST expressions to AST, returning a `SmallVec`.
-fn lower_exprs(
-    ast: &mut Ast,
-    ctx: &mut Ctx,
-    exprs: Vec<cst::Expr>,
-) -> Result<SmallVec<[ExprId; 4]>> {
-    exprs
-        .into_iter()
-        .map(|e| lower_expr(ast, ctx, e))
-        .collect::<Result<SmallVec<_>>>()
-}
-
-/// Lower a CST type expression to AST.
-///
-/// The `tps` set contains type parameter names in scope; when `App("F", ...)`
-/// is encountered and `"F"` is in `tps`, it becomes `VarApp("F", ...)`
-/// instead, marking it as a type variable application (HKT).
-fn lower_type_expr(
-    ast: &mut Ast,
-    tps: &HashSet<StringId>,
-    ty: cst::TypeExpr,
-    interner: &StringInterner,
-) -> Result<AstTypeExprId> {
-    let span = ty.span;
-    let te = match ty.kind {
-        cst::TypeExprKind::Wildcard => AstTypeExpr::Wildcard,
-        cst::TypeExprKind::Named(segs) => {
-            AstTypeExpr::Named(interner.join_path(&segs))
-        }
-        cst::TypeExprKind::App(segs, params) => {
-            let param_ids = params
-                .into_iter()
-                .map(|t| lower_type_expr(ast, tps, t, interner))
-                .collect::<Result<SmallVec<_>>>()?;
-            let name = interner.join_path(&segs);
-            let is_tv = segs.len() == 1
-                && segs.first().is_some_and(|id| tps.contains(id));
-            if is_tv {
-                AstTypeExpr::VarApp(name, param_ids)
-            } else {
-                AstTypeExpr::App(name, param_ids)
-            }
-        }
-        cst::TypeExprKind::Fn(params, ret) => {
-            let param_ids = params
-                .into_iter()
-                .map(|t| lower_type_expr(ast, tps, t, interner))
-                .collect::<Result<SmallVec<_>>>()?;
-            let ret_id = lower_type_expr(ast, tps, *ret, interner)?;
-            AstTypeExpr::Fn(param_ids, ret_id)
-        }
-        cst::TypeExprKind::Tuple(elems) => {
-            let elem_ids = elems
-                .into_iter()
-                .map(|t| lower_type_expr(ast, tps, t, interner))
-                .collect::<Result<SmallVec<_>>>()?;
-            AstTypeExpr::Tuple(elem_ids)
-        }
-        cst::TypeExprKind::Union(members) => {
-            let member_ids = members
-                .into_iter()
-                .map(|t| lower_type_expr(ast, tps, t, interner))
-                .collect::<Result<SmallVec<_>>>()?;
-            AstTypeExpr::Union(member_ids)
-        }
-        cst::TypeExprKind::Object(fields) => {
-            let lowered = fields
-                .into_iter()
-                .map(|(name, ty)| {
-                    lower_type_expr(ast, tps, ty, interner)
-                        .map(|id| (interner.resolve(name), id))
-                })
-                .collect::<Result<SmallVec<_>>>()?;
-            AstTypeExpr::Object(lowered)
-        }
-        cst::TypeExprKind::AssocType { class, name } => {
-            let name_s = interner.resolve(name);
-            let class_s = class.map(|id| interner.resolve(id));
-            AstTypeExpr::AssocType {
-                class: class_s,
-                name: name_s,
-            }
-        }
-    };
-    ast.add_type_expr(te, span)
-}
-
-/// Lower a CST type pattern to AST.
-fn lower_type_pattern(
-    ast: &mut Ast,
-    tps: &HashSet<StringId>,
-    interner: &StringInterner,
-    pat: cst::TypePattern,
-) -> Result<TypePattern> {
-    Ok(match pat {
-        cst::TypePattern::Type(ty) => {
-            TypePattern::Type(lower_type_expr(ast, tps, ty, interner)?)
-        }
-        cst::TypePattern::Variant(ty, var) => {
-            TypePattern::Variant(interner.resolve(ty), interner.resolve(var))
-        }
-        cst::TypePattern::VariantWildcard(ty, var) => {
-            TypePattern::VariantWildcard(
-                interner.resolve(ty),
-                interner.resolve(var),
-            )
-        }
-        cst::TypePattern::VariantBind(ty, var, names) => {
-            let name_strs: SmallVec<[String; 2]> =
-                names.iter().map(|id| interner.resolve(*id)).collect();
-            TypePattern::VariantBind(
-                interner.resolve(ty),
-                interner.resolve(var),
-                name_strs,
-            )
-        }
-        cst::TypePattern::Object(fields) => {
-            let lowered = fields
-                .into_iter()
-                .map(|(name, ty)| {
-                    lower_type_expr(ast, tps, ty, interner)
-                        .map(|id| (interner.resolve(name), id))
-                })
-                .collect::<Result<SmallVec<_>>>()?;
-            TypePattern::Object(lowered)
-        }
-    })
-}
-
-/// Lower a CST binding pattern to AST.
-fn lower_binding_pattern(
-    pat: cst::BindingPattern,
-    interner: &StringInterner,
-) -> BindingPattern {
-    match pat {
-        cst::BindingPattern::Var(name) => {
-            BindingPattern::Var(interner.resolve(name))
-        }
-        cst::BindingPattern::Tuple(pats) => BindingPattern::Tuple(
-            pats.into_iter()
-                .map(|p| lower_binding_pattern(p, interner))
-                .collect(),
-        ),
-        cst::BindingPattern::Object(fields) => BindingPattern::Object(
-            fields
-                .into_iter()
-                .map(|(k, p)| {
-                    (interner.resolve(k), lower_binding_pattern(p, interner))
-                })
-                .collect(),
-        ),
-        cst::BindingPattern::Array(pats, rest) => BindingPattern::Array(
-            pats.into_iter()
-                .map(|p| lower_binding_pattern(p, interner))
-                .collect(),
-            rest.map(|r| lower_rest_pattern(r, interner)),
-        ),
-        cst::BindingPattern::Wildcard => BindingPattern::Wildcard,
-    }
-}
-
-/// Lower a CST rest pattern to AST.
-fn lower_rest_pattern(
-    pat: cst::RestPattern,
-    interner: &StringInterner,
-) -> RestPattern {
-    match pat {
-        cst::RestPattern::Ignore => RestPattern::Ignore,
-        cst::RestPattern::Bind(name) => {
-            RestPattern::Bind(interner.resolve(name))
-        }
-    }
-}
-
-/// Lower a CST type definition to AST.
-fn lower_type_def(
-    ast: &mut Ast,
-    tps: &HashSet<StringId>,
-    interner: &StringInterner,
-    def: cst::TypeDefCst,
-) -> Result<TypeDefAst> {
-    match def {
-        cst::TypeDefCst::Sum(variants) => {
-            let lowered = variants
-                .into_iter()
-                .map(|v| lower_variant(ast, tps, interner, v))
-                .collect::<Result<SmallVec<_>>>()?;
-            Ok(TypeDefAst::Sum(lowered))
-        }
-    }
-}
-
-/// Lower a CST variant to AST.
-fn lower_variant(
-    ast: &mut Ast,
-    tps: &HashSet<StringId>,
-    interner: &StringInterner,
-    v: cst::VariantCst,
-) -> Result<VariantAst> {
-    let payloads = v
-        .payloads
-        .into_iter()
-        .map(|t| lower_type_expr(ast, tps, t, interner))
-        .collect::<Result<SmallVec<_>>>()?;
-    Ok(VariantAst {
-        name: interner.resolve(v.name),
-        payloads,
-    })
-}
-
-/// Lower a CST match arm to AST.
-fn lower_match_arm(
-    ast: &mut Ast,
-    ctx: &mut Ctx,
-    arm: cst::MatchArm,
-) -> Result<MatchArm> {
-    let pattern =
-        lower_match_pattern(ast, &ctx.type_params, ctx.interner, arm.pattern)?;
-    let guard = arm.guard.map(|e| lower_expr(ast, ctx, e)).transpose()?;
-    let body = lower_expr(ast, ctx, arm.body)?;
-    Ok(MatchArm {
-        pattern,
-        guard,
-        body,
-    })
-}
-
-/// Lower a CST array element to AST.
-fn lower_array_elem(
-    ast: &mut Ast,
-    ctx: &mut Ctx,
-    elem: cst::ArrayElem,
-) -> Result<ArrayElem> {
-    match elem {
-        cst::ArrayElem::Elem(e) => lower_expr(ast, ctx, e).map(ArrayElem::Elem),
-        cst::ArrayElem::Spread(e) => {
-            lower_expr(ast, ctx, e).map(ArrayElem::Spread)
-        }
-    }
-}
-
-/// Lower a CST object entry to AST.
-fn lower_object_entry(
-    ast: &mut Ast,
-    ctx: &mut Ctx,
-    entry: cst::ObjectEntry,
-) -> Result<ObjectEntry> {
-    match entry {
-        cst::ObjectEntry::Field(k, v) => lower_expr(ast, ctx, v)
-            .map(|id| ObjectEntry::Field(ctx.sid_to_str(k), id)),
-        cst::ObjectEntry::Spread(e) => {
-            lower_expr(ast, ctx, e).map(ObjectEntry::Spread)
-        }
-    }
-}
-
-/// Lower a CST subscript element to AST.
-fn lower_subscript_elem(
-    ast: &mut Ast,
-    ctx: &mut Ctx,
-    elem: cst::SubscriptElem,
-) -> Result<SubscriptElem> {
-    match elem {
-        cst::SubscriptElem::Elem(e) => {
-            lower_expr(ast, ctx, e).map(SubscriptElem::Elem)
-        }
-        cst::SubscriptElem::Spread(e) => {
-            lower_expr(ast, ctx, e).map(SubscriptElem::Spread)
-        }
-    }
-}
-
-/// Lower a list of CST subscript elements to AST.
-fn lower_subscript_elems(
-    ast: &mut Ast,
-    ctx: &mut Ctx,
-    elems: Vec<cst::SubscriptElem>,
-) -> Result<SmallVec<[SubscriptElem; 4]>> {
-    elems
-        .into_iter()
-        .map(|e| lower_subscript_elem(ast, ctx, e))
-        .collect()
-}
-
-/// Lower a CST database reference to AST.
-fn lower_db_ref(
-    ast: &mut Ast,
-    ctx: &mut Ctx,
-    dbref: cst::DbRef,
-) -> Result<DbRef> {
-    match dbref {
-        cst::DbRef::Local(name, subs) => {
-            let sub_ids = lower_subscript_elems(ast, ctx, subs)?;
-            Ok(DbRef::Local(ctx.sid_to_str(name), sub_ids))
-        }
-        cst::DbRef::Global(name, subs) => {
-            let sub_ids = lower_subscript_elems(ast, ctx, subs)?;
-            Ok(DbRef::Global(ctx.sid_to_str(name), sub_ids))
-        }
-    }
-}
-
-/// Lower a ref argument expression to `RefTarget`.
-///
-/// If the expression is a `RefLit`, uses `RefTarget::Inline`; otherwise
-/// lowers the expression and uses `RefTarget::Expr`.
-fn lower_ref_arg(
-    ast: &mut Ast,
-    ctx: &mut Ctx,
-    expr: cst::Expr,
-) -> Result<RefTarget> {
-    match expr.kind {
-        cst::ExprKind::RefLit(dbref) => {
-            lower_db_ref(ast, ctx, dbref).map(RefTarget::Inline)
-        }
-        _ => lower_expr(ast, ctx, expr).map(RefTarget::Expr),
-    }
-}
-
-/// Merge a `RefTarget` from source AST into target AST.
-fn merge_ref_target(
-    target: &mut Ast,
-    source: &Ast,
-    rt: &RefTarget,
-    span: crate::Span,
-) -> Result<RefTarget> {
-    match rt {
-        RefTarget::Inline(dbref) => {
-            merge_dbref(target, source, dbref, span).map(RefTarget::Inline)
-        }
-        RefTarget::Expr(e) => {
-            merge_expr(target, source, *e, span).map(RefTarget::Expr)
-        }
-    }
-}
-
-/// Lower a CST match pattern to AST, allocating into the pattern arena.
-fn lower_match_pattern(
-    ast: &mut Ast,
-    tps: &HashSet<StringId>,
-    interner: &StringInterner,
-    pat: cst::MatchPattern,
-) -> Result<MatchPatternId> {
-    let p = match pat {
-        cst::MatchPattern::Wildcard => MatchPattern::Wildcard,
-        cst::MatchPattern::Var(name) => {
-            MatchPattern::Var(interner.resolve(name))
-        }
-        cst::MatchPattern::Literal(lit) => MatchPattern::Literal(lit),
-        cst::MatchPattern::Variant(ty, var, pats) => {
-            let sub_ids = pats
-                .into_iter()
-                .map(|p| lower_match_pattern(ast, tps, interner, p))
-                .collect::<Result<SmallVec<_>>>()?;
-            MatchPattern::Variant(
-                interner.join_path(&ty),
-                interner.resolve(var),
-                sub_ids,
-            )
-        }
-        cst::MatchPattern::Object(fields) => {
-            let field_ids = fields
-                .into_iter()
-                .map(|(k, p)| {
-                    lower_match_pattern(ast, tps, interner, p)
-                        .map(|id| (interner.resolve(k), id))
-                })
-                .collect::<Result<SmallVec<_>>>()?;
-            MatchPattern::Object(field_ids)
-        }
-        cst::MatchPattern::Tuple(pats) => {
-            let elem_ids = pats
-                .into_iter()
-                .map(|p| lower_match_pattern(ast, tps, interner, p))
-                .collect::<Result<SmallVec<_>>>()?;
-            MatchPattern::Tuple(elem_ids)
-        }
-        cst::MatchPattern::Array(pats, rest) => {
-            let elem_ids = pats
-                .into_iter()
-                .map(|p| lower_match_pattern(ast, tps, interner, p))
-                .collect::<Result<SmallVec<_>>>()?;
-            MatchPattern::Array(
-                elem_ids,
-                rest.map(|r| lower_rest_pattern(r, interner)),
-            )
-        }
-        cst::MatchPattern::Is(name, ty) => {
-            let ty_id = lower_type_expr(ast, tps, ty, interner)?;
-            MatchPattern::Is(interner.resolve(name), ty_id)
-        }
-    };
-    ast.add_pattern(p)
-}
-
-/// Lower CST transaction modifiers to AST.
-fn lower_txn_modifiers(
-    ast: &mut Ast,
-    ctx: &mut Ctx,
-    m: cst::TransactionModifiers,
-) -> Result<TransactionModifiers> {
-    let conflict = m.conflict.map(|c| match c {
-        cst::ConflictModifier::Abort => rumps_storage::ConflictStrategy::Abort,
-        cst::ConflictModifier::Overwrite => {
-            rumps_storage::ConflictStrategy::Overwrite
-        }
-    });
-    let timeout = m.timeout.map(|e| lower_expr(ast, ctx, *e)).transpose()?;
-    let isolation = m.isolation.map(|i| match i {
-        cst::IsolationModifier::Snapshot => {
-            rumps_storage::IsolationLevel::SnapshotIsolation
-        }
-    });
-    Ok(TransactionModifiers {
-        conflict,
-        timeout,
-        retries: m.retries,
-        isolation,
-    })
-}
-
-/// Lower interpolated string parts to an AST expression.
-///
-/// Takes the alternating literal/expression parts and parses expression strings
-/// into AST nodes. Returns an `Expr::Interpolation` containing the parsed parts.
-///
-/// Note: `_ctx` is unused because interpolated expressions are parsed fresh
-/// and unlikely to contain module file imports.
-fn lower_interpolation(
-    ast: &mut Ast,
-    _ctx: &mut Ctx,
-    parts: Vec<String>,
-    span: crate::Span,
-) -> Result<Expr> {
-    use crate::{Lexer, Parser};
-
-    let ids: Result<SmallVec<[crate::ast::ExprId; 4]>> = parts
-        .into_iter()
-        .enumerate()
-        .map(|(i, part)| {
-            if i % 2 == 0 {
-                // Even indices: literal text; create a String literal
-                let lit = ast::Literal::String(part);
-                ast.add_expr(Expr::Literal(lit), span)
-            } else {
-                // Odd indices: expression source code; parse and merge
-                let tokens = Lexer::new(&part).lex().map_err(|e| {
-                    crate::Error::parse(span, e.to_string(), vec![])
-                })?;
-
-                let parsed = Parser::parse_tokens(tokens).map_err(|e| {
-                    crate::Error::parse(span, e.to_string(), vec![])
-                })?;
-
-                // Should produce exactly one expression statement
-                let expr = parsed
-                    .stmts
-                    .first()
-                    .and_then(|stmt_id| parsed.ast.get_stmt(*stmt_id))
-                    .and_then(|stmt| match stmt {
-                        ast::Stmt::Expr(expr_id) => Some(*expr_id),
-                        _ => None,
+                    .map(|(n, t)| {
+                        t.map(|te| self.type_expr(te))
+                            .transpose()
+                            .map(|ty_id| (self.sid_to_str(n), ty_id))
                     })
-                    .ok_or_else(|| {
-                        let msg = if part.trim().is_empty() {
-                            "interpolation requires an expression".into()
-                        } else {
-                            format!("interpolation requires an expression, got `{}`", part)
-                        };
-                        crate::Error::parse(span, msg, vec![])
-                    })?;
+                    .collect::<Result<SmallVec<_>>>()?;
+                let ret_id = ret.map(|t| self.type_expr(t)).transpose()?;
+                let tp_lowered = self.type_param_list(type_params)?;
 
-                // Copy the expression from the parsed AST into our AST
-                merge_expr(ast, &parsed.ast, expr, span)
+                // Lower body (may contain nested closures that see outer type params)
+                let body_id = self.expr(body)?;
+
+                self.type_params = saved;
+                Stmt::Fun {
+                    name: self.sid_to_str(name),
+                    type_params: tp_lowered,
+                    params: params_lowered,
+                    ret: ret_id,
+                    body: body_id,
+                    vis: Self::vis(vis),
+                }
             }
-        })
-        .collect();
-
-    ids.map(Expr::Interpolation)
-}
-
-/// Merge a `DbRef` from source AST into target AST.
-///
-/// Recursively copies subscript expressions.
-fn merge_dbref(
-    target: &mut Ast,
-    source: &Ast,
-    dbref: &DbRef,
-    span: crate::Span,
-) -> Result<DbRef> {
-    let mut merge_subs =
-        |subs: &SmallVec<[SubscriptElem; 4]>| -> Result<SmallVec<_>> {
-            subs.iter()
-                .map(|elem| match elem {
-                    SubscriptElem::Elem(e) => {
-                        merge_expr(target, source, *e, span)
-                            .map(SubscriptElem::Elem)
+            cst::StmtKind::Type {
+                name,
+                type_params,
+                def,
+                vis,
+            } => {
+                self.known_types.insert(name);
+                let saved = self.type_params.clone();
+                self.type_params
+                    .extend(type_params.iter().map(|tp| tp.name));
+                let def_lowered = self.type_def(def)?;
+                let tp_lowered = self.type_param_list(type_params)?;
+                self.type_params = saved;
+                Stmt::Type {
+                    name: self.sid_to_str(name),
+                    type_params: tp_lowered,
+                    def: def_lowered,
+                    vis: Self::vis(vis),
+                }
+            }
+            cst::StmtKind::NewType {
+                name,
+                type_params,
+                target,
+                vis,
+            } => {
+                self.known_types.insert(name);
+                let saved = self.type_params.clone();
+                self.type_params
+                    .extend(type_params.iter().map(|tp| tp.name));
+                let target_id = self.type_expr(target)?;
+                let tp_lowered = self.type_param_list(type_params)?;
+                self.type_params = saved;
+                Stmt::NewType {
+                    name: self.sid_to_str(name),
+                    type_params: tp_lowered,
+                    target: target_id,
+                    vis: Self::vis(vis),
+                }
+            }
+            cst::StmtKind::Union {
+                name,
+                type_params,
+                members,
+                vis,
+            } => {
+                self.known_types.insert(name);
+                let saved = self.type_params.clone();
+                self.type_params
+                    .extend(type_params.iter().map(|tp| tp.name));
+                let member_ids = members
+                    .into_iter()
+                    .map(|t| self.type_expr(t))
+                    .collect::<Result<SmallVec<_>>>()?;
+                let tp_lowered = self.type_param_list(type_params)?;
+                self.type_params = saved;
+                Stmt::Union {
+                    name: self.sid_to_str(name),
+                    type_params: tp_lowered,
+                    members: member_ids,
+                    vis: Self::vis(vis),
+                }
+            }
+            cst::StmtKind::Module { name, source } => {
+                let body_ids = match source {
+                    cst::ModuleSource::Inline(body) => body
+                        .into_iter()
+                        .map(|s| self.stmt(s))
+                        .collect::<Result<Vec<_>>>()?,
+                    cst::ModuleSource::File(path) => {
+                        self.module_from_file(&path, span)?
                     }
-                    SubscriptElem::Spread(e) => {
-                        merge_expr(target, source, *e, span)
-                            .map(SubscriptElem::Spread)
-                    }
+                };
+                Stmt::Module {
+                    name: self.sid_to_str(name),
+                    body: body_ids,
+                }
+            }
+            cst::StmtKind::Import(imp) => {
+                let items = imp
+                    .items
+                    .into_iter()
+                    .map(|item| match item {
+                        cst::ImportItem::Named { name, alias } => {
+                            ImportItem::Named {
+                                name: self.sid_to_str(name),
+                                alias: alias.map(|a| self.sid_to_str(a)),
+                            }
+                        }
+                        cst::ImportItem::Wildcard => ImportItem::Wildcard,
+                        cst::ImportItem::Exclude(n) => {
+                            ImportItem::Exclude(self.sid_to_str(n))
+                        }
+                    })
+                    .collect();
+                Stmt::Import(Import {
+                    path: imp
+                        .path
+                        .iter()
+                        .map(|id| self.sid_to_str(*id))
+                        .collect(),
+                    items,
                 })
-                .collect()
+            }
+            cst::StmtKind::ClassInstance {
+                class_name,
+                class_args,
+                type_params,
+                for_type,
+                constraints,
+                assoc_types,
+                methods,
+            } => {
+                let saved = self.type_params.clone();
+                self.type_params
+                    .extend(type_params.iter().map(|tp| tp.name));
+                self.collect_type_vars(&for_type);
+
+                // Lower type-level items
+                let class_args_ids = class_args
+                    .into_iter()
+                    .map(|t| self.type_expr(t))
+                    .collect::<Result<SmallVec<_>>>()?;
+                let for_type_id = self.type_expr(for_type)?;
+                let constraints_lowered = constraints
+                    .into_iter()
+                    .map(|(name, classes)| {
+                        classes
+                            .into_iter()
+                            .map(|c| self.class(c))
+                            .collect::<Result<SmallVec<_>>>()
+                            .map(|cs| (self.sid_to_str(name), cs))
+                    })
+                    .collect::<Result<SmallVec<_>>>()?;
+                let assoc_types_lowered = assoc_types
+                    .into_iter()
+                    .map(|a| self.assoc_type_def(a))
+                    .collect::<Result<SmallVec<_>>>()?;
+                let tp_lowered = self.type_param_list(type_params)?;
+
+                // Lower methods (contain bodies that need `&mut self`)
+                let methods_lowered = methods
+                    .into_iter()
+                    .map(|m| self.instance_method(m))
+                    .collect::<Result<SmallVec<_>>>()?;
+
+                self.type_params = saved;
+                Stmt::ClassInstance {
+                    class_name: self.sid_to_str(class_name),
+                    class_args: class_args_ids,
+                    type_params: tp_lowered,
+                    for_type: for_type_id,
+                    constraints: constraints_lowered,
+                    assoc_types: assoc_types_lowered,
+                    methods: methods_lowered,
+                }
+            }
         };
-    match dbref {
-        DbRef::Local(name, subs) => {
-            Ok(DbRef::Local(name.clone(), merge_subs(subs)?))
-        }
-        DbRef::Global(name, subs) => {
-            Ok(DbRef::Global(name.clone(), merge_subs(subs)?))
-        }
+        self.ast.add_stmt(s, span)
     }
-}
 
-/// Merge an `AstTypeExprId` from source AST into target AST.
-fn merge_type_expr(
-    target: &mut Ast,
-    source: &Ast,
-    id: AstTypeExprId,
-    span: crate::Span,
-) -> Result<AstTypeExprId> {
-    let te = source
-        .get_type_expr(id)
-        .ok_or_else(|| {
-            crate::Error::parse(span, "invalid type expr id", vec![])
-        })?
-        .clone();
-    let new_te = match te {
-        AstTypeExpr::Wildcard => AstTypeExpr::Wildcard,
-        AstTypeExpr::Named(n) => AstTypeExpr::Named(n),
-        AstTypeExpr::App(name, args) => {
-            let new_args: Result<SmallVec<_>> = args
-                .iter()
-                .map(|&a| merge_type_expr(target, source, a, span))
-                .collect();
-            AstTypeExpr::App(name, new_args?)
-        }
-        AstTypeExpr::VarApp(name, args) => {
-            let new_args: Result<SmallVec<_>> = args
-                .iter()
-                .map(|&a| merge_type_expr(target, source, a, span))
-                .collect();
-            AstTypeExpr::VarApp(name, new_args?)
-        }
-        AstTypeExpr::Fn(params, ret) => {
-            let new_params: Result<SmallVec<_>> = params
-                .iter()
-                .map(|&p| merge_type_expr(target, source, p, span))
-                .collect();
-            let new_ret = merge_type_expr(target, source, ret, span)?;
-            AstTypeExpr::Fn(new_params?, new_ret)
-        }
-        AstTypeExpr::Tuple(elems) => {
-            let new_elems: Result<SmallVec<_>> = elems
-                .iter()
-                .map(|&e| merge_type_expr(target, source, e, span))
-                .collect();
-            AstTypeExpr::Tuple(new_elems?)
-        }
-        AstTypeExpr::Union(members) => {
-            let new_members: Result<SmallVec<_>> = members
-                .iter()
-                .map(|&m| merge_type_expr(target, source, m, span))
-                .collect();
-            AstTypeExpr::Union(new_members?)
-        }
-        AstTypeExpr::Object(fields) => {
-            let new_fields: Result<SmallVec<_>> = fields
-                .into_iter()
-                .map(|(name, ty_id)| {
-                    merge_type_expr(target, source, ty_id, span)
-                        .map(|new_id| (name, new_id))
-                })
-                .collect();
-            AstTypeExpr::Object(new_fields?)
-        }
-        AstTypeExpr::AssocType { class, name } => {
-            AstTypeExpr::AssocType { class, name }
-        }
-    };
-    target.add_type_expr(new_te, span)
-}
-
-/// Merge a `MatchPatternId` from source AST into target AST.
-fn merge_pattern(
-    target: &mut Ast,
-    source: &Ast,
-    id: MatchPatternId,
-    span: crate::Span,
-) -> Result<MatchPatternId> {
-    let pat = source
-        .get_pattern(id)
-        .ok_or_else(|| crate::Error::parse(span, "invalid pattern id", vec![]))?
-        .clone();
-    let new_pat = match pat {
-        MatchPattern::Wildcard => MatchPattern::Wildcard,
-        MatchPattern::Var(name) => MatchPattern::Var(name),
-        MatchPattern::Literal(lit) => MatchPattern::Literal(lit),
-        MatchPattern::Variant(ty, var, pats) => {
-            let new_pats: Result<SmallVec<_>> = pats
-                .iter()
-                .map(|&p| merge_pattern(target, source, p, span))
-                .collect();
-            MatchPattern::Variant(ty, var, new_pats?)
-        }
-        MatchPattern::Object(fields) => {
-            let new_fields: Result<SmallVec<_>> = fields
-                .into_iter()
-                .map(|(name, pat_id)| {
-                    merge_pattern(target, source, pat_id, span)
-                        .map(|new_id| (name, new_id))
-                })
-                .collect();
-            MatchPattern::Object(new_fields?)
-        }
-        MatchPattern::Tuple(pats) => {
-            let new_pats: Result<SmallVec<_>> = pats
-                .iter()
-                .map(|&p| merge_pattern(target, source, p, span))
-                .collect();
-            MatchPattern::Tuple(new_pats?)
-        }
-        MatchPattern::Array(pats, rest) => {
-            let new_pats: Result<SmallVec<_>> = pats
-                .iter()
-                .map(|&p| merge_pattern(target, source, p, span))
-                .collect();
-            MatchPattern::Array(new_pats?, rest)
-        }
-        MatchPattern::Is(name, ty_id) => {
-            let new_ty = merge_type_expr(target, source, ty_id, span)?;
-            MatchPattern::Is(name, new_ty)
-        }
-    };
-    target.add_pattern(new_pat)
-}
-
-/// Merge a `WriteExpr` from source AST into target AST.
-fn merge_write_expr(
-    target: &mut Ast,
-    source: &Ast,
-    w: &WriteExpr,
-    span: crate::Span,
-) -> Result<WriteExpr> {
-    let new_expr = merge_expr(target, source, w.expr, span)?;
-    let new_target = match w.target {
-        OutputTarget::Stdout => OutputTarget::Stdout,
-        OutputTarget::Stderr => OutputTarget::Stderr,
-        OutputTarget::File(e) => {
-            OutputTarget::File(merge_expr(target, source, e, span)?)
-        }
-    };
-    Ok(WriteExpr {
-        expr: new_expr,
-        format: w.format,
-        target: new_target,
-    })
-}
-
-/// Merge a `TypePattern` from source AST into target AST.
-fn merge_type_pattern(
-    target: &mut Ast,
-    source: &Ast,
-    pat: &TypePattern,
-    span: crate::Span,
-) -> Result<TypePattern> {
-    match pat {
-        TypePattern::Type(ty_id) => {
-            let new_ty = merge_type_expr(target, source, *ty_id, span)?;
-            Ok(TypePattern::Type(new_ty))
-        }
-        TypePattern::Variant(ty, var) => {
-            Ok(TypePattern::Variant(ty.clone(), var.clone()))
-        }
-        TypePattern::VariantWildcard(ty, var) => {
-            Ok(TypePattern::VariantWildcard(ty.clone(), var.clone()))
-        }
-        TypePattern::VariantBind(ty, var, binds) => Ok(
-            TypePattern::VariantBind(ty.clone(), var.clone(), binds.clone()),
-        ),
-        TypePattern::Object(fields) => {
-            let new_fields: Result<SmallVec<_>> = fields
-                .iter()
-                .map(|(name, ty_id)| {
-                    merge_type_expr(target, source, *ty_id, span)
-                        .map(|new_id| (name.clone(), new_id))
-                })
-                .collect();
-            Ok(TypePattern::Object(new_fields?))
-        }
-    }
-}
-
-/// Merge a statement from source AST into target AST.
-fn merge_stmt(
-    target: &mut Ast,
-    source: &Ast,
-    stmt_id: StmtId,
-    span: crate::Span,
-) -> Result<StmtId> {
-    let stmt = source
-        .get_stmt(stmt_id)
-        .ok_or_else(|| crate::Error::parse(span, "invalid stmt id", vec![]))?
-        .clone();
-    let new_stmt = match stmt {
-        Stmt::Let(pat, ty_ann, expr, vis) => {
-            let new_ty = ty_ann
-                .map(|t| merge_type_expr(target, source, t, span))
-                .transpose()?;
-            let new_expr = merge_expr(target, source, expr, span)?;
-            Stmt::Let(pat, new_ty, new_expr, vis)
-        }
-        Stmt::Expr(e) => {
-            let new_e = merge_expr(target, source, e, span)?;
-            Stmt::Expr(new_e)
-        }
-        Stmt::Fun {
-            name,
-            type_params,
+    /// Lower a CST instance method to AST.
+    fn instance_method(
+        &mut self,
+        m: cst::InstanceMethodDef,
+    ) -> Result<ast::InstanceMethodDef> {
+        let params = m
+            .params
+            .into_iter()
+            .map(|(n, t)| {
+                t.map(|te| self.type_expr(te))
+                    .transpose()
+                    .map(|ty_id| (self.sid_to_str(n), ty_id))
+            })
+            .collect::<Result<SmallVec<_>>>()?;
+        let ret = m.ret.map(|t| self.type_expr(t)).transpose()?;
+        let body = self.expr(m.body)?;
+        Ok(ast::InstanceMethodDef {
+            name: self.sid_to_str(m.name),
             params,
             ret,
             body,
-            vis,
-        } => {
-            let new_params: Result<SmallVec<_>> = params
-                .into_iter()
-                .map(|(n, ty_opt)| {
-                    let new_ty = ty_opt
-                        .map(|t| merge_type_expr(target, source, t, span))
-                        .transpose()?;
-                    Ok((n, new_ty))
+            span: m.span,
+        })
+    }
+
+    /// Lower a CST associated type definition to AST.
+    fn assoc_type_def(&mut self, a: cst::AssocTypeCst) -> Result<AssocTypeDef> {
+        let constraint = a.constraint.map(|c| self.class(c)).transpose()?;
+        let target = self.type_expr(a.target)?;
+        Ok(AssocTypeDef {
+            name: self.interner.resolve(a.name),
+            constraint,
+            target,
+            span: a.span,
+        })
+    }
+
+    /// Lower a CST expression to AST.
+    fn expr(&mut self, expr: cst::Expr) -> Result<ExprId> {
+        let span = expr.span;
+        let e = match expr.kind {
+            cst::ExprKind::Literal(lit) => Expr::Literal(lit),
+            cst::ExprKind::Interpolation(parts) => {
+                self.interpolation(parts, span)?
+            }
+            cst::ExprKind::Var(name) => {
+                Expr::Var(self.sid_to_str(name))
+            }
+            cst::ExprKind::Intrinsic(op, r, value) => {
+                let rt = self.ref_arg(*r)?;
+                let val =
+                    value.map(|v| self.expr(*v)).transpose()?;
+                Expr::Intrinsic(op, rt, val, None)
+            }
+            cst::ExprKind::Binary(lhs, op, rhs) => {
+                let lhs_id = self.expr(*lhs)?;
+                let rhs_id = self.expr(*rhs)?;
+                Expr::Binary(lhs_id, op, rhs_id)
+            }
+            cst::ExprKind::Unary(op, operand) => {
+                let operand_id = self.expr(*operand)?;
+                Expr::Unary(op, operand_id)
+            }
+            cst::ExprKind::Call(callee, args) => {
+                let callee_id = self.expr(*callee)?;
+                let arg_ids = self.exprs(args)?;
+                Expr::Call(callee_id, arg_ids)
+            }
+            cst::ExprKind::Object(entries) => {
+                let lowered = entries
+                    .into_iter()
+                    .map(|e| self.object_entry(e))
+                    .collect::<Result<Vec<_>>>()?;
+                Expr::Object(lowered)
+            }
+            cst::ExprKind::Array(elems) => {
+                let lowered = elems
+                    .into_iter()
+                    .map(|e| self.array_elem(e))
+                    .collect::<Result<Vec<_>>>()?;
+                Expr::Array(lowered)
+            }
+            cst::ExprKind::Tuple(elems) => {
+                let elem_ids = elems
+                    .into_iter()
+                    .map(|e| self.expr(e))
+                    .collect::<Result<SmallVec<_>>>()?;
+                Expr::Tuple(elem_ids)
+            }
+            cst::ExprKind::MapLit(entries) => {
+                let entry_ids = entries
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let k_id = self.expr(k)?;
+                        let v_id = self.expr(v)?;
+                        Ok((k_id, v_id))
+                    })
+                    .collect::<Result<SmallVec<_>>>()?;
+                Expr::MapLit(entry_ids)
+            }
+            cst::ExprKind::TupleIndex(base, idx) => {
+                let base_id = self.expr(*base)?;
+                Expr::TupleIndex(base_id, idx)
+            }
+            cst::ExprKind::Index(base, idx) => {
+                let base_id = self.expr(*base)?;
+                let idx_id = self.expr(*idx)?;
+                Expr::Index(base_id, idx_id)
+            }
+            cst::ExprKind::OptionalIndex(base, idx) => {
+                let base_id = self.expr(*base)?;
+                let idx_id = self.expr(*idx)?;
+                Expr::OptionalIndex(base_id, idx_id)
+            }
+            cst::ExprKind::Field(base, field) => {
+                let base_id = self.expr(*base)?;
+                Expr::Field(base_id, self.sid_to_str(field))
+            }
+            cst::ExprKind::OptionalField(base, field) => {
+                let base_id = self.expr(*base)?;
+                Expr::OptionalField(base_id, self.sid_to_str(field))
+            }
+            cst::ExprKind::Variant(ty, var, args) => {
+                let arg_ids = self.exprs(args)?;
+                Expr::Variant(
+                    self.sid_to_str(ty),
+                    self.sid_to_str(var),
+                    arg_ids,
+                )
+            }
+            cst::ExprKind::Is(inner, pattern) => {
+                let inner_id = self.expr(*inner)?;
+                let lowered_pat = self.type_pattern(pattern)?;
+                Expr::Is(inner_id, lowered_pat)
+            }
+            cst::ExprKind::As(inner, ty) => {
+                let inner_id = self.expr(*inner)?;
+                let ty_id = self.type_expr(ty)?;
+                Expr::As(inner_id, ty_id)
+            }
+            cst::ExprKind::Read(inner, ty) => {
+                let inner_id = self.expr(*inner)?;
+                let ty_id = self.type_expr(ty)?;
+                Expr::Read(inner_id, ty_id)
+            }
+            cst::ExprKind::Block(stmts, tail) => {
+                let stmt_ids = stmts
+                    .into_iter()
+                    .map(|s| self.stmt(s))
+                    .collect::<Result<Vec<_>>>()?;
+                let tail_id = tail
+                    .map(|e| self.expr(*e))
+                    .transpose()?;
+                Expr::Block(stmt_ids, tail_id)
+            }
+            cst::ExprKind::If(cond, then_br, else_br) => {
+                let cond_id = self.expr(*cond)?;
+                let then_id = self.expr(*then_br)?;
+                let else_id = else_br
+                    .map(|e| self.expr(*e))
+                    .transpose()?;
+                Expr::If(cond_id, then_id, else_id)
+            }
+            cst::ExprKind::Closure {
+                type_params,
+                params,
+                ret,
+                body,
+            } => {
+                // Push closure type params into scope
+                let saved = self.type_params.clone();
+                self.type_params
+                    .extend(type_params.iter().map(|tp| tp.name));
+
+                let params_lowered = params
+                    .into_iter()
+                    .map(|(n, t)| {
+                        t.map(|te| self.type_expr(te))
+                            .transpose()
+                            .map(|ty_id| (self.sid_to_str(n), ty_id))
+                    })
+                    .collect::<Result<SmallVec<_>>>()?;
+                let ret_id = ret
+                    .map(|t| self.type_expr(t))
+                    .transpose()?;
+                let tp_lowered =
+                    self.type_param_list(type_params)?;
+
+                let body_id = self.expr(*body)?;
+
+                self.type_params = saved;
+                Expr::Closure {
+                    type_params: tp_lowered,
+                    params: params_lowered,
+                    ret: ret_id,
+                    body: body_id,
+                }
+            }
+            cst::ExprKind::Match(scrutinee, arms) => {
+                let scrutinee_id = self.expr(*scrutinee)?;
+                let arms_lowered = arms
+                    .into_iter()
+                    .map(|arm| self.match_arm(arm))
+                    .collect::<Result<Vec<_>>>()?;
+                Expr::Match(scrutinee_id, arms_lowered)
+            }
+            cst::ExprKind::Unwrap(inner) => {
+                let inner_id = self.expr(*inner)?;
+                Expr::Postfix(PostfixOp::Unwrap, inner_id)
+            }
+            cst::ExprKind::Range(start, end, inclusive) => {
+                let start_id = self.expr(*start)?;
+                let end_id = self.expr(*end)?;
+                Expr::Range(start_id, end_id, inclusive)
+            }
+            cst::ExprKind::Annotate(inner, ty) => {
+                let inner_id = self.expr(*inner)?;
+                let ty_id = self.type_expr(ty)?;
+                Expr::Annotate(inner_id, ty_id)
+            }
+            cst::ExprKind::Json(fields) => {
+                let field_ids = fields
+                    .into_iter()
+                    .map(|(k, v)| {
+                        self.expr(v).map(|id| (k, id))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Expr::Json(field_ids)
+            }
+            cst::ExprKind::JsonAccess(base, kind, key) => {
+                let base_id = self.expr(*base)?;
+                let key_lowered = match key {
+                    cst::JsonAccessKey::Field(name) => {
+                        JsonAccessKey::Field(self.sid_to_str(name))
+                    }
+                    cst::JsonAccessKey::Expr(e) => {
+                        let e_id = self.expr(*e)?;
+                        JsonAccessKey::Expr(e_id)
+                    }
+                };
+                Expr::JsonAccess(base_id, kind, key_lowered)
+            }
+            cst::ExprKind::Regex(pattern) => {
+                Expr::Regex(pattern, None)
+            }
+            cst::ExprKind::Matches(lhs, rhs) => {
+                let lhs_id = self.expr(*lhs)?;
+                let rhs_id = self.expr(*rhs)?;
+                Expr::Matches(lhs_id, rhs_id)
+            }
+            cst::ExprKind::Catch(expr, handler) => {
+                let expr_id = self.expr(*expr)?;
+                let handler_id = self.expr(*handler)?;
+                Expr::Catch(expr_id, handler_id)
+            }
+            cst::ExprKind::Write(output) => {
+                let expr_id = self.expr(output.expr)?;
+                let format = match output.format {
+                    cst::OutputFormat::Default => OutputFormat::Default,
+                    cst::OutputFormat::Json => OutputFormat::Json,
+                    cst::OutputFormat::Raw => OutputFormat::Raw,
+                };
+                let target = match output.target {
+                    cst::OutputTarget::Stdout => OutputTarget::Stdout,
+                    cst::OutputTarget::Stderr => OutputTarget::Stderr,
+                    cst::OutputTarget::File(path_expr) => {
+                        let path_id =
+                            self.expr(*path_expr)?;
+                        OutputTarget::File(path_id)
+                    }
+                };
+                Expr::Write(WriteExpr {
+                    expr: expr_id,
+                    format,
+                    target,
                 })
-                .collect();
-            let new_ret = ret
-                .map(|t| merge_type_expr(target, source, t, span))
-                .transpose()?;
-            let new_body = merge_expr(target, source, body, span)?;
+            }
+            cst::ExprKind::Raise(inner) => {
+                let id = self.expr(*inner)?;
+                Expr::Raise(id)
+            }
+            cst::ExprKind::Forever {
+                seed,
+                state_param,
+                cont_param,
+                body,
+            } => {
+                let seed_id = self.expr(*seed)?;
+                let state_ty = state_param
+                    .1
+                    .map(|t| self.type_expr(t))
+                    .transpose()?;
+                let cont_ty = cont_param
+                    .1
+                    .map(|t| self.type_expr(t))
+                    .transpose()?;
+                let body_id = self.expr(*body)?;
+                Expr::Forever {
+                    seed: seed_id,
+                    state_param: (
+                        self.sid_to_str(state_param.0),
+                        state_ty,
+                    ),
+                    cont_param: (
+                        self.sid_to_str(cont_param.0),
+                        cont_ty,
+                    ),
+                    body: body_id,
+                }
+            }
+            cst::ExprKind::Transaction(txn) => {
+                let stmts = txn
+                    .stmts
+                    .into_iter()
+                    .map(|s| self.stmt(s))
+                    .collect::<Result<Vec<_>>>()?;
+                let expr = txn
+                    .expr
+                    .map(|e| self.expr(*e))
+                    .transpose()?;
+                let modifiers =
+                    self.txn_modifiers(txn.modifiers)?;
+                Expr::Transaction(ast::TransactionExpr {
+                    id: None,
+                    stmts,
+                    expr,
+                    modifiers,
+                })
+            }
+            cst::ExprKind::Mempty => Expr::Mempty,
+            cst::ExprKind::RefLit(dbref) => {
+                let dbref = self.db_ref(dbref)?;
+                Expr::Ref(dbref)
+            }
+            cst::ExprKind::ClassMethod(class, method, args) => {
+                let arg_ids = self.exprs(args)?;
+                Expr::ClassMethod(
+                    self.sid_to_str(class),
+                    self.sid_to_str(method),
+                    arg_ids,
+                )
+            }
+            cst::ExprKind::ClassMethodRef(class, type_args, method) => {
+                let type_arg_ids = type_args
+                    .into_iter()
+                    .map(|t| self.type_expr(t))
+                    .collect::<Result<SmallVec<_>>>()?;
+                Expr::ClassMethodRef(
+                    self.sid_to_str(class),
+                    type_arg_ids,
+                    self.sid_to_str(method),
+                )
+            }
+            cst::ExprKind::PipePlaceholder => {
+                Err(crate::Error::parse(
+                    span,
+                    "pipe placeholder `.` can only appear in call arguments on RHS of `|>`",
+                    vec![],
+                ))?
+            }
+            cst::ExprKind::Error(msg) => {
+                Err(crate::Error::parse(span, msg, vec![]))?
+            }
+        };
+        self.ast.add_expr(e, span)
+    }
+
+    /// Lower a list of CST expressions to AST, returning a `SmallVec`.
+    fn exprs(
+        &mut self,
+        exprs: Vec<cst::Expr>,
+    ) -> Result<SmallVec<[ExprId; 4]>> {
+        exprs
+            .into_iter()
+            .map(|e| self.expr(e))
+            .collect::<Result<SmallVec<_>>>()
+    }
+
+    /// Lower a CST type expression to AST.
+    ///
+    /// When `App("F", ...)` is encountered and `"F"` is in `self.type_params`,
+    /// it becomes `VarApp("F", ...)` instead, marking it as a type variable
+    /// application (HKT).
+    fn type_expr(&mut self, ty: cst::TypeExpr) -> Result<AstTypeExprId> {
+        let span = ty.span;
+        let te = match ty.kind {
+            cst::TypeExprKind::Wildcard => AstTypeExpr::Wildcard,
+            cst::TypeExprKind::Named(segs) => {
+                AstTypeExpr::Named(self.interner.join_path(&segs))
+            }
+            cst::TypeExprKind::App(segs, params) => {
+                let param_ids = params
+                    .into_iter()
+                    .map(|t| self.type_expr(t))
+                    .collect::<Result<SmallVec<_>>>()?;
+                let name = self.interner.join_path(&segs);
+                let is_tv = segs.len() == 1
+                    && segs
+                        .first()
+                        .is_some_and(|id| self.type_params.contains(id));
+                if is_tv {
+                    AstTypeExpr::VarApp(name, param_ids)
+                } else {
+                    AstTypeExpr::App(name, param_ids)
+                }
+            }
+            cst::TypeExprKind::Fn(params, ret) => {
+                let param_ids = params
+                    .into_iter()
+                    .map(|t| self.type_expr(t))
+                    .collect::<Result<SmallVec<_>>>()?;
+                let ret_id = self.type_expr(*ret)?;
+                AstTypeExpr::Fn(param_ids, ret_id)
+            }
+            cst::TypeExprKind::Tuple(elems) => {
+                let elem_ids = elems
+                    .into_iter()
+                    .map(|t| self.type_expr(t))
+                    .collect::<Result<SmallVec<_>>>()?;
+                AstTypeExpr::Tuple(elem_ids)
+            }
+            cst::TypeExprKind::Union(members) => {
+                let member_ids = members
+                    .into_iter()
+                    .map(|t| self.type_expr(t))
+                    .collect::<Result<SmallVec<_>>>()?;
+                AstTypeExpr::Union(member_ids)
+            }
+            cst::TypeExprKind::Object(fields) => {
+                let lowered = fields
+                    .into_iter()
+                    .map(|(name, ty)| {
+                        self.type_expr(ty)
+                            .map(|id| (self.interner.resolve(name), id))
+                    })
+                    .collect::<Result<SmallVec<_>>>()?;
+                AstTypeExpr::Object(lowered)
+            }
+            cst::TypeExprKind::AssocType { class, name } => {
+                let name_s = self.interner.resolve(name);
+                let class_s = class.map(|id| self.interner.resolve(id));
+                AstTypeExpr::AssocType {
+                    class: class_s,
+                    name: name_s,
+                }
+            }
+        };
+        self.ast.add_type_expr(te, span)
+    }
+
+    /// Lower a CST type pattern to AST.
+    fn type_pattern(&mut self, pat: cst::TypePattern) -> Result<TypePattern> {
+        Ok(match pat {
+            cst::TypePattern::Type(ty) => {
+                TypePattern::Type(self.type_expr(ty)?)
+            }
+            cst::TypePattern::Variant(ty, var) => TypePattern::Variant(
+                self.interner.resolve(ty),
+                self.interner.resolve(var),
+            ),
+            cst::TypePattern::VariantWildcard(ty, var) => {
+                TypePattern::VariantWildcard(
+                    self.interner.resolve(ty),
+                    self.interner.resolve(var),
+                )
+            }
+            cst::TypePattern::VariantBind(ty, var, names) => {
+                let name_strs: SmallVec<[String; 2]> =
+                    names.iter().map(|id| self.interner.resolve(*id)).collect();
+                TypePattern::VariantBind(
+                    self.interner.resolve(ty),
+                    self.interner.resolve(var),
+                    name_strs,
+                )
+            }
+            cst::TypePattern::Object(fields) => {
+                let lowered = fields
+                    .into_iter()
+                    .map(|(name, ty)| {
+                        self.type_expr(ty)
+                            .map(|id| (self.interner.resolve(name), id))
+                    })
+                    .collect::<Result<SmallVec<_>>>()?;
+                TypePattern::Object(lowered)
+            }
+        })
+    }
+
+    /// Lower a CST binding pattern to AST.
+    fn binding_pattern(&self, pat: cst::BindingPattern) -> BindingPattern {
+        match pat {
+            cst::BindingPattern::Var(name) => {
+                BindingPattern::Var(self.interner.resolve(name))
+            }
+            cst::BindingPattern::Tuple(pats) => BindingPattern::Tuple(
+                pats.into_iter().map(|p| self.binding_pattern(p)).collect(),
+            ),
+            cst::BindingPattern::Object(fields) => BindingPattern::Object(
+                fields
+                    .into_iter()
+                    .map(|(k, p)| {
+                        (self.interner.resolve(k), self.binding_pattern(p))
+                    })
+                    .collect(),
+            ),
+            cst::BindingPattern::Array(pats, rest) => BindingPattern::Array(
+                pats.into_iter().map(|p| self.binding_pattern(p)).collect(),
+                rest.map(|r| self.rest_pattern(r)),
+            ),
+            cst::BindingPattern::Wildcard => BindingPattern::Wildcard,
+        }
+    }
+
+    /// Lower a CST rest pattern to AST.
+    fn rest_pattern(&self, pat: cst::RestPattern) -> RestPattern {
+        match pat {
+            cst::RestPattern::Ignore => RestPattern::Ignore,
+            cst::RestPattern::Bind(name) => {
+                RestPattern::Bind(self.interner.resolve(name))
+            }
+        }
+    }
+
+    /// Lower a CST match pattern to AST, allocating into the pattern arena.
+    fn match_pattern(
+        &mut self,
+        pat: cst::MatchPattern,
+    ) -> Result<MatchPatternId> {
+        let p = match pat {
+            cst::MatchPattern::Wildcard => MatchPattern::Wildcard,
+            cst::MatchPattern::Var(name) => {
+                MatchPattern::Var(self.interner.resolve(name))
+            }
+            cst::MatchPattern::Literal(lit) => MatchPattern::Literal(lit),
+            cst::MatchPattern::Variant(ty, var, pats) => {
+                let sub_ids = pats
+                    .into_iter()
+                    .map(|p| self.match_pattern(p))
+                    .collect::<Result<SmallVec<_>>>()?;
+                MatchPattern::Variant(
+                    self.interner.join_path(&ty),
+                    self.interner.resolve(var),
+                    sub_ids,
+                )
+            }
+            cst::MatchPattern::Object(fields) => {
+                let field_ids = fields
+                    .into_iter()
+                    .map(|(k, p)| {
+                        self.match_pattern(p)
+                            .map(|id| (self.interner.resolve(k), id))
+                    })
+                    .collect::<Result<SmallVec<_>>>()?;
+                MatchPattern::Object(field_ids)
+            }
+            cst::MatchPattern::Tuple(pats) => {
+                let elem_ids = pats
+                    .into_iter()
+                    .map(|p| self.match_pattern(p))
+                    .collect::<Result<SmallVec<_>>>()?;
+                MatchPattern::Tuple(elem_ids)
+            }
+            cst::MatchPattern::Array(pats, rest) => {
+                let elem_ids = pats
+                    .into_iter()
+                    .map(|p| self.match_pattern(p))
+                    .collect::<Result<SmallVec<_>>>()?;
+                MatchPattern::Array(
+                    elem_ids,
+                    rest.map(|r| self.rest_pattern(r)),
+                )
+            }
+            cst::MatchPattern::Is(name, ty) => {
+                let ty_id = self.type_expr(ty)?;
+                MatchPattern::Is(self.interner.resolve(name), ty_id)
+            }
+        };
+        self.ast.add_pattern(p)
+    }
+
+    /// Lower a CST type definition to AST.
+    fn type_def(&mut self, def: cst::TypeDefCst) -> Result<TypeDefAst> {
+        match def {
+            cst::TypeDefCst::Sum(variants) => {
+                let lowered = variants
+                    .into_iter()
+                    .map(|v| self.variant(v))
+                    .collect::<Result<SmallVec<_>>>()?;
+                Ok(TypeDefAst::Sum(lowered))
+            }
+        }
+    }
+
+    /// Lower a CST variant to AST.
+    fn variant(&mut self, v: cst::VariantCst) -> Result<VariantAst> {
+        let payloads = v
+            .payloads
+            .into_iter()
+            .map(|t| self.type_expr(t))
+            .collect::<Result<SmallVec<_>>>()?;
+        Ok(VariantAst {
+            name: self.interner.resolve(v.name),
+            payloads,
+        })
+    }
+
+    /// Lower a CST match arm to AST.
+    fn match_arm(&mut self, arm: cst::MatchArm) -> Result<MatchArm> {
+        let pattern = self.match_pattern(arm.pattern)?;
+        let guard = arm.guard.map(|e| self.expr(e)).transpose()?;
+        let body = self.expr(arm.body)?;
+        Ok(MatchArm {
+            pattern,
+            guard,
+            body,
+        })
+    }
+
+    /// Lower a CST array element to AST.
+    fn array_elem(&mut self, elem: cst::ArrayElem) -> Result<ArrayElem> {
+        match elem {
+            cst::ArrayElem::Elem(e) => self.expr(e).map(ArrayElem::Elem),
+            cst::ArrayElem::Spread(e) => self.expr(e).map(ArrayElem::Spread),
+        }
+    }
+
+    /// Lower a CST object entry to AST.
+    fn object_entry(&mut self, entry: cst::ObjectEntry) -> Result<ObjectEntry> {
+        match entry {
+            cst::ObjectEntry::Field(k, v) => self
+                .expr(v)
+                .map(|id| ObjectEntry::Field(self.sid_to_str(k), id)),
+            cst::ObjectEntry::Spread(e) => {
+                self.expr(e).map(ObjectEntry::Spread)
+            }
+        }
+    }
+
+    /// Lower a CST subscript element to AST.
+    fn subscript_elem(
+        &mut self,
+        elem: cst::SubscriptElem,
+    ) -> Result<SubscriptElem> {
+        match elem {
+            cst::SubscriptElem::Elem(e) => {
+                self.expr(e).map(SubscriptElem::Elem)
+            }
+            cst::SubscriptElem::Spread(e) => {
+                self.expr(e).map(SubscriptElem::Spread)
+            }
+        }
+    }
+
+    /// Lower a list of CST subscript elements to AST.
+    fn subscript_elems(
+        &mut self,
+        elems: Vec<cst::SubscriptElem>,
+    ) -> Result<SmallVec<[SubscriptElem; 4]>> {
+        elems.into_iter().map(|e| self.subscript_elem(e)).collect()
+    }
+
+    /// Lower a CST database reference to AST.
+    fn db_ref(&mut self, dbref: cst::DbRef) -> Result<DbRef> {
+        match dbref {
+            cst::DbRef::Local(name, subs) => {
+                let sub_ids = self.subscript_elems(subs)?;
+                Ok(DbRef::Local(self.sid_to_str(name), sub_ids))
+            }
+            cst::DbRef::Global(name, subs) => {
+                let sub_ids = self.subscript_elems(subs)?;
+                Ok(DbRef::Global(self.sid_to_str(name), sub_ids))
+            }
+        }
+    }
+
+    /// Lower a ref argument expression to `RefTarget`.
+    ///
+    /// If the expression is a `RefLit`, uses `RefTarget::Inline`; otherwise
+    /// lowers the expression and uses `RefTarget::Expr`.
+    fn ref_arg(&mut self, expr: cst::Expr) -> Result<RefTarget> {
+        match expr.kind {
+            cst::ExprKind::RefLit(dbref) => {
+                self.db_ref(dbref).map(RefTarget::Inline)
+            }
+            _ => self.expr(expr).map(RefTarget::Expr),
+        }
+    }
+
+    /// Lower CST transaction modifiers to AST.
+    fn txn_modifiers(
+        &mut self,
+        m: cst::TransactionModifiers,
+    ) -> Result<TransactionModifiers> {
+        let conflict = m.conflict.map(|c| match c {
+            cst::ConflictModifier::Abort => {
+                rumps_storage::ConflictStrategy::Abort
+            }
+            cst::ConflictModifier::Overwrite => {
+                rumps_storage::ConflictStrategy::Overwrite
+            }
+        });
+        let timeout = m.timeout.map(|e| self.expr(*e)).transpose()?;
+        let isolation = m.isolation.map(|i| match i {
+            cst::IsolationModifier::Snapshot => {
+                rumps_storage::IsolationLevel::SnapshotIsolation
+            }
+        });
+        Ok(TransactionModifiers {
+            conflict,
+            timeout,
+            retries: m.retries,
+            isolation,
+        })
+    }
+
+    /// Lower interpolated string parts to an AST expression.
+    ///
+    /// Takes the alternating literal/expression parts and parses expression
+    /// strings into AST nodes. Returns an `Expr::Interpolation` containing the
+    /// parsed parts.
+    fn interpolation(
+        &mut self,
+        parts: Vec<String>,
+        span: crate::Span,
+    ) -> Result<Expr> {
+        use crate::{Lexer, Parser};
+
+        let ids: Result<SmallVec<[crate::ast::ExprId; 4]>> = parts
+            .into_iter()
+            .enumerate()
+            .map(|(i, part)| {
+                if i % 2 == 0 {
+                    // Even indices: literal text; create a String literal
+                    let lit = ast::Literal::String(part);
+                    self.ast.add_expr(Expr::Literal(lit), span)
+                } else {
+                    // Odd indices: expression source code; parse and merge
+                    let tokens =
+                        Lexer::new(&part).lex().map_err(|e| {
+                            crate::Error::parse(
+                                span,
+                                e.to_string(),
+                                vec![],
+                            )
+                        })?;
+
+                    let parsed =
+                        Parser::parse_tokens(tokens).map_err(|e| {
+                            crate::Error::parse(
+                                span,
+                                e.to_string(),
+                                vec![],
+                            )
+                        })?;
+
+                    // Should produce exactly one expression statement
+                    let expr = parsed
+                        .stmts
+                        .first()
+                        .and_then(|stmt_id| {
+                            parsed.ast.get_stmt(*stmt_id)
+                        })
+                        .and_then(|stmt| match stmt {
+                            ast::Stmt::Expr(expr_id) => {
+                                Some(*expr_id)
+                            }
+                            _ => None,
+                        })
+                        .ok_or_else(|| {
+                            let msg = if part.trim().is_empty() {
+                                "interpolation requires an expression"
+                                    .into()
+                            } else {
+                                format!(
+                                    "interpolation requires an expression, got `{}`",
+                                    part
+                                )
+                            };
+                            crate::Error::parse(span, msg, vec![])
+                        })?;
+
+                    // Copy the expression from the parsed AST into our AST
+                    MergeCtx::new(&mut self.ast, &parsed.ast)
+                        .expr(expr, span)
+                }
+            })
+            .collect();
+
+        ids.map(Expr::Interpolation)
+    }
+}
+
+// MergeCtx: copies AST nodes from a source AST into a target AST.
+
+/// Context for merging nodes from a source `Ast` into a target `Ast`.
+///
+/// Used by interpolation lowering to copy parsed sub-expressions into the
+/// main AST.
+struct MergeCtx<'a> {
+    target: &'a mut Ast,
+    source: &'a Ast,
+}
+
+impl<'a> MergeCtx<'a> {
+    fn new(target: &'a mut Ast, source: &'a Ast) -> Self {
+        Self { target, source }
+    }
+
+    /// Merge a `RefTarget` from source AST into target AST.
+    fn ref_target(
+        &mut self,
+        rt: &RefTarget,
+        span: crate::Span,
+    ) -> Result<RefTarget> {
+        match rt {
+            RefTarget::Inline(dbref) => {
+                self.dbref(dbref, span).map(RefTarget::Inline)
+            }
+            RefTarget::Expr(e) => self.expr(*e, span).map(RefTarget::Expr),
+        }
+    }
+
+    /// Merge a `DbRef` from source AST into target AST.
+    ///
+    /// Recursively copies subscript expressions.
+    fn dbref(&mut self, dbref: &DbRef, span: crate::Span) -> Result<DbRef> {
+        let mut merge =
+            |subs: &SmallVec<[SubscriptElem; 4]>| -> Result<SmallVec<_>> {
+                subs.iter()
+                    .map(|elem| match elem {
+                        SubscriptElem::Elem(e) => {
+                            self.expr(*e, span).map(SubscriptElem::Elem)
+                        }
+                        SubscriptElem::Spread(e) => {
+                            self.expr(*e, span).map(SubscriptElem::Spread)
+                        }
+                    })
+                    .collect()
+            };
+        match dbref {
+            DbRef::Local(name, subs) => {
+                Ok(DbRef::Local(name.clone(), merge(subs)?))
+            }
+            DbRef::Global(name, subs) => {
+                Ok(DbRef::Global(name.clone(), merge(subs)?))
+            }
+        }
+    }
+
+    /// Merge an `AstTypeExprId` from source AST into target AST.
+    fn type_expr(
+        &mut self,
+        id: AstTypeExprId,
+        span: crate::Span,
+    ) -> Result<AstTypeExprId> {
+        let te = self
+            .source
+            .get_type_expr(id)
+            .ok_or_else(|| {
+                crate::Error::parse(span, "invalid type expr id", vec![])
+            })?
+            .clone();
+        let new_te = match te {
+            AstTypeExpr::Wildcard => AstTypeExpr::Wildcard,
+            AstTypeExpr::Named(n) => AstTypeExpr::Named(n),
+            AstTypeExpr::App(name, args) => {
+                let new_args: Result<SmallVec<_>> =
+                    args.iter().map(|&a| self.type_expr(a, span)).collect();
+                AstTypeExpr::App(name, new_args?)
+            }
+            AstTypeExpr::VarApp(name, args) => {
+                let new_args: Result<SmallVec<_>> =
+                    args.iter().map(|&a| self.type_expr(a, span)).collect();
+                AstTypeExpr::VarApp(name, new_args?)
+            }
+            AstTypeExpr::Fn(params, ret) => {
+                let new_params: Result<SmallVec<_>> =
+                    params.iter().map(|&p| self.type_expr(p, span)).collect();
+                let new_ret = self.type_expr(ret, span)?;
+                AstTypeExpr::Fn(new_params?, new_ret)
+            }
+            AstTypeExpr::Tuple(elems) => {
+                let new_elems: Result<SmallVec<_>> =
+                    elems.iter().map(|&e| self.type_expr(e, span)).collect();
+                AstTypeExpr::Tuple(new_elems?)
+            }
+            AstTypeExpr::Union(members) => {
+                let new_members: Result<SmallVec<_>> =
+                    members.iter().map(|&m| self.type_expr(m, span)).collect();
+                AstTypeExpr::Union(new_members?)
+            }
+            AstTypeExpr::Object(fields) => {
+                let new_fields: Result<SmallVec<_>> = fields
+                    .into_iter()
+                    .map(|(name, ty_id)| {
+                        self.type_expr(ty_id, span).map(|new_id| (name, new_id))
+                    })
+                    .collect();
+                AstTypeExpr::Object(new_fields?)
+            }
+            AstTypeExpr::AssocType { class, name } => {
+                AstTypeExpr::AssocType { class, name }
+            }
+        };
+        self.target.add_type_expr(new_te, span)
+    }
+
+    /// Merge a `MatchPatternId` from source AST into target AST.
+    fn pattern(
+        &mut self,
+        id: MatchPatternId,
+        span: crate::Span,
+    ) -> Result<MatchPatternId> {
+        let pat = self
+            .source
+            .get_pattern(id)
+            .ok_or_else(|| {
+                crate::Error::parse(span, "invalid pattern id", vec![])
+            })?
+            .clone();
+        let new_pat = match pat {
+            MatchPattern::Wildcard => MatchPattern::Wildcard,
+            MatchPattern::Var(name) => MatchPattern::Var(name),
+            MatchPattern::Literal(lit) => MatchPattern::Literal(lit),
+            MatchPattern::Variant(ty, var, pats) => {
+                let new_pats: Result<SmallVec<_>> =
+                    pats.iter().map(|&p| self.pattern(p, span)).collect();
+                MatchPattern::Variant(ty, var, new_pats?)
+            }
+            MatchPattern::Object(fields) => {
+                let new_fields: Result<SmallVec<_>> = fields
+                    .into_iter()
+                    .map(|(name, pat_id)| {
+                        self.pattern(pat_id, span).map(|new_id| (name, new_id))
+                    })
+                    .collect();
+                MatchPattern::Object(new_fields?)
+            }
+            MatchPattern::Tuple(pats) => {
+                let new_pats: Result<SmallVec<_>> =
+                    pats.iter().map(|&p| self.pattern(p, span)).collect();
+                MatchPattern::Tuple(new_pats?)
+            }
+            MatchPattern::Array(pats, rest) => {
+                let new_pats: Result<SmallVec<_>> =
+                    pats.iter().map(|&p| self.pattern(p, span)).collect();
+                MatchPattern::Array(new_pats?, rest)
+            }
+            MatchPattern::Is(name, ty_id) => {
+                let new_ty = self.type_expr(ty_id, span)?;
+                MatchPattern::Is(name, new_ty)
+            }
+        };
+        self.target.add_pattern(new_pat)
+    }
+
+    /// Merge a `WriteExpr` from source AST into target AST.
+    fn write_expr(
+        &mut self,
+        w: &WriteExpr,
+        span: crate::Span,
+    ) -> Result<WriteExpr> {
+        let new_expr = self.expr(w.expr, span)?;
+        let new_target = match w.target {
+            OutputTarget::Stdout => OutputTarget::Stdout,
+            OutputTarget::Stderr => OutputTarget::Stderr,
+            OutputTarget::File(e) => OutputTarget::File(self.expr(e, span)?),
+        };
+        Ok(WriteExpr {
+            expr: new_expr,
+            format: w.format,
+            target: new_target,
+        })
+    }
+
+    /// Merge a `TypePattern` from source AST into target AST.
+    fn type_pattern(
+        &mut self,
+        pat: &TypePattern,
+        span: crate::Span,
+    ) -> Result<TypePattern> {
+        match pat {
+            TypePattern::Type(ty_id) => {
+                let new_ty = self.type_expr(*ty_id, span)?;
+                Ok(TypePattern::Type(new_ty))
+            }
+            TypePattern::Variant(ty, var) => {
+                Ok(TypePattern::Variant(ty.clone(), var.clone()))
+            }
+            TypePattern::VariantWildcard(ty, var) => {
+                Ok(TypePattern::VariantWildcard(ty.clone(), var.clone()))
+            }
+            TypePattern::VariantBind(ty, var, binds) => {
+                Ok(TypePattern::VariantBind(
+                    ty.clone(),
+                    var.clone(),
+                    binds.clone(),
+                ))
+            }
+            TypePattern::Object(fields) => {
+                let new_fields: Result<SmallVec<_>> = fields
+                    .iter()
+                    .map(|(name, ty_id)| {
+                        self.type_expr(*ty_id, span)
+                            .map(|new_id| (name.clone(), new_id))
+                    })
+                    .collect();
+                Ok(TypePattern::Object(new_fields?))
+            }
+        }
+    }
+
+    /// Merge a statement from source AST into target AST.
+    fn stmt(&mut self, stmt_id: StmtId, span: crate::Span) -> Result<StmtId> {
+        let stmt = self
+            .source
+            .get_stmt(stmt_id)
+            .ok_or_else(|| {
+                crate::Error::parse(span, "invalid stmt id", vec![])
+            })?
+            .clone();
+        let new_stmt = match stmt {
+            Stmt::Let(pat, ty_ann, expr, vis) => {
+                let new_ty =
+                    ty_ann.map(|t| self.type_expr(t, span)).transpose()?;
+                let new_expr = self.expr(expr, span)?;
+                Stmt::Let(pat, new_ty, new_expr, vis)
+            }
+            Stmt::Expr(e) => {
+                let new_e = self.expr(e, span)?;
+                Stmt::Expr(new_e)
+            }
             Stmt::Fun {
                 name,
                 type_params,
-                params: new_params?,
-                ret: new_ret,
-                body: new_body,
+                params,
+                ret,
+                body,
                 vis,
-            }
-        }
-        Stmt::Type {
-            name,
-            type_params,
-            def,
-            vis,
-        } => {
-            // TypeDefAst variants only contain AstTypeExprId
-            let new_def = match def {
-                TypeDefAst::Sum(variants) => {
-                    let new_variants: Result<SmallVec<_>> = variants
-                        .into_iter()
-                        .map(|v| {
-                            let new_payloads: Result<SmallVec<_>> = v
-                                .payloads
-                                .iter()
-                                .map(|&p| {
-                                    merge_type_expr(target, source, p, span)
-                                })
-                                .collect();
-                            Ok(VariantAst {
-                                name: v.name,
-                                payloads: new_payloads?,
-                            })
-                        })
-                        .collect();
-                    TypeDefAst::Sum(new_variants?)
+            } => {
+                let new_params: Result<SmallVec<_>> = params
+                    .into_iter()
+                    .map(|(n, ty_opt)| {
+                        let new_ty = ty_opt
+                            .map(|t| self.type_expr(t, span))
+                            .transpose()?;
+                        Ok((n, new_ty))
+                    })
+                    .collect();
+                let new_ret =
+                    ret.map(|t| self.type_expr(t, span)).transpose()?;
+                let new_body = self.expr(body, span)?;
+                Stmt::Fun {
+                    name,
+                    type_params,
+                    params: new_params?,
+                    ret: new_ret,
+                    body: new_body,
+                    vis,
                 }
-            };
+            }
             Stmt::Type {
                 name,
                 type_params,
-                def: new_def,
+                def,
                 vis,
+            } => {
+                let new_def = match def {
+                    TypeDefAst::Sum(variants) => {
+                        let new_variants: Result<SmallVec<_>> = variants
+                            .into_iter()
+                            .map(|v| {
+                                let new_payloads: Result<SmallVec<_>> = v
+                                    .payloads
+                                    .iter()
+                                    .map(|&p| self.type_expr(p, span))
+                                    .collect();
+                                Ok(VariantAst {
+                                    name: v.name,
+                                    payloads: new_payloads?,
+                                })
+                            })
+                            .collect();
+                        TypeDefAst::Sum(new_variants?)
+                    }
+                };
+                Stmt::Type {
+                    name,
+                    type_params,
+                    def: new_def,
+                    vis,
+                }
             }
-        }
-        Stmt::NewType {
-            name,
-            type_params,
-            target: ty,
-            vis,
-        } => {
-            let new_ty = merge_type_expr(target, source, ty, span)?;
             Stmt::NewType {
                 name,
                 type_params,
-                target: new_ty,
+                target: ty,
                 vis,
+            } => {
+                let new_ty = self.type_expr(ty, span)?;
+                Stmt::NewType {
+                    name,
+                    type_params,
+                    target: new_ty,
+                    vis,
+                }
             }
-        }
-        Stmt::Union {
-            name,
-            type_params,
-            members,
-            vis,
-        } => {
-            let new_members: Result<SmallVec<_>> = members
-                .iter()
-                .map(|&m| merge_type_expr(target, source, m, span))
-                .collect();
             Stmt::Union {
                 name,
                 type_params,
-                members: new_members?,
+                members,
                 vis,
+            } => {
+                let new_members: Result<SmallVec<_>> =
+                    members.iter().map(|&m| self.type_expr(m, span)).collect();
+                Stmt::Union {
+                    name,
+                    type_params,
+                    members: new_members?,
+                    vis,
+                }
             }
-        }
-        Stmt::Module { name, body } => {
-            let new_body: Result<Vec<_>> = body
-                .iter()
-                .map(|&s| merge_stmt(target, source, s, span))
-                .collect();
-            Stmt::Module {
-                name,
-                body: new_body?,
+            Stmt::Module { name, body } => {
+                let new_body: Result<Vec<_>> =
+                    body.iter().map(|&s| self.stmt(s, span)).collect();
+                Stmt::Module {
+                    name,
+                    body: new_body?,
+                }
             }
-        }
-        Stmt::Import(import) => Stmt::Import(import),
-        Stmt::ClassInstance {
-            class_name,
-            class_args,
-            type_params,
-            for_type,
-            constraints,
-            assoc_types,
-            methods,
-        } => {
-            let new_class_args: Result<SmallVec<_>> = class_args
-                .iter()
-                .map(|&t| merge_type_expr(target, source, t, span))
-                .collect();
-            let new_for_type = merge_type_expr(target, source, for_type, span)?;
-            let new_constraints: Result<SmallVec<_>> = constraints
-                .iter()
-                .map(|(name, cs)| Ok((name.clone(), cs.clone())))
-                .collect();
-            let new_assoc_types: Result<SmallVec<_>> = assoc_types
-                .iter()
-                .map(|a| {
-                    let new_target =
-                        merge_type_expr(target, source, a.target, span)?;
-                    Ok(ast::AssocTypeDef {
-                        name: a.name.clone(),
-                        constraint: a.constraint.clone(),
-                        target: new_target,
-                        span: a.span,
-                    })
-                })
-                .collect();
-            let new_methods: Result<SmallVec<_>> = methods
-                .iter()
-                .map(|m| {
-                    let new_params: Result<SmallVec<_>> = m
-                        .params
-                        .iter()
-                        .map(|(n, ty_opt)| {
-                            let new_ty = ty_opt
-                                .map(|t| {
-                                    merge_type_expr(target, source, t, span)
-                                })
-                                .transpose()?;
-                            Ok((n.clone(), new_ty))
-                        })
-                        .collect();
-                    let new_ret = m
-                        .ret
-                        .map(|t| merge_type_expr(target, source, t, span))
-                        .transpose()?;
-                    let new_body = merge_expr(target, source, m.body, span)?;
-                    Ok(ast::InstanceMethodDef {
-                        name: m.name.clone(),
-                        params: new_params?,
-                        ret: new_ret,
-                        body: new_body,
-                        span: m.span,
-                    })
-                })
-                .collect();
+            Stmt::Import(import) => Stmt::Import(import),
             Stmt::ClassInstance {
                 class_name,
-                class_args: new_class_args?,
+                class_args,
                 type_params,
-                for_type: new_for_type,
-                constraints: new_constraints?,
-                assoc_types: new_assoc_types?,
-                methods: new_methods?,
-            }
-        }
-    };
-    target.add_stmt(new_stmt, span)
-}
-
-/// Merge an expression from a parsed AST into the target AST.
-///
-/// Recursively copies the expression and all its sub-expressions, statements,
-/// type expressions, and patterns.
-fn merge_expr(
-    target: &mut Ast,
-    source: &Ast,
-    expr_id: ExprId,
-    span: crate::Span,
-) -> Result<ExprId> {
-    let expr = source
-        .get_expr(expr_id)
-        .ok_or_else(|| {
-            crate::Error::parse(span, "invalid expression id", vec![])
-        })?
-        .clone();
-
-    let new_expr = match expr {
-        Expr::Literal(lit) => Expr::Literal(lit),
-        Expr::Interpolation(parts) => {
-            let new_parts: Result<SmallVec<_>> = parts
-                .iter()
-                .map(|&id| merge_expr(target, source, id, span))
-                .collect();
-            Expr::Interpolation(new_parts?)
-        }
-        Expr::Var(name) => Expr::Var(name),
-        Expr::Intrinsic(op, ref rt, value, txn) => {
-            let new_rt = merge_ref_target(target, source, rt, span)?;
-            let new_val = value
-                .map(|v| merge_expr(target, source, v, span))
-                .transpose()?;
-            Expr::Intrinsic(op, new_rt, new_val, txn)
-        }
-        Expr::Binary(lhs, op, rhs) => {
-            let new_lhs = merge_expr(target, source, lhs, span)?;
-            let new_rhs = merge_expr(target, source, rhs, span)?;
-            Expr::Binary(new_lhs, op, new_rhs)
-        }
-        Expr::Unary(op, operand) => {
-            let new_op = merge_expr(target, source, operand, span)?;
-            Expr::Unary(op, new_op)
-        }
-        Expr::Call(callee, args) => {
-            let new_callee = merge_expr(target, source, callee, span)?;
-            let new_args: Result<SmallVec<_>> = args
-                .iter()
-                .map(|&id| merge_expr(target, source, id, span))
-                .collect();
-            Expr::Call(new_callee, new_args?)
-        }
-        Expr::Object(entries) => {
-            let new_entries: Result<Vec<_>> = entries
-                .into_iter()
-                .map(|entry| match entry {
-                    ObjectEntry::Field(k, v) => {
-                        merge_expr(target, source, v, span)
-                            .map(|new_v| ObjectEntry::Field(k, new_v))
-                    }
-                    ObjectEntry::Spread(e) => {
-                        merge_expr(target, source, e, span)
-                            .map(ObjectEntry::Spread)
-                    }
-                })
-                .collect();
-            Expr::Object(new_entries?)
-        }
-        Expr::Array(elems) => {
-            let new_elems: Result<Vec<_>> = elems
-                .into_iter()
-                .map(|elem| match elem {
-                    ArrayElem::Elem(e) => {
-                        merge_expr(target, source, e, span).map(ArrayElem::Elem)
-                    }
-                    ArrayElem::Spread(e) => merge_expr(target, source, e, span)
-                        .map(ArrayElem::Spread),
-                })
-                .collect();
-            Expr::Array(new_elems?)
-        }
-        Expr::Tuple(elems) => {
-            let new_elems: Result<SmallVec<_>> = elems
-                .iter()
-                .map(|&id| merge_expr(target, source, id, span))
-                .collect();
-            Expr::Tuple(new_elems?)
-        }
-        Expr::MapLit(entries) => {
-            let new_entries: Result<SmallVec<_>> = entries
-                .into_iter()
-                .map(|(k, v)| {
-                    let new_k = merge_expr(target, source, k, span)?;
-                    let new_v = merge_expr(target, source, v, span)?;
-                    Ok((new_k, new_v))
-                })
-                .collect();
-            Expr::MapLit(new_entries?)
-        }
-        Expr::TupleIndex(base, idx) => {
-            let new_base = merge_expr(target, source, base, span)?;
-            Expr::TupleIndex(new_base, idx)
-        }
-        Expr::Index(base, idx) => {
-            let new_base = merge_expr(target, source, base, span)?;
-            let new_idx = merge_expr(target, source, idx, span)?;
-            Expr::Index(new_base, new_idx)
-        }
-        Expr::OptionalIndex(base, idx) => {
-            let new_base = merge_expr(target, source, base, span)?;
-            let new_idx = merge_expr(target, source, idx, span)?;
-            Expr::OptionalIndex(new_base, new_idx)
-        }
-        Expr::Field(base, field) => {
-            let new_base = merge_expr(target, source, base, span)?;
-            Expr::Field(new_base, field)
-        }
-        Expr::OptionalField(base, field) => {
-            let new_base = merge_expr(target, source, base, span)?;
-            Expr::OptionalField(new_base, field)
-        }
-        Expr::Variant(ty, var, args) => {
-            let new_args: Result<SmallVec<_>> = args
-                .iter()
-                .map(|&id| merge_expr(target, source, id, span))
-                .collect();
-            Expr::Variant(ty, var, new_args?)
-        }
-        Expr::Path(segments) => Expr::Path(segments),
-        Expr::ClassMethod(class, method, args) => {
-            let new_args: Result<SmallVec<_>> = args
-                .iter()
-                .map(|&id| merge_expr(target, source, id, span))
-                .collect();
-            Expr::ClassMethod(class, method, new_args?)
-        }
-        Expr::ClassMethodRef(class, type_args, method) => {
-            let new_type_args: Result<SmallVec<_>> = type_args
-                .iter()
-                .map(|&id| merge_type_expr(target, source, id, span))
-                .collect();
-            Expr::ClassMethodRef(class, new_type_args?, method)
-        }
-        Expr::Is(expr, pat) => {
-            let new_expr = merge_expr(target, source, expr, span)?;
-            let new_pat = merge_type_pattern(target, source, &pat, span)?;
-            Expr::Is(new_expr, new_pat)
-        }
-        Expr::As(expr, ty) => {
-            let new_expr = merge_expr(target, source, expr, span)?;
-            let new_ty = merge_type_expr(target, source, ty, span)?;
-            Expr::As(new_expr, new_ty)
-        }
-        Expr::Read(expr, ty) => {
-            let new_expr = merge_expr(target, source, expr, span)?;
-            let new_ty = merge_type_expr(target, source, ty, span)?;
-            Expr::Read(new_expr, new_ty)
-        }
-        Expr::Block(stmts, tail) => {
-            let new_stmts: Result<Vec<_>> = stmts
-                .iter()
-                .map(|&s| merge_stmt(target, source, s, span))
-                .collect();
-            let new_tail = tail
-                .map(|e| merge_expr(target, source, e, span))
-                .transpose()?;
-            Expr::Block(new_stmts?, new_tail)
-        }
-        Expr::If(cond, then, els) => {
-            let new_cond = merge_expr(target, source, cond, span)?;
-            let new_then = merge_expr(target, source, then, span)?;
-            let new_els = els
-                .map(|e| merge_expr(target, source, e, span))
-                .transpose()?;
-            Expr::If(new_cond, new_then, new_els)
-        }
-        Expr::Match(scrut, arms) => {
-            let new_scrut = merge_expr(target, source, scrut, span)?;
-            let new_arms: Result<Vec<_>> = arms
-                .into_iter()
-                .map(|arm| {
-                    let new_pat =
-                        merge_pattern(target, source, arm.pattern, span)?;
-                    let new_guard = arm
-                        .guard
-                        .map(|g| merge_expr(target, source, g, span))
-                        .transpose()?;
-                    let new_body = merge_expr(target, source, arm.body, span)?;
-                    Ok(MatchArm {
-                        pattern: new_pat,
-                        guard: new_guard,
-                        body: new_body,
+                for_type,
+                constraints,
+                assoc_types,
+                methods,
+            } => {
+                let new_class_args: Result<SmallVec<_>> = class_args
+                    .iter()
+                    .map(|&t| self.type_expr(t, span))
+                    .collect();
+                let new_for_type = self.type_expr(for_type, span)?;
+                let new_constraints: Result<SmallVec<_>> = constraints
+                    .iter()
+                    .map(|(name, cs)| Ok((name.clone(), cs.clone())))
+                    .collect();
+                let new_assoc_types: Result<SmallVec<_>> = assoc_types
+                    .iter()
+                    .map(|a| {
+                        let new_target = self.type_expr(a.target, span)?;
+                        Ok(ast::AssocTypeDef {
+                            name: a.name.clone(),
+                            constraint: a.constraint.clone(),
+                            target: new_target,
+                            span: a.span,
+                        })
                     })
-                })
-                .collect();
-            Expr::Match(new_scrut, new_arms?)
-        }
-        Expr::Closure {
-            type_params,
-            params,
-            ret,
-            body,
-        } => {
-            let new_params: Result<SmallVec<_>> = params
-                .into_iter()
-                .map(|(n, ty_opt)| {
-                    let new_ty = ty_opt
-                        .map(|t| merge_type_expr(target, source, t, span))
-                        .transpose()?;
-                    Ok((n, new_ty))
-                })
-                .collect();
-            let new_ret = ret
-                .map(|t| merge_type_expr(target, source, t, span))
-                .transpose()?;
-            let new_body = merge_expr(target, source, body, span)?;
+                    .collect();
+                let new_methods: Result<SmallVec<_>> = methods
+                    .iter()
+                    .map(|m| {
+                        let new_params: Result<SmallVec<_>> = m
+                            .params
+                            .iter()
+                            .map(|(n, ty_opt)| {
+                                let new_ty = ty_opt
+                                    .map(|t| self.type_expr(t, span))
+                                    .transpose()?;
+                                Ok((n.clone(), new_ty))
+                            })
+                            .collect();
+                        let new_ret = m
+                            .ret
+                            .map(|t| self.type_expr(t, span))
+                            .transpose()?;
+                        let new_body = self.expr(m.body, span)?;
+                        Ok(ast::InstanceMethodDef {
+                            name: m.name.clone(),
+                            params: new_params?,
+                            ret: new_ret,
+                            body: new_body,
+                            span: m.span,
+                        })
+                    })
+                    .collect();
+                Stmt::ClassInstance {
+                    class_name,
+                    class_args: new_class_args?,
+                    type_params,
+                    for_type: new_for_type,
+                    constraints: new_constraints?,
+                    assoc_types: new_assoc_types?,
+                    methods: new_methods?,
+                }
+            }
+        };
+        self.target.add_stmt(new_stmt, span)
+    }
+
+    /// Merge an expression from a parsed AST into the target AST.
+    ///
+    /// Recursively copies the expression and all its sub-expressions,
+    /// statements, type expressions, and patterns.
+    fn expr(&mut self, expr_id: ExprId, span: crate::Span) -> Result<ExprId> {
+        let expr = self
+            .source
+            .get_expr(expr_id)
+            .ok_or_else(|| {
+                crate::Error::parse(span, "invalid expression id", vec![])
+            })?
+            .clone();
+
+        let new_expr = match expr {
+            Expr::Literal(lit) => Expr::Literal(lit),
+            Expr::Interpolation(parts) => {
+                let new_parts: Result<SmallVec<_>> =
+                    parts.iter().map(|&id| self.expr(id, span)).collect();
+                Expr::Interpolation(new_parts?)
+            }
+            Expr::Var(name) => Expr::Var(name),
+            Expr::Intrinsic(op, ref rt, value, txn) => {
+                let new_rt = self.ref_target(rt, span)?;
+                let new_val = value.map(|v| self.expr(v, span)).transpose()?;
+                Expr::Intrinsic(op, new_rt, new_val, txn)
+            }
+            Expr::Binary(lhs, op, rhs) => {
+                let new_lhs = self.expr(lhs, span)?;
+                let new_rhs = self.expr(rhs, span)?;
+                Expr::Binary(new_lhs, op, new_rhs)
+            }
+            Expr::Unary(op, operand) => {
+                let new_op = self.expr(operand, span)?;
+                Expr::Unary(op, new_op)
+            }
+            Expr::Call(callee, args) => {
+                let new_callee = self.expr(callee, span)?;
+                let new_args: Result<SmallVec<_>> =
+                    args.iter().map(|&id| self.expr(id, span)).collect();
+                Expr::Call(new_callee, new_args?)
+            }
+            Expr::Object(entries) => {
+                let new_entries: Result<Vec<_>> = entries
+                    .into_iter()
+                    .map(|entry| match entry {
+                        ObjectEntry::Field(k, v) => self
+                            .expr(v, span)
+                            .map(|new_v| ObjectEntry::Field(k, new_v)),
+                        ObjectEntry::Spread(e) => {
+                            self.expr(e, span).map(ObjectEntry::Spread)
+                        }
+                    })
+                    .collect();
+                Expr::Object(new_entries?)
+            }
+            Expr::Array(elems) => {
+                let new_elems: Result<Vec<_>> = elems
+                    .into_iter()
+                    .map(|elem| match elem {
+                        ArrayElem::Elem(e) => {
+                            self.expr(e, span).map(ArrayElem::Elem)
+                        }
+                        ArrayElem::Spread(e) => {
+                            self.expr(e, span).map(ArrayElem::Spread)
+                        }
+                    })
+                    .collect();
+                Expr::Array(new_elems?)
+            }
+            Expr::Tuple(elems) => {
+                let new_elems: Result<SmallVec<_>> =
+                    elems.iter().map(|&id| self.expr(id, span)).collect();
+                Expr::Tuple(new_elems?)
+            }
+            Expr::MapLit(entries) => {
+                let new_entries: Result<SmallVec<_>> = entries
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let new_k = self.expr(k, span)?;
+                        let new_v = self.expr(v, span)?;
+                        Ok((new_k, new_v))
+                    })
+                    .collect();
+                Expr::MapLit(new_entries?)
+            }
+            Expr::TupleIndex(base, idx) => {
+                let new_base = self.expr(base, span)?;
+                Expr::TupleIndex(new_base, idx)
+            }
+            Expr::Index(base, idx) => {
+                let new_base = self.expr(base, span)?;
+                let new_idx = self.expr(idx, span)?;
+                Expr::Index(new_base, new_idx)
+            }
+            Expr::OptionalIndex(base, idx) => {
+                let new_base = self.expr(base, span)?;
+                let new_idx = self.expr(idx, span)?;
+                Expr::OptionalIndex(new_base, new_idx)
+            }
+            Expr::Field(base, field) => {
+                let new_base = self.expr(base, span)?;
+                Expr::Field(new_base, field)
+            }
+            Expr::OptionalField(base, field) => {
+                let new_base = self.expr(base, span)?;
+                Expr::OptionalField(new_base, field)
+            }
+            Expr::Variant(ty, var, args) => {
+                let new_args: Result<SmallVec<_>> =
+                    args.iter().map(|&id| self.expr(id, span)).collect();
+                Expr::Variant(ty, var, new_args?)
+            }
+            Expr::Path(segments) => Expr::Path(segments),
+            Expr::ClassMethod(class, method, args) => {
+                let new_args: Result<SmallVec<_>> =
+                    args.iter().map(|&id| self.expr(id, span)).collect();
+                Expr::ClassMethod(class, method, new_args?)
+            }
+            Expr::ClassMethodRef(class, type_args, method) => {
+                let new_type_args: Result<SmallVec<_>> = type_args
+                    .iter()
+                    .map(|&id| self.type_expr(id, span))
+                    .collect();
+                Expr::ClassMethodRef(class, new_type_args?, method)
+            }
+            Expr::Is(expr, pat) => {
+                let new_expr = self.expr(expr, span)?;
+                let new_pat = self.type_pattern(&pat, span)?;
+                Expr::Is(new_expr, new_pat)
+            }
+            Expr::As(expr, ty) => {
+                let new_expr = self.expr(expr, span)?;
+                let new_ty = self.type_expr(ty, span)?;
+                Expr::As(new_expr, new_ty)
+            }
+            Expr::Read(expr, ty) => {
+                let new_expr = self.expr(expr, span)?;
+                let new_ty = self.type_expr(ty, span)?;
+                Expr::Read(new_expr, new_ty)
+            }
+            Expr::Block(stmts, tail) => {
+                let new_stmts: Result<Vec<_>> =
+                    stmts.iter().map(|&s| self.stmt(s, span)).collect();
+                let new_tail = tail.map(|e| self.expr(e, span)).transpose()?;
+                Expr::Block(new_stmts?, new_tail)
+            }
+            Expr::If(cond, then, els) => {
+                let new_cond = self.expr(cond, span)?;
+                let new_then = self.expr(then, span)?;
+                let new_els = els.map(|e| self.expr(e, span)).transpose()?;
+                Expr::If(new_cond, new_then, new_els)
+            }
+            Expr::Match(scrut, arms) => {
+                let new_scrut = self.expr(scrut, span)?;
+                let new_arms: Result<Vec<_>> = arms
+                    .into_iter()
+                    .map(|arm| {
+                        let new_pat = self.pattern(arm.pattern, span)?;
+                        let new_guard = arm
+                            .guard
+                            .map(|g| self.expr(g, span))
+                            .transpose()?;
+                        let new_body = self.expr(arm.body, span)?;
+                        Ok(MatchArm {
+                            pattern: new_pat,
+                            guard: new_guard,
+                            body: new_body,
+                        })
+                    })
+                    .collect();
+                Expr::Match(new_scrut, new_arms?)
+            }
             Expr::Closure {
                 type_params,
-                params: new_params?,
-                ret: new_ret,
-                body: new_body,
-            }
-        }
-        Expr::Postfix(op, expr) => {
-            let new_expr = merge_expr(target, source, expr, span)?;
-            Expr::Postfix(op, new_expr)
-        }
-        Expr::Range(start, end, incl) => {
-            let new_start = merge_expr(target, source, start, span)?;
-            let new_end = merge_expr(target, source, end, span)?;
-            Expr::Range(new_start, new_end, incl)
-        }
-        Expr::Annotate(expr, ty) => {
-            let new_expr = merge_expr(target, source, expr, span)?;
-            let new_ty = merge_type_expr(target, source, ty, span)?;
-            Expr::Annotate(new_expr, new_ty)
-        }
-        Expr::Json(entries) => {
-            let new_entries: Result<Vec<_>> = entries
-                .into_iter()
-                .map(|(k, v)| {
-                    merge_expr(target, source, v, span).map(|new_v| (k, new_v))
-                })
-                .collect();
-            Expr::Json(new_entries?)
-        }
-        Expr::JsonAccess(expr, kind, key) => {
-            let new_expr = merge_expr(target, source, expr, span)?;
-            let new_key = match key {
-                JsonAccessKey::Field(f) => JsonAccessKey::Field(f),
-                JsonAccessKey::Expr(e) => {
-                    JsonAccessKey::Expr(merge_expr(target, source, e, span)?)
+                params,
+                ret,
+                body,
+            } => {
+                let new_params: Result<SmallVec<_>> = params
+                    .into_iter()
+                    .map(|(n, ty_opt)| {
+                        let new_ty = ty_opt
+                            .map(|t| self.type_expr(t, span))
+                            .transpose()?;
+                        Ok((n, new_ty))
+                    })
+                    .collect();
+                let new_ret =
+                    ret.map(|t| self.type_expr(t, span)).transpose()?;
+                let new_body = self.expr(body, span)?;
+                Expr::Closure {
+                    type_params,
+                    params: new_params?,
+                    ret: new_ret,
+                    body: new_body,
                 }
-            };
-            Expr::JsonAccess(new_expr, kind, new_key)
-        }
-        Expr::Regex(pat, cache_idx) => Expr::Regex(pat, cache_idx),
-        Expr::Matches(lhs, rhs) => {
-            let new_lhs = merge_expr(target, source, lhs, span)?;
-            let new_rhs = merge_expr(target, source, rhs, span)?;
-            Expr::Matches(new_lhs, new_rhs)
-        }
-        Expr::Catch(expr, handler) => {
-            let new_expr = merge_expr(target, source, expr, span)?;
-            let new_handler = merge_expr(target, source, handler, span)?;
-            Expr::Catch(new_expr, new_handler)
-        }
-        Expr::Write(out) => {
-            let new_out = merge_write_expr(target, source, &out, span)?;
-            Expr::Write(new_out)
-        }
-        Expr::Raise(expr) => {
-            let new_expr = merge_expr(target, source, expr, span)?;
-            Expr::Raise(new_expr)
-        }
-        Expr::Forever {
-            seed,
-            state_param,
-            cont_param,
-            body,
-        } => {
-            let new_seed = merge_expr(target, source, seed, span)?;
-            let new_state_ty = state_param
-                .1
-                .map(|t| merge_type_expr(target, source, t, span))
-                .transpose()?;
-            let new_cont_ty = cont_param
-                .1
-                .map(|t| merge_type_expr(target, source, t, span))
-                .transpose()?;
-            let new_body = merge_expr(target, source, body, span)?;
-            Expr::Forever {
-                seed: new_seed,
-                state_param: (state_param.0, new_state_ty),
-                cont_param: (cont_param.0, new_cont_ty),
-                body: new_body,
             }
-        }
-        Expr::Transaction(txn_expr) => {
-            let new_stmts: Result<Vec<_>> = txn_expr
-                .stmts
-                .iter()
-                .map(|&s| merge_stmt(target, source, s, span))
-                .collect();
-            let new_tail = txn_expr
-                .expr
-                .map(|e| merge_expr(target, source, e, span))
-                .transpose()?;
-            let new_timeout = txn_expr
-                .modifiers
-                .timeout
-                .map(|e| merge_expr(target, source, e, span))
-                .transpose()?;
-            Expr::Transaction(ast::TransactionExpr {
-                id: txn_expr.id,
-                stmts: new_stmts?,
-                expr: new_tail,
-                modifiers: TransactionModifiers {
-                    conflict: txn_expr.modifiers.conflict,
-                    timeout: new_timeout,
-                    retries: txn_expr.modifiers.retries,
-                    isolation: txn_expr.modifiers.isolation,
-                },
-            })
-        }
-        Expr::Mempty => Expr::Mempty,
-        Expr::Ref(ref dbref) => {
-            let new_dbref = merge_dbref(target, source, dbref, span)?;
-            Expr::Ref(new_dbref)
-        }
-    };
+            Expr::Postfix(op, expr) => {
+                let new_expr = self.expr(expr, span)?;
+                Expr::Postfix(op, new_expr)
+            }
+            Expr::Range(start, end, incl) => {
+                let new_start = self.expr(start, span)?;
+                let new_end = self.expr(end, span)?;
+                Expr::Range(new_start, new_end, incl)
+            }
+            Expr::Annotate(expr, ty) => {
+                let new_expr = self.expr(expr, span)?;
+                let new_ty = self.type_expr(ty, span)?;
+                Expr::Annotate(new_expr, new_ty)
+            }
+            Expr::Json(entries) => {
+                let new_entries: Result<Vec<_>> = entries
+                    .into_iter()
+                    .map(|(k, v)| self.expr(v, span).map(|new_v| (k, new_v)))
+                    .collect();
+                Expr::Json(new_entries?)
+            }
+            Expr::JsonAccess(expr, kind, key) => {
+                let new_expr = self.expr(expr, span)?;
+                let new_key = match key {
+                    JsonAccessKey::Field(f) => JsonAccessKey::Field(f),
+                    JsonAccessKey::Expr(e) => {
+                        JsonAccessKey::Expr(self.expr(e, span)?)
+                    }
+                };
+                Expr::JsonAccess(new_expr, kind, new_key)
+            }
+            Expr::Regex(pat, cache_idx) => Expr::Regex(pat, cache_idx),
+            Expr::Matches(lhs, rhs) => {
+                let new_lhs = self.expr(lhs, span)?;
+                let new_rhs = self.expr(rhs, span)?;
+                Expr::Matches(new_lhs, new_rhs)
+            }
+            Expr::Catch(expr, handler) => {
+                let new_expr = self.expr(expr, span)?;
+                let new_handler = self.expr(handler, span)?;
+                Expr::Catch(new_expr, new_handler)
+            }
+            Expr::Write(out) => {
+                let new_out = self.write_expr(&out, span)?;
+                Expr::Write(new_out)
+            }
+            Expr::Raise(expr) => {
+                let new_expr = self.expr(expr, span)?;
+                Expr::Raise(new_expr)
+            }
+            Expr::Forever {
+                seed,
+                state_param,
+                cont_param,
+                body,
+            } => {
+                let new_seed = self.expr(seed, span)?;
+                let new_state_ty = state_param
+                    .1
+                    .map(|t| self.type_expr(t, span))
+                    .transpose()?;
+                let new_cont_ty = cont_param
+                    .1
+                    .map(|t| self.type_expr(t, span))
+                    .transpose()?;
+                let new_body = self.expr(body, span)?;
+                Expr::Forever {
+                    seed: new_seed,
+                    state_param: (state_param.0, new_state_ty),
+                    cont_param: (cont_param.0, new_cont_ty),
+                    body: new_body,
+                }
+            }
+            Expr::Transaction(txn_expr) => {
+                let new_stmts: Result<Vec<_>> = txn_expr
+                    .stmts
+                    .iter()
+                    .map(|&s| self.stmt(s, span))
+                    .collect();
+                let new_tail =
+                    txn_expr.expr.map(|e| self.expr(e, span)).transpose()?;
+                let new_timeout = txn_expr
+                    .modifiers
+                    .timeout
+                    .map(|e| self.expr(e, span))
+                    .transpose()?;
+                Expr::Transaction(ast::TransactionExpr {
+                    id: txn_expr.id,
+                    stmts: new_stmts?,
+                    expr: new_tail,
+                    modifiers: TransactionModifiers {
+                        conflict: txn_expr.modifiers.conflict,
+                        timeout: new_timeout,
+                        retries: txn_expr.modifiers.retries,
+                        isolation: txn_expr.modifiers.isolation,
+                    },
+                })
+            }
+            Expr::Mempty => Expr::Mempty,
+            Expr::Ref(ref dbref) => {
+                let new_dbref = self.dbref(dbref, span)?;
+                Expr::Ref(new_dbref)
+            }
+        };
 
-    target.add_expr(new_expr, span)
+        self.target.add_expr(new_expr, span)
+    }
 }

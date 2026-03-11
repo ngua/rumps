@@ -151,7 +151,7 @@ impl Parser {
                 })
             })
             .and_then(|cst_stmts| {
-                let (ast, stmts) = lower::program_with_path(
+                let (ast, stmts) = lower::LowerCtx::program_with_path(
                     cst_stmts,
                     src_path,
                     &mut interner,

@@ -51,8 +51,7 @@ impl Parser {
                         .or_not(),
                 )
                 .map(|(name, maybe_pat)| {
-                    let p = maybe_pat
-                        .unwrap_or_else(|| cst::BindingPattern::Var(name));
+                    let p = maybe_pat.unwrap_or(cst::BindingPattern::Var(name));
                     (name, p)
                 });
 
@@ -243,8 +242,7 @@ impl Parser {
                         .or_not(),
                 )
                 .map(|(name, maybe_pat)| {
-                    let p = maybe_pat
-                        .unwrap_or_else(|| cst::MatchPattern::Var(name));
+                    let p = maybe_pat.unwrap_or(cst::MatchPattern::Var(name));
                     (name, p)
                 });
 

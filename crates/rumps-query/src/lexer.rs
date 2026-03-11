@@ -102,7 +102,7 @@ impl<S: Clone + PartialEq> Spanned<S> {
                     Token::Newline => {
                         // Only push the first newline; skip consecutive ones
                         if !st.after_newline {
-                            st.result.push(Spanned::new(t.tok.clone(), t.span));
+                            st.result.push(Self::new(t.tok.clone(), t.span));
                             st.after_newline = true;
                             st.pending_span = t.span;
                         }
@@ -110,9 +110,9 @@ impl<S: Clone + PartialEq> Spanned<S> {
                     Token::Eof => {
                         // Emit final dedents before EOF
                         (1..st.indent_stack.len()).for_each(|_| {
-                            st.result.push(Spanned::new(Token::Dedent, t.span));
+                            st.result.push(Self::new(Token::Dedent, t.span));
                         });
-                        st.result.push(Spanned::new(t.tok.clone(), t.span));
+                        st.result.push(Self::new(t.tok.clone(), t.span));
                     }
                     _ => {
                         if st.after_newline {
@@ -120,7 +120,7 @@ impl<S: Clone + PartialEq> Spanned<S> {
                                 st.indent_stack.last().copied().unwrap_or(0);
                             if t.col > cur {
                                 st.indent_stack.push(t.col);
-                                st.result.push(Spanned::new(
+                                st.result.push(Self::new(
                                     Token::Indent,
                                     st.pending_span,
                                 ));
@@ -134,7 +134,7 @@ impl<S: Clone + PartialEq> Spanned<S> {
                             }
                             st.after_newline = false;
                         }
-                        st.result.push(Spanned::new(t.tok.clone(), t.span));
+                        st.result.push(Self::new(t.tok.clone(), t.span));
                     }
                 }
                 st
