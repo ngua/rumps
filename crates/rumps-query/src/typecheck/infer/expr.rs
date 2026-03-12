@@ -1550,11 +1550,10 @@ impl InferCtx<'_> {
                 // Base is type variable; generate Indexable constraint.
                 // The index type is resolved via the associated type `Base.Index`.
                 let elem = self.fresh();
-                let idx_name = self.env.intern("Index");
                 let expected_idx = self.ty_arena.alloc(Ty::AssocType(
                     v,
                     BuiltinClassTag::Indexable,
-                    idx_name,
+                    self.idx_id,
                 ));
                 self.unify(idx_ty, expected_idx, span);
                 self.constrain(Constraint::Class {
@@ -1595,9 +1594,8 @@ impl InferCtx<'_> {
                         );
 
                         // Resolve index type from associated type
-                        let idx_name = self.env.intern("Index");
                         let inst_idx_ty = inst
-                            .get_assoc_type(idx_name)
+                            .get_assoc_type(self.idx_id)
                             .map(|a| self.ty_arena.apply(a.ty, &param_subst))
                             .unwrap_or(TyArena::UNKNOWN);
                         self.unify(idx_ty, inst_idx_ty, span);
@@ -1678,11 +1676,10 @@ impl InferCtx<'_> {
                 // Generate Indexable constraint with elem wrapped in Option.
                 // The index type is resolved via the associated type `Base.Index`.
                 let inner = self.fresh();
-                let idx_name = self.env.intern("Index");
                 let expected_idx = self.ty_arena.alloc(Ty::AssocType(
                     v,
                     BuiltinClassTag::Indexable,
-                    idx_name,
+                    self.idx_id,
                 ));
                 self.unify(idx_ty, expected_idx, span);
                 self.constrain(Constraint::Class {
@@ -1722,9 +1719,8 @@ impl InferCtx<'_> {
                         );
 
                         // Resolve index type from associated type
-                        let idx_name = self.env.intern("Index");
                         let inst_idx_ty = inst
-                            .get_assoc_type(idx_name)
+                            .get_assoc_type(self.idx_id)
                             .map(|a| self.ty_arena.apply(a.ty, &param_subst))
                             .unwrap_or(TyArena::UNKNOWN);
                         self.unify(idx_ty, inst_idx_ty, span);
@@ -2494,15 +2490,12 @@ impl InferCtx<'_> {
         // Handle builtin types
         if type_id == TypeId::OPTION {
             let inner = self.fresh();
-            let t_id = self.env.intern("T");
-            let map = std::iter::once((t_id, inner)).collect();
+            let map = std::iter::once((self.t_id, inner)).collect();
             (self.ty_arena.option(inner), map)
         } else if type_id == TypeId::RESULT {
             let ok = self.fresh();
             let err = self.fresh();
-            let ok_id = self.env.intern("T");
-            let err_id = self.env.intern("E");
-            let map = [(ok_id, ok), (err_id, err)].into_iter().collect();
+            let map = [(self.t_id, ok), (self.e_id, err)].into_iter().collect();
             (self.ty_arena.result(ok, err), map)
         } else {
             // User-defined sum type

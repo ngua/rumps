@@ -5,6 +5,7 @@
 //! no `Rc` or `RefCell` required.
 
 use std::collections::HashSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use smallvec::SmallVec;
@@ -179,7 +180,7 @@ impl<'a> LowerCtx<'a> {
         self.in_progress.insert(canonical.clone());
 
         // Read file content
-        let content = std::fs::read_to_string(&canonical).map_err(|e| {
+        let content = fs::read_to_string(&canonical).map_err(|e| {
             Error::parse(
                 span,
                 format!(
