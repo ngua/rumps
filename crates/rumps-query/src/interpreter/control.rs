@@ -206,16 +206,8 @@ impl<I: IoContext> Interpreter<'_, I> {
         let cond_expr = self.ast.get_expr(cond).cloned();
         match cond_expr {
             Some(Expr::Is(expr, TypePattern::VariantBind(ty, var, names))) => {
-                let ty_s = self.arena.strings.resolve(ty);
-                let var_s = self.arena.strings.resolve(var);
-                let ns: Vec<String> = names
-                    .iter()
-                    .map(|n| self.arena.strings.resolve(*n))
-                    .collect();
-                self.if_with_bindings(
-                    expr, &ty_s, &var_s, &ns, then_br, else_br,
-                )
-                .await
+                self.if_with_bindings(expr, ty, var, &names, then_br, else_br)
+                    .await
             }
             _ => {
                 let cond_val = self.eval(cond).await?;
@@ -256,9 +248,9 @@ impl<I: IoContext> Interpreter<'_, I> {
     async fn if_with_bindings(
         &mut self,
         expr: ExprId,
-        ty_name: &str,
-        var_name: &str,
-        names: &[String],
+        ty_name: StringId,
+        var_name: StringId,
+        names: &[StringId],
         then_br: ExprId,
         else_br: Option<ExprId>,
     ) -> Result<Value> {
@@ -272,10 +264,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             Some(else_id) => {
                 // if/else with bindings: only evaluate the taken branch
                 if matched {
-                    self.eval_with_variant_bindings(
-                        &val, ty_name, var_name, names, then_br, span,
-                    )
-                    .await
+                    self.eval_with_variant_bindings(&val, names, then_br, span)
+                        .await
                 } else {
                     self.eval(else_id).await
                 }
@@ -284,10 +274,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 // Single-arm if with bindings: body must be Unit.
                 // Type checker guarantees body is Unit.
                 if matched {
-                    self.eval_with_variant_bindings(
-                        &val, ty_name, var_name, names, then_br, span,
-                    )
-                    .await?;
+                    self.eval_with_variant_bindings(&val, names, then_br, span)
+                        .await?;
                 }
                 Ok(Value::Unit)
             }
@@ -302,9 +290,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     async fn eval_with_variant_bindings(
         &mut self,
         val: &Value,
-        _ty_name: &str,
-        _var_name: &str,
-        names: &[String],
+        names: &[StringId],
         body: ExprId,
         span: Span,
     ) -> Result<Value> {

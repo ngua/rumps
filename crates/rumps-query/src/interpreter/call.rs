@@ -166,9 +166,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
                 if let Some((ty_id, var_id)) = maybe_variant {
                     // Handle as variant constructor
-                    let ty_s = self.arena.strings.resolve(ty_id);
-                    let var_s = self.arena.strings.resolve(var_id);
-                    self.variant(&ty_s, &var_s, args, span).await
+                    self.variant(ty_id, var_id, args, span).await
                 } else {
                     // Evaluate callee expression and call the result
                     let callee_val = self.eval(callee).await?;

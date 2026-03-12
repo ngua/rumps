@@ -6,6 +6,7 @@ use smallvec::{smallvec, SmallVec};
 use super::class::ClassCtx;
 use super::Interpreter;
 use crate::ast::ExprId;
+use crate::intern::StringId;
 use crate::io::IoContext;
 use crate::typecheck::BuiltinClassTag;
 use crate::value::{TypeExprId, TypeId, Value, ValueId};
@@ -89,24 +90,21 @@ impl<I: IoContext> Interpreter<'_, I> {
     #[async_recursion]
     pub(super) async fn variant(
         &mut self,
-        ty_name: &str,
-        var_name: &str,
+        ty_name: StringId,
+        var_name: StringId,
         args: &[ExprId],
         span: Span,
     ) -> Result<Value> {
-        let ty_id = self.arena.intern(ty_name);
-        let var_id = self.arena.intern(var_name);
-
         // Typechecker validates type names
         let type_id = self
             .registry
-            .lookup(ty_id)
+            .lookup(ty_name)
             .unwrap_or_else(|| typechecked!("variant", "known type"));
 
         // Typechecker validates variant names
         let var_def = self
             .registry
-            .lookup_variant(type_id, var_id)
+            .lookup_variant(type_id, var_name)
             .unwrap_or_else(|| typechecked!("variant", "known variant"));
 
         // Typechecker validates arity

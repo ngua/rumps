@@ -56,19 +56,13 @@ impl<I: IoContext> Interpreter<'_, I> {
                 }
             }
             TypePattern::Variant(ty_name, var_name) => {
-                let ty_s = self.arena.strings.resolve(*ty_name);
-                let var_s = self.arena.strings.resolve(*var_name);
-                self.check_variant_zero_arity(v, &ty_s, &var_s, span)
+                self.check_variant_zero_arity(v, *ty_name, *var_name, span)
             }
             TypePattern::VariantWildcard(ty_name, var_name) => {
-                let ty_s = self.arena.strings.resolve(*ty_name);
-                let var_s = self.arena.strings.resolve(*var_name);
-                self.check_variant(v, &ty_s, &var_s, span)
+                self.check_variant(v, *ty_name, *var_name, span)
             }
             TypePattern::VariantBind(ty_name, var_name, _) => {
-                let ty_s = self.arena.strings.resolve(*ty_name);
-                let var_s = self.arena.strings.resolve(*var_name);
-                self.check_variant(v, &ty_s, &var_s, span)
+                self.check_variant(v, *ty_name, *var_name, span)
             }
             TypePattern::Object(fields) => {
                 // Structural object check: `is { name: String, age: Int }`
@@ -99,8 +93,8 @@ impl<I: IoContext> Interpreter<'_, I> {
     fn check_variant_zero_arity(
         &self,
         val: &Value,
-        ty_name: &str,
-        var_name: &str,
+        ty_name: StringId,
+        var_name: StringId,
         span: Span,
     ) -> Result<bool> {
         let (type_id, var_def) =
@@ -126,8 +120,8 @@ impl<I: IoContext> Interpreter<'_, I> {
     pub(super) fn check_variant(
         &self,
         val: &Value,
-        ty_name: &str,
-        var_name: &str,
+        ty_name: StringId,
+        var_name: StringId,
         span: Span,
     ) -> Result<bool> {
         let (type_id, var_def) =
@@ -149,19 +143,18 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Typechecker validates that type and variant names are valid.
     pub(super) fn lookup_variant(
         &self,
-        ty_name: &str,
-        var_name: &str,
+        ty_name: StringId,
+        var_name: StringId,
         _span: Span,
     ) -> Result<(TypeId, crate::value::VariantDef)> {
-        let ty_id = self.arena.lookup_string(ty_name);
-        let var_id = self.arena.lookup_string(var_name);
-
-        let type_id = ty_id
-            .and_then(|id| self.registry.lookup(id))
+        let type_id = self
+            .registry
+            .lookup(ty_name)
             .unwrap_or_else(|| typechecked!("pattern", "known type"));
 
-        let var_def = var_id
-            .and_then(|id| self.registry.lookup_variant(type_id, id))
+        let var_def = self
+            .registry
+            .lookup_variant(type_id, var_name)
             .cloned()
             .unwrap_or_else(|| typechecked!("pattern", "known variant"));
 
@@ -171,7 +164,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Bind payload values to names in the current scope.
     pub(super) fn bind_payloads(
         &mut self,
-        names: &[String],
+        names: &[StringId],
         payloads: &[ValueId],
         span: Span,
     ) {
@@ -180,8 +173,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         names
             .iter()
             .zip(payloads.iter())
-            .for_each(|(name, &val_id)| {
-                let nid = self.arena.intern(name);
+            .for_each(|(&nid, &val_id)| {
                 // Re-add the value to get a fresh ValueId in case it matters
                 let val =
                     self.arena.get(val_id).cloned().unwrap_or(fallback.clone());
@@ -223,16 +215,10 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             // Structural patterns use unwrapped value
             MatchPattern::Variant(ty_name, var_name, sub_pats) => {
-                let ty_s = self.arena.strings.resolve(*ty_name);
-                let var_s = self.arena.strings.resolve(*var_name);
-                self.try_match_variant(&ty_s, &var_s, sub_pats, v, span)
+                self.try_match_variant(*ty_name, *var_name, sub_pats, v, span)
             }
             MatchPattern::Object(fields) => {
-                let fs: SmallVec<[(String, MatchPatternId); 4]> = fields
-                    .iter()
-                    .map(|(n, p)| (self.arena.strings.resolve(*n), *p))
-                    .collect();
-                self.try_match_object(&fs, v, span)
+                self.try_match_object(fields, v, span)
             }
             MatchPattern::Tuple(pats) => self.try_match_tuple(pats, v, span),
             MatchPattern::Array(pats, rest) => {
@@ -240,8 +226,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             // Is pattern uses original value (value_matches_type_expr handles unwrapping)
             MatchPattern::Is(name, ty_id) => {
-                let ns = self.arena.strings.resolve(*name);
-                self.try_match_is(&ns, *ty_id, val, span)
+                self.try_match_is(*name, *ty_id, val, span)
             }
         }
     }
@@ -249,19 +234,18 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Try to match a type-narrowing pattern: `x IS Type`
     fn try_match_is(
         &mut self,
-        name: &str,
+        name: StringId,
         ast_ty_id: crate::ast::AstTypeExprId,
         val: &Value,
         span: Span,
     ) -> Result<Option<Vec<(StringId, ValueId)>>> {
         let ty_expr = self.resolve_type_expr(ast_ty_id, span)?;
         if self.value_matches_type_expr(val, ty_expr) {
-            let name_id = self.arena.intern(name);
             // Unwrap Union/Newtype wrappers to bind the inner value
             let unwrapped = self.unwrap_value_recursive(val);
             let bound_val = unwrapped.as_ref().unwrap_or(val);
             let val_id = self.arena.add(bound_val.clone(), span);
-            Ok(Some(vec![(name_id, val_id)]))
+            Ok(Some(vec![(name, val_id)]))
         } else {
             Ok(None)
         }
@@ -270,8 +254,8 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Try to match a variant pattern against a value.
     fn try_match_variant(
         &mut self,
-        ty_name: &str,
-        var_name: &str,
+        ty_name: StringId,
+        var_name: StringId,
         sub_pats: &[MatchPatternId],
         val: &Value,
         span: Span,
@@ -307,31 +291,28 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Try to match an object pattern against a value.
     fn try_match_object(
         &mut self,
-        fields: &[(String, MatchPatternId)],
+        fields: &[(StringId, MatchPatternId)],
         val: &Value,
         span: Span,
     ) -> Result<Option<Vec<(StringId, ValueId)>>> {
         match val {
             Value::Object(obj) => {
                 // Collect bindings from all field matches
-                fields
-                    .iter()
-                    .try_fold(Some(vec![]), |acc, (fname, pat_id)| {
-                        acc.map_or(Ok(None), |mut bindings| {
-                            let fid = self.arena.intern(fname);
-                            obj.get(&fid)
-                                .and_then(|&vid| self.arena.get(vid).cloned())
-                                .map_or(Ok(None), |fval| {
-                                    self.try_match_pattern(*pat_id, &fval, span)
-                                        .map(|maybe_sub| {
-                                            maybe_sub.map(|sub| {
-                                                bindings.extend(sub);
-                                                bindings
-                                            })
+                fields.iter().try_fold(Some(vec![]), |acc, (fid, pat_id)| {
+                    acc.map_or(Ok(None), |mut bindings| {
+                        obj.get(fid)
+                            .and_then(|&vid| self.arena.get(vid).cloned())
+                            .map_or(Ok(None), |fval| {
+                                self.try_match_pattern(*pat_id, &fval, span)
+                                    .map(|maybe_sub| {
+                                        maybe_sub.map(|sub| {
+                                            bindings.extend(sub);
+                                            bindings
                                         })
-                                })
-                        })
+                                    })
+                            })
                     })
+                })
             }
             _ => Ok(None),
         }

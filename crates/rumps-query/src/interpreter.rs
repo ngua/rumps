@@ -594,9 +594,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 self.optional_field(base, &field, span).await
             }
             Expr::Variant(ty, var, args) => {
-                let ty_s = self.arena.strings.resolve(ty);
-                let var_s = self.arena.strings.resolve(var);
-                self.variant(&ty_s, &var_s, &args, span).await
+                self.variant(ty, var, &args, span).await
             }
             Expr::Path(ref segments) => self.path(segments, span),
             Expr::Is(expr, pattern) => self.is(expr, &pattern, span).await,
