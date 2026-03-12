@@ -149,10 +149,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
         // For variable callees, use name-based resolution (functions first)
         match callee_expr {
-            Expr::Var(ref name) => {
-                let n = self.arena.strings.resolve(*name);
-                self.call_by_name(&n, args, span).await
-            }
+            Expr::Var(ref name) => self.call_by_name(*name, args, span).await,
             // Check if this is a variant constructor for a user-defined type
             Expr::Field(base_id, ref var_name) => {
                 let maybe_variant =
@@ -197,19 +194,17 @@ impl<I: IoContext> Interpreter<'_, I> {
     #[async_recursion]
     async fn call_by_name(
         &mut self,
-        name: &str,
+        name: StringId,
         args: &[ExprId],
         span: Span,
     ) -> Result<Value> {
-        let name_id = self.arena.intern(name);
-
         // Clone function def to avoid borrow issues with async
-        let func_def = self.functions.get(&name_id).cloned();
+        let func_def = self.functions.get(&name).cloned();
         let scope_val = func_def.as_ref().map_or_else(
             || {
                 self.env
                     .scopes
-                    .lookup(name_id)
+                    .lookup(name)
                     .and_then(|val_id| self.arena.get(val_id).cloned())
             },
             |_| None,
@@ -387,12 +382,6 @@ impl<I: IoContext> Interpreter<'_, I> {
         use crate::typecheck::BuiltinClassTag;
 
         let cs = self.arena.strings.get(class).unwrap_or_default();
-        let ms = self
-            .arena
-            .strings
-            .get(method)
-            .unwrap_or_default()
-            .to_owned();
         let kind = BuiltinClassTag::from_str(cs).unwrap_or_else(|| {
             typechecked!("class method class", "known class")
         });
@@ -400,7 +389,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         // Evaluate arguments
         let arg_ids = self.eval_args(args).await?;
 
-        self.dispatch_class_method(Some(expr_id), kind, &ms, &arg_ids, span)
+        self.dispatch_class_method(Some(expr_id), kind, method, &arg_ids, span)
             .await
     }
 
@@ -425,17 +414,12 @@ impl<I: IoContext> Interpreter<'_, I> {
             .arena
             .get_str(class)
             .unwrap_or_else(|| invariant!("class StringId in arena"));
-        let method_str: String = self
-            .arena
-            .get_str(method)
-            .map(str::to_owned)
-            .unwrap_or_else(|| invariant!("method StringId in arena"));
 
         let kind = BuiltinClassTag::from_str(class_str).unwrap_or_else(|| {
             typechecked!("invoke_class_method_fn", "known class")
         });
 
-        self.dispatch_class_method(expr_id, kind, &method_str, args, span)
+        self.dispatch_class_method(expr_id, kind, method, args, span)
             .await
     }
 
@@ -458,7 +442,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         expr_id: Option<ExprId>,
         class: crate::typecheck::BuiltinClassTag,
-        method: &str,
+        method: StringId,
         args: &[ValueId],
         span: Span,
     ) -> Result<Value> {
@@ -484,9 +468,8 @@ impl<I: IoContext> Interpreter<'_, I> {
 
         // If we have a user type, check for user instance
         if let Some(type_id) = user_type_id {
-            let method_id = self.arena.intern(method);
             if let Some(fn_name) =
-                self.user_instances.lookup_method(class, type_id, method_id)
+                self.user_instances.lookup_method(class, type_id, method)
             {
                 // Dispatch to user-defined instance method
                 let func_def = self.functions.get(&fn_name).cloned();
@@ -539,7 +522,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         expr_id: Option<ExprId>,
         class: crate::typecheck::BuiltinClassTag,
-        method: &str,
+        method: StringId,
         args: &[ValueId],
         span: Span,
     ) -> Result<Value> {
@@ -576,13 +559,14 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         expr_id: Option<ExprId>,
         class: crate::typecheck::BuiltinClassTag,
-        method: &str,
+        method: StringId,
         args: &[ValueId],
         span: Span,
     ) -> Result<Value> {
+        let ms = self.arena.strings.get(method).unwrap_or_default();
         // Check for HOF first (requires async)
         if let Some(super::class::MethodFn::Hof(f)) =
-            self.class_methods.lookup(class, method)
+            self.class_methods.lookup(class, ms)
         {
             self.run_hof_trampoline(f, args, span).await
         } else {
@@ -600,11 +584,13 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         expr_id: Option<ExprId>,
         class: crate::typecheck::BuiltinClassTag,
-        method: &str,
+        method: StringId,
         args: &[ValueId],
         span: Span,
     ) -> Result<Value> {
         use super::class::ClassCtx;
+
+        let ms = self.arena.strings.resolve(method);
 
         let val = |i: usize| {
             self.arena
@@ -613,7 +599,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .unwrap_or_else(|| invariant!("class method arg in arena"))
         };
 
-        match self.class_methods.lookup(class, method) {
+        match self.class_methods.lookup(class, &ms) {
             Some(super::class::MethodFn::Binary(_)) => {
                 let left = val(0);
                 let right = val(1);
@@ -626,7 +612,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     span,
                 };
                 self.class_methods
-                    .dispatch_binary(class, method, &mut ctx, &left, &right)
+                    .dispatch_binary(class, &ms, &mut ctx, &left, &right)
             }
             Some(super::class::MethodFn::Unary(_)) => {
                 let v = val(0);
@@ -638,8 +624,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     regex_cache: &self.regex_cache,
                     span,
                 };
-                self.class_methods
-                    .dispatch_unary(class, method, &mut ctx, &v)
+                self.class_methods.dispatch_unary(class, &ms, &mut ctx, &v)
             }
             Some(super::class::MethodFn::Nullary(_)) => {
                 let id = expr_id.unwrap_or_else(|| {
@@ -659,7 +644,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     span,
                 };
                 self.class_methods
-                    .dispatch_nullary(class, method, &mut ctx, &ty)
+                    .dispatch_nullary(class, &ms, &mut ctx, &ty)
             }
             Some(super::class::MethodFn::Convert(_)) => {
                 let v = val(0);
@@ -685,7 +670,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     span,
                 };
                 self.class_methods
-                    .dispatch_convert(class, method, &mut ctx, &v, &ty)
+                    .dispatch_convert(class, &ms, &mut ctx, &v, &ty)
             }
             Some(super::class::MethodFn::Hof(_)) => {
                 // HOFs need async; caller should use dispatch_class_method

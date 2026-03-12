@@ -131,6 +131,80 @@ use crate::value::{
 };
 use crate::{Result, Span};
 
+/// Pre-interned constant strings used by the interpreter.
+///
+/// Avoids repeated hash lookups for strings that are known at construction
+/// time and referenced on hot paths (class dispatch, indexing, etc.).
+struct PreInterned {
+    empty: StringId,
+    main: StringId,
+    // Indexable class methods
+    index: StringId,
+    get: StringId,
+    // Numeric class methods
+    add: StringId,
+    sub: StringId,
+    mul: StringId,
+    floor_div: StringId,
+    r#mod: StringId,
+    pow: StringId,
+    // Eq / Ord
+    eq: StringId,
+    compare: StringId,
+    // Monoid
+    concat: StringId,
+    // BitLike
+    bit_and: StringId,
+    bit_or: StringId,
+    shl: StringId,
+    shr: StringId,
+}
+
+impl PreInterned {
+    fn new(arena: &mut ValueArena) -> Self {
+        Self {
+            empty: arena.intern(""),
+            main: arena.intern("main"),
+            index: arena.intern("index"),
+            get: arena.intern("get"),
+            add: arena.intern("add"),
+            sub: arena.intern("sub"),
+            mul: arena.intern("mul"),
+            floor_div: arena.intern("floor-div"),
+            r#mod: arena.intern("mod"),
+            pow: arena.intern("pow"),
+            eq: arena.intern("eq"),
+            compare: arena.intern("compare"),
+            concat: arena.intern("concat"),
+            bit_and: arena.intern("bit-and"),
+            bit_or: arena.intern("bit-or"),
+            shl: arena.intern("shl"),
+            shr: arena.intern("shr"),
+        }
+    }
+
+    /// Look up the pre-interned `StringId` for a `BinOp` class dispatch
+    /// method name.
+    fn class_dispatch(&self, method: &str) -> StringId {
+        match method {
+            "add" => self.add,
+            "sub" => self.sub,
+            "mul" => self.mul,
+            "floor-div" => self.floor_div,
+            "mod" => self.r#mod,
+            "pow" => self.pow,
+            "eq" => self.eq,
+            "compare" => self.compare,
+            "concat" => self.concat,
+            "bit-and" => self.bit_and,
+            "bit-or" => self.bit_or,
+            "shl" => self.shl,
+            "shr" => self.shr,
+            _ => invariant!("known class dispatch method"),
+        }
+    }
+}
+
 /// The RUMPS interpreter.
 ///
 /// Walks the AST and evaluates expressions/executes statements. Owns the
@@ -159,6 +233,9 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
 
     /// Arena for runtime values with string interning.
     arena: ValueArena,
+
+    /// Pre-interned constant strings for hot-path lookups.
+    pre: PreInterned,
 
     /// Type registry for runtime type information.
     registry: TypeRegistry,
@@ -281,11 +358,14 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         )
         .check(stmts, &registry, &arena)?;
 
+        let pre = PreInterned::new(&mut arena);
+
         Ok(Self {
             ast,
             env,
             db,
             txns: HashMap::new(),
+            pre,
             arena,
             registry,
             regex_cache: tc.regex_cache,
@@ -397,10 +477,9 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
 
     /// Call the `main` function (non-interactive mode entry point).
     async fn call_main(&mut self) -> Result<()> {
-        let main_id = self.arena.intern("main");
         let def = self
             .functions
-            .get(&main_id)
+            .get(&self.pre.main)
             .cloned()
             .unwrap_or_else(|| typechecked!("main", "defined"));
         self.call_function(&def.params, def.ret, def.body, &[], Span::default())
@@ -422,15 +501,17 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         ast: &'a Ast,
         db: Database,
         io: I,
-        arena: ValueArena,
+        mut arena: ValueArena,
         registry: TypeRegistry,
         type_exprs: TypeExprArena,
     ) -> Self {
+        let pre = PreInterned::new(&mut arena);
         Self {
             ast,
             env: Environment::new(),
             db,
             txns: HashMap::new(),
+            pre,
             arena,
             registry,
             regex_cache: Vec::new(),
@@ -625,14 +706,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 ret,
                 body,
                 ..
-            } => {
-                let n = self.arena.strings.resolve(name);
-                let p: Vec<(String, Option<AstTypeExprId>)> = params
-                    .iter()
-                    .map(|(pid, ty)| (self.arena.strings.resolve(*pid), *ty))
-                    .collect();
-                self.fun(&n, &p, ret, body, span)
-            }
+            } => self.fun(name, &params, ret, body, span),
             Stmt::Type {
                 name,
                 type_params,
@@ -1070,14 +1144,12 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// immediately available for recursive calls.
     fn fun(
         &mut self,
-        name: &str,
-        params: &[(String, Option<AstTypeExprId>)],
+        name: StringId,
+        params: &[(StringId, Option<AstTypeExprId>)],
         ret: Option<AstTypeExprId>,
         body: ExprId,
         span: Span,
     ) -> Result<()> {
-        let name_id = self.arena.intern(name);
-
         // Resolve parameter types
         // Use try_resolve_type_expr to handle type parameters gracefully
         let resolved_params: Result<
@@ -1085,7 +1157,6 @@ impl<I: IoContext> Interpreter<'_, I> {
         > = params
             .iter()
             .map(|(pname, ty)| {
-                let pname_id = self.arena.intern(pname);
                 let ty_id = ty
                     .map(|ast_id| {
                         let s = self.ast.type_expr_span(ast_id).unwrap_or(span);
@@ -1093,7 +1164,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     })
                     .transpose()?
                     .flatten();
-                Ok((pname_id, ty_id))
+                Ok((*pname, ty_id))
             })
             .collect();
 
@@ -1108,9 +1179,9 @@ impl<I: IoContext> Interpreter<'_, I> {
 
         // Register the function
         self.functions.insert(
-            name_id,
+            name,
             FunctionDef {
-                name: name_id,
+                name,
                 params: resolved_params?,
                 ret: resolved_ret,
                 body,

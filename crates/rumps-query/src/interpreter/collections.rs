@@ -557,7 +557,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 self.dispatch_class_method(
                     Some(base),
                     crate::typecheck::BuiltinClassTag::Indexable,
-                    "index",
+                    self.pre.index,
                     &[base_id, idx_id],
                     span,
                 )
@@ -641,7 +641,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 self.dispatch_class_method(
                     Some(base),
                     crate::typecheck::BuiltinClassTag::Indexable,
-                    "get",
+                    self.pre.get,
                     &[base_id, idx_id],
                     span,
                 )

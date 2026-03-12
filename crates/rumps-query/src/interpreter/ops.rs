@@ -221,9 +221,10 @@ impl<I: IoContext> Interpreter<'_, I> {
         right: &Value,
         span: Span,
     ) -> Result<Value> {
-        let (class, method) = op.class_dispatch().unwrap_or_else(|| {
+        let (class, method_str) = op.class_dispatch().unwrap_or_else(|| {
             typechecked!("binop user dispatch", "class-dispatched op")
         });
+        let method = self.pre.class_dispatch(method_str);
 
         let l = self.arena.add(left.clone(), span);
         let r = self.arena.add(right.clone(), span);

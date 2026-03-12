@@ -58,17 +58,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 ret,
                 body,
                 ..
-            }) => {
-                let n = self.arena.strings.resolve(name);
-                let p: Vec<(String, Option<crate::ast::AstTypeExprId>)> =
-                    params
-                        .iter()
-                        .map(|(pid, ty)| {
-                            (self.arena.strings.resolve(*pid), *ty)
-                        })
-                        .collect();
-                self.hoist_fun(&n, &p, ret, body, span)
-            }
+            }) => self.hoist_fun(name, &params, ret, body, span),
 
             Some(Stmt::Module { name, body }) => {
                 let n = self.arena.strings.resolve(name);
@@ -90,8 +80,8 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// before its definition is executed.
     fn hoist_fun(
         &mut self,
-        name: &str,
-        params: &[(String, Option<crate::ast::AstTypeExprId>)],
+        name: StringId,
+        params: &[(StringId, Option<crate::ast::AstTypeExprId>)],
         ret: Option<crate::ast::AstTypeExprId>,
         body: crate::ast::ExprId,
         span: Span,
@@ -151,20 +141,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                                         invariant!("resolved method not in AST")
                                     });
 
-                                let fn_s = self.arena.strings.resolve(fn_id);
-                                let p: Vec<(
-                                    String,
-                                    Option<crate::ast::AstTypeExprId>,
-                                )> = method_def
-                                    .params
-                                    .iter()
-                                    .map(|(pid, ty)| {
-                                        (self.arena.strings.resolve(*pid), *ty)
-                                    })
-                                    .collect();
                                 self.fun(
-                                    &fn_s,
-                                    &p,
+                                    fn_id,
+                                    &method_def.params,
                                     method_def.ret,
                                     method_def.body,
                                     span,
