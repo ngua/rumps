@@ -46,9 +46,9 @@ pub(crate) struct ResolvedInstance {
     /// The class being implemented.
     pub(crate) class: BuiltinClassTag,
     /// The name of the implementing type (e.g., `"Point"`, `"MyModule.Point"`).
-    pub(crate) type_name: String,
+    pub(crate) type_name: StringId,
     /// Method mappings: `(method_name, generated_fn_name)`.
-    pub(crate) methods: Vec<(String, String)>,
+    pub(crate) methods: Vec<(StringId, StringId)>,
 }
 
 /// Map from `StmtId` to resolved instance info.
@@ -289,7 +289,7 @@ impl<'a> ResolveCtx<'a> {
     }
 
     /// Process all `Stmt::ClassInstance` statements and return resolved info.
-    fn resolve_class_instances(&self) -> InstanceMap {
+    fn resolve_class_instances(&mut self) -> InstanceMap {
         let mut map = InstanceMap::new();
         let ids: Vec<_> = self.ast.stmt_ids().collect();
         self.resolve_class_instances_rec(&ids, None, &mut map);
@@ -297,9 +297,9 @@ impl<'a> ResolveCtx<'a> {
     }
 
     fn resolve_class_instances_rec(
-        &self,
+        &mut self,
         ids: &[StmtId],
-        module: Option<&str>,
+        module: Option<StringId>,
         map: &mut InstanceMap,
     ) {
         ids.iter().for_each(|&id| {
@@ -313,18 +313,22 @@ impl<'a> ResolveCtx<'a> {
                 .get_stmt(id)
                 .into_iter()
                 .filter_map(|s| match s {
-                    Stmt::Module { name, body } => Some((name, body)),
+                    Stmt::Module { name, body } => Some((*name, body.clone())),
                     _ => None,
                 })
+                .collect::<Vec<_>>()
+                .into_iter()
                 .for_each(|(name, body)| {
-                    let n = self.arena.strings.get(*name).unwrap_or_default();
-                    let mod_path = module.map_or_else(
-                        || n.to_owned(),
-                        |m| format!("{}.{}", m, n),
-                    );
+                    let mod_path = match module {
+                        Some(m) => {
+                            let segs = [m, name];
+                            self.arena.strings.intern_joined(&segs)
+                        }
+                        None => name,
+                    };
                     self.resolve_class_instances_rec(
-                        body,
-                        Some(&mod_path),
+                        &body,
+                        Some(mod_path),
                         map,
                     );
                 });
@@ -332,9 +336,9 @@ impl<'a> ResolveCtx<'a> {
     }
 
     fn resolve_class_instance(
-        &self,
+        &mut self,
         id: StmtId,
-        module: Option<&str>,
+        module: Option<StringId>,
     ) -> Option<ResolvedInstance> {
         let stmt = self.ast.get_stmt(id)?;
 
@@ -348,26 +352,33 @@ impl<'a> ResolveCtx<'a> {
                 let cn =
                     self.arena.strings.get(*class_name).unwrap_or_default();
                 let class = BuiltinClassTag::from_str(cn)?;
-                let raw_name =
-                    Self::extract_type_name(self.ast, self.arena, *for_type)?;
+                let raw_id = Self::extract_type_name_id(self.ast, *for_type)?;
 
+                let raw_str =
+                    self.arena.strings.get(raw_id).unwrap_or_default();
                 let type_name = match module {
-                    Some(m) if !raw_name.contains('.') => {
-                        format!("{}.{}", m, raw_name)
+                    Some(m) if !raw_str.contains('.') => {
+                        let segs = [m, raw_id];
+                        self.arena.strings.intern_joined(&segs)
                     }
-                    _ => raw_name,
+                    _ => raw_id,
                 };
 
-                let mappings: Vec<(String, String)> = methods
+                let type_name_str = self.arena.strings.resolve(type_name);
+                let methods = methods.clone();
+                let mappings: Vec<(StringId, StringId)> = methods
                     .iter()
                     .map(|m| {
                         let mn =
                             self.arena.strings.get(m.name).unwrap_or_default();
                         let fn_name =
                             crate::interpreter::instance::instance_fn_name(
-                                class, &type_name, mn,
+                                class,
+                                &type_name_str,
+                                mn,
                             );
-                        (mn.to_owned(), fn_name)
+                        let fn_id = self.arena.strings.intern(&fn_name);
+                        (m.name, fn_id)
                     })
                     .collect();
 
@@ -381,15 +392,14 @@ impl<'a> ResolveCtx<'a> {
         }
     }
 
-    /// Extract the type name from an `AstTypeExpr`.
-    fn extract_type_name(
+    /// Extract the type name `StringId` from an `AstTypeExpr`.
+    fn extract_type_name_id(
         ast: &Ast,
-        arena: &ValueArena,
         id: crate::ast::AstTypeExprId,
-    ) -> Option<String> {
+    ) -> Option<StringId> {
         ast.get_type_expr(id).and_then(|te| match te {
-            AstTypeExpr::Named(name) => Some(arena.strings.resolve(*name)),
-            AstTypeExpr::App(name, _) => Some(arena.strings.resolve(*name)),
+            AstTypeExpr::Named(name) => Some(*name),
+            AstTypeExpr::App(name, _) => Some(*name),
             _ => None,
         })
     }

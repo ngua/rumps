@@ -129,12 +129,11 @@ impl<I: IoContext> Interpreter<'_, I> {
             None => Ok(()),
             Some(r) => {
                 let class = r.class;
-                let type_name = r.type_name.clone();
+                let type_name_id = r.type_name;
                 let mappings = r.methods.clone();
 
                 // Look up the TypeId for the implementing type.
                 // If type doesn't exist, skip; typechecking will report.
-                let type_name_id = self.arena.intern(&type_name);
                 match self.registry.lookup(type_name_id) {
                     None => Ok(()),
                     Some(type_id) => {
@@ -145,14 +144,14 @@ impl<I: IoContext> Interpreter<'_, I> {
                         // Register each method as a function
                         let mut runtime_inst = RuntimeInstance::default();
 
-                        let result: Result<()> = mappings.iter().try_for_each(
-                            |(method_name, fn_name)| {
-                                let mid = self.arena.intern(method_name);
+                        let result: Result<()> =
+                            mappings.iter().try_for_each(|&(mid, fn_id)| {
                                 let method_def =
                                     method_map.get(&mid).unwrap_or_else(|| {
                                         invariant!("resolved method not in AST")
                                     });
 
+                                let fn_s = self.arena.strings.resolve(fn_id);
                                 let p: Vec<(
                                     String,
                                     Option<crate::ast::AstTypeExprId>,
@@ -164,19 +163,17 @@ impl<I: IoContext> Interpreter<'_, I> {
                                     })
                                     .collect();
                                 self.fun(
-                                    fn_name,
+                                    &fn_s,
                                     &p,
                                     method_def.ret,
                                     method_def.body,
                                     span,
                                 )?;
 
-                                let fn_id = self.arena.intern(fn_name);
                                 runtime_inst.methods.insert(mid, fn_id);
 
                                 Ok(())
-                            },
-                        );
+                            });
 
                         self.user_instances.register(
                             class,
