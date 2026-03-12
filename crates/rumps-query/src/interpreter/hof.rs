@@ -23,9 +23,12 @@
 //! }
 //! ```
 
+use std::collections::HashMap;
+
 use smallvec::{smallvec, SmallVec};
 
 use super::class::{ClassCtx, Mappable};
+use crate::intern::{StringId, StringInterner};
 use crate::value::{TypeExprId, TypeId, Value, ValueArena, ValueId};
 use crate::Result;
 
@@ -653,51 +656,48 @@ pub(crate) fn resume_sort_by(
 
 /// Registry for module-level HoFs (e.g., `Option.map`, `Array.sort-by`).
 ///
-/// Keyed by `(module_name, function_name)` pairs.
+/// Keyed by `(module_name, function_name)` pairs as `StringId`s.
 pub(crate) struct ModuleHofs {
-    fns: std::collections::HashMap<(&'static str, &'static str), HofMethodFn>,
+    fns: HashMap<(StringId, StringId), HofMethodFn>,
 }
 
 impl ModuleHofs {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(interner: &mut StringInterner) -> Self {
         let mut m = Self {
-            fns: std::collections::HashMap::new(),
+            fns: HashMap::new(),
         };
-        m.register_all();
+        m.register_all(interner);
         m
     }
 
-    fn register(
-        &mut self,
-        module: &'static str,
-        name: &'static str,
-        f: HofMethodFn,
-    ) {
+    fn register(&mut self, module: StringId, name: StringId, f: HofMethodFn) {
         self.fns.insert((module, name), f);
     }
 
     /// Look up a module HoF by path.
     ///
     /// Returns `Some(f)` if `path` matches a registered HoF, `None` otherwise.
-    pub(crate) fn lookup(&self, path: &[&str]) -> Option<HofMethodFn> {
+    pub(crate) fn lookup(&self, path: &[StringId]) -> Option<HofMethodFn> {
         match path {
             [module, name] => self.fns.get(&(*module, *name)).copied(),
             _ => None,
         }
     }
 
-    fn register_all(&mut self) {
-        self.register("Option", "map", OptionHof::map);
-        self.register("Result", "map", ResultHof::map);
-        self.register("Result", "map-err", ResultHof::map_err);
-        self.register("Array", "zip-with", ArrayHof::zip_with);
-        self.register("Array", "sort-by", ArrayHof::sort_by);
-    }
-}
+    fn register_all(&mut self, interner: &mut StringInterner) {
+        let option = interner.intern("Option");
+        let result = interner.intern("Result");
+        let array = interner.intern("Array");
+        let map = interner.intern("map");
+        let map_err = interner.intern("map-err");
+        let zip_with = interner.intern("zip-with");
+        let sort_by = interner.intern("sort-by");
 
-impl Default for ModuleHofs {
-    fn default() -> Self {
-        Self::new()
+        self.register(option, map, OptionHof::map);
+        self.register(result, map, ResultHof::map);
+        self.register(result, map_err, ResultHof::map_err);
+        self.register(array, zip_with, ArrayHof::zip_with);
+        self.register(array, sort_by, ArrayHof::sort_by);
     }
 }
 

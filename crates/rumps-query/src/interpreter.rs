@@ -345,7 +345,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         let resolved_instances =
             ResolveCtx::new(ast, &mut arena, &registry).resolve();
 
-        let env = Environment::new();
+        let env = Environment::with_interner(arena.interner());
 
         // Run type checking after resolution
         let tc = crate::typecheck::InferCtx::new(
@@ -359,6 +359,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         .check(stmts, &registry, &arena)?;
 
         let pre = PreInterned::new(&mut arena);
+        let module_hofs = hof::ModuleHofs::new(&mut arena.strings);
 
         Ok(Self {
             ast,
@@ -383,7 +384,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 cm.register_all();
                 cm
             },
-            module_hofs: hof::ModuleHofs::new(),
+            module_hofs,
             user_instances: instance::RuntimeInstanceRegistry::new(),
             instance_calls: tc.instance_calls,
             resolved_instances,
@@ -506,9 +507,10 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         type_exprs: TypeExprArena,
     ) -> Self {
         let pre = PreInterned::new(&mut arena);
+        let module_hofs = hof::ModuleHofs::new(&mut arena.strings);
         Self {
             ast,
-            env: Environment::new(),
+            env: Environment::with_interner(arena.interner()),
             db,
             txns: HashMap::new(),
             pre,
@@ -529,7 +531,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 cm.register_all();
                 cm
             },
-            module_hofs: hof::ModuleHofs::new(),
+            module_hofs,
             user_instances: instance::RuntimeInstanceRegistry::new(),
             instance_calls: HashMap::new(),
             resolved_instances: HashMap::new(),
@@ -735,8 +737,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 self.union_decl(&n, &type_params, &members, span)
             }
             Stmt::Module { name, body } => {
-                let n = self.arena.strings.resolve(name);
-                self.user_module(&n, &body, span).await
+                self.user_module(name, &body, span).await
             }
             Stmt::Import(ref import) => self.import(import, span),
             Stmt::ClassInstance { .. } => {
@@ -755,13 +756,16 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// closures defined in the module body can capture sibling bindings.
     async fn user_module(
         &mut self,
-        name: &str,
+        name: StringId,
         body: &[StmtId],
         span: Span,
     ) -> Result<()> {
         let mut module = crate::env::UserModule::default();
+        let mod_path = self.arena.strings.resolve(name);
         self.env.scopes.push();
-        let res = self.populate_module(body, &mut module, name, span).await;
+        let res = self
+            .populate_module(body, &mut module, &mod_path, span)
+            .await;
         self.env.scopes.pop();
         res?;
         self.env.register_user_module(name, module);
@@ -795,7 +799,6 @@ impl<I: IoContext> Interpreter<'_, I> {
                         } => {
                             // Create FunctionDef (not closure) so siblings are
                             // bound at call time, enabling mutual recursion.
-                            let fn_name_s = self.arena.strings.resolve(fn_name);
                             let resolved_params: Result<
                                 SmallVec<[(StringId, Option<TypeExprId>); 4]>,
                             > = params
@@ -827,7 +830,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                                 .transpose()?
                                 .flatten();
                             module.functions.insert(
-                                fn_name_s,
+                                fn_name,
                                 FunctionDef {
                                     name: fn_name,
                                     params: resolved_params?,
@@ -841,9 +844,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                             let val = self.eval(expr_id).await?;
                             let val_id = self.arena.add(val, item_span);
                             if let BindingPattern::Var(ref const_name) = pat {
-                                let cs =
-                                    self.arena.strings.resolve(*const_name);
-                                module.constants.insert(cs, val_id);
+                                module.constants.insert(*const_name, val_id);
                                 // Bind in scope so later `let` initializers can
                                 // reference earlier constants.
                                 self.env.scopes.bind(*const_name, val_id);
@@ -854,11 +855,12 @@ impl<I: IoContext> Interpreter<'_, I> {
                             name: sub_name,
                             body: sub_body,
                         } => {
-                            let sub_name_s =
-                                self.arena.strings.resolve(sub_name);
                             let mut sub = crate::env::UserModule::default();
-                            let sub_path =
-                                format!("{}.{}", mod_path, sub_name_s);
+                            let sub_path = format!(
+                                "{}.{}",
+                                mod_path,
+                                self.arena.strings.resolve(sub_name)
+                            );
                             // Push scope for nested module so its bindings
                             // don't leak into parent
                             self.env.scopes.push();
@@ -869,7 +871,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                                 .await;
                             self.env.scopes.pop();
                             res?;
-                            module.submodules.insert(sub_name_s, sub);
+                            module.submodules.insert(sub_name, sub);
                         }
 
                         Stmt::Type {
@@ -952,27 +954,15 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// validated that the module exists, members exist, and there are no
     /// conflicts, so no runtime errors are possible.
     fn import(&mut self, import: &Import, span: Span) -> Result<()> {
-        let path_strs: Vec<String> = import
-            .path
-            .iter()
-            .map(|s| self.arena.strings.resolve(*s))
-            .collect();
-        let path_refs: Vec<&str> =
-            path_strs.iter().map(String::as_str).collect();
-
         // Collect exclusions for wildcard imports
-        let exclude_strs: Vec<String> = import
+        let excludes: HashSet<StringId> = import
             .items
             .iter()
             .filter_map(|item| match item {
-                ImportItem::Exclude(name) => {
-                    Some(self.arena.strings.resolve(*name))
-                }
+                ImportItem::Exclude(name) => Some(*name),
                 _ => None,
             })
             .collect();
-        let excludes: HashSet<&str> =
-            exclude_strs.iter().map(String::as_str).collect();
 
         // Check for wildcard
         let has_wildcard = import
@@ -981,18 +971,19 @@ impl<I: IoContext> Interpreter<'_, I> {
             .any(|item| matches!(item, ImportItem::Wildcard));
 
         // Check if this is a builtin module (or submodule like Math.Trig)
-        if let Some(builtin) = self.env.get_builtin_module_by_path(&path_refs) {
+        if let Some(builtin) = self.env.get_builtin_module_by_path(&import.path)
+        {
             // Builtin module
             if has_wildcard {
                 // Get all members and bind them (except exclusions)
-                let members: Vec<String> = builtin
+                let members: Vec<StringId> = builtin
                     .public_members()
                     .into_iter()
                     .map(|(name, _)| name)
-                    .filter(|name| !excludes.contains(name.as_str()))
+                    .filter(|name| !excludes.contains(name))
                     .collect();
 
-                members.iter().for_each(|name| {
+                members.iter().for_each(|&name| {
                     self.bind_module_member(&import.path, name, name, span);
                 });
             }
@@ -1000,41 +991,38 @@ impl<I: IoContext> Interpreter<'_, I> {
             // Process named imports
             import.items.iter().for_each(|item| {
                 if let ImportItem::Named { name, alias } = item {
-                    let ns = self.arena.strings.resolve(*name);
-                    let bs = alias
-                        .map(|a| self.arena.strings.resolve(a))
-                        .unwrap_or_else(|| ns.clone());
-                    self.bind_module_member(&import.path, &ns, &bs, span);
+                    let bs = alias.unwrap_or(*name);
+                    self.bind_module_member(&import.path, *name, bs, span);
                 }
             });
         } else {
             // User module
             if has_wildcard {
                 // Get all public members and bind them (except exclusions)
-                let members: Vec<(String, bool)> = self
+                let members: Vec<(StringId, bool)> = self
                     .env
-                    .get_user_module(&path_refs)
+                    .get_user_module(&import.path)
                     .map(|m| {
                         let fns = m
                             .functions
                             .keys()
-                            .map(|n| (n.clone(), true))
-                            .filter(|(n, _)| !excludes.contains(n.as_str()));
+                            .map(|n| (*n, true))
+                            .filter(|(n, _)| !excludes.contains(n));
                         let consts = m
                             .constants
                             .keys()
-                            .map(|n| (n.clone(), false))
-                            .filter(|(n, _)| !excludes.contains(n.as_str()));
+                            .map(|n| (*n, false))
+                            .filter(|(n, _)| !excludes.contains(n));
                         fns.chain(consts).collect()
                     })
                     .unwrap_or_default();
 
-                members.iter().for_each(|(name, is_fn)| {
+                members.iter().for_each(|&(name, is_fn)| {
                     self.bind_user_module_member(
                         &import.path,
                         name,
                         name,
-                        *is_fn,
+                        is_fn,
                         span,
                     );
                 });
@@ -1043,20 +1031,17 @@ impl<I: IoContext> Interpreter<'_, I> {
             // Process named imports
             import.items.iter().for_each(|item| {
                 if let ImportItem::Named { name, alias } = item {
-                    let ns = self.arena.strings.resolve(*name);
-                    let bs = alias
-                        .map(|a| self.arena.strings.resolve(a))
-                        .unwrap_or_else(|| ns.clone());
+                    let bs = alias.unwrap_or(*name);
                     // Check if it's a function or constant
                     let is_fn = self
                         .env
-                        .get_user_module(&path_refs)
-                        .map(|m| m.functions.contains_key(&ns))
+                        .get_user_module(&import.path)
+                        .map(|m| m.functions.contains_key(name))
                         .unwrap_or(false);
                     self.bind_user_module_member(
                         &import.path,
-                        &ns,
-                        &bs,
+                        *name,
+                        bs,
                         is_fn,
                         span,
                     );
@@ -1071,69 +1056,44 @@ impl<I: IoContext> Interpreter<'_, I> {
     fn bind_module_member(
         &mut self,
         path: &[StringId],
-        name: &str,
-        bind_as: &str,
+        name: StringId,
+        bind_as: StringId,
         span: Span,
     ) {
-        let bind_id = self.arena.intern(bind_as);
-        let path_strs: Vec<String> = path
-            .iter()
-            .map(|s| self.arena.strings.resolve(*s))
-            .collect();
-        let path_refs: Vec<&str> =
-            path_strs.iter().map(String::as_str).collect();
-        let full_path_refs: Vec<&str> = path_refs
-            .iter()
-            .copied()
-            .chain(std::iter::once(name))
-            .collect();
-
-        // Build the interned path
         let mut full_path: SmallVec<[StringId; 4]> = path.into();
-        full_path.push(self.arena.intern(name));
+        full_path.push(name);
 
-        // Check if it's a constant or function and create appropriate value
-        let val = if self.env.module_const_exists(&full_path_refs) {
+        let val = if self.env.module_const_exists(&full_path) {
             Value::ModuleConst { path: full_path }
         } else {
             Value::ModuleFn { path: full_path }
         };
         let val_id = self.arena.add(val, span);
-        self.env.scopes.bind(bind_id, val_id);
+        self.env.scopes.bind(bind_as, val_id);
     }
 
     /// Bind a user module member to the current scope.
     fn bind_user_module_member(
         &mut self,
         path: &[StringId],
-        name: &str,
-        bind_as: &str,
+        name: StringId,
+        bind_as: StringId,
         is_fn: bool,
         span: Span,
     ) {
-        let bind_id = self.arena.intern(bind_as);
         if is_fn {
             // For functions, create a ModuleFn reference
             let mut full_path: SmallVec<[StringId; 4]> = path.into();
-            full_path.push(self.arena.intern(name));
+            full_path.push(name);
             let val = Value::ModuleFn { path: full_path };
             let val_id = self.arena.add(val, span);
-            self.env.scopes.bind(bind_id, val_id);
+            self.env.scopes.bind(bind_as, val_id);
         } else {
             // For constants, look up the ValueId and bind it directly
-            let path_strs: Vec<String> = path
-                .iter()
-                .map(|s| self.arena.strings.resolve(*s))
-                .collect();
-            let path_refs: Vec<&str> =
-                path_strs.iter().map(String::as_str).collect();
-            let full_path: Vec<&str> = path_refs
-                .iter()
-                .copied()
-                .chain(std::iter::once(name))
-                .collect();
+            let mut full_path: SmallVec<[StringId; 4]> = path.into();
+            full_path.push(name);
             if let Some(const_id) = self.env.get_user_module_const(&full_path) {
-                self.env.scopes.bind(bind_id, const_id);
+                self.env.scopes.bind(bind_as, const_id);
             }
         }
     }
@@ -1576,16 +1536,11 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Otherwise returns the value unchanged.
     fn resolve_module_const(&self, val: Value) -> Value {
         match val {
-            Value::ModuleConst { ref path } => {
-                let path_strs: Vec<&str> = path
-                    .iter()
-                    .filter_map(|id| self.arena.strings.get(*id))
-                    .collect();
-                self.env
-                    .get_module_const(&path_strs)
-                    .and_then(|id| self.env.consts.get(id).cloned())
-                    .unwrap_or(val)
-            }
+            Value::ModuleConst { ref path } => self
+                .env
+                .get_module_const(path)
+                .and_then(|id| self.env.consts.get(id).cloned())
+                .unwrap_or(val),
             other => other,
         }
     }

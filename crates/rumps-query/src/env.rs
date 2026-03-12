@@ -24,7 +24,7 @@ use futures::future::BoxFuture;
 use smallvec::{smallvec, SmallVec};
 
 use crate::ast::{BinOp, Intrinsic, PostfixOp, UnOp};
-use crate::intern::StringId;
+use crate::intern::{StringId, StringInterner};
 use crate::io::IoContext;
 use crate::value::{FunctionDef, TypeId, Value, ValueArena, ValueId};
 use crate::{Error, Result, Span};
@@ -570,22 +570,25 @@ impl PostfixOp {
 #[derive(Default)]
 pub(crate) struct Module {
     /// Functions in this module: `(primitive_fn, type_scheme)`.
-    functions: HashMap<String, (PrimFn, Scheme)>,
+    functions: HashMap<StringId, (PrimFn, Scheme)>,
 
     /// Constants in this module: `(value_id, type)`.
     /// `ValueId`s index into `Environment::consts`.
-    constants: HashMap<String, (ValueId, TyId)>,
+    constants: HashMap<StringId, (ValueId, TyId)>,
 
     /// Submodules, keyed by submodule name.
-    submodules: HashMap<String, Self>,
+    submodules: HashMap<StringId, Self>,
 }
 
 impl Module {
     /// Create a module from primitive definitions.
-    pub(crate) fn from_prims(prims: &[PrimDef]) -> Self {
+    pub(crate) fn from_prims(
+        prims: &[PrimDef],
+        interner: &mut StringInterner,
+    ) -> Self {
         let functions = prims
             .iter()
-            .map(|p| (p.name.to_string(), (p.f, p.ty.clone())))
+            .map(|p| (interner.intern(p.name), (p.f, p.ty.clone())))
             .collect();
         Self {
             functions,
@@ -595,83 +598,82 @@ impl Module {
     }
 
     /// Builder method to add a submodule.
-    pub(crate) fn with_submodule(mut self, name: &str, m: Self) -> Self {
-        self.submodules.insert(name.to_string(), m);
+    pub(crate) fn with_submodule(mut self, name: StringId, m: Self) -> Self {
+        self.submodules.insert(name, m);
         self
     }
 
     /// Builder method to add a constant with its type.
     pub(crate) fn with_const(
         mut self,
-        name: &str,
+        name: StringId,
         id: ValueId,
         ty: TyId,
     ) -> Self {
-        self.constants.insert(name.to_string(), (id, ty));
+        self.constants.insert(name, (id, ty));
         self
     }
 
     /// Mutably add a constant with its type.
-    pub(crate) fn add_const(&mut self, name: &str, id: ValueId, ty: TyId) {
-        self.constants.insert(name.to_string(), (id, ty));
+    pub(crate) fn add_const(&mut self, name: StringId, id: ValueId, ty: TyId) {
+        self.constants.insert(name, (id, ty));
     }
 
     /// Look up a function by path within this module.
     ///
     /// For a single-segment path, looks up the function directly.
     /// For multi-segment paths, traverses submodules.
-    pub(crate) fn get_fn(&self, path: &[&str]) -> Option<&PrimFn> {
+    pub(crate) fn get_fn(&self, path: &[StringId]) -> Option<&PrimFn> {
         match path {
             [] => None,
-            [name] => self.functions.get(*name).map(|(f, _)| f),
+            [name] => self.functions.get(name).map(|(f, _)| f),
             [first, rest @ ..] => {
-                self.submodules.get(*first).and_then(|m| m.get_fn(rest))
+                self.submodules.get(first).and_then(|m| m.get_fn(rest))
             }
         }
     }
 
     /// Look up a function's type scheme by path within this module.
-    pub(crate) fn get_fn_type(&self, path: &[&str]) -> Option<&Scheme> {
+    pub(crate) fn get_fn_type(&self, path: &[StringId]) -> Option<&Scheme> {
         match path {
             [] => None,
-            [name] => self.functions.get(*name).map(|(_, ty)| ty),
-            [first, rest @ ..] => self
-                .submodules
-                .get(*first)
-                .and_then(|m| m.get_fn_type(rest)),
+            [name] => self.functions.get(name).map(|(_, ty)| ty),
+            [first, rest @ ..] => {
+                self.submodules.get(first).and_then(|m| m.get_fn_type(rest))
+            }
         }
     }
 
     /// Look up a constant by path within this module.
-    pub(crate) fn get_const(&self, path: &[&str]) -> Option<ValueId> {
+    pub(crate) fn get_const(&self, path: &[StringId]) -> Option<ValueId> {
         match path {
             [] => None,
-            [name] => self.constants.get(*name).map(|(id, _)| *id),
+            [name] => self.constants.get(name).map(|(id, _)| *id),
             [first, rest @ ..] => {
-                self.submodules.get(*first).and_then(|m| m.get_const(rest))
+                self.submodules.get(first).and_then(|m| m.get_const(rest))
             }
         }
     }
 
     /// Look up a constant's type by path within this module.
-    pub(crate) fn get_const_type(&self, path: &[&str]) -> Option<TyId> {
+    pub(crate) fn get_const_type(&self, path: &[StringId]) -> Option<TyId> {
         match path {
             [] => None,
-            [name] => self.constants.get(*name).map(|(_, ty)| *ty),
+            [name] => self.constants.get(name).map(|(_, ty)| *ty),
             [first, rest @ ..] => self
                 .submodules
-                .get(*first)
+                .get(first)
                 .and_then(|m| m.get_const_type(rest)),
         }
     }
 
     /// Check if a path resolves to a function within this module.
-    pub(crate) fn contains_fn(&self, path: &[&str]) -> bool {
+    pub(crate) fn contains_fn(&self, path: &[StringId]) -> bool {
         self.get_fn(path).is_some()
     }
 
     /// Check if a path resolves to a constant within this module.
-    pub(crate) fn contains_const(&self, path: &[&str]) -> bool {
+    pub(crate) fn contains_const(&self, path: &[StringId]) -> bool {
         self.get_const(path).is_some()
     }
 
@@ -679,27 +681,27 @@ impl Module {
     ///
     /// Returns `(name, scheme)` pairs for all top-level members.
     /// All builtin module members are public.
-    pub(crate) fn public_members(&self) -> Vec<(String, Scheme)> {
+    pub(crate) fn public_members(&self) -> Vec<(StringId, Scheme)> {
         let fns = self
             .functions
             .iter()
-            .map(|(name, (_, scheme))| (name.clone(), scheme.clone()));
+            .map(|(name, (_, scheme))| (*name, scheme.clone()));
         let consts = self
             .constants
             .iter()
-            .map(|(name, (_, ty))| (name.clone(), Scheme::mono(*ty)));
+            .map(|(name, (_, ty))| (*name, Scheme::mono(*ty)));
         fns.chain(consts).collect()
     }
 
     /// Navigate to a submodule by path.
     ///
     /// An empty path returns `self`. Otherwise, navigates through submodules.
-    pub(crate) fn get_submodule(&self, path: &[&str]) -> Option<&Self> {
+    pub(crate) fn get_submodule(&self, path: &[StringId]) -> Option<&Self> {
         match path {
             [] => Some(self),
             [first, rest @ ..] => self
                 .submodules
-                .get(*first)
+                .get(first)
                 .and_then(|m| m.get_submodule(rest)),
         }
     }
@@ -715,45 +717,45 @@ pub(crate) struct UserModule {
     /// Functions in this module, keyed by function name.
     /// Stored as `FunctionDef`s so sibling lookup happens at call time,
     /// enabling mutual recursion between module functions.
-    pub(crate) functions: HashMap<String, FunctionDef>,
+    pub(crate) functions: HashMap<StringId, FunctionDef>,
 
     /// Constants in this module, keyed by constant name.
-    pub(crate) constants: HashMap<String, ValueId>,
+    pub(crate) constants: HashMap<StringId, ValueId>,
 
     /// Submodules, keyed by submodule name.
-    pub(crate) submodules: HashMap<String, Self>,
+    pub(crate) submodules: HashMap<StringId, Self>,
 }
 
 impl UserModule {
     /// Look up a function by path within this module.
-    pub(crate) fn get_fn(&self, path: &[&str]) -> Option<&FunctionDef> {
+    pub(crate) fn get_fn(&self, path: &[StringId]) -> Option<&FunctionDef> {
         match path {
             [] => None,
-            [name] => self.functions.get(*name),
+            [name] => self.functions.get(name),
             [first, rest @ ..] => {
-                self.submodules.get(*first).and_then(|m| m.get_fn(rest))
+                self.submodules.get(first).and_then(|m| m.get_fn(rest))
             }
         }
     }
 
     /// Look up a constant by path within this module.
-    pub(crate) fn get_const(&self, path: &[&str]) -> Option<ValueId> {
+    pub(crate) fn get_const(&self, path: &[StringId]) -> Option<ValueId> {
         match path {
             [] => None,
-            [name] => self.constants.get(*name).copied(),
+            [name] => self.constants.get(name).copied(),
             [first, rest @ ..] => {
-                self.submodules.get(*first).and_then(|m| m.get_const(rest))
+                self.submodules.get(first).and_then(|m| m.get_const(rest))
             }
         }
     }
 
     /// Check if a path resolves to a function within this module.
-    pub(crate) fn contains_fn(&self, path: &[&str]) -> bool {
+    pub(crate) fn contains_fn(&self, path: &[StringId]) -> bool {
         self.get_fn(path).is_some()
     }
 
     /// Check if a path resolves to a constant within this module.
-    pub(crate) fn contains_const(&self, path: &[&str]) -> bool {
+    pub(crate) fn contains_const(&self, path: &[StringId]) -> bool {
         self.get_const(path).is_some()
     }
 }
@@ -774,10 +776,10 @@ pub(crate) struct Environment {
     pub(crate) scopes: Scopes,
 
     /// Built-in modules (e.g., `Object`, `Array`).
-    modules: HashMap<String, Module>,
+    modules: HashMap<StringId, Module>,
 
     /// User-defined modules.
-    user_modules: HashMap<String, UserModule>,
+    user_modules: HashMap<StringId, UserModule>,
 
     /// Arena backing module constant `ValueId`s.
     pub(crate) consts: ValueArena,
@@ -786,20 +788,17 @@ pub(crate) struct Environment {
     pub(crate) ty_arena: TyArena,
 }
 
-impl Default for Environment {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Environment {
-    /// Create a new environment with built-in modules registered.
-    pub(crate) fn new() -> Self {
+    /// Create a new environment seeded with an existing interner.
+    ///
+    /// Module name `StringId`s will be compatible with the caller's interner,
+    /// so lookups using AST `StringId`s will match the registered module keys.
+    pub(crate) fn with_interner(interner: StringInterner) -> Self {
         let mut env = Self {
             scopes: Scopes::new(),
             modules: HashMap::new(),
             user_modules: HashMap::new(),
-            consts: ValueArena::new(),
+            consts: ValueArena::with_interner(interner),
             ty_arena: TyArena::new(),
         };
         env.register_builtins();
@@ -807,35 +806,39 @@ impl Environment {
     }
 
     /// Check if a top-level module exists (builtin or user-defined).
-    pub(crate) fn has_module(&self, name: &str) -> bool {
-        self.modules.contains_key(name) || self.user_modules.contains_key(name)
+    pub(crate) fn has_module(&self, name: StringId) -> bool {
+        self.modules.contains_key(&name)
+            || self.user_modules.contains_key(&name)
     }
 
     /// Register a user-defined module.
     pub(crate) fn register_user_module(
         &mut self,
-        name: &str,
+        name: StringId,
         module: UserModule,
     ) {
-        self.user_modules.insert(name.to_string(), module);
+        self.user_modules.insert(name, module);
     }
 
     /// Get a mutable reference to a user module, creating it if it doesn't exist.
     pub(crate) fn get_or_create_user_module(
         &mut self,
-        name: &str,
+        name: StringId,
     ) -> &mut UserModule {
-        self.user_modules.entry(name.to_string()).or_default()
+        self.user_modules.entry(name).or_default()
     }
 
     /// Look up a user module by path.
     ///
     /// The path is the module path segments (e.g., `["Counter"]` or
     /// `["Counter", "Inner"]` for nested modules).
-    pub(crate) fn get_user_module(&self, path: &[&str]) -> Option<&UserModule> {
+    pub(crate) fn get_user_module(
+        &self,
+        path: &[StringId],
+    ) -> Option<&UserModule> {
         path.split_first().and_then(|(first, rest)| {
-            self.user_modules.get(*first).and_then(|m| {
-                rest.iter().try_fold(m, |acc, seg| acc.submodules.get(*seg))
+            self.user_modules.get(first).and_then(|m| {
+                rest.iter().try_fold(m, |acc, seg| acc.submodules.get(seg))
             })
         })
     }
@@ -843,32 +846,32 @@ impl Environment {
     /// Look up a user module function by path.
     pub(crate) fn get_user_module_fn(
         &self,
-        path: &[&str],
+        path: &[StringId],
     ) -> Option<&FunctionDef> {
         path.split_first().and_then(|(module, rest)| {
-            self.user_modules.get(*module).and_then(|m| m.get_fn(rest))
+            self.user_modules.get(module).and_then(|m| m.get_fn(rest))
         })
     }
 
     /// Look up a user module constant by path.
     pub(crate) fn get_user_module_const(
         &self,
-        path: &[&str],
+        path: &[StringId],
     ) -> Option<ValueId> {
         path.split_first().and_then(|(module, rest)| {
             self.user_modules
-                .get(*module)
+                .get(module)
                 .and_then(|m| m.get_const(rest))
         })
     }
 
     /// Check if a path resolves to a user module function.
-    pub(crate) fn user_module_fn_exists(&self, path: &[&str]) -> bool {
+    pub(crate) fn user_module_fn_exists(&self, path: &[StringId]) -> bool {
         self.get_user_module_fn(path).is_some()
     }
 
     /// Check if a path resolves to a user module constant.
-    pub(crate) fn user_module_const_exists(&self, path: &[&str]) -> bool {
+    pub(crate) fn user_module_const_exists(&self, path: &[StringId]) -> bool {
         self.get_user_module_const(path).is_some()
     }
 
@@ -876,31 +879,31 @@ impl Environment {
     ///
     /// The path must have at least two segments: the first is the module name,
     /// and the remaining segments form the path within that module.
-    pub(crate) fn module_fn_exists(&self, path: &[&str]) -> bool {
+    pub(crate) fn module_fn_exists(&self, path: &[StringId]) -> bool {
         path.split_first().is_some_and(|(module, rest)| {
             self.modules
-                .get(*module)
+                .get(module)
                 .is_some_and(|m| m.contains_fn(rest))
         })
     }
 
     /// Check if a path resolves to a module constant.
-    pub(crate) fn module_const_exists(&self, path: &[&str]) -> bool {
+    pub(crate) fn module_const_exists(&self, path: &[StringId]) -> bool {
         path.split_first().is_some_and(|(module, rest)| {
             self.modules
-                .get(*module)
+                .get(module)
                 .is_some_and(|m| m.contains_const(rest))
         })
     }
 
     /// Check if a name is a builtin module.
-    pub(crate) fn is_builtin_module(&self, name: &str) -> bool {
-        self.modules.contains_key(name)
+    pub(crate) fn is_builtin_module(&self, name: StringId) -> bool {
+        self.modules.contains_key(&name)
     }
 
     /// Get a builtin module by name.
-    pub(crate) fn get_builtin_module(&self, name: &str) -> Option<&Module> {
-        self.modules.get(name)
+    pub(crate) fn get_builtin_module(&self, name: StringId) -> Option<&Module> {
+        self.modules.get(&name)
     }
 
     /// Get a builtin module or submodule by path.
@@ -908,10 +911,10 @@ impl Environment {
     /// The path should be like `["Math"]` or `["Math", "Trig"]`.
     pub(crate) fn get_builtin_module_by_path(
         &self,
-        path: &[&str],
+        path: &[StringId],
     ) -> Option<&Module> {
         path.split_first().and_then(|(first, rest)| {
-            self.modules.get(*first).and_then(|m| m.get_submodule(rest))
+            self.modules.get(first).and_then(|m| m.get_submodule(rest))
         })
     }
 
@@ -923,9 +926,9 @@ impl Environment {
     /// Examples:
     /// - `["Iter", "length"]` -> `Iter.length`
     /// - `["Math", "Trig", "sin"]` -> `Math.Trig.sin`
-    pub(crate) fn get_module_fn(&self, path: &[&str]) -> Option<&PrimFn> {
+    pub(crate) fn get_module_fn(&self, path: &[StringId]) -> Option<&PrimFn> {
         path.split_first().and_then(|(module, rest)| {
-            self.modules.get(*module).and_then(|m| m.get_fn(rest))
+            self.modules.get(module).and_then(|m| m.get_fn(rest))
         })
     }
 
@@ -933,26 +936,35 @@ impl Environment {
     ///
     /// The path must have at least two segments: the first is the module name,
     /// and the remaining segments form the path within that module.
-    pub(crate) fn get_module_fn_type(&self, path: &[&str]) -> Option<&Scheme> {
+    pub(crate) fn get_module_fn_type(
+        &self,
+        path: &[StringId],
+    ) -> Option<&Scheme> {
         path.split_first().and_then(|(module, rest)| {
-            self.modules.get(*module).and_then(|m| m.get_fn_type(rest))
+            self.modules.get(module).and_then(|m| m.get_fn_type(rest))
         })
     }
 
     /// Look up a constant by its full path.
     ///
     /// Returns the `ValueId` indexing into `self.consts`.
-    pub(crate) fn get_module_const(&self, path: &[&str]) -> Option<ValueId> {
+    pub(crate) fn get_module_const(
+        &self,
+        path: &[StringId],
+    ) -> Option<ValueId> {
         path.split_first().and_then(|(module, rest)| {
-            self.modules.get(*module).and_then(|m| m.get_const(rest))
+            self.modules.get(module).and_then(|m| m.get_const(rest))
         })
     }
 
     /// Look up a constant's type by its full path.
-    pub(crate) fn get_module_const_type(&self, path: &[&str]) -> Option<TyId> {
+    pub(crate) fn get_module_const_type(
+        &self,
+        path: &[StringId],
+    ) -> Option<TyId> {
         path.split_first().and_then(|(module, rest)| {
             self.modules
-                .get(*module)
+                .get(module)
                 .and_then(|m| m.get_const_type(rest))
         })
     }
@@ -1042,70 +1054,74 @@ impl Environment {
         // `intersperse: (T, Array[T]) -> Array[T]`
         let intersperse_ty = a.func(smallvec![v0, arr_v0], arr_v0);
 
+        let arr_id = self.consts.strings.intern("Array");
         self.modules.insert(
-            "Array".to_string(),
-            Module::from_prims(&[
-                PrimDef {
-                    name: "push",
-                    f: Array::push,
-                    ty: poly1(push_ty),
-                },
-                PrimDef {
-                    name: "pop",
-                    f: Array::pop,
-                    ty: poly1(pop_ty),
-                },
-                PrimDef {
-                    name: "head",
-                    f: Array::head,
-                    ty: poly1(head_ty),
-                },
-                PrimDef {
-                    name: "tail",
-                    f: Array::tail,
-                    ty: poly1(tail_ty),
-                },
-                PrimDef {
-                    name: "sort",
-                    f: Array::sort,
-                    ty: poly1(sort_ty),
-                },
-                PrimDef {
-                    name: "slice",
-                    f: Array::slice,
-                    ty: poly1(slice_ty),
-                },
-                PrimDef {
-                    name: "concat",
-                    f: Array::concat,
-                    ty: poly1(concat_ty),
-                },
-                PrimDef {
-                    name: "sort-by",
-                    f: Array::placeholder,
-                    ty: poly1(sort_by_ty),
-                },
-                PrimDef {
-                    name: "zip",
-                    f: Array::zip,
-                    ty: poly2(zip_ty),
-                },
-                PrimDef {
-                    name: "zip-with",
-                    f: Array::placeholder,
-                    ty: poly3(zip_with_ty),
-                },
-                PrimDef {
-                    name: "unzip",
-                    f: Array::unzip,
-                    ty: poly2(unzip_ty),
-                },
-                PrimDef {
-                    name: "intersperse",
-                    f: Array::intersperse,
-                    ty: poly1(intersperse_ty),
-                },
-            ]),
+            arr_id,
+            Module::from_prims(
+                &[
+                    PrimDef {
+                        name: "push",
+                        f: Array::push,
+                        ty: poly1(push_ty),
+                    },
+                    PrimDef {
+                        name: "pop",
+                        f: Array::pop,
+                        ty: poly1(pop_ty),
+                    },
+                    PrimDef {
+                        name: "head",
+                        f: Array::head,
+                        ty: poly1(head_ty),
+                    },
+                    PrimDef {
+                        name: "tail",
+                        f: Array::tail,
+                        ty: poly1(tail_ty),
+                    },
+                    PrimDef {
+                        name: "sort",
+                        f: Array::sort,
+                        ty: poly1(sort_ty),
+                    },
+                    PrimDef {
+                        name: "slice",
+                        f: Array::slice,
+                        ty: poly1(slice_ty),
+                    },
+                    PrimDef {
+                        name: "concat",
+                        f: Array::concat,
+                        ty: poly1(concat_ty),
+                    },
+                    PrimDef {
+                        name: "sort-by",
+                        f: Array::placeholder,
+                        ty: poly1(sort_by_ty),
+                    },
+                    PrimDef {
+                        name: "zip",
+                        f: Array::zip,
+                        ty: poly2(zip_ty),
+                    },
+                    PrimDef {
+                        name: "zip-with",
+                        f: Array::placeholder,
+                        ty: poly3(zip_with_ty),
+                    },
+                    PrimDef {
+                        name: "unzip",
+                        f: Array::unzip,
+                        ty: poly2(unzip_ty),
+                    },
+                    PrimDef {
+                        name: "intersperse",
+                        f: Array::intersperse,
+                        ty: poly1(intersperse_ty),
+                    },
+                ],
+                &mut self.consts.strings,
+            ),
         );
 
         // --- String module ---
@@ -1131,60 +1147,64 @@ impl Environment {
             TyArena::STRING,
         );
 
+        let str_id = self.consts.strings.intern("String");
         self.modules.insert(
-            "String".to_string(),
-            Module::from_prims(&[
-                PrimDef {
-                    name: "length",
-                    f: Str::length,
-                    ty: Scheme::mono(str_to_int),
-                },
-                PrimDef {
-                    name: "upper",
-                    f: Str::upper,
-                    ty: Scheme::mono(str_to_str),
-                },
-                PrimDef {
-                    name: "lower",
-                    f: Str::lower,
-                    ty: Scheme::mono(str_to_str),
-                },
-                PrimDef {
-                    name: "trim",
-                    f: Str::trim,
-                    ty: Scheme::mono(str_to_str),
-                },
-                PrimDef {
-                    name: "split",
-                    f: Str::split,
-                    ty: Scheme::mono(str2_to_arr),
-                },
-                PrimDef {
-                    name: "join",
-                    f: Str::join,
-                    ty: Scheme::mono(join_ty),
-                },
-                PrimDef {
-                    name: "slice",
-                    f: Str::slice,
-                    ty: Scheme::mono(str_slice_ty),
-                },
-                PrimDef {
-                    name: "contains",
-                    f: Str::contains,
-                    ty: Scheme::mono(str2_to_bool),
-                },
-                PrimDef {
-                    name: "replace",
-                    f: Str::replace,
-                    ty: Scheme::mono(str_replace_ty),
-                },
-                PrimDef {
-                    name: "escape",
-                    f: Str::escape,
-                    ty: Scheme::mono(str_to_str),
-                },
-            ]),
+            str_id,
+            Module::from_prims(
+                &[
+                    PrimDef {
+                        name: "length",
+                        f: Str::length,
+                        ty: Scheme::mono(str_to_int),
+                    },
+                    PrimDef {
+                        name: "upper",
+                        f: Str::upper,
+                        ty: Scheme::mono(str_to_str),
+                    },
+                    PrimDef {
+                        name: "lower",
+                        f: Str::lower,
+                        ty: Scheme::mono(str_to_str),
+                    },
+                    PrimDef {
+                        name: "trim",
+                        f: Str::trim,
+                        ty: Scheme::mono(str_to_str),
+                    },
+                    PrimDef {
+                        name: "split",
+                        f: Str::split,
+                        ty: Scheme::mono(str2_to_arr),
+                    },
+                    PrimDef {
+                        name: "join",
+                        f: Str::join,
+                        ty: Scheme::mono(join_ty),
+                    },
+                    PrimDef {
+                        name: "slice",
+                        f: Str::slice,
+                        ty: Scheme::mono(str_slice_ty),
+                    },
+                    PrimDef {
+                        name: "contains",
+                        f: Str::contains,
+                        ty: Scheme::mono(str2_to_bool),
+                    },
+                    PrimDef {
+                        name: "replace",
+                        f: Str::replace,
+                        ty: Scheme::mono(str_replace_ty),
+                    },
+                    PrimDef {
+                        name: "escape",
+                        f: Str::escape,
+                        ty: Scheme::mono(str_to_str),
+                    },
+                ],
+                &mut self.consts.strings,
+            ),
         );
 
         // --- Math module ---
@@ -1215,48 +1235,51 @@ impl Environment {
         let float_to_int = a.func(smallvec![TyArena::FLOAT], TyArena::INT);
         let float_to_float = a.func(smallvec![TyArena::FLOAT], TyArena::FLOAT);
 
-        let mut math_module = Module::from_prims(&[
-            PrimDef {
-                name: "abs",
-                f: Math::abs,
-                ty: num_unary(abs_ty),
-            },
-            PrimDef {
-                name: "min",
-                f: Math::min,
-                ty: num_binary(minmax_ty),
-            },
-            PrimDef {
-                name: "max",
-                f: Math::max,
-                ty: num_binary(minmax_ty),
-            },
-            PrimDef {
-                name: "floor",
-                f: Math::floor,
-                ty: Scheme::mono(float_to_int),
-            },
-            PrimDef {
-                name: "ceil",
-                f: Math::ceil,
-                ty: Scheme::mono(float_to_int),
-            },
-            PrimDef {
-                name: "round",
-                f: Math::round,
-                ty: Scheme::mono(float_to_int),
-            },
-            PrimDef {
-                name: "sqrt",
-                f: Math::sqrt,
-                ty: Scheme::mono(float_to_float),
-            },
-            PrimDef {
-                name: "log",
-                f: Math::log,
-                ty: Scheme::mono(float_to_float),
-            },
-        ]);
+        let mut math_module = Module::from_prims(
+            &[
+                PrimDef {
+                    name: "abs",
+                    f: Math::abs,
+                    ty: num_unary(abs_ty),
+                },
+                PrimDef {
+                    name: "min",
+                    f: Math::min,
+                    ty: num_binary(minmax_ty),
+                },
+                PrimDef {
+                    name: "max",
+                    f: Math::max,
+                    ty: num_binary(minmax_ty),
+                },
+                PrimDef {
+                    name: "floor",
+                    f: Math::floor,
+                    ty: Scheme::mono(float_to_int),
+                },
+                PrimDef {
+                    name: "ceil",
+                    f: Math::ceil,
+                    ty: Scheme::mono(float_to_int),
+                },
+                PrimDef {
+                    name: "round",
+                    f: Math::round,
+                    ty: Scheme::mono(float_to_int),
+                },
+                PrimDef {
+                    name: "sqrt",
+                    f: Math::sqrt,
+                    ty: Scheme::mono(float_to_float),
+                },
+                PrimDef {
+                    name: "log",
+                    f: Math::log,
+                    ty: Scheme::mono(float_to_float),
+                },
+            ],
+            &mut self.consts.strings,
+        );
 
         // Math constants (intern into `consts` arena)
         use ordered_float::OrderedFloat;
@@ -1272,7 +1295,8 @@ impl Environment {
             let id = self
                 .consts
                 .add(Value::Float(OrderedFloat(val)), Span::MODULE_CONST);
-            math_module.add_const(name, id, TyArena::FLOAT);
+            let name_id = self.consts.strings.intern(name);
+            math_module.add_const(name_id, id, TyArena::FLOAT);
         });
 
         // Trig submodule
@@ -1281,49 +1305,50 @@ impl Environment {
         let float2_to_float =
             a.func(smallvec![TyArena::FLOAT, TyArena::FLOAT], TyArena::FLOAT);
 
-        self.modules.insert(
-            "Math".to_string(),
-            math_module.with_submodule(
-                "Trig",
-                Module::from_prims(&[
-                    PrimDef {
-                        name: "sin",
-                        f: Trig::sin,
-                        ty: Scheme::mono(float_to_float),
-                    },
-                    PrimDef {
-                        name: "cos",
-                        f: Trig::cos,
-                        ty: Scheme::mono(float_to_float),
-                    },
-                    PrimDef {
-                        name: "tan",
-                        f: Trig::tan,
-                        ty: Scheme::mono(float_to_float),
-                    },
-                    PrimDef {
-                        name: "asin",
-                        f: Trig::asin,
-                        ty: Scheme::mono(float_to_float),
-                    },
-                    PrimDef {
-                        name: "acos",
-                        f: Trig::acos,
-                        ty: Scheme::mono(float_to_float),
-                    },
-                    PrimDef {
-                        name: "atan",
-                        f: Trig::atan,
-                        ty: Scheme::mono(float_to_float),
-                    },
-                    PrimDef {
-                        name: "atan2",
-                        f: Trig::atan2,
-                        ty: Scheme::mono(float2_to_float),
-                    },
-                ]),
-            ),
+        let math_id = self.consts.strings.intern("Math");
+        let trig_id = self.consts.strings.intern("Trig");
+        let trig_mod = Module::from_prims(
+            &[
+                PrimDef {
+                    name: "sin",
+                    f: Trig::sin,
+                    ty: Scheme::mono(float_to_float),
+                },
+                PrimDef {
+                    name: "cos",
+                    f: Trig::cos,
+                    ty: Scheme::mono(float_to_float),
+                },
+                PrimDef {
+                    name: "tan",
+                    f: Trig::tan,
+                    ty: Scheme::mono(float_to_float),
+                },
+                PrimDef {
+                    name: "asin",
+                    f: Trig::asin,
+                    ty: Scheme::mono(float_to_float),
+                },
+                PrimDef {
+                    name: "acos",
+                    f: Trig::acos,
+                    ty: Scheme::mono(float_to_float),
+                },
+                PrimDef {
+                    name: "atan",
+                    f: Trig::atan,
+                    ty: Scheme::mono(float_to_float),
+                },
+                PrimDef {
+                    name: "atan2",
+                    f: Trig::atan2,
+                    ty: Scheme::mono(float2_to_float),
+                },
+            ],
+            &mut self.consts.strings,
         );
+        self.modules
+            .insert(math_id, math_module.with_submodule(trig_id, trig_mod));
 
         // --- Random module ---
         let a = &mut self.ty_arena;
@@ -1357,50 +1382,54 @@ impl Environment {
             constraints: smallvec![],
         };
 
+        let rand_id = self.consts.strings.intern("Random");
         self.modules.insert(
-            "Random".to_string(),
-            Module::from_prims(&[
-                PrimDef {
-                    name: "random",
-                    f: Random::random,
-                    ty: Scheme::mono(thunk_float),
-                },
-                PrimDef {
-                    name: "range",
-                    f: Random::range,
-                    ty: Scheme::mono(float2_to_float),
-                },
-                PrimDef {
-                    name: "int",
-                    f: Random::int,
-                    ty: Scheme::mono(int2_to_int),
-                },
-                PrimDef {
-                    name: "bool",
-                    f: Random::bool,
-                    ty: Scheme::mono(thunk_bool),
-                },
-                PrimDef {
-                    name: "choice",
-                    f: Random::choice,
-                    ty: poly1(choice_ty),
-                },
-                PrimDef {
-                    name: "shuffle",
-                    f: Random::shuffle,
-                    ty: poly1(shuffle_ty),
-                },
-                PrimDef {
-                    name: "sample",
-                    f: Random::sample,
-                    ty: poly1(sample_ret),
-                },
-                PrimDef {
-                    name: "uuid",
-                    f: Random::uuid,
-                    ty: Scheme::mono(thunk_str),
-                },
-            ]),
+            rand_id,
+            Module::from_prims(
+                &[
+                    PrimDef {
+                        name: "random",
+                        f: Random::random,
+                        ty: Scheme::mono(thunk_float),
+                    },
+                    PrimDef {
+                        name: "range",
+                        f: Random::range,
+                        ty: Scheme::mono(float2_to_float),
+                    },
+                    PrimDef {
+                        name: "int",
+                        f: Random::int,
+                        ty: Scheme::mono(int2_to_int),
+                    },
+                    PrimDef {
+                        name: "bool",
+                        f: Random::bool,
+                        ty: Scheme::mono(thunk_bool),
+                    },
+                    PrimDef {
+                        name: "choice",
+                        f: Random::choice,
+                        ty: poly1(choice_ty),
+                    },
+                    PrimDef {
+                        name: "shuffle",
+                        f: Random::shuffle,
+                        ty: poly1(shuffle_ty),
+                    },
+                    PrimDef {
+                        name: "sample",
+                        f: Random::sample,
+                        ty: poly1(sample_ret),
+                    },
+                    PrimDef {
+                        name: "uuid",
+                        f: Random::uuid,
+                        ty: Scheme::mono(thunk_str),
+                    },
+                ],
+                &mut self.consts.strings,
+            ),
         );
 
         // --- Map module ---
@@ -1426,65 +1455,69 @@ impl Environment {
         let map_merge_ty = a.func(smallvec![map_kv, map_kv], map_kv);
         let map_from_entries_ty = a.func(smallvec![arr_pair_kv], map_kv);
 
+        let map_id = self.consts.strings.intern("Map");
         self.modules.insert(
-            "Map".to_string(),
-            Module::from_prims(&[
-                PrimDef {
-                    name: "empty",
-                    f: Map::empty,
-                    ty: poly2(map_empty_ty),
-                },
-                PrimDef {
-                    name: "length",
-                    f: Map::length,
-                    ty: poly2(map_length_ty),
-                },
-                PrimDef {
-                    name: "keys",
-                    f: Map::keys,
-                    ty: poly2(map_keys_ty),
-                },
-                PrimDef {
-                    name: "values",
-                    f: Map::values,
-                    ty: poly2(map_values_ty),
-                },
-                PrimDef {
-                    name: "entries",
-                    f: Map::entries,
-                    ty: poly2(map_entries_ty),
-                },
-                PrimDef {
-                    name: "has",
-                    f: Map::has,
-                    ty: poly2(map_has_ty),
-                },
-                PrimDef {
-                    name: "lookup",
-                    f: Map::get,
-                    ty: poly2(map_lookup_ty),
-                },
-                PrimDef {
-                    name: "insert",
-                    f: Map::set,
-                    ty: poly2(map_insert_ty),
-                },
-                PrimDef {
-                    name: "remove",
-                    f: Map::remove,
-                    ty: poly2(map_remove_ty),
-                },
-                PrimDef {
-                    name: "merge",
-                    f: Map::merge,
-                    ty: poly2(map_merge_ty),
-                },
-                PrimDef {
-                    name: "from-entries",
-                    f: Map::from_entries,
-                    ty: poly2(map_from_entries_ty),
-                },
-            ]),
+            map_id,
+            Module::from_prims(
+                &[
+                    PrimDef {
+                        name: "empty",
+                        f: Map::empty,
+                        ty: poly2(map_empty_ty),
+                    },
+                    PrimDef {
+                        name: "length",
+                        f: Map::length,
+                        ty: poly2(map_length_ty),
+                    },
+                    PrimDef {
+                        name: "keys",
+                        f: Map::keys,
+                        ty: poly2(map_keys_ty),
+                    },
+                    PrimDef {
+                        name: "values",
+                        f: Map::values,
+                        ty: poly2(map_values_ty),
+                    },
+                    PrimDef {
+                        name: "entries",
+                        f: Map::entries,
+                        ty: poly2(map_entries_ty),
+                    },
+                    PrimDef {
+                        name: "has",
+                        f: Map::has,
+                        ty: poly2(map_has_ty),
+                    },
+                    PrimDef {
+                        name: "lookup",
+                        f: Map::get,
+                        ty: poly2(map_lookup_ty),
+                    },
+                    PrimDef {
+                        name: "insert",
+                        f: Map::set,
+                        ty: poly2(map_insert_ty),
+                    },
+                    PrimDef {
+                        name: "remove",
+                        f: Map::remove,
+                        ty: poly2(map_remove_ty),
+                    },
+                    PrimDef {
+                        name: "merge",
+                        f: Map::merge,
+                        ty: poly2(map_merge_ty),
+                    },
+                    PrimDef {
+                        name: "from-entries",
+                        f: Map::from_entries,
+                        ty: poly2(map_from_entries_ty),
+                    },
+                ],
+                &mut self.consts.strings,
+            ),
         );
 
         // --- Time module ---
@@ -1502,75 +1535,79 @@ impl Environment {
         let time_to_int = a.func(smallvec![TyArena::TIME], TyArena::INT);
         let int_to_unit = a.func(smallvec![TyArena::INT], TyArena::UNIT);
 
+        let time_id = self.consts.strings.intern("Time");
         self.modules.insert(
-            "Time".to_string(),
-            Module::from_prims(&[
-                PrimDef {
-                    name: "now",
-                    f: Time::now,
-                    ty: Scheme::mono(thunk_time),
-                },
-                PrimDef {
-                    name: "epoch",
-                    f: Time::epoch,
-                    ty: Scheme::mono(thunk_time),
-                },
-                PrimDef {
-                    name: "parse",
-                    f: Time::parse,
-                    ty: Scheme::mono(time_parse_ty),
-                },
-                PrimDef {
-                    name: "format",
-                    f: Time::format,
-                    ty: Scheme::mono(time_format_ty),
-                },
-                PrimDef {
-                    name: "add-seconds",
-                    f: Time::add_seconds,
-                    ty: Scheme::mono(time_add_ty),
-                },
-                PrimDef {
-                    name: "diff-seconds",
-                    f: Time::diff_seconds,
-                    ty: Scheme::mono(time_diff_ty),
-                },
-                PrimDef {
-                    name: "year",
-                    f: Time::year,
-                    ty: Scheme::mono(time_to_int),
-                },
-                PrimDef {
-                    name: "month",
-                    f: Time::month,
-                    ty: Scheme::mono(time_to_int),
-                },
-                PrimDef {
-                    name: "day",
-                    f: Time::day,
-                    ty: Scheme::mono(time_to_int),
-                },
-                PrimDef {
-                    name: "hour",
-                    f: Time::hour,
-                    ty: Scheme::mono(time_to_int),
-                },
-                PrimDef {
-                    name: "minute",
-                    f: Time::minute,
-                    ty: Scheme::mono(time_to_int),
-                },
-                PrimDef {
-                    name: "second",
-                    f: Time::second,
-                    ty: Scheme::mono(time_to_int),
-                },
-                PrimDef {
-                    name: "sleep",
-                    f: Time::sleep,
-                    ty: Scheme::mono(int_to_unit),
-                },
-            ]),
+            time_id,
+            Module::from_prims(
+                &[
+                    PrimDef {
+                        name: "now",
+                        f: Time::now,
+                        ty: Scheme::mono(thunk_time),
+                    },
+                    PrimDef {
+                        name: "epoch",
+                        f: Time::epoch,
+                        ty: Scheme::mono(thunk_time),
+                    },
+                    PrimDef {
+                        name: "parse",
+                        f: Time::parse,
+                        ty: Scheme::mono(time_parse_ty),
+                    },
+                    PrimDef {
+                        name: "format",
+                        f: Time::format,
+                        ty: Scheme::mono(time_format_ty),
+                    },
+                    PrimDef {
+                        name: "add-seconds",
+                        f: Time::add_seconds,
+                        ty: Scheme::mono(time_add_ty),
+                    },
+                    PrimDef {
+                        name: "diff-seconds",
+                        f: Time::diff_seconds,
+                        ty: Scheme::mono(time_diff_ty),
+                    },
+                    PrimDef {
+                        name: "year",
+                        f: Time::year,
+                        ty: Scheme::mono(time_to_int),
+                    },
+                    PrimDef {
+                        name: "month",
+                        f: Time::month,
+                        ty: Scheme::mono(time_to_int),
+                    },
+                    PrimDef {
+                        name: "day",
+                        f: Time::day,
+                        ty: Scheme::mono(time_to_int),
+                    },
+                    PrimDef {
+                        name: "hour",
+                        f: Time::hour,
+                        ty: Scheme::mono(time_to_int),
+                    },
+                    PrimDef {
+                        name: "minute",
+                        f: Time::minute,
+                        ty: Scheme::mono(time_to_int),
+                    },
+                    PrimDef {
+                        name: "second",
+                        f: Time::second,
+                        ty: Scheme::mono(time_to_int),
+                    },
+                    PrimDef {
+                        name: "sleep",
+                        f: Time::sleep,
+                        ty: Scheme::mono(int_to_unit),
+                    },
+                ],
+                &mut self.consts.strings,
+            ),
         );
 
         // --- Option module ---
@@ -1603,30 +1640,34 @@ impl Environment {
             constraints: smallvec![],
         };
 
+        let opt_id = self.consts.strings.intern("Option");
         self.modules.insert(
-            "Option".to_string(),
-            Module::from_prims(&[
-                PrimDef {
-                    name: "map",
-                    f: Opt::placeholder,
-                    ty: poly2(opt_map_ty),
-                },
-                PrimDef {
-                    name: "unwrap-or",
-                    f: Opt::unwrap_or,
-                    ty: poly1(opt_unwrap_or_ty),
-                },
-                PrimDef {
-                    name: "flatten",
-                    f: Opt::flatten,
-                    ty: poly1(opt_flatten_ty),
-                },
-                PrimDef {
-                    name: "note",
-                    f: Opt::note,
-                    ty: poly2(opt_note_ty),
-                },
-            ]),
+            opt_id,
+            Module::from_prims(
+                &[
+                    PrimDef {
+                        name: "map",
+                        f: Opt::placeholder,
+                        ty: poly2(opt_map_ty),
+                    },
+                    PrimDef {
+                        name: "unwrap-or",
+                        f: Opt::unwrap_or,
+                        ty: poly1(opt_unwrap_or_ty),
+                    },
+                    PrimDef {
+                        name: "flatten",
+                        f: Opt::flatten,
+                        ty: poly1(opt_flatten_ty),
+                    },
+                    PrimDef {
+                        name: "note",
+                        f: Opt::note,
+                        ty: poly2(opt_note_ty),
+                    },
+                ],
+                &mut self.consts.strings,
+            ),
         );
 
         // --- Result module ---
@@ -1666,35 +1707,39 @@ impl Environment {
             constraints: smallvec![],
         };
 
+        let res_id = self.consts.strings.intern("Result");
         self.modules.insert(
-            "Result".to_string(),
-            Module::from_prims(&[
-                PrimDef {
-                    name: "map",
-                    f: Res::placeholder,
-                    ty: poly3(res_map_ty),
-                },
-                PrimDef {
-                    name: "map-err",
-                    f: Res::placeholder,
-                    ty: poly3(res_map_err_ty),
-                },
-                PrimDef {
-                    name: "unwrap-or",
-                    f: Res::unwrap_or,
-                    ty: poly2(res_unwrap_or_ty),
-                },
-                PrimDef {
-                    name: "flatten",
-                    f: Res::flatten,
-                    ty: poly2(res_flatten_ty),
-                },
-                PrimDef {
-                    name: "hush",
-                    f: Res::hush,
-                    ty: poly2(res_hush_ty),
-                },
-            ]),
+            res_id,
+            Module::from_prims(
+                &[
+                    PrimDef {
+                        name: "map",
+                        f: Res::placeholder,
+                        ty: poly3(res_map_ty),
+                    },
+                    PrimDef {
+                        name: "map-err",
+                        f: Res::placeholder,
+                        ty: poly3(res_map_err_ty),
+                    },
+                    PrimDef {
+                        name: "unwrap-or",
+                        f: Res::unwrap_or,
+                        ty: poly2(res_unwrap_or_ty),
+                    },
+                    PrimDef {
+                        name: "flatten",
+                        f: Res::flatten,
+                        ty: poly2(res_flatten_ty),
+                    },
+                    PrimDef {
+                        name: "hush",
+                        f: Res::hush,
+                        ty: poly2(res_hush_ty),
+                    },
+                ],
+                &mut self.consts.strings,
+            ),
         );
 
         // Build Directory submodule first to avoid double mutable borrow
@@ -1705,9 +1750,10 @@ impl Environment {
         let thunk_str = a.func(smallvec![], TyArena::STRING);
         let str_to_unit = a.func(smallvec![TyArena::STRING], TyArena::UNIT);
 
-        self.modules.insert(
-            "Io".to_string(),
-            Module::from_prims(&[
+        let io_id = self.consts.strings.intern("Io");
+        let dir_id = self.consts.strings.intern("Directory");
+        let io_mod = Module::from_prims(
+            &[
                 PrimDef {
                     name: "get-line",
                     f: Io::get_line,
@@ -1733,9 +1779,11 @@ impl Environment {
                     f: Io::eprintln,
                     ty: Scheme::mono(str_to_unit),
                 },
-            ])
-            .with_submodule("Directory", directory_module),
-        );
+            ],
+            &mut self.consts.strings,
+        )
+        .with_submodule(dir_id, directory_module);
+        self.modules.insert(io_id, io_mod);
     }
 
     /// Build the `Io.Directory` submodule.
@@ -1801,127 +1849,130 @@ impl Environment {
         }));
         let set_env_ty = a.func(smallvec![env_obj], TyArena::UNIT);
 
-        Module::from_prims(&[
-            PrimDef {
-                name: "list-dir",
-                f: Directory::list_dir,
-                ty: Scheme::mono(list_dir_ty),
-            },
-            PrimDef {
-                name: "exists",
-                f: Directory::exists,
-                ty: Scheme::mono(fp_to_bool),
-            },
-            PrimDef {
-                name: "is-file",
-                f: Directory::is_file,
-                ty: Scheme::mono(fp_to_bool),
-            },
-            PrimDef {
-                name: "is-dir",
-                f: Directory::is_dir,
-                ty: Scheme::mono(fp_to_bool),
-            },
-            PrimDef {
-                name: "read-file",
-                f: Directory::read_file,
-                ty: Scheme::mono(read_file_ty),
-            },
-            PrimDef {
-                name: "remove",
-                f: Directory::remove,
-                ty: Scheme::mono(fp_to_unit),
-            },
-            PrimDef {
-                name: "remove-all",
-                f: Directory::remove_all,
-                ty: Scheme::mono(fp_to_unit),
-            },
-            PrimDef {
-                name: "create-dir",
-                f: Directory::create_dir,
-                ty: Scheme::mono(fp_to_unit),
-            },
-            PrimDef {
-                name: "create-dir-all",
-                f: Directory::create_dir_all,
-                ty: Scheme::mono(fp_to_unit),
-            },
-            PrimDef {
-                name: "pwd",
-                f: Directory::pwd,
-                ty: Scheme::mono(pwd_ty),
-            },
-            PrimDef {
-                name: "set-pwd",
-                f: Directory::set_pwd,
-                ty: Scheme::mono(fp_to_unit),
-            },
-            PrimDef {
-                name: "get-env",
-                f: Directory::get_env,
-                ty: Scheme::mono(get_env_ty),
-            },
-            PrimDef {
-                name: "move-path",
-                f: Directory::move_path,
-                ty: Scheme::mono(move_ty),
-            },
-            PrimDef {
-                name: "copy-path",
-                f: Directory::copy_path,
-                ty: Scheme::mono(copy_ty),
-            },
-            PrimDef {
-                name: "write-file",
-                f: Directory::write_file,
-                ty: Scheme::mono(write_ty),
-            },
-            PrimDef {
-                name: "append-file",
-                f: Directory::append_file,
-                ty: Scheme::mono(append_ty),
-            },
-            PrimDef {
-                name: "set-env",
-                f: Directory::set_env,
-                ty: Scheme::mono(set_env_ty),
-            },
-            PrimDef {
-                name: "canonicalize",
-                f: Directory::canonicalize,
-                ty: Scheme::mono(canonicalize_ty),
-            },
-            PrimDef {
-                name: "parent",
-                f: Directory::parent,
-                ty: Scheme::mono(parent_ty),
-            },
-            PrimDef {
-                name: "file-name",
-                f: Directory::file_name,
-                ty: Scheme::mono(file_name_ty),
-            },
-            PrimDef {
-                name: "extension",
-                f: Directory::extension,
-                ty: Scheme::mono(extension_ty),
-            },
-            PrimDef {
-                name: "join",
-                f: Directory::join,
-                ty: Scheme::mono(join_ty),
-            },
-            PrimDef {
-                name: "temp-dir",
-                f: Directory::temp_dir,
-                ty: Scheme::mono(temp_dir_ty),
-            },
-            PrimDef {
-                name: "with-extension",
-                f: Directory::with_extension,
-                ty: Scheme::mono(with_ext_ty),
-            },
-        ])
+        Module::from_prims(
+            &[
+                PrimDef {
+                    name: "list-dir",
+                    f: Directory::list_dir,
+                    ty: Scheme::mono(list_dir_ty),
+                },
+                PrimDef {
+                    name: "exists",
+                    f: Directory::exists,
+                    ty: Scheme::mono(fp_to_bool),
+                },
+                PrimDef {
+                    name: "is-file",
+                    f: Directory::is_file,
+                    ty: Scheme::mono(fp_to_bool),
+                },
+                PrimDef {
+                    name: "is-dir",
+                    f: Directory::is_dir,
+                    ty: Scheme::mono(fp_to_bool),
+                },
+                PrimDef {
+                    name: "read-file",
+                    f: Directory::read_file,
+                    ty: Scheme::mono(read_file_ty),
+                },
+                PrimDef {
+                    name: "remove",
+                    f: Directory::remove,
+                    ty: Scheme::mono(fp_to_unit),
+                },
+                PrimDef {
+                    name: "remove-all",
+                    f: Directory::remove_all,
+                    ty: Scheme::mono(fp_to_unit),
+                },
+                PrimDef {
+                    name: "create-dir",
+                    f: Directory::create_dir,
+                    ty: Scheme::mono(fp_to_unit),
+                },
+                PrimDef {
+                    name: "create-dir-all",
+                    f: Directory::create_dir_all,
+                    ty: Scheme::mono(fp_to_unit),
+                },
+                PrimDef {
+                    name: "pwd",
+                    f: Directory::pwd,
+                    ty: Scheme::mono(pwd_ty),
+                },
+                PrimDef {
+                    name: "set-pwd",
+                    f: Directory::set_pwd,
+                    ty: Scheme::mono(fp_to_unit),
+                },
+                PrimDef {
+                    name: "get-env",
+                    f: Directory::get_env,
+                    ty: Scheme::mono(get_env_ty),
+                },
+                PrimDef {
+                    name: "move-path",
+                    f: Directory::move_path,
+                    ty: Scheme::mono(move_ty),
+                },
+                PrimDef {
+                    name: "copy-path",
+                    f: Directory::copy_path,
+                    ty: Scheme::mono(copy_ty),
+                },
+                PrimDef {
+                    name: "write-file",
+                    f: Directory::write_file,
+                    ty: Scheme::mono(write_ty),
+                },
+                PrimDef {
+                    name: "append-file",
+                    f: Directory::append_file,
+                    ty: Scheme::mono(append_ty),
+                },
+                PrimDef {
+                    name: "set-env",
+                    f: Directory::set_env,
+                    ty: Scheme::mono(set_env_ty),
+                },
+                PrimDef {
+                    name: "canonicalize",
+                    f: Directory::canonicalize,
+                    ty: Scheme::mono(canonicalize_ty),
+                },
+                PrimDef {
+                    name: "parent",
+                    f: Directory::parent,
+                    ty: Scheme::mono(parent_ty),
+                },
+                PrimDef {
+                    name: "file-name",
+                    f: Directory::file_name,
+                    ty: Scheme::mono(file_name_ty),
+                },
+                PrimDef {
+                    name: "extension",
+                    f: Directory::extension,
+                    ty: Scheme::mono(extension_ty),
+                },
+                PrimDef {
+                    name: "join",
+                    f: Directory::join,
+                    ty: Scheme::mono(join_ty),
+                },
+                PrimDef {
+                    name: "temp-dir",
+                    f: Directory::temp_dir,
+                    ty: Scheme::mono(temp_dir_ty),
+                },
+                PrimDef {
+                    name: "with-extension",
+                    f: Directory::with_extension,
+                    ty: Scheme::mono(with_ext_ty),
+                },
+            ],
+            &mut self.consts.strings,
+        )
     }
 }

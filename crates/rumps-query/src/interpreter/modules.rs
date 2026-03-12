@@ -53,9 +53,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             .split_first()
             .unwrap_or_else(|| typechecked!("path", "non-empty"));
 
-        let first_s = self.arena.strings.resolve(first);
         // Check if the first segment is a module
-        if self.env.has_module(&first_s) {
+        if self.env.has_module(first) {
             self.module_path(segments)
         } else {
             // Fall back to type + variant interpretation
@@ -69,20 +68,13 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// function/constant name; all preceding segments form the module path.
     /// Checks both builtin and user-defined modules.
     fn module_path(&mut self, segments: &[StringId]) -> Result<Value> {
-        let path_strs: SmallVec<[String; 4]> = segments
-            .iter()
-            .map(|s| self.arena.strings.resolve(*s))
-            .collect();
-        let path_refs: SmallVec<[&str; 4]> =
-            path_strs.iter().map(String::as_str).collect();
-
         // Check for builtin module function first
-        if self.env.module_fn_exists(&path_refs) {
+        if self.env.module_fn_exists(segments) {
             let path: SmallVec<[StringId; 4]> = segments.into();
             Ok(Value::ModuleFn { path })
         }
         // Check for builtin module constant
-        else if let Some(const_id) = self.env.get_module_const(&path_refs) {
+        else if let Some(const_id) = self.env.get_module_const(segments) {
             Ok(self
                 .env
                 .consts
@@ -91,15 +83,14 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .unwrap_or_else(|| invariant!("ConstId in consts map")))
         }
         // Check for user module function
-        else if self.env.user_module_fn_exists(&path_refs) {
+        else if self.env.user_module_fn_exists(segments) {
             // Return ModuleFn; actual FunctionDef is looked up at call time
             // so siblings can be bound then (enabling mutual recursion).
             let path: SmallVec<[StringId; 4]> = segments.into();
             Ok(Value::ModuleFn { path })
         }
         // Check for user module constant
-        else if let Some(const_id) =
-            self.env.get_user_module_const(&path_refs)
+        else if let Some(const_id) = self.env.get_user_module_const(segments)
         {
             Ok(self
                 .arena

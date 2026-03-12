@@ -263,36 +263,21 @@ impl<I: IoContext> Interpreter<'_, I> {
         args: &[ValueId],
         span: Span,
     ) -> Result<Value> {
-        // Convert StringIds to owned Strings first to avoid borrow issues
-        let path_strs: SmallVec<[String; 4]> = path
-            .iter()
-            .filter_map(|id| self.arena.get_str(*id).map(String::from))
-            .collect();
-
-        // Convert to &str for lookup
-        let path_refs: SmallVec<[&str; 4]> =
-            path_strs.iter().map(String::as_str).collect();
-
         // Higher-order functions (those that invoke closures/functions passed as
         // arguments) are dispatched via `module_hofs` registry. The `PrimFn`
         // signature only receives values; it has no access to the interpreter's
         // closure invocation machinery (`invoke_callable`). See `primitives.rs`
         // module docs for details.
-        if let Some(hof) = self.module_hofs.lookup(&path_refs) {
+        if let Some(hof) = self.module_hofs.lookup(path) {
             self.run_hof_trampoline(hof, args, span).await
-        } else if let Some(fn_def) =
-            self.env.get_user_module_fn(&path_refs).cloned()
+        } else if let Some(fn_def) = self.env.get_user_module_fn(path).cloned()
         {
             // User-defined module function
-            self.invoke_user_module_fn(&path_refs, &fn_def, args, span)
-                .await
+            self.invoke_user_module_fn(path, &fn_def, args, span).await
         } else {
             // Builtin sync module function; resolver guarantees it exists
-            let prim = self
-                .env
-                .get_module_fn(&path_refs)
-                .copied()
-                .unwrap_or_else(|| {
+            let prim =
+                self.env.get_module_fn(path).copied().unwrap_or_else(|| {
                     typechecked!("invoke_module_fn", "known module function")
                 });
 
@@ -308,7 +293,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     #[async_recursion]
     async fn invoke_user_module_fn(
         &mut self,
-        path: &[&str],
+        path: &[StringId],
         fn_def: &FunctionDef,
         args: &[ValueId],
         span: Span,
@@ -335,8 +320,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         self.env.scopes.push();
 
         // Bind all sibling functions as Value::Function so they can be called
-        module.functions.iter().for_each(|(name, sibling)| {
-            let name_id = self.arena.intern(name);
+        module.functions.iter().for_each(|(&name, sibling)| {
             let val = Value::Function {
                 name: sibling.name,
                 params: sibling.params.clone(),
@@ -344,13 +328,12 @@ impl<I: IoContext> Interpreter<'_, I> {
                 body: sibling.body,
             };
             let val_id = self.arena.add(val, span);
-            self.env.scopes.bind(name_id, val_id);
+            self.env.scopes.bind(name, val_id);
         });
 
         // Bind all sibling constants
-        module.constants.iter().for_each(|(name, &const_id)| {
-            let name_id = self.arena.intern(name);
-            self.env.scopes.bind(name_id, const_id);
+        module.constants.iter().for_each(|(&name, &const_id)| {
+            self.env.scopes.bind(name, const_id);
         });
 
         // Bind parameters

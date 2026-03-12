@@ -331,16 +331,10 @@ impl InferCtx<'_> {
     pub(super) fn import_stmt(&mut self, import: &Import, span: Span) {
         let mod_path_str = self.env.strings.join_path(&import.path);
         let mod_path_id = self.env.intern(&mod_path_str);
-        let path_strs: Vec<String> = import
-            .path
-            .iter()
-            .filter_map(|id| self.env.get_str(*id).map(|s| s.to_owned()))
-            .collect();
-        let path_segs: Vec<&str> =
-            path_strs.iter().map(String::as_str).collect();
 
         // Check if module exists (builtin or user-defined)
-        let is_builtin = path_segs
+        let is_builtin = import
+            .path
             .first()
             .is_some_and(|&name| self.runtime_env.is_builtin_module(name));
         let is_user = self.env.is_user_module(mod_path_id);
@@ -381,15 +375,15 @@ impl InferCtx<'_> {
         if has_wildcard {
             // Get public members from builtin module
             if is_builtin {
-                if let Some(m) = path_segs
+                if let Some(m) = import
+                    .path
                     .first()
                     .and_then(|&name| self.runtime_env.get_builtin_module(name))
                 {
                     m.public_members().into_iter().for_each(
                         |(name, scheme)| {
-                            let id = self.env.intern(&name);
-                            if !exclusions.contains(&id) {
-                                self.env.bind(id, scheme);
+                            if !exclusions.contains(&name) {
+                                self.env.bind(name, scheme);
                             }
                         },
                     );
@@ -423,8 +417,9 @@ impl InferCtx<'_> {
             if let ImportItem::Named { name, alias } = item {
                 let bind_id = alias.unwrap_or(*name);
                 let n = self.env.resolve_str(*name).to_owned();
-                let mut full_path = path_segs.clone();
-                full_path.push(&n);
+                let mut full_path: SmallVec<[StringId; 4]> =
+                    import.path.iter().copied().collect();
+                full_path.push(*name);
 
                 // Try builtin module first (always public)
                 let builtin = self

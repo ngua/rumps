@@ -61,8 +61,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             }) => self.hoist_fun(name, &params, ret, body, span),
 
             Some(Stmt::Module { name, body }) => {
-                let n = self.arena.strings.resolve(name);
-                self.hoist_module(&n, &body, span).await
+                self.hoist_module(name, &body, span).await
             }
 
             Some(Stmt::ClassInstance {
@@ -93,7 +92,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Hoist a module declaration and its members.
     async fn hoist_module(
         &mut self,
-        name: &str,
+        name: StringId,
         body: &[StmtId],
         span: Span,
     ) -> Result<()> {

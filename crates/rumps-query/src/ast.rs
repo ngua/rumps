@@ -1152,7 +1152,7 @@ pub(crate) enum ImportItem {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Import {
     /// Module path segments (e.g., `["Module", "Nested"]`).
-    pub(crate) path: Vec<StringId>,
+    pub(crate) path: SmallVec<[StringId; 2]>,
     /// Import items.
     pub(crate) items: Vec<ImportItem>,
 }

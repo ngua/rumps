@@ -181,21 +181,13 @@ impl InferCtx<'_> {
             Expr::Path(segments) => {
                 // Look up the type from the runtime environment;
                 // first check constants, then functions
-                let strs: SmallVec<[String; 4]> = segments
-                    .iter()
-                    .map(|s| {
-                        self.env.get_str(*s).unwrap_or_default().to_owned()
-                    })
-                    .collect();
-                let path: SmallVec<[&str; 4]> =
-                    strs.iter().map(String::as_str).collect();
-
                 // Check builtin module constants first (no constraints)
-                if let Some(ty) = self.runtime_env.get_module_const_type(&path)
+                if let Some(ty) =
+                    self.runtime_env.get_module_const_type(segments)
                 {
                     ty
                 } else if let Some(scheme) =
-                    self.runtime_env.get_module_fn_type(&path)
+                    self.runtime_env.get_module_fn_type(segments)
                 {
                     // Builtin module functions (no user constraints)
                     let (ty, constraints) = scheme

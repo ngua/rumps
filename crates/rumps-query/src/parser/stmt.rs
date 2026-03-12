@@ -572,7 +572,10 @@ impl Parser {
             .then(items)
             .map_with_span(|(path, items), span| {
                 cst::Stmt::new(
-                    cst::StmtKind::Import(cst::ImportStmt { path, items }),
+                    cst::StmtKind::Import(cst::ImportStmt {
+                        path: SmallVec::from_vec(path),
+                        items,
+                    }),
                     span,
                 )
             })
