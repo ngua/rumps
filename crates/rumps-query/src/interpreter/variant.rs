@@ -204,6 +204,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             .unwrap_or_else(|| typechecked!("mempty", "resolved type"));
         let ty = self.ty_arena.get(ty_id).clone();
 
+        let mid = self.pre.identity;
         let mut ctx = ClassCtx {
             arena: &mut self.arena,
             type_exprs: &mut self.type_exprs,
@@ -214,7 +215,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         };
         self.class_methods.dispatch_nullary(
             BuiltinClassTag::Monoid,
-            "identity",
+            mid,
             &mut ctx,
             &ty,
         )

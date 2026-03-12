@@ -153,11 +153,19 @@ struct PreInterned {
     compare: StringId,
     // Monoid
     concat: StringId,
+    identity: StringId,
     // BitLike
     bit_and: StringId,
     bit_or: StringId,
     shl: StringId,
     shr: StringId,
+    // Negatable
+    neg: StringId,
+    // Fallible
+    wrap: StringId,
+    // Into / TryInto
+    into: StringId,
+    try_into: StringId,
 }
 
 impl PreInterned {
@@ -176,10 +184,15 @@ impl PreInterned {
             eq: arena.intern("eq"),
             compare: arena.intern("compare"),
             concat: arena.intern("concat"),
+            identity: arena.intern("identity"),
             bit_and: arena.intern("bit-and"),
             bit_or: arena.intern("bit-or"),
             shl: arena.intern("shl"),
             shr: arena.intern("shr"),
+            neg: arena.intern("neg"),
+            wrap: arena.intern("wrap"),
+            into: arena.intern("into"),
+            try_into: arena.intern("try-into"),
         }
     }
 
@@ -360,6 +373,11 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
 
         let pre = PreInterned::new(&mut arena);
         let module_hofs = hof::ModuleHofs::new(&mut arena.strings);
+        let class_methods = {
+            let mut cm = class::ClassMethods::new();
+            cm.register_all(&mut arena.strings);
+            cm
+        };
 
         Ok(Self {
             ast,
@@ -379,11 +397,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             type_exprs,
             functions: HashMap::new(),
             io,
-            class_methods: {
-                let mut cm = class::ClassMethods::new();
-                cm.register_all();
-                cm
-            },
+            class_methods,
             module_hofs,
             user_instances: instance::RuntimeInstanceRegistry::new(),
             instance_calls: tc.instance_calls,
@@ -508,6 +522,11 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
     ) -> Self {
         let pre = PreInterned::new(&mut arena);
         let module_hofs = hof::ModuleHofs::new(&mut arena.strings);
+        let class_methods = {
+            let mut cm = class::ClassMethods::new();
+            cm.register_all(&mut arena.strings);
+            cm
+        };
         Self {
             ast,
             env: Environment::with_interner(arena.interner()),
@@ -526,11 +545,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             type_exprs,
             functions: HashMap::new(),
             io,
-            class_methods: {
-                let mut cm = class::ClassMethods::new();
-                cm.register_all();
-                cm
-            },
+            class_methods,
             module_hofs,
             user_instances: instance::RuntimeInstanceRegistry::new(),
             instance_calls: HashMap::new(),

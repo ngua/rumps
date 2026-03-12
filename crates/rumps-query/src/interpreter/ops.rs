@@ -6,6 +6,7 @@ use ordered_float::OrderedFloat;
 use super::class::ClassCtx;
 use super::Interpreter;
 use crate::ast::{BinOp, ExprId, UnOp};
+use crate::intern::StringId;
 use crate::io::IoContext;
 use crate::typecheck::BuiltinClassTag;
 use crate::value::Value;
@@ -37,7 +38,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 }
                 _ => self.dispatch_binary(
                     BuiltinClassTag::Numeric,
-                    "add",
+                    self.pre.add,
                     left,
                     right,
                     span,
@@ -49,7 +50,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 }
                 _ => self.dispatch_binary(
                     BuiltinClassTag::Numeric,
-                    "sub",
+                    self.pre.sub,
                     left,
                     right,
                     span,
@@ -61,7 +62,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 }
                 _ => self.dispatch_binary(
                     BuiltinClassTag::Numeric,
-                    "mul",
+                    self.pre.mul,
                     left,
                     right,
                     span,
@@ -70,21 +71,21 @@ impl<I: IoContext> Interpreter<'_, I> {
             BinOp::Div => self.binop_div(left, right, span),
             BinOp::FloorDiv => self.dispatch_binary(
                 BuiltinClassTag::Numeric,
-                "floor-div",
+                self.pre.floor_div,
                 left,
                 right,
                 span,
             ),
             BinOp::Mod => self.dispatch_binary(
                 BuiltinClassTag::Numeric,
-                "mod",
+                self.pre.r#mod,
                 left,
                 right,
                 span,
             ),
             BinOp::Pow => self.dispatch_binary(
                 BuiltinClassTag::Numeric,
-                "pow",
+                self.pre.pow,
                 left,
                 right,
                 span,
@@ -93,7 +94,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             // Equality via Eq class
             BinOp::Eq => self.dispatch_binary(
                 BuiltinClassTag::Eq,
-                "eq",
+                self.pre.eq,
                 left,
                 right,
                 span,
@@ -101,7 +102,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             BinOp::Ne => {
                 let eq = self.dispatch_binary(
                     BuiltinClassTag::Eq,
-                    "eq",
+                    self.pre.eq,
                     left,
                     right,
                     span,
@@ -138,7 +139,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             // Monoid class method
             BinOp::Concat => self.dispatch_binary(
                 BuiltinClassTag::Monoid,
-                "concat",
+                self.pre.concat,
                 left,
                 right,
                 span,
@@ -147,28 +148,28 @@ impl<I: IoContext> Interpreter<'_, I> {
             // BitLike class methods
             BinOp::BitAnd => self.dispatch_binary(
                 BuiltinClassTag::BitLike,
-                "bit-and",
+                self.pre.bit_and,
                 left,
                 right,
                 span,
             ),
             BinOp::BitOr => self.dispatch_binary(
                 BuiltinClassTag::BitLike,
-                "bit-or",
+                self.pre.bit_or,
                 left,
                 right,
                 span,
             ),
             BinOp::Shl => self.dispatch_binary(
                 BuiltinClassTag::BitLike,
-                "shl",
+                self.pre.shl,
                 left,
                 right,
                 span,
             ),
             BinOp::Shr => self.dispatch_binary(
                 BuiltinClassTag::BitLike,
-                "shr",
+                self.pre.shr,
                 left,
                 right,
                 span,
@@ -183,7 +184,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     fn dispatch_binary(
         &mut self,
         kind: BuiltinClassTag,
-        method: &str,
+        mid: StringId,
         left: &Value,
         right: &Value,
         span: Span,
@@ -203,7 +204,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             span,
         };
         self.class_methods
-            .dispatch_binary(kind, method, &mut ctx, l, r)
+            .dispatch_binary(kind, mid, &mut ctx, l, r)
     }
 
     /// Dispatch a binary operator through user-defined class instance.
@@ -282,7 +283,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 Value::Int(n) => Ok(Value::Int(-n)),
                 _ => self.dispatch_unary(
                     BuiltinClassTag::Negatable,
-                    "neg",
+                    self.pre.neg,
                     &v,
                     span,
                 ),
@@ -300,7 +301,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let ty = self.ty_arena.get(ty_id).clone();
                 self.dispatch_convert(
                     BuiltinClassTag::Fallible,
-                    "wrap",
+                    self.pre.wrap,
                     &v,
                     &ty,
                     span,
@@ -315,7 +316,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     pub(super) fn dispatch_unary(
         &mut self,
         kind: BuiltinClassTag,
-        method: &str,
+        mid: StringId,
         v: &Value,
         span: Span,
     ) -> Result<Value> {
@@ -331,8 +332,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             regex_cache: &self.regex_cache,
             span,
         };
-        self.class_methods
-            .dispatch_unary(kind, method, &mut ctx, val)
+        self.class_methods.dispatch_unary(kind, mid, &mut ctx, val)
     }
 
     /// Dispatch a conversion class method (`Into:into`, `TryInto:try-into`).
@@ -341,7 +341,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     pub(super) fn dispatch_convert(
         &mut self,
         kind: BuiltinClassTag,
-        method: &str,
+        mid: StringId,
         v: &Value,
         target: &crate::typecheck::Ty,
         span: Span,
@@ -359,7 +359,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             span,
         };
         self.class_methods
-            .dispatch_convert(kind, method, &mut ctx, val, target)
+            .dispatch_convert(kind, mid, &mut ctx, val, target)
     }
 
     /// Dispatch `Ord:compare` and apply a predicate to the result.
@@ -378,7 +378,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     {
         let ord = self.dispatch_binary(
             BuiltinClassTag::Ord,
-            "compare",
+            self.pre.compare,
             left,
             right,
             span,

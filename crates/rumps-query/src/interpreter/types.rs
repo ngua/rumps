@@ -252,7 +252,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let ty = self.ty_arena.get(ty_id).clone();
                 self.dispatch_convert(
                     BuiltinClassTag::Into,
-                    "into",
+                    self.pre.into,
                     val,
                     &ty,
                     span,
@@ -299,7 +299,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         let ty = self.ty_arena.get(ty_id).clone();
         self.dispatch_convert(
             BuiltinClassTag::TryInto,
-            "try-into",
+            self.pre.try_into,
             val,
             &ty,
             span,

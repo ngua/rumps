@@ -546,10 +546,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         args: &[ValueId],
         span: Span,
     ) -> Result<Value> {
-        let ms = self.arena.strings.get(method).unwrap_or_default();
         // Check for HOF first (requires async)
         if let Some(super::class::MethodFn::Hof(f)) =
-            self.class_methods.lookup(class, ms)
+            self.class_methods.lookup(class, method)
         {
             self.run_hof_trampoline(f, args, span).await
         } else {
@@ -573,8 +572,6 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<Value> {
         use super::class::ClassCtx;
 
-        let ms = self.arena.strings.resolve(method);
-
         let val = |i: usize| {
             self.arena
                 .get(args[i])
@@ -582,7 +579,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .unwrap_or_else(|| invariant!("class method arg in arena"))
         };
 
-        match self.class_methods.lookup(class, &ms) {
+        match self.class_methods.lookup(class, method) {
             Some(super::class::MethodFn::Binary(_)) => {
                 let left = val(0);
                 let right = val(1);
@@ -595,7 +592,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     span,
                 };
                 self.class_methods
-                    .dispatch_binary(class, &ms, &mut ctx, &left, &right)
+                    .dispatch_binary(class, method, &mut ctx, &left, &right)
             }
             Some(super::class::MethodFn::Unary(_)) => {
                 let v = val(0);
@@ -607,7 +604,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                     regex_cache: &self.regex_cache,
                     span,
                 };
-                self.class_methods.dispatch_unary(class, &ms, &mut ctx, &v)
+                self.class_methods
+                    .dispatch_unary(class, method, &mut ctx, &v)
             }
             Some(super::class::MethodFn::Nullary(_)) => {
                 let id = expr_id.unwrap_or_else(|| {
@@ -627,7 +625,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     span,
                 };
                 self.class_methods
-                    .dispatch_nullary(class, &ms, &mut ctx, &ty)
+                    .dispatch_nullary(class, method, &mut ctx, &ty)
             }
             Some(super::class::MethodFn::Convert(_)) => {
                 let v = val(0);
@@ -653,7 +651,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     span,
                 };
                 self.class_methods
-                    .dispatch_convert(class, &ms, &mut ctx, &v, &ty)
+                    .dispatch_convert(class, method, &mut ctx, &v, &ty)
             }
             Some(super::class::MethodFn::Hof(_)) => {
                 // HOFs need async; caller should use dispatch_class_method
