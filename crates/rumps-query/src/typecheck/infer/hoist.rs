@@ -251,7 +251,7 @@ impl InferCtx<'_> {
                             let parent_id = self.env.intern(parent);
                             let saved =
                                 self.current_module.replace(parent_id);
-                            if self.resolve_type_name(&n).is_some() {
+                            if self.resolve_type_name(*name).is_some() {
                                 self.error(TypeError::Custom {
                                     msg: format!(
                                         "type `{}` already in scope from outer module",

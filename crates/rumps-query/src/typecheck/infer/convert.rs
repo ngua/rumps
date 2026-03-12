@@ -3,8 +3,6 @@
 //! Contains methods for converting between AST type expressions, runtime type
 //! representations, and static `Ty` / `TyId` types.
 
-use std::borrow::Cow;
-
 use indexmap::IndexMap;
 use smallvec::{smallvec, SmallVec};
 
@@ -347,41 +345,24 @@ impl InferCtx<'_> {
                     subst.get(name).copied().unwrap_or_else(|| {
                         let span =
                             self.ast.type_expr_span(id).unwrap_or_default();
-                        let name_s = self.env.resolve_string(*name);
 
                         // Try module-aware resolution for user types
-                        // Extract resolution data; only allocate when rewrite needed
-                        let resolved = self.resolve_type_name(&name_s).map(
-                            |(tid, cow)| {
-                                let rewrite = *cow != *name_s;
-                                // Only allocate on rewrite; otherwise use `None`
-                                // and reference `name_s` later
-                                let qname = if rewrite {
-                                    Some(cow.into_owned())
-                                } else {
-                                    None
-                                };
-                                (tid, qname)
-                            },
-                        );
+                        let resolved = self.resolve_type_name(*name);
                         match resolved {
-                            Some((type_id, qname)) => {
-                                // Effective name for checks (borrow or owned)
-                                let eff = qname.as_deref().unwrap_or(&name_s);
+                            Some((type_id, qid)) => {
                                 // Check visibility
-                                if !self.check_type_visibility(eff, span) {
+                                if !self.check_type_visibility(qid, span) {
                                     TyArena::ERROR
                                 } else {
                                     // Rewrite AST if name was resolved differently
-                                    if let Some(ref q) = qname {
+                                    if qid != *name {
                                         self.ast.set_type_expr(
                                             id,
-                                            AstTypeExpr::Named(
-                                                self.env.intern(q),
-                                            ),
+                                            AstTypeExpr::Named(qid),
                                         );
                                     }
                                     // Check arity; builtins use expected_type_arity
+                                    let eff = self.env.resolve_str(qid);
                                     let exp = self
                                         .registry
                                         .type_param_count(type_id)
@@ -390,9 +371,10 @@ impl InferCtx<'_> {
                                         })
                                         .unwrap_or(0);
                                     if exp > 0 {
+                                        let n = self.env.resolve_string(qid);
                                         self.error(
                                             TypeError::TypeArityMismatch {
-                                                name: qname.unwrap_or(name_s),
+                                                name: n,
                                                 expected: exp,
                                                 got: 0,
                                                 span,
@@ -405,6 +387,7 @@ impl InferCtx<'_> {
                                 }
                             }
                             None => {
+                                let name_s = self.env.resolve_string(*name);
                                 // Try builtin types
                                 let expected =
                                     Self::expected_type_arity(&name_s);
@@ -439,48 +422,33 @@ impl InferCtx<'_> {
                 }
                 AstTypeExpr::App(name, args) => {
                     let span = self.ast.type_expr_span(id).unwrap_or_default();
-                    let name_s = self.env.resolve_string(*name);
 
                     // Try module-aware resolution for user types
-                    // Only allocate when rewrite needed
-                    let resolved =
-                        self.resolve_type_name(&name_s).map(|(tid, cow)| {
-                            let rewrite = *cow != *name_s;
-                            let qname = if rewrite {
-                                Some(cow.into_owned())
-                            } else {
-                                None
-                            };
-                            (tid, qname)
-                        });
+                    let resolved = self.resolve_type_name(*name);
                     // Check for user-defined type (not builtin)
-                    let user_def =
-                        resolved.as_ref().and_then(|(tid, qname)| {
-                            let eff = qname.as_deref().unwrap_or(&name_s);
-                            self.registry
-                                .type_param_count(*tid)
-                                .map(|exp| (*tid, eff, qname.clone(), exp))
-                        });
+                    let user_def = resolved.and_then(|(tid, qid)| {
+                        self.registry
+                            .type_param_count(tid)
+                            .map(|exp| (tid, qid, exp))
+                    });
                     match user_def {
-                        Some((type_id, eff, qname, exp)) => {
+                        Some((type_id, qid, exp)) => {
                             // User-defined parameterized type
-                            if !self.check_type_visibility(eff, span) {
+                            if !self.check_type_visibility(qid, span) {
                                 TyArena::ERROR
                             } else {
                                 // Rewrite AST if name was resolved differently
-                                if let Some(ref q) = qname {
+                                if qid != *name {
                                     self.ast.set_type_expr(
                                         id,
-                                        AstTypeExpr::App(
-                                            self.env.intern(q),
-                                            args.clone(),
-                                        ),
+                                        AstTypeExpr::App(qid, args.clone()),
                                     );
                                 }
                                 // Check arity
                                 if args.len() != exp {
+                                    let n = self.env.resolve_string(qid);
                                     self.error(TypeError::TypeArityMismatch {
-                                        name: qname.unwrap_or(name_s),
+                                        name: n,
                                         expected: exp,
                                         got: args.len(),
                                         span,
@@ -497,6 +465,7 @@ impl InferCtx<'_> {
                             }
                         }
                         None => {
+                            let name_s = self.env.resolve_string(*name);
                             // Builtin or unknown parameterized type
                             let expected = Self::expected_type_arity(&name_s);
                             if let Some(exp) = expected {
@@ -754,22 +723,24 @@ impl InferCtx<'_> {
     /// Emits a `PrivateAccess` error for private types.
     ///
     /// Non-module types (no `.` in name) always return `true`.
-    fn check_type_visibility(&mut self, name: &str, span: Span) -> bool {
-        // Only check visibility for module-qualified types
-        name.contains('.')
-            .then(|| {
-                let id = self.env.intern(name);
-                self.env.lookup_user_module_type_vis(id).is_none_or(|vis| {
+    fn check_type_visibility(&mut self, name: StringId, span: Span) -> bool {
+        let has_dot = {
+            let s = self.env.resolve_str(name);
+            s.contains('.')
+        };
+        if has_dot {
+            self.env
+                .lookup_user_module_type_vis(name)
+                .is_none_or(|vis| {
                     if vis == Visibility::Private {
-                        // Extract module path and type name for error
-                        let parts: Vec<_> = name.split('.').collect();
-                        let (type_name, module_parts) = parts
+                        let name_s = self.env.resolve_string(name);
+                        let parts: Vec<_> = name_s.split('.').collect();
+                        let (tn, mp) = parts
                             .split_last()
                             .map_or(("", vec![]), |(t, m)| (*t, m.to_vec()));
-                        let module = module_parts.join(".");
                         self.error(TypeError::PrivateAccess {
-                            module,
-                            name: type_name.to_string(),
+                            module: mp.join("."),
+                            name: tn.to_string(),
                             span,
                         });
                         false
@@ -777,8 +748,9 @@ impl InferCtx<'_> {
                         true
                     }
                 })
-            })
-            .unwrap_or(true)
+        } else {
+            true
+        }
     }
 
     /// Extract the type of a field from a type.
@@ -921,54 +893,42 @@ impl InferCtx<'_> {
     /// 1. Check imported types first
     /// 2. Try exact name (already qualified or top-level)
     /// 3. If inside a module, try prefixing with current module, then parent
-    pub(super) fn resolve_type_name<'a>(
-        &'a self,
-        name: &'a str,
-    ) -> Option<(TypeId, Cow<'a, str>)> {
+    pub(super) fn resolve_type_name(
+        &self,
+        name: StringId,
+    ) -> Option<(TypeId, StringId)> {
         // 1. Check imported types
-        let imported = self
-            .env
-            .lookup_str(name)
-            .and_then(|id| self.env.lookup_imported_type(id))
-            .and_then(|qid| self.env.get_str(qid));
-        let effective: Cow<str> =
-            imported.map(Cow::Borrowed).unwrap_or(Cow::Borrowed(name));
+        let eff = self.env.lookup_imported_type(name).unwrap_or(name);
 
-        // 2. Try exact lookup
-        self.try_lookup_type(&effective)
-            .map(|id| (id, effective.clone()))
-            .or_else(|| {
-                // 3. Try module prefixes (only if not already qualified)
-                if effective.contains('.') {
-                    None
-                } else {
-                    self.current_module.and_then(|mod_id| {
-                        let mod_path = self.env.resolve_str(mod_id);
-                        std::iter::successors(Some(mod_path), |p| {
-                            p.rsplit_once('.').map(|(parent, _)| parent)
-                        })
-                        .find_map(|prefix| {
-                            let qname = format!("{}.{}", prefix, effective);
-                            self.try_lookup_type(&qname)
-                                .map(|id| (id, Cow::Owned(qname)))
+        // 2. Try exact lookup (`StringId` maps directly to the registry)
+        self.registry.lookup(eff).map(|id| (id, eff)).or_else(|| {
+            // 3. Try module prefixes (only if not already qualified)
+            let eff_s = self.env.resolve_str(eff);
+            if eff_s.contains('.') {
+                None
+            } else {
+                self.current_module.and_then(|mod_id| {
+                    let mod_s = self.env.resolve_str(mod_id);
+                    std::iter::successors(Some(mod_s), |p| {
+                        p.rsplit_once('.').map(|(parent, _)| parent)
+                    })
+                    .find_map(|prefix| {
+                        let qname = format!("{prefix}.{eff_s}");
+                        self.env.lookup_str(&qname).and_then(|qid| {
+                            self.registry.lookup(qid).map(|id| (id, qid))
                         })
                     })
-                }
-            })
-    }
-
-    /// Try to look up a type by exact name.
-    fn try_lookup_type(&self, name: &str) -> Option<TypeId> {
-        self.env
-            .lookup_str(name)
-            .and_then(|id| self.registry.lookup(id))
+                })
+            }
+        })
     }
 
     /// Check if `name` refers to a known (builtin or user-defined) type,
     /// as opposed to a type variable.
-    pub(super) fn is_known_type_name(&self, name: &str) -> bool {
-        Self::builtin_type_from_name(name).is_some()
-            || Self::expected_type_arity(name).is_some()
+    pub(super) fn is_known_type_name(&self, name: StringId) -> bool {
+        let s = self.env.resolve_str(name);
+        Self::builtin_type_from_name(s).is_some()
+            || Self::expected_type_arity(s).is_some()
             || self.resolve_type_name(name).is_some()
     }
 
@@ -980,7 +940,7 @@ impl InferCtx<'_> {
     pub(super) fn collect_type_vars_from_ast(
         &self,
         id: AstTypeExprId,
-    ) -> SmallVec<[String; 4]> {
+    ) -> SmallVec<[StringId; 4]> {
         let mut out = SmallVec::new();
         self.collect_type_vars_rec(id, &mut out);
         out
@@ -997,8 +957,7 @@ impl InferCtx<'_> {
     ) {
         self.collect_type_vars_from_ast(for_type)
             .into_iter()
-            .for_each(|name| {
-                let id = self.env.intern(&name);
+            .for_each(|id| {
                 if !subst.contains_key(&id) {
                     let tv = self.fresh_var();
                     subst.insert(id, self.ty_arena.alloc(Ty::Var(tv)));
@@ -1009,17 +968,17 @@ impl InferCtx<'_> {
     fn collect_type_vars_rec(
         &self,
         id: AstTypeExprId,
-        out: &mut SmallVec<[String; 4]>,
+        out: &mut SmallVec<[StringId; 4]>,
     ) {
         if let Some(te) = self.ast.get_type_expr(id).cloned() {
             match te {
                 AstTypeExpr::Named(name) => {
-                    if !self.is_known_type_name(self.env.resolve_str(name)) {
-                        out.push(self.env.resolve_string(name));
+                    if !self.is_known_type_name(name) {
+                        out.push(name);
                     }
                 }
                 AstTypeExpr::VarApp(name, args) => {
-                    out.push(self.env.resolve_string(name));
+                    out.push(name);
                     args.iter()
                         .for_each(|a| self.collect_type_vars_rec(*a, out));
                 }

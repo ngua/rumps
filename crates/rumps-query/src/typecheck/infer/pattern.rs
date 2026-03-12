@@ -126,7 +126,7 @@ impl InferCtx<'_> {
                     // Check scrutinee is compatible with variant pattern
                     if !self.scrutinee_compatible_with_variant(
                         scrutinee_ty,
-                        self.env.resolve_str(*ty_name),
+                        *ty_name,
                     ) {
                         let pat_ty = self.env.resolve_string(*ty_name);
                         self.error(TypeError::IncompatibleVariantPattern {
@@ -136,20 +136,18 @@ impl InferCtx<'_> {
                         });
                     }
 
-                    // Resolve type name using module-aware lookup; extract owned
-                    // string only if it differs (avoids allocation in common case)
-                    let ty_str = self.env.resolve_str(*ty_name);
-                    let qname = self
-                        .resolve_type_name(ty_str)
-                        .map(|(_, cow)| cow.into_owned())
-                        .filter(|q| q != ty_str);
+                    // Resolve type name using module-aware lookup
+                    let qid = self
+                        .resolve_type_name(*ty_name)
+                        .map(|(_, qid)| qid)
+                        .filter(|&qid| qid != *ty_name);
 
                     // Rewrite AST if name was resolved differently
-                    if let Some(q) = &qname {
+                    if let Some(qid) = qid {
                         self.ast.set_pattern(
                             pat_id,
                             MatchPattern::Variant(
-                                self.env.intern(q),
+                                qid,
                                 *var_name,
                                 sub_pats.clone(),
                             ),
@@ -157,9 +155,10 @@ impl InferCtx<'_> {
                     }
 
                     let var_s = self.env.resolve_string(*var_name);
-                    let ty_s = self.env.resolve_string(*ty_name);
+                    let eff = qid.unwrap_or(*ty_name);
+                    let ty_s = self.env.resolve_string(eff);
                     let payload_tys = self.variant_payload_types(
-                        qname.as_deref().unwrap_or(&ty_s),
+                        &ty_s,
                         &var_s,
                         scrutinee_ty,
                         span,
