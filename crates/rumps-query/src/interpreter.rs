@@ -1985,7 +1985,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     #[allow(clippy::while_let_on_iterator)]
     async fn json(
         &mut self,
-        fields: &[(String, ExprId)],
+        fields: &[(StringId, ExprId)],
         _span: Span,
     ) -> Result<Value> {
         let mut obj = serde_json::Map::new();
@@ -1994,7 +1994,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         while let Some((key, expr_id)) = it.next() {
             let val = self.eval(*expr_id).await?;
             let json_val = self.jsonify(&val);
-            obj.insert(key.clone(), json_val);
+            obj.insert(self.arena.strings.resolve(*key).to_owned(), json_val);
         }
         Ok(Value::Json(serde_json::Value::Object(obj)))
     }

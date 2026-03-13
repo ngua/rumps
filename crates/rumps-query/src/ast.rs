@@ -965,7 +965,7 @@ pub(crate) enum Expr {
     ///
     /// Distinguished from native `Object` by having quoted string keys.
     /// Evaluates to `Value::Json`.
-    Json(Vec<(String, ExprId)>),
+    Json(Vec<(StringId, ExprId)>),
 
     /// JSON field access operators.
     ///

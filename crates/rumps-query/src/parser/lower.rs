@@ -735,7 +735,8 @@ impl<'a> LowerCtx<'a> {
                 let field_ids = fields
                     .into_iter()
                     .map(|(k, v)| {
-                        self.expr(v).map(|id| (k, id))
+                        let kid = self.interner.intern(&k);
+                        self.expr(v).map(|id| (kid, id))
                     })
                     .collect::<Result<Vec<_>>>()?;
                 Expr::Json(field_ids)
