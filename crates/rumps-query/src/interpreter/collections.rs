@@ -554,10 +554,11 @@ impl<I: IoContext> Interpreter<'_, I> {
             | (Value::Newtype(_, _), _) => {
                 let base_id = self.arena.add(base_val, span);
                 let idx_id = self.arena.add(idx_val, span);
+                let mid = self.arena.intern("index");
                 self.dispatch_class_method(
                     Some(base),
                     crate::typecheck::BuiltinClassTag::Indexable,
-                    self.pre.index,
+                    mid,
                     &[base_id, idx_id],
                     span,
                 )
@@ -638,10 +639,11 @@ impl<I: IoContext> Interpreter<'_, I> {
             | (Value::Newtype(_, _), _) => {
                 let base_id = self.arena.add(base_val, span);
                 let idx_id = self.arena.add(idx_val, span);
+                let mid = self.arena.intern("get");
                 self.dispatch_class_method(
                     Some(base),
                     crate::typecheck::BuiltinClassTag::Indexable,
-                    self.pre.get,
+                    mid,
                     &[base_id, idx_id],
                     span,
                 )

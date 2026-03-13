@@ -250,9 +250,10 @@ impl<I: IoContext> Interpreter<'_, I> {
             _ => {
                 let ty_id = Self::type_id_to_ty_id(target, &mut self.ty_arena);
                 let ty = self.ty_arena.get(ty_id).clone();
+                let mid = self.arena.intern("into");
                 self.dispatch_convert(
                     BuiltinClassTag::Into,
-                    self.pre.into,
+                    mid,
                     val,
                     &ty,
                     span,
@@ -297,13 +298,8 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<Value> {
         let ty_id = Self::type_id_to_ty_id(target, &mut self.ty_arena);
         let ty = self.ty_arena.get(ty_id).clone();
-        self.dispatch_convert(
-            BuiltinClassTag::TryInto,
-            self.pre.try_into,
-            val,
-            &ty,
-            span,
-        )
+        let mid = self.arena.intern("try-into");
+        self.dispatch_convert(BuiltinClassTag::TryInto, mid, val, &ty, span)
     }
 
     /// Perform typed conversion for `read` with full type expression support.

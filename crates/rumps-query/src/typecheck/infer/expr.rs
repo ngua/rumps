@@ -1531,7 +1531,7 @@ impl InferCtx<'_> {
                 let expected_idx = self.ty_arena.alloc(Ty::AssocType(
                     v,
                     BuiltinClassTag::Indexable,
-                    self.idx_id,
+                    self.env.intern("Index"),
                 ));
                 self.unify(idx_ty, expected_idx, span);
                 self.constrain(Constraint::Class {
@@ -1573,7 +1573,7 @@ impl InferCtx<'_> {
 
                         // Resolve index type from associated type
                         let inst_idx_ty = inst
-                            .get_assoc_type(self.idx_id)
+                            .get_assoc_type(self.env.intern("Index"))
                             .map(|a| self.ty_arena.apply(a.ty, &param_subst))
                             .unwrap_or(TyArena::UNKNOWN);
                         self.unify(idx_ty, inst_idx_ty, span);
@@ -1657,7 +1657,7 @@ impl InferCtx<'_> {
                 let expected_idx = self.ty_arena.alloc(Ty::AssocType(
                     v,
                     BuiltinClassTag::Indexable,
-                    self.idx_id,
+                    self.env.intern("Index"),
                 ));
                 self.unify(idx_ty, expected_idx, span);
                 self.constrain(Constraint::Class {
@@ -1698,7 +1698,7 @@ impl InferCtx<'_> {
 
                         // Resolve index type from associated type
                         let inst_idx_ty = inst
-                            .get_assoc_type(self.idx_id)
+                            .get_assoc_type(self.env.intern("Index"))
                             .map(|a| self.ty_arena.apply(a.ty, &param_subst))
                             .unwrap_or(TyArena::UNKNOWN);
                         self.unify(idx_ty, inst_idx_ty, span);
@@ -2451,12 +2451,14 @@ impl InferCtx<'_> {
         // Handle builtin types
         if type_id == TypeId::OPTION {
             let inner = self.fresh();
-            let map = std::iter::once((self.t_id, inner)).collect();
+            let map = std::iter::once((self.env.intern("T"), inner)).collect();
             (self.ty_arena.option(inner), map)
         } else if type_id == TypeId::RESULT {
             let ok = self.fresh();
             let err = self.fresh();
-            let map = [(self.t_id, ok), (self.e_id, err)].into_iter().collect();
+            let map = [(self.env.intern("T"), ok), (self.env.intern("E"), err)]
+                .into_iter()
+                .collect();
             (self.ty_arena.result(ok, err), map)
         } else {
             // User-defined sum type

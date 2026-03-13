@@ -36,73 +36,89 @@ impl<I: IoContext> Interpreter<'_, I> {
                 (Value::Int(a), Value::Int(b)) => {
                     Ok(Value::Int(a.wrapping_add(*b)))
                 }
-                _ => self.dispatch_binary(
-                    BuiltinClassTag::Numeric,
-                    self.pre.add,
-                    left,
-                    right,
-                    span,
-                ),
+                _ => {
+                    let id = self.arena.intern("add");
+                    self.dispatch_binary(
+                        BuiltinClassTag::Numeric,
+                        id,
+                        left,
+                        right,
+                        span,
+                    )
+                }
             },
             BinOp::Sub => match (left, right) {
                 (Value::Int(a), Value::Int(b)) => {
                     Ok(Value::Int(a.wrapping_sub(*b)))
                 }
-                _ => self.dispatch_binary(
-                    BuiltinClassTag::Numeric,
-                    self.pre.sub,
-                    left,
-                    right,
-                    span,
-                ),
+                _ => {
+                    let id = self.arena.intern("sub");
+                    self.dispatch_binary(
+                        BuiltinClassTag::Numeric,
+                        id,
+                        left,
+                        right,
+                        span,
+                    )
+                }
             },
             BinOp::Mul => match (left, right) {
                 (Value::Int(a), Value::Int(b)) => {
                     Ok(Value::Int(a.wrapping_mul(*b)))
                 }
-                _ => self.dispatch_binary(
+                _ => {
+                    let id = self.arena.intern("mul");
+                    self.dispatch_binary(
+                        BuiltinClassTag::Numeric,
+                        id,
+                        left,
+                        right,
+                        span,
+                    )
+                }
+            },
+            BinOp::Div => self.binop_div(left, right, span),
+            BinOp::FloorDiv => {
+                let id = self.arena.intern("floor-div");
+                self.dispatch_binary(
                     BuiltinClassTag::Numeric,
-                    self.pre.mul,
+                    id,
                     left,
                     right,
                     span,
-                ),
-            },
-            BinOp::Div => self.binop_div(left, right, span),
-            BinOp::FloorDiv => self.dispatch_binary(
-                BuiltinClassTag::Numeric,
-                self.pre.floor_div,
-                left,
-                right,
-                span,
-            ),
-            BinOp::Mod => self.dispatch_binary(
-                BuiltinClassTag::Numeric,
-                self.pre.r#mod,
-                left,
-                right,
-                span,
-            ),
-            BinOp::Pow => self.dispatch_binary(
-                BuiltinClassTag::Numeric,
-                self.pre.pow,
-                left,
-                right,
-                span,
-            ),
+                )
+            }
+            BinOp::Mod => {
+                let id = self.arena.intern("mod");
+                self.dispatch_binary(
+                    BuiltinClassTag::Numeric,
+                    id,
+                    left,
+                    right,
+                    span,
+                )
+            }
+            BinOp::Pow => {
+                let id = self.arena.intern("pow");
+                self.dispatch_binary(
+                    BuiltinClassTag::Numeric,
+                    id,
+                    left,
+                    right,
+                    span,
+                )
+            }
 
             // Equality via Eq class
-            BinOp::Eq => self.dispatch_binary(
-                BuiltinClassTag::Eq,
-                self.pre.eq,
-                left,
-                right,
-                span,
-            ),
+            BinOp::Eq => {
+                let id = self.arena.intern("eq");
+                self.dispatch_binary(BuiltinClassTag::Eq, id, left, right, span)
+            }
             BinOp::Ne => {
+                let id = self.arena.intern("eq");
                 let eq = self.dispatch_binary(
                     BuiltinClassTag::Eq,
-                    self.pre.eq,
+                    id,
                     left,
                     right,
                     span,
@@ -137,43 +153,58 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
 
             // Monoid class method
-            BinOp::Concat => self.dispatch_binary(
-                BuiltinClassTag::Monoid,
-                self.pre.concat,
-                left,
-                right,
-                span,
-            ),
+            BinOp::Concat => {
+                let id = self.arena.intern("concat");
+                self.dispatch_binary(
+                    BuiltinClassTag::Monoid,
+                    id,
+                    left,
+                    right,
+                    span,
+                )
+            }
 
             // BitLike class methods
-            BinOp::BitAnd => self.dispatch_binary(
-                BuiltinClassTag::BitLike,
-                self.pre.bit_and,
-                left,
-                right,
-                span,
-            ),
-            BinOp::BitOr => self.dispatch_binary(
-                BuiltinClassTag::BitLike,
-                self.pre.bit_or,
-                left,
-                right,
-                span,
-            ),
-            BinOp::Shl => self.dispatch_binary(
-                BuiltinClassTag::BitLike,
-                self.pre.shl,
-                left,
-                right,
-                span,
-            ),
-            BinOp::Shr => self.dispatch_binary(
-                BuiltinClassTag::BitLike,
-                self.pre.shr,
-                left,
-                right,
-                span,
-            ),
+            BinOp::BitAnd => {
+                let id = self.arena.intern("bit-and");
+                self.dispatch_binary(
+                    BuiltinClassTag::BitLike,
+                    id,
+                    left,
+                    right,
+                    span,
+                )
+            }
+            BinOp::BitOr => {
+                let id = self.arena.intern("bit-or");
+                self.dispatch_binary(
+                    BuiltinClassTag::BitLike,
+                    id,
+                    left,
+                    right,
+                    span,
+                )
+            }
+            BinOp::Shl => {
+                let id = self.arena.intern("shl");
+                self.dispatch_binary(
+                    BuiltinClassTag::BitLike,
+                    id,
+                    left,
+                    right,
+                    span,
+                )
+            }
+            BinOp::Shr => {
+                let id = self.arena.intern("shr");
+                self.dispatch_binary(
+                    BuiltinClassTag::BitLike,
+                    id,
+                    left,
+                    right,
+                    span,
+                )
+            }
         }
     }
 
@@ -225,7 +256,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         let (class, method_str) = op.class_dispatch().unwrap_or_else(|| {
             typechecked!("binop user dispatch", "class-dispatched op")
         });
-        let method = self.pre.class_dispatch(method_str);
+        let method = self.arena.intern(method_str);
 
         let l = self.arena.add(left.clone(), span);
         let r = self.arena.add(right.clone(), span);
@@ -281,12 +312,15 @@ impl<I: IoContext> Interpreter<'_, I> {
             UnOp::Neg => match &v {
                 // Fast-path: Int negation (most common)
                 Value::Int(n) => Ok(Value::Int(-n)),
-                _ => self.dispatch_unary(
-                    BuiltinClassTag::Negatable,
-                    self.pre.neg,
-                    &v,
-                    span,
-                ),
+                _ => {
+                    let id = self.arena.intern("neg");
+                    self.dispatch_unary(
+                        BuiltinClassTag::Negatable,
+                        id,
+                        &v,
+                        span,
+                    )
+                }
             },
             UnOp::Not => Ok(match &v {
                 Value::Bool(b) => Value::Bool(!b),
@@ -299,9 +333,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                         typechecked!("?", "resolved wrap type")
                     });
                 let ty = self.ty_arena.get(ty_id).clone();
+                let mid = self.arena.intern("wrap");
                 self.dispatch_convert(
                     BuiltinClassTag::Fallible,
-                    self.pre.wrap,
+                    mid,
                     &v,
                     &ty,
                     span,
@@ -376,13 +411,9 @@ impl<I: IoContext> Interpreter<'_, I> {
     where
         F: FnOnce(i64) -> bool,
     {
-        let ord = self.dispatch_binary(
-            BuiltinClassTag::Ord,
-            self.pre.compare,
-            left,
-            right,
-            span,
-        )?;
+        let cmp = self.arena.intern("compare");
+        let ord =
+            self.dispatch_binary(BuiltinClassTag::Ord, cmp, left, right, span)?;
         match ord {
             Value::Int(n) => Ok(Value::Bool(pred(n))),
             _ => typechecked!("compare result", "Int"),

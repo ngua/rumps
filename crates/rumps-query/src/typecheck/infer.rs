@@ -284,14 +284,6 @@ pub(crate) struct InferCtx<'a> {
     /// executed sequentially. In normal mode, a `main` function is required
     /// and top-level expressions are rejected.
     interactive: bool,
-    /// Pre-interned `StringId` for `"main"`.
-    main_id: StringId,
-    /// Pre-interned `StringId` for `"Index"` (associated type on `Indexable`).
-    pub(super) idx_id: StringId,
-    /// Pre-interned `StringId` for `"T"` (type param on `Option`/`Result`).
-    pub(super) t_id: StringId,
-    /// Pre-interned `StringId` for `"E"` (error type param on `Result`).
-    pub(super) e_id: StringId,
     /// Type variables representing polymorphic parameters.
     ///
     /// When entering a function body with type parameters (e.g., `[T, F: Fallible[T]]`),
@@ -324,11 +316,7 @@ impl<'a> InferCtx<'a> {
         // builtin module schemes remain valid; inference will extend this
         // copy with its own type allocations.
         let mut ty_arena = runtime_env.ty_arena.clone();
-        let mut env = TypeEnv::new(strings, &mut ty_arena);
-        let main_id = env.intern("main");
-        let idx_id = env.intern("Index");
-        let t_id = env.intern("T");
-        let e_id = env.intern("E");
+        let env = TypeEnv::new(strings, &mut ty_arena);
         Self {
             ast,
             registry,
@@ -356,10 +344,6 @@ impl<'a> InferCtx<'a> {
             class_context: None,
             current_module: None,
             interactive,
-            main_id,
-            idx_id,
-            t_id,
-            e_id,
             poly_param_vars: HashSet::new(),
         }
     }
@@ -654,7 +638,8 @@ impl<'a> InferCtx<'a> {
             let file_span = Span::new(0, 0);
             let expected =
                 self.ty_arena.func(smallvec::smallvec![], TyArena::UNIT);
-            let main_err = self.env.lookup(self.main_id).map_or_else(
+            let main_id = self.env.intern("main");
+            let main_err = self.env.lookup(main_id).map_or_else(
                 || Some(TypeError::MissingMain(file_span)),
                 |scheme| {
                     if scheme.ty == expected {

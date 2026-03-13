@@ -319,11 +319,14 @@ impl InferCtx<'_> {
                 }
 
                 Ty::Option(_) => {
+                    let oid = self.env.intern("Option");
+                    let sid = self.env.intern("Some");
+                    let nid = self.env.intern("None");
                     let has_some = unguarded.iter().any(|arm| {
-                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if self.env.resolve_str(*ty) == "Option" && self.env.resolve_str(*var) == "Some"))
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if *ty == oid && *var == sid))
                     });
                     let has_none = unguarded.iter().any(|arm| {
-                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if self.env.resolve_str(*ty) == "Option" && self.env.resolve_str(*var) == "None"))
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if *ty == oid && *var == nid))
                     });
                     if !has_some || !has_none {
                         self.error(TypeError::NonExhaustiveMatch(span));
@@ -331,11 +334,14 @@ impl InferCtx<'_> {
                 }
 
                 Ty::Result(_, _) => {
+                    let rid = self.env.intern("Result");
+                    let ok = self.env.intern("Ok");
+                    let er = self.env.intern("Err");
                     let has_ok = unguarded.iter().any(|arm| {
-                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if self.env.resolve_str(*ty) == "Result" && self.env.resolve_str(*var) == "Ok"))
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if *ty == rid && *var == ok))
                     });
                     let has_err = unguarded.iter().any(|arm| {
-                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if self.env.resolve_str(*ty) == "Result" && self.env.resolve_str(*var) == "Err"))
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if *ty == rid && *var == er))
                     });
                     if !has_ok || !has_err {
                         self.error(TypeError::NonExhaustiveMatch(span));
@@ -365,14 +371,18 @@ impl InferCtx<'_> {
                 }
 
                 Ty::Ordering => {
+                    let oid = self.env.intern("Ordering");
+                    let lt = self.env.intern("Lt");
+                    let eq = self.env.intern("Eq");
+                    let gt = self.env.intern("Gt");
                     let has_lt = unguarded.iter().any(|arm| {
-                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if self.env.resolve_str(*ty) == "Ordering" && self.env.resolve_str(*var) == "Lt"))
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if *ty == oid && *var == lt))
                     });
                     let has_eq = unguarded.iter().any(|arm| {
-                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if self.env.resolve_str(*ty) == "Ordering" && self.env.resolve_str(*var) == "Eq"))
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if *ty == oid && *var == eq))
                     });
                     let has_gt = unguarded.iter().any(|arm| {
-                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if self.env.resolve_str(*ty) == "Ordering" && self.env.resolve_str(*var) == "Gt"))
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if *ty == oid && *var == gt))
                     });
                     if !has_lt || !has_eq || !has_gt {
                         self.error(TypeError::NonExhaustiveMatch(span));
@@ -380,17 +390,22 @@ impl InferCtx<'_> {
                 }
 
                 Ty::DataStatus => {
+                    let did = self.env.intern("DataStatus");
+                    let nd = self.env.intern("NoData");
+                    let hv = self.env.intern("HasValue");
+                    let hd = self.env.intern("HasDescendants");
+                    let bt = self.env.intern("Both");
                     let has_no_data = unguarded.iter().any(|arm| {
-                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if self.env.resolve_str(*ty) == "DataStatus" && self.env.resolve_str(*var) == "NoData"))
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if *ty == did && *var == nd))
                     });
                     let has_value = unguarded.iter().any(|arm| {
-                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if self.env.resolve_str(*ty) == "DataStatus" && self.env.resolve_str(*var) == "HasValue"))
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if *ty == did && *var == hv))
                     });
                     let has_desc = unguarded.iter().any(|arm| {
-                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if self.env.resolve_str(*ty) == "DataStatus" && self.env.resolve_str(*var) == "HasDescendants"))
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if *ty == did && *var == hd))
                     });
                     let has_both = unguarded.iter().any(|arm| {
-                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if self.env.resolve_str(*ty) == "DataStatus" && self.env.resolve_str(*var) == "Both"))
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if *ty == did && *var == bt))
                     });
                     if !has_no_data || !has_value || !has_desc || !has_both {
                         self.error(TypeError::NonExhaustiveMatch(span));
@@ -398,14 +413,20 @@ impl InferCtx<'_> {
                 }
 
                 Ty::RuntimeError => {
-                    let dominated =
-                        ["Runtime", "Raise", "Type", "Coerce"].iter().all(|v| {
-                            unguarded.iter().any(|arm| {
-                                self.ast.get_pattern(arm.pattern).is_some_and(
-                                    |p| matches!(p, MatchPattern::Variant(ty, var, _) if self.env.resolve_str(*ty) == "Error" && self.env.resolve_str(*var) == *v),
-                                )
-                            })
-                        });
+                    let eid = self.env.intern("Error");
+                    let vars = [
+                        self.env.intern("Runtime"),
+                        self.env.intern("Raise"),
+                        self.env.intern("Type"),
+                        self.env.intern("Coerce"),
+                    ];
+                    let dominated = vars.iter().all(|&v| {
+                        unguarded.iter().any(|arm| {
+                            self.ast.get_pattern(arm.pattern).is_some_and(
+                                |p| matches!(p, MatchPattern::Variant(ty, var, _) if *ty == eid && *var == v),
+                            )
+                        })
+                    });
                     if !dominated {
                         self.error(TypeError::NonExhaustiveMatch(span));
                     }

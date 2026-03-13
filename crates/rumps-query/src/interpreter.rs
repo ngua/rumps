@@ -131,93 +131,6 @@ use crate::value::{
 };
 use crate::{Result, Span};
 
-/// Pre-interned constant strings used by the interpreter.
-///
-/// Avoids repeated hash lookups for strings that are known at construction
-/// time and referenced on hot paths (class dispatch, indexing, etc.).
-struct PreInterned {
-    empty: StringId,
-    main: StringId,
-    // Indexable class methods
-    index: StringId,
-    get: StringId,
-    // Numeric class methods
-    add: StringId,
-    sub: StringId,
-    mul: StringId,
-    floor_div: StringId,
-    r#mod: StringId,
-    pow: StringId,
-    // Eq / Ord
-    eq: StringId,
-    compare: StringId,
-    // Monoid
-    concat: StringId,
-    identity: StringId,
-    // BitLike
-    bit_and: StringId,
-    bit_or: StringId,
-    shl: StringId,
-    shr: StringId,
-    // Negatable
-    neg: StringId,
-    // Fallible
-    wrap: StringId,
-    // Into / TryInto
-    into: StringId,
-    try_into: StringId,
-}
-
-impl PreInterned {
-    fn new(arena: &mut ValueArena) -> Self {
-        Self {
-            empty: arena.intern(""),
-            main: arena.intern("main"),
-            index: arena.intern("index"),
-            get: arena.intern("get"),
-            add: arena.intern("add"),
-            sub: arena.intern("sub"),
-            mul: arena.intern("mul"),
-            floor_div: arena.intern("floor-div"),
-            r#mod: arena.intern("mod"),
-            pow: arena.intern("pow"),
-            eq: arena.intern("eq"),
-            compare: arena.intern("compare"),
-            concat: arena.intern("concat"),
-            identity: arena.intern("identity"),
-            bit_and: arena.intern("bit-and"),
-            bit_or: arena.intern("bit-or"),
-            shl: arena.intern("shl"),
-            shr: arena.intern("shr"),
-            neg: arena.intern("neg"),
-            wrap: arena.intern("wrap"),
-            into: arena.intern("into"),
-            try_into: arena.intern("try-into"),
-        }
-    }
-
-    /// Look up the pre-interned `StringId` for a `BinOp` class dispatch
-    /// method name.
-    fn class_dispatch(&self, method: &str) -> StringId {
-        match method {
-            "add" => self.add,
-            "sub" => self.sub,
-            "mul" => self.mul,
-            "floor-div" => self.floor_div,
-            "mod" => self.r#mod,
-            "pow" => self.pow,
-            "eq" => self.eq,
-            "compare" => self.compare,
-            "concat" => self.concat,
-            "bit-and" => self.bit_and,
-            "bit-or" => self.bit_or,
-            "shl" => self.shl,
-            "shr" => self.shr,
-            _ => invariant!("known class dispatch method"),
-        }
-    }
-}
-
 /// The RUMPS interpreter.
 ///
 /// Walks the AST and evaluates expressions/executes statements. Owns the
@@ -246,9 +159,6 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
 
     /// Arena for runtime values with string interning.
     arena: ValueArena,
-
-    /// Pre-interned constant strings for hot-path lookups.
-    pre: PreInterned,
 
     /// Type registry for runtime type information.
     registry: TypeRegistry,
@@ -371,7 +281,6 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         )
         .check(stmts, &registry, &arena)?;
 
-        let pre = PreInterned::new(&mut arena);
         let module_hofs = hof::ModuleHofs::new(&mut arena.strings);
         let class_methods = {
             let mut cm = class::ClassMethods::new();
@@ -384,7 +293,6 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             env,
             db,
             txns: HashMap::new(),
-            pre,
             arena,
             registry,
             regex_cache: tc.regex_cache,
@@ -492,9 +400,10 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
 
     /// Call the `main` function (non-interactive mode entry point).
     async fn call_main(&mut self) -> Result<()> {
+        let main = self.arena.intern("main");
         let def = self
             .functions
-            .get(&self.pre.main)
+            .get(&main)
             .cloned()
             .unwrap_or_else(|| typechecked!("main", "defined"));
         self.call_function(&def.params, def.ret, def.body, &[], Span::default())
@@ -520,7 +429,6 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         registry: TypeRegistry,
         type_exprs: TypeExprArena,
     ) -> Self {
-        let pre = PreInterned::new(&mut arena);
         let module_hofs = hof::ModuleHofs::new(&mut arena.strings);
         let class_methods = {
             let mut cm = class::ClassMethods::new();
@@ -532,7 +440,6 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             env: Environment::with_interner(arena.interner()),
             db,
             txns: HashMap::new(),
-            pre,
             arena,
             registry,
             regex_cache: Vec::new(),
