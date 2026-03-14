@@ -37,7 +37,7 @@ use super::env::TypeEnv;
 use super::error::{TyPrinter, TypeError};
 use super::instance::InstanceRegistry;
 use super::ty::{
-    BuiltinClass, BuiltinClassTag, Scheme, Subst, Ty, TyArena, TyId, TyVar,
+    BuiltinClass, BuiltinClassTag, Scheme, Ty, TyArena, TyId, TyVar,
 };
 use super::uf::UnionFind;
 use super::TypecheckOutput;
@@ -243,7 +243,7 @@ pub(crate) struct InferCtx<'a> {
     /// Deferred instance call candidates to resolve after constraint solving.
     ///
     /// During inference, class method calls on types that are still type
-    /// variables are recorded here. After `apply_subst`, we resolve the types
+    /// variables are recorded here. After `resolve_all_types`, we resolve the types
     /// and populate `instance_calls` for any user instances found.
     deferred_instance_calls: Vec<(ExprId, TyId, BuiltinClassTag)>,
     /// Type variables created for integer literals, for defaulting to `Int`.
@@ -496,52 +496,56 @@ impl<'a> InferCtx<'a> {
         std::mem::take(&mut self.errors)
     }
 
-    /// Apply a substitution to all inferred expression types.
+    /// Resolve all inferred types through the union-find.
     ///
     /// Called after constraint solving to replace type variables with their
     /// resolved concrete types.
-    pub(crate) fn apply_subst(&mut self, subst: &Subst) {
-        // Collect keys first to avoid borrow conflict with `&mut self.ty_arena`
+    pub(crate) fn resolve_all_types(&mut self) {
+        // Resolve all type variables through the union-find
         let expr_keys: Vec<_> = self.expr_types.keys().copied().collect();
         expr_keys.into_iter().for_each(|k| {
-            let new = self.ty_arena.apply(self.expr_types[&k], subst);
+            let new = self.uf.resolve(self.expr_types[&k], &mut self.ty_arena);
             self.expr_types.insert(k, new);
         });
         let mempty_keys: Vec<_> = self.mempty_types.keys().copied().collect();
         mempty_keys.into_iter().for_each(|k| {
-            let new = self.ty_arena.apply(self.mempty_types[&k], subst);
+            let new =
+                self.uf.resolve(self.mempty_types[&k], &mut self.ty_arena);
             self.mempty_types.insert(k, new);
         });
         let numeric_keys: Vec<_> = self.numeric_types.keys().copied().collect();
         numeric_keys.into_iter().for_each(|k| {
-            let new = self.ty_arena.apply(self.numeric_types[&k], subst);
+            let new =
+                self.uf.resolve(self.numeric_types[&k], &mut self.ty_arena);
             self.numeric_types.insert(k, new);
         });
         let convert_keys: Vec<_> =
             self.convert_targets.keys().copied().collect();
         convert_keys.into_iter().for_each(|k| {
-            let new = self.ty_arena.apply(self.convert_targets[&k], subst);
+            let new = self
+                .uf
+                .resolve(self.convert_targets[&k], &mut self.ty_arena);
             self.convert_targets.insert(k, new);
         });
         let wrap_keys: Vec<_> = self.wrap_types.keys().copied().collect();
         wrap_keys.into_iter().for_each(|k| {
-            let new = self.ty_arena.apply(self.wrap_types[&k], subst);
+            let new = self.uf.resolve(self.wrap_types[&k], &mut self.ty_arena);
             self.wrap_types.insert(k, new);
         });
     }
 
-    /// Resolve deferred instance calls after substitution.
+    /// Resolve deferred instance calls after constraint solving.
     ///
-    /// After constraint solving and substitution, type variables are resolved
+    /// After constraint solving and type resolution, type variables are resolved
     /// to concrete types. This method iterates through deferred instance call
     /// candidates, resolves their types, and populates `instance_calls` for
     /// any that have user-defined instances.
-    pub(crate) fn resolve_deferred_instance_calls(&mut self, subst: &Subst) {
+    pub(crate) fn resolve_deferred_instance_calls(&mut self) {
         // Take ownership to avoid borrow issues
         let deferred = std::mem::take(&mut self.deferred_instance_calls);
 
         deferred.into_iter().for_each(|(expr_id, ty, kind)| {
-            let resolved = self.ty_arena.apply(ty, subst);
+            let resolved = self.uf.resolve(ty, &mut self.ty_arena);
             let type_id = match self.ty_arena.get(resolved) {
                 Ty::Named(id, _) => Some(*id),
                 Ty::Bool => Some(TypeId::BOOL),
@@ -666,14 +670,14 @@ impl<'a> InferCtx<'a> {
         // Pass 2: Infer types for all statement bodies
         stmts.iter().for_each(|id| self.stmt(*id));
 
-        // Solve collected constraints
-        let subst = self.solve_constraints();
+        // Solve collected constraints (updates union-find in-place)
+        self.solve_constraints();
 
-        // Apply substitution to all inferred types
-        self.apply_subst(&subst);
+        // Resolve all type variables through the union-find
+        self.resolve_all_types();
 
         // Resolve deferred instance calls (now that types are resolved)
-        self.resolve_deferred_instance_calls(&subst);
+        self.resolve_deferred_instance_calls();
 
         // Check for remaining unresolved type variables
         self.check_remaining_unknowns();

@@ -164,13 +164,13 @@ impl InferCtx<'_> {
         // - Explicit type parameters (e.g., `T` in `fun f[T](x: T) -> T`)
         // - Inferred type variables from unannotated params/returns (e.g., `fun id(x) { x }`)
         // - Type variables that only appear in constraints (e.g., `T` in `fun f[T, F: Fallible[T]](x: F)`)
-        let outer_free = self.env.free_vars(&self.ty_arena);
-        let mut fn_free = self.ty_arena.free_vars(fn_ty);
+        let outer_free = self.env.free_vars(&self.ty_arena, &mut self.uf);
+        let mut fn_free = self.uf.free_vars(fn_ty, &self.ty_arena);
 
         // Add free variables from constraints
         scheme_constraints.iter().for_each(|(tv, class)| {
             fn_free.insert(*tv);
-            fn_free.extend(class.free_vars(&self.ty_arena));
+            fn_free.extend(class.free_vars(&self.ty_arena, &mut self.uf));
         });
 
         let vars: Vec<_> = fn_free

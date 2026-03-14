@@ -3,6 +3,8 @@
 //! Replaces the naive `Subst` (`HashMap<TyVar, TyId>`) with a near-linear
 //! amortized data structure using path compression and union-by-rank.
 
+use std::collections::HashSet;
+
 use indexmap::IndexMap;
 use smallvec::SmallVec;
 
@@ -24,23 +26,43 @@ enum Entry {
 ///
 /// Each type variable is a slot. `find` with path compression gives the
 /// canonical root; `probe` checks if the root is bound to a concrete type.
+///
+/// Supports snapshot/rollback for backtracking (e.g. union bijection
+/// matching). When `snap_depth > 0`, mutations are automatically recorded
+/// to the undo log.
 pub(crate) struct UnionFind {
     entries: Vec<Entry>,
+    /// Undo log for snapshot/rollback. Only populated when `snap_depth > 0`.
+    undo: Vec<(usize, Entry)>,
+    /// Number of active snapshots. When `> 0`, mutations are recorded.
+    snap_depth: u32,
 }
 
-/// Snapshot for backtracking (e.g. union bijection matching).
-///
-/// Stores the length of `entries` at snapshot time and a log of mutations
-/// made since the snapshot, so `rollback` can undo them.
+/// Opaque snapshot handle for backtracking.
 pub(crate) struct Snapshot {
-    len: usize,
-    log: Vec<(usize, Entry)>,
+    entries_len: usize,
+    undo_len: usize,
 }
 
 impl UnionFind {
     pub(crate) fn new() -> Self {
         Self {
             entries: Vec::new(),
+            undo: Vec::new(),
+            snap_depth: 0,
+        }
+    }
+
+    /// Set `entries[idx]` to `val`, recording the old value if snapshots
+    /// are active.
+    fn set(&mut self, idx: usize, val: Entry) {
+        if self.snap_depth > 0 {
+            if let Some(&old) = self.entries.get(idx) {
+                self.undo.push((idx, old));
+            }
+        }
+        if let Some(slot) = self.entries.get_mut(idx) {
+            *slot = val;
         }
     }
 
@@ -72,7 +94,7 @@ impl UnionFind {
                 let parent = *parent;
                 let root = self.find(parent);
                 if root != parent {
-                    self.entries[idx] = Entry::Link(root);
+                    self.set(idx, Entry::Link(root));
                 }
                 root
             }
@@ -103,12 +125,12 @@ impl UnionFind {
                 _ => 0,
             };
             if ra >= rb {
-                self.entries[b.idx() as usize] = Entry::Link(a);
+                self.set(b.idx() as usize, Entry::Link(a));
                 if ra == rb {
-                    self.entries[a.idx() as usize] = Entry::Root(ra + 1);
+                    self.set(a.idx() as usize, Entry::Root(ra + 1));
                 }
             } else {
-                self.entries[a.idx() as usize] = Entry::Link(b);
+                self.set(a.idx() as usize, Entry::Link(b));
             }
         }
     }
@@ -117,7 +139,7 @@ impl UnionFind {
     ///
     /// Caller must `find` first to get the root.
     pub(crate) fn bind(&mut self, v: TyVar, ty: TyId) {
-        self.entries[v.idx() as usize] = Entry::Bound(ty);
+        self.set(v.idx() as usize, Entry::Bound(ty));
     }
 
     /// Recursively resolve all `Ty::Var`s in `ty` through the union-find,
@@ -324,29 +346,146 @@ impl UnionFind {
         }
     }
 
-    /// Take a snapshot of current state for backtracking.
-    pub(crate) fn snapshot(&self) -> Snapshot {
-        Snapshot {
-            len: self.entries.len(),
-            log: Vec::new(),
+    /// Collect all free type variables in `id`, chasing through UF bindings.
+    ///
+    /// Unlike `TyArena::free_vars`, this resolves variables through the
+    /// union-find: bound variables are replaced by their binding's free vars.
+    pub(crate) fn free_vars(
+        &mut self,
+        id: TyId,
+        arena: &TyArena,
+    ) -> HashSet<TyVar> {
+        let mut acc = HashSet::new();
+        self.collect_free_vars(id, arena, &mut acc);
+        acc
+    }
+
+    fn collect_free_vars(
+        &mut self,
+        id: TyId,
+        arena: &TyArena,
+        acc: &mut HashSet<TyVar>,
+    ) {
+        let ty = arena.get(id).clone();
+        match ty {
+            Ty::Var(v) => {
+                let root = self.find(v);
+                match self.probe(root) {
+                    Some(bound) => self.collect_free_vars(bound, arena, acc),
+                    None => {
+                        acc.insert(root);
+                    }
+                }
+            }
+            Ty::Bool
+            | Ty::Int
+            | Ty::Word
+            | Ty::Float
+            | Ty::Char
+            | Ty::String
+            | Ty::Unit
+            | Ty::Time
+            | Ty::Range
+            | Ty::Json
+            | Ty::Ordering
+            | Ty::DataStatus
+            | Ty::FilePath
+            | Ty::Path
+            | Ty::Regex
+            | Ty::RuntimeError
+            | Ty::Local
+            | Ty::Global
+            | Ty::Unknown
+            | Ty::Error => {}
+            Ty::Array(t) | Ty::Option(t) => {
+                self.collect_free_vars(t, arena, acc);
+            }
+            Ty::Result(ok, err) => {
+                self.collect_free_vars(ok, arena, acc);
+                self.collect_free_vars(err, arena, acc);
+            }
+            Ty::Map(k, v) => {
+                self.collect_free_vars(k, arena, acc);
+                self.collect_free_vars(v, arena, acc);
+            }
+            Ty::Tuple(ts) => {
+                ts.iter()
+                    .for_each(|&t| self.collect_free_vars(t, arena, acc));
+            }
+            Ty::Fn(params, ret) => {
+                params
+                    .iter()
+                    .for_each(|&t| self.collect_free_vars(t, arena, acc));
+                self.collect_free_vars(ret, arena, acc);
+            }
+            Ty::Object(fields) => {
+                fields
+                    .values()
+                    .for_each(|&t| self.collect_free_vars(t, arena, acc));
+            }
+            Ty::Union(members) => {
+                members
+                    .iter()
+                    .for_each(|&t| self.collect_free_vars(t, arena, acc));
+            }
+            Ty::Named(_, args) => {
+                args.iter()
+                    .for_each(|&t| self.collect_free_vars(t, arena, acc));
+            }
+            Ty::Apply(v, args) => {
+                let root = self.find(v);
+                match self.probe(root) {
+                    Some(bound) => self.collect_free_vars(bound, arena, acc),
+                    None => {
+                        acc.insert(root);
+                    }
+                }
+                args.iter()
+                    .for_each(|&t| self.collect_free_vars(t, arena, acc));
+            }
+            Ty::AssocType(v, _, _) => {
+                let root = self.find(v);
+                match self.probe(root) {
+                    Some(bound) => self.collect_free_vars(bound, arena, acc),
+                    None => {
+                        acc.insert(root);
+                    }
+                }
+            }
         }
     }
 
-    /// Record the old value at `idx` into the snapshot before mutating.
-    ///
-    /// Call this before modifying `entries[idx]` so `rollback` can restore it.
-    pub(crate) fn record(&mut self, snap: &mut Snapshot, idx: usize) {
-        snap.log.push((idx, self.entries[idx].clone()));
+    /// Take a snapshot for backtracking. All subsequent mutations (via
+    /// `find`, `union`, `bind`) are automatically recorded until
+    /// `rollback` is called.
+    pub(crate) fn snapshot(&mut self) -> Snapshot {
+        self.snap_depth += 1;
+        Snapshot {
+            entries_len: self.entries.len(),
+            undo_len: self.undo.len(),
+        }
     }
 
-    /// Rollback to a previous snapshot, undoing all mutations.
+    /// Rollback to a previous snapshot, undoing all mutations since it.
     pub(crate) fn rollback(&mut self, snap: Snapshot) {
-        // Restore mutated entries
-        snap.log.into_iter().for_each(|(idx, entry)| {
-            self.entries[idx] = entry;
-        });
+        // Restore mutated entries in reverse order
+        self.undo
+            .drain(snap.undo_len..)
+            .rev()
+            .for_each(|(idx, entry)| {
+                if let Some(slot) = self.entries.get_mut(idx) {
+                    *slot = entry;
+                }
+            });
         // Truncate any entries added since the snapshot
-        self.entries.truncate(snap.len);
+        self.entries.truncate(snap.entries_len);
+        self.snap_depth -= 1;
+    }
+
+    /// Check if the union-find has active snapshots (for testing).
+    #[cfg(test)]
+    fn has_snapshots(&self) -> bool {
+        self.snap_depth > 0
     }
 }
 
@@ -481,14 +620,11 @@ mod tests {
         let mut uf = UnionFind::new();
         let a = uf.fresh();
         let b = uf.fresh();
-        let mut snap = uf.snapshot();
-        // Make some changes, recording before each mutation
+        let snap = uf.snapshot();
+        // Make some changes (auto-recorded by snapshot)
         let c = uf.fresh();
-        uf.record(&mut snap, a.idx() as usize);
-        uf.record(&mut snap, b.idx() as usize);
         uf.union(a, b);
         let root = uf.find(a);
-        uf.record(&mut snap, root.idx() as usize);
         uf.bind(root, TyArena::INT);
         // Rollback
         uf.rollback(snap);
@@ -498,18 +634,47 @@ mod tests {
         assert_eq!(uf.probe(a), None);
         assert_eq!(uf.probe(b), None);
         assert_ne!(uf.find(a), uf.find(b));
+        assert!(!uf.has_snapshots());
         let _ = c;
     }
 
     #[test]
-    fn snapshot_record_and_rollback() {
+    fn snapshot_bind_and_rollback() {
         let mut uf = UnionFind::new();
         let a = uf.fresh();
-        let mut snap = uf.snapshot();
-        uf.record(&mut snap, a.idx() as usize);
+        let snap = uf.snapshot();
         uf.bind(a, TyArena::INT);
         assert_eq!(uf.probe(a), Some(TyArena::INT));
         uf.rollback(snap);
         assert_eq!(uf.probe(a), None);
+    }
+
+    #[test]
+    fn nested_snapshots() {
+        let mut uf = UnionFind::new();
+        let a = uf.fresh();
+        let b = uf.fresh();
+        let snap1 = uf.snapshot();
+        uf.bind(a, TyArena::INT);
+        let snap2 = uf.snapshot();
+        uf.bind(b, TyArena::STRING);
+        assert_eq!(uf.probe(b), Some(TyArena::STRING));
+        // Roll back inner snapshot; `a` still bound, `b` unbound
+        uf.rollback(snap2);
+        assert_eq!(uf.probe(a), Some(TyArena::INT));
+        assert_eq!(uf.probe(b), None);
+        // Roll back outer snapshot; both unbound
+        uf.rollback(snap1);
+        assert_eq!(uf.probe(a), None);
+        assert_eq!(uf.probe(b), None);
+    }
+
+    #[test]
+    fn no_undo_recording_without_snapshot() {
+        let mut uf = UnionFind::new();
+        let a = uf.fresh();
+        uf.bind(a, TyArena::INT);
+        // Undo log should be empty when no snapshots are active
+        assert!(uf.undo.is_empty());
     }
 }

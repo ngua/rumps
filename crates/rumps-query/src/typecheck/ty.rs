@@ -800,12 +800,35 @@ impl BuiltinClass<TyId> {
         }
     }
 
+    /// Resolve inner types through the union-find.
+    pub(crate) fn resolve_inner(
+        &self,
+        uf: &mut UnionFind,
+        arena: &mut TyArena,
+    ) -> Self {
+        match *self {
+            Self::Simple(t) => Self::Simple(t),
+            Self::Hkt(t, opt) => {
+                Self::Hkt(t, opt.map(|id| uf.resolve(id, arena)))
+            }
+            Self::Parameterized(t, id) => {
+                Self::Parameterized(t, uf.resolve(id, arena))
+            }
+        }
+    }
+
     /// Collect free type variables from any inner types.
-    pub(crate) fn free_vars(&self, arena: &TyArena) -> HashSet<TyVar> {
+    ///
+    /// Chases through UF bindings.
+    pub(crate) fn free_vars(
+        &self,
+        arena: &TyArena,
+        uf: &mut UnionFind,
+    ) -> HashSet<TyVar> {
         match *self {
             Self::Simple(_) | Self::Hkt(_, None) => HashSet::new(),
-            Self::Hkt(_, Some(id)) => arena.free_vars(id),
-            Self::Parameterized(_, id) => arena.free_vars(id),
+            Self::Hkt(_, Some(id)) => uf.free_vars(id, arena),
+            Self::Parameterized(_, id) => uf.free_vars(id, arena),
         }
     }
 
@@ -1255,6 +1278,89 @@ impl TyArena {
         }
     }
 
+    /// Occurs check that chases through union-find bindings.
+    ///
+    /// Like `occurs`, but for each `Ty::Var(w)`, follows UF links: if `w`
+    /// is bound to a type, recurses into that type; if unbound, checks
+    /// canonical root against `v`.
+    pub(crate) fn occurs_uf(
+        &self,
+        id: TyId,
+        v: TyVar,
+        uf: &mut UnionFind,
+    ) -> bool {
+        match self.get(id) {
+            Ty::Var(w) => {
+                let root = uf.find(*w);
+                match uf.probe(root) {
+                    Some(bound) => self.occurs_uf(bound, v, uf),
+                    None => root == v,
+                }
+            }
+            Ty::Bool
+            | Ty::Int
+            | Ty::Word
+            | Ty::Float
+            | Ty::Char
+            | Ty::String
+            | Ty::Unit
+            | Ty::Time
+            | Ty::Range
+            | Ty::Json
+            | Ty::Ordering
+            | Ty::DataStatus
+            | Ty::FilePath
+            | Ty::Path
+            | Ty::Regex
+            | Ty::RuntimeError
+            | Ty::Local
+            | Ty::Global
+            | Ty::Unknown
+            | Ty::Error => false,
+            Ty::Array(t) | Ty::Option(t) => self.occurs_uf(*t, v, uf),
+            Ty::Result(ok, err) => {
+                self.occurs_uf(*ok, v, uf) || self.occurs_uf(*err, v, uf)
+            }
+            Ty::Map(k, val) => {
+                self.occurs_uf(*k, v, uf) || self.occurs_uf(*val, v, uf)
+            }
+            Ty::Tuple(ts) => ts.iter().any(|&t| self.occurs_uf(t, v, uf)),
+            Ty::Fn(params, ret) => {
+                params.iter().any(|&t| self.occurs_uf(t, v, uf))
+                    || self.occurs_uf(*ret, v, uf)
+            }
+            Ty::Object(fields) => {
+                fields.values().any(|&t| self.occurs_uf(t, v, uf))
+            }
+            Ty::Union(members) => {
+                members.iter().any(|&t| self.occurs_uf(t, v, uf))
+            }
+            Ty::Named(_, args) => {
+                args.iter().any(|&t| self.occurs_uf(t, v, uf))
+            }
+            Ty::Apply(w, args) => {
+                let root = uf.find(*w);
+                match uf.probe(root) {
+                    Some(bound) => {
+                        self.occurs_uf(bound, v, uf)
+                            || args.iter().any(|&t| self.occurs_uf(t, v, uf))
+                    }
+                    None => {
+                        root == v
+                            || args.iter().any(|&t| self.occurs_uf(t, v, uf))
+                    }
+                }
+            }
+            Ty::AssocType(w, _, _) => {
+                let root = uf.find(*w);
+                match uf.probe(root) {
+                    Some(bound) => self.occurs_uf(bound, v, uf),
+                    None => root == v,
+                }
+            }
+        }
+    }
+
     /// Collect all free type variables in a type.
     pub(crate) fn free_vars(&self, id: TyId) -> HashSet<TyVar> {
         let mut acc = HashSet::new();
@@ -1651,28 +1757,16 @@ impl Scheme {
         }
     }
 
-    /// Apply a substitution to the scheme's body.
-    ///
-    /// Only substitutes free variables; quantified ones are shadowed.
-    pub(crate) fn apply(&self, subst: &Subst, arena: &mut TyArena) -> Self {
-        let filtered = Subst(
-            subst
-                .0
-                .iter()
-                .filter(|(v, _)| !self.vars.contains(v))
-                .map(|(v, &t)| (*v, t))
-                .collect(),
-        );
-        Self {
-            vars: self.vars.clone(),
-            ty: arena.apply(self.ty, &filtered),
-            constraints: self.constraints.clone(),
-        }
-    }
-
     /// Collect free type variables (excludes quantified variables).
-    pub(crate) fn free_vars(&self, arena: &TyArena) -> HashSet<TyVar> {
-        let mut fv = arena.free_vars(self.ty);
+    ///
+    /// Chases through UF bindings so that bound variables are not
+    /// reported as free.
+    pub(crate) fn free_vars(
+        &self,
+        arena: &TyArena,
+        uf: &mut UnionFind,
+    ) -> HashSet<TyVar> {
+        let mut fv = uf.free_vars(self.ty, arena);
         self.vars.iter().for_each(|v| {
             fv.remove(v);
         });
@@ -1859,7 +1953,9 @@ mod tests {
             ty: f,
             constraints: SmallVec::new(),
         };
-        let fv = s.free_vars(&a);
+        let mut uf = UnionFind::new();
+        uf.reserve_through(1);
+        let fv = s.free_vars(&a, &mut uf);
         assert!(!fv.contains(&va)); // bound
         assert!(fv.contains(&vb)); // free
     }

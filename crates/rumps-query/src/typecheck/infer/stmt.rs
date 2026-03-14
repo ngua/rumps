@@ -492,7 +492,7 @@ impl InferCtx<'_> {
         span: Span,
     ) {
         // Capture outer env free vars BEFORE binding function (for generalization)
-        let outer_free = self.env.free_vars(&self.ty_arena);
+        let outer_free = self.env.free_vars(&self.ty_arena, &mut self.uf);
 
         // First pass: create fresh type variables for all type parameters
         let name_to_tv: HashMap<StringId, TyVar> = type_params
@@ -571,7 +571,7 @@ impl InferCtx<'_> {
         let fn_ty = self
             .ty_arena
             .func(param_tys.iter().copied().collect(), actual_ret);
-        let ty_vars = self.ty_arena.free_vars(fn_ty);
+        let ty_vars = self.uf.free_vars(fn_ty, &self.ty_arena);
         // Include all declared type params (they may only appear in constraints,
         // not in the function type itself; e.g. `T` in `[T, F: Fallible[T]]`)
         let declared_tvs: HashSet<_> = name_to_tv.values().copied().collect();

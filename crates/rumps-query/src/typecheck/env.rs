@@ -5,9 +5,10 @@
 use std::collections::{HashMap, HashSet};
 
 use super::ty::{
-    BuiltinClassDef, BuiltinClassDefs, BuiltinClassTag, Scheme, Subst, TyArena,
-    TyId, TyVar,
+    BuiltinClassDef, BuiltinClassDefs, BuiltinClassTag, Scheme, TyArena, TyId,
+    TyVar,
 };
+use super::uf::UnionFind;
 use crate::ast::Visibility;
 use crate::intern::{QualifiedName, StringId, StringInterner};
 
@@ -293,41 +294,43 @@ impl TypeEnv {
     /// Collect all free type variables in the environment.
     ///
     /// A type variable is free in the environment if it's free in any binding.
-    pub(crate) fn free_vars(&self, arena: &TyArena) -> HashSet<TyVar> {
+    /// Chases through UF bindings.
+    pub(crate) fn free_vars(
+        &self,
+        arena: &TyArena,
+        uf: &mut UnionFind,
+    ) -> HashSet<TyVar> {
         self.scopes
             .iter()
             .flat_map(|scope| scope.bindings.values())
-            .flat_map(|scheme| scheme.free_vars(arena))
+            .flat_map(|scheme| scheme.free_vars(arena, uf))
             .collect()
     }
 
     /// Generalize a type over variables not free in the environment.
     ///
     /// Creates a polymorphic scheme by quantifying over type variables that
-    /// are free in `ty` but not in any existing binding.
+    /// are free in `ty` but not in any existing binding. Chases through UF
+    /// bindings so that bound variables are not quantified.
     ///
     /// Note: This produces a scheme with no constraints. For user-defined
     /// functions, constraints are added separately in `InferCtx::fun`. This
     /// means closures with constrained type params will only be checked at
     /// definition time, not at call sites.
-    pub(crate) fn generalize(&self, ty: TyId, arena: &TyArena) -> Scheme {
-        let env_fv = self.free_vars(arena);
-        let ty_fv = arena.free_vars(ty);
+    pub(crate) fn generalize(
+        &self,
+        ty: TyId,
+        arena: &TyArena,
+        uf: &mut UnionFind,
+    ) -> Scheme {
+        let env_fv = self.free_vars(arena, uf);
+        let ty_fv = uf.free_vars(ty, arena);
         let vars: Vec<TyVar> = ty_fv.difference(&env_fv).copied().collect();
         Scheme {
             vars,
             ty,
             constraints: smallvec::SmallVec::new(),
         }
-    }
-
-    /// Apply a substitution to all schemes in the environment.
-    pub(crate) fn apply(&mut self, subst: &Subst, arena: &mut TyArena) {
-        self.scopes.iter_mut().for_each(|scope| {
-            scope.bindings.values_mut().for_each(|scheme| {
-                *scheme = scheme.apply(subst, arena);
-            });
-        });
     }
 }
 
@@ -393,7 +396,9 @@ mod tests {
         env.bind(x, Scheme::mono(va));
         env.push_scope();
         env.bind(y, Scheme::mono(vb));
-        let fv = env.free_vars(&arena);
+        let mut uf = UnionFind::new();
+        uf.reserve_through(1);
+        let fv = env.free_vars(&arena, &mut uf);
         assert!(fv.contains(&a));
         assert!(fv.contains(&b));
     }
@@ -405,7 +410,9 @@ mod tests {
         let a = TyVar::new(0);
         let va = arena.var(0);
         let ty = arena.array(va);
-        let scheme = env.generalize(ty, &arena);
+        let mut uf = UnionFind::new();
+        uf.reserve_through(0);
+        let scheme = env.generalize(ty, &arena, &mut uf);
         assert!(scheme.vars.contains(&a));
     }
 
@@ -421,7 +428,9 @@ mod tests {
         env.bind(existing, Scheme::mono(va));
         // `b` is free in ty but not in env; `a` is in both
         let ty = arena.func(smallvec::smallvec![va], vb);
-        let scheme = env.generalize(ty, &arena);
+        let mut uf = UnionFind::new();
+        uf.reserve_through(1);
+        let scheme = env.generalize(ty, &arena, &mut uf);
         assert!(!scheme.vars.contains(&a)); // `a` in env, not generalized
         assert!(scheme.vars.contains(&b)); // `b` free, generalized
     }
