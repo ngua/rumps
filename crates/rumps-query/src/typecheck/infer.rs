@@ -39,6 +39,7 @@ use super::instance::InstanceRegistry;
 use super::ty::{
     BuiltinClass, BuiltinClassTag, Scheme, Subst, Ty, TyArena, TyId, TyVar,
 };
+use super::uf::UnionFind;
 use super::TypecheckOutput;
 use crate::ast::{
     AssocTypeDef, AstClassConstraints, AstTypeExprId, ExprId,
@@ -193,8 +194,8 @@ pub(crate) struct InferCtx<'a> {
     pub(super) ty_arena: TyArena,
     /// Collected constraints to be solved.
     constraints: Vec<Constraint>,
-    /// Counter for generating fresh type variables.
-    pub(super) next_var: u32,
+    /// Union-find for type variable allocation and (future) constraint solving.
+    pub(super) uf: UnionFind,
     /// Inferred types for each expression.
     expr_types: HashMap<ExprId, TyId>,
     /// Type errors encountered during inference.
@@ -326,7 +327,7 @@ impl<'a> InferCtx<'a> {
             instance_registry: InstanceRegistry::new(),
             ty_arena,
             constraints: Vec::new(),
-            next_var: 0,
+            uf: UnionFind::new(),
             expr_types: HashMap::new(),
             errors: Vec::new(),
             regex_cache: Vec::new(),
@@ -375,9 +376,7 @@ impl<'a> InferCtx<'a> {
 
     /// Generate a fresh type variable.
     pub(crate) fn fresh_var(&mut self) -> TyVar {
-        let v = TyVar::new(self.next_var);
-        self.next_var += 1;
-        v
+        self.uf.fresh()
     }
 
     /// Generate a fresh type variable wrapped in `Ty::Var`, interned.
@@ -460,11 +459,6 @@ impl<'a> InferCtx<'a> {
     /// Get an immutable reference to the type environment.
     pub(crate) fn env(&self) -> &TypeEnv {
         &self.env
-    }
-
-    /// Get the next type variable counter (for scheme instantiation).
-    pub(crate) fn next_var_mut(&mut self) -> &mut u32 {
-        &mut self.next_var
     }
 
     /// Get the collected constraints.

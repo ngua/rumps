@@ -10,6 +10,7 @@ use indexmap::IndexMap;
 use smallvec::{smallvec, SmallVec};
 
 use super::error::TypeError;
+use super::uf::UnionFind;
 use crate::intern::StringId;
 use crate::{Span, TypeId};
 
@@ -1606,29 +1607,28 @@ impl Scheme {
 
     /// Instantiate the scheme with fresh type variables.
     ///
-    /// Takes a mutable counter for generating fresh `TyVar`s. Returns:
+    /// Allocates fresh `TyVar`s via the union-find. Returns:
     /// - The `TyId` with all quantified variables replaced by fresh ones
     /// - The class constraints with type variables substituted
     pub(crate) fn instantiate(
         &self,
-        next: &mut u32,
+        uf: &mut UnionFind,
         arena: &mut TyArena,
     ) -> (TyId, SmallVec<[(TyId, BuiltinClass<TyId>); 2]>) {
         if self.vars.is_empty() {
             (self.ty, SmallVec::new())
         } else {
             // Ensure fresh vars don't overlap with scheme vars to avoid
-            // transitive collapse during apply (since apply recursively
-            // substitutes, {v0 -> v1, v1 -> v2} would map v0 to v2)
-            let max_scheme = self.vars.iter().map(|v| v.0).max().unwrap_or(0);
-            *next = (*next).max(max_scheme + 1);
+            // infinite loops during `apply` (which recursively substitutes)
+            let max_scheme =
+                self.vars.iter().map(|v| v.idx()).max().unwrap_or(0);
+            uf.reserve_through(max_scheme);
 
             let subst = Subst(
                 self.vars
                     .iter()
                     .map(|v| {
-                        let fresh = TyVar::new(*next);
-                        *next += 1;
+                        let fresh = uf.fresh();
                         (*v, arena.alloc(Ty::Var(fresh)))
                     })
                     .collect(),
@@ -1824,6 +1824,7 @@ mod tests {
     #[test]
     fn scheme_instantiate() {
         let mut a = TyArena::new();
+        let mut uf = UnionFind::new();
         let v = TyVar::new(0);
         let vid = a.var(0);
         let arr = a.array(vid);
@@ -1832,13 +1833,12 @@ mod tests {
             ty: arr,
             constraints: SmallVec::new(),
         };
-        let mut next = 100;
-        let (inst, constraints) = s.instantiate(&mut next, &mut a);
-        assert_eq!(next, 101);
-        // Should be `Array[?100]`
+        let (inst, constraints) = s.instantiate(&mut uf, &mut a);
+        // Scheme var is `0`, so `reserve_through(0)` pads to len `1`.
+        // Fresh var is `1`.
         match a.get(inst) {
             Ty::Array(inner) => match a.get(*inner) {
-                Ty::Var(tv) => assert_eq!(tv.idx(), 100),
+                Ty::Var(tv) => assert_eq!(tv.idx(), 1),
                 other => panic!("expected Var, got {other:?}"),
             },
             other => panic!("expected Array, got {other:?}"),
@@ -2114,13 +2114,13 @@ mod tests {
     #[test]
     fn scheme_poly_instantiate() {
         let mut a = TyArena::new();
+        let mut uf = UnionFind::new();
         let s = Scheme::poly(&mut a, |t, a| a.array(t));
-        let mut next = 100;
-        let (inst, constraints) = s.instantiate(&mut next, &mut a);
-        assert_eq!(next, 101);
+        let (inst, constraints) = s.instantiate(&mut uf, &mut a);
+        // `poly` uses `TyVar(0)`, so fresh starts at `1`
         match a.get(inst) {
             Ty::Array(inner) => match a.get(*inner) {
-                Ty::Var(tv) => assert_eq!(tv.idx(), 100),
+                Ty::Var(tv) => assert_eq!(tv.idx(), 1),
                 other => panic!("expected Var, got {other:?}"),
             },
             other => panic!("expected Array, got {other:?}"),
@@ -2131,17 +2131,17 @@ mod tests {
     #[test]
     fn scheme_poly2_instantiate() {
         let mut a = TyArena::new();
+        let mut uf = UnionFind::new();
         let s = Scheme::poly2(&mut a, |t, u, a| {
             a.alloc(Ty::Tuple(smallvec![t, u]))
         });
-        let mut next = 50;
-        let (inst, constraints) = s.instantiate(&mut next, &mut a);
-        assert_eq!(next, 52);
+        let (inst, constraints) = s.instantiate(&mut uf, &mut a);
+        // `poly2` uses `TyVar(0)` and `TyVar(1)`, so fresh starts at `2`
         match a.get(inst) {
             Ty::Tuple(elems) => {
                 assert_eq!(elems.len(), 2);
-                assert!(matches!(a.get(elems[0]), Ty::Var(v) if v.idx() == 50));
-                assert!(matches!(a.get(elems[1]), Ty::Var(v) if v.idx() == 51));
+                assert!(matches!(a.get(elems[0]), Ty::Var(v) if v.idx() == 2));
+                assert!(matches!(a.get(elems[1]), Ty::Var(v) if v.idx() == 3));
             }
             other => panic!("expected Tuple, got {other:?}"),
         }

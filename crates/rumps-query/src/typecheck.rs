@@ -18,6 +18,7 @@ mod error;
 mod infer;
 mod instance;
 mod ty;
+mod uf;
 mod unify;
 
 use std::collections::HashMap;

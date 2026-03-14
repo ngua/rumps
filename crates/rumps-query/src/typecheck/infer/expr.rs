@@ -190,8 +190,8 @@ impl InferCtx<'_> {
                     self.runtime_env.get_module_fn_type(segments)
                 {
                     // Builtin module functions (no user constraints)
-                    let (ty, constraints) = scheme
-                        .instantiate(&mut self.next_var, &mut self.ty_arena);
+                    let (ty, constraints) =
+                        scheme.instantiate(&mut self.uf, &mut self.ty_arena);
                     self.emit_class_constraints(constraints, span);
                     ty
                 } else {
@@ -221,7 +221,7 @@ impl InferCtx<'_> {
                                 // Public member; instantiate and use
                                 let (ty, constraints) =
                                     member.scheme.instantiate(
-                                        &mut self.next_var,
+                                        &mut self.uf,
                                         &mut self.ty_arena,
                                     );
                                 self.emit_class_constraints(constraints, span);
@@ -435,7 +435,7 @@ impl InferCtx<'_> {
                                     // For standard method refs, instantiate the scheme.
                                     // If type args provided, substitute them.
                                     let (ty, vars) = scheme.instantiate(
-                                        &mut self.next_var,
+                                        &mut self.uf,
                                         &mut self.ty_arena,
                                     );
                                     match (type_args.first(), vars.first()) {
@@ -707,8 +707,8 @@ impl InferCtx<'_> {
                     TyArena::ERROR
                 } else {
                     // Instantiate scheme with fresh type variables
-                    let (fn_ty, constraints) = scheme
-                        .instantiate(&mut self.next_var, &mut self.ty_arena);
+                    let (fn_ty, constraints) =
+                        scheme.instantiate(&mut self.uf, &mut self.ty_arena);
 
                     // Extract params and return type (copy out before further arena use)
                     let (params, ret) = match self.ty_arena.get(fn_ty) {
@@ -928,7 +928,7 @@ impl InferCtx<'_> {
         match self.env.lookup(name) {
             Some(scheme) => {
                 let (ty, constraints) =
-                    scheme.instantiate(&mut self.next_var, &mut self.ty_arena);
+                    scheme.instantiate(&mut self.uf, &mut self.ty_arena);
                 self.emit_class_constraints(constraints, span);
                 ty
             }
@@ -953,7 +953,7 @@ impl InferCtx<'_> {
         span: Span,
     ) -> TyId {
         let (fn_ty, constraints) =
-            scheme.instantiate(&mut self.next_var, &mut self.ty_arena);
+            scheme.instantiate(&mut self.uf, &mut self.ty_arena);
         self.emit_class_constraints(constraints, span);
 
         // Copy out params/ret before further arena mutation
@@ -2848,10 +2848,8 @@ impl InferCtx<'_> {
                     DbRef::Local(name, subs) if subs.is_empty() => {
                         // Check if name is a variable of type Ref
                         let ref_ty = self.env.lookup(*name).and_then(|s| {
-                            let (ty, _) = s.instantiate(
-                                &mut self.next_var,
-                                &mut self.ty_arena,
-                            );
+                            let (ty, _) =
+                                s.instantiate(&mut self.uf, &mut self.ty_arena);
                             self.ty_arena.get(ty).is_ref().then_some(ty)
                         });
                         ref_ty.map_or_else(
