@@ -152,7 +152,7 @@ impl InferCtx<'_> {
 
             // Variant constructors
             Expr::Variant(ty_name, var_name, args) => {
-                self.variant(id, *ty_name, *var_name, args, span)
+                self.variant(id, ty_name.clone(), *var_name, args, span)
             }
 
             // Postfix operators: `!`
@@ -196,17 +196,20 @@ impl InferCtx<'_> {
                     ty
                 } else {
                     // Split segments into module path (all but last) and member (last)
-                    let mod_id = self.env.strings.intern_joined(
-                        &segments[..segments.len().saturating_sub(1)],
+                    let mod_qn = QualifiedName::new(
+                        segments[..segments.len().saturating_sub(1)].to_vec(),
                     );
-                    let member_id = segments.last().copied().unwrap_or(mod_id);
-                    match self.env.lookup_user_module_member(mod_id, member_id)
+                    let member_id = segments
+                        .last()
+                        .copied()
+                        .unwrap_or_else(|| invariant!("path has segments"));
+                    match self.env.lookup_user_module_member(&mod_qn, member_id)
                     {
                         Some(member) => {
                             // Check visibility; private members cannot be accessed
                             // from outside the module
                             if member.vis == Visibility::Private {
-                                let module = self.env.resolve_string(mod_id);
+                                let module = mod_qn.display(&self.env.strings);
                                 let name = self.env.resolve_string(member_id);
                                 self.error(TypeError::PrivateAccess {
                                     module,
@@ -227,7 +230,7 @@ impl InferCtx<'_> {
                         }
                         None => {
                             // Path resolved as module but member not found
-                            let module = self.env.resolve_string(mod_id);
+                            let module = mod_qn.display(&self.env.strings);
                             let name = self.env.resolve_string(member_id);
                             self.error(TypeError::NotFoundInModule {
                                 module,
@@ -646,14 +649,21 @@ impl InferCtx<'_> {
         let inst = self.instance_registry.lookup(class, type_id)?.clone();
         match inst.module {
             None => Some(inst),
-            Some(mod_id) => {
-                if self.env.is_module_imported(mod_id) {
+            Some(ref mod_qn) => {
+                // Check if the module's root segment has been imported
+                let imported = self.env.is_module_imported(
+                    *mod_qn
+                        .segments()
+                        .first()
+                        .unwrap_or_else(|| invariant!("module has segments")),
+                );
+                if imported {
                     Some(inst)
                 } else {
                     self.error(TypeError::InstanceNotImported {
                         class,
                         type_id,
-                        module: self.env.resolve_string(mod_id),
+                        module: mod_qn.display(&self.env.strings),
                         span,
                     });
                     None
@@ -1394,13 +1404,10 @@ impl InferCtx<'_> {
 
         match variant_lookup {
             Some((type_id, resolved_id, 0)) => {
-                // Zero-arity variant: rewrite AST to Variant expression;
-                // use dot-joined `StringId` for the type name
-                let rid =
-                    self.env.strings.intern_joined(resolved_id.segments());
+                // Zero-arity variant: rewrite AST to Variant expression
                 self.ast.set_expr(
                     expr_id,
-                    Expr::Variant(rid, field_id, smallvec![]),
+                    Expr::Variant(resolved_id, field_id, smallvec![]),
                 );
                 // Return the variant type
                 self.variant_type_for_nullary(type_id)
@@ -1409,9 +1416,7 @@ impl InferCtx<'_> {
                 // Non-zero-arity variant: return a function type for the
                 // constructor. The AST will be rewritten to `Variant` by
                 // `call` when this is invoked.
-                let rid =
-                    self.env.strings.intern_joined(resolved_id.segments());
-                self.variant_ctor_fn_type(type_id, rid, field_id, span)
+                self.variant_ctor_fn_type(type_id, resolved_id, field_id, span)
             }
             None => {
                 // Regular field access
@@ -1987,15 +1992,13 @@ impl InferCtx<'_> {
 
         match resolved {
             Some((qid, var_name_id)) => {
-                // Rewrite AST to Variant expression; use dot-joined `StringId`
-                let resolved_id =
-                    self.env.strings.intern_joined(qid.segments());
+                // Rewrite AST to Variant expression
                 self.ast.set_expr(
                     expr_id,
-                    Expr::Variant(resolved_id, var_name_id, args.clone()),
+                    Expr::Variant(qid.clone(), var_name_id, args.clone()),
                 );
                 // Delegate to variant method
-                self.variant(expr_id, resolved_id, var_name_id, args, span)
+                self.variant(expr_id, qid, var_name_id, args, span)
             }
             None => self.call(callee_id, args, span),
         }
@@ -2051,7 +2054,7 @@ impl InferCtx<'_> {
         let then_ty = match cond_expr {
             Some(Expr::Is(
                 scrutinee_id,
-                TypePattern::VariantBind(ty_name, var_name, names),
+                TypePattern::VariantBind(ref ty_name, var_name, names),
             )) => {
                 // IS with variant bindings: bindings only visible in then branch
                 let scrutinee_ty = self.expr(scrutinee_id);
@@ -2060,7 +2063,7 @@ impl InferCtx<'_> {
                 if !self
                     .scrutinee_compatible_with_variant(scrutinee_ty, ty_name)
                 {
-                    let pat_ty = self.env.resolve_string(ty_name);
+                    let pat_ty = self.env.resolve_string(ty_name.local_name());
                     self.error(TypeError::IncompatibleVariantPattern {
                         pattern_ty: pat_ty,
                         scrutinee_ty,
@@ -2068,10 +2071,12 @@ impl InferCtx<'_> {
                     });
                 }
 
-                let tn = self.env.resolve_string(ty_name);
-                let vn = self.env.resolve_string(var_name);
-                let payload_tys =
-                    self.variant_payload_types(&tn, &vn, scrutinee_ty, span);
+                let payload_tys = self.variant_payload_types(
+                    ty_name,
+                    var_name,
+                    scrutinee_ty,
+                    span,
+                );
 
                 if payload_tys.len() != names.len() {
                     self.error(TypeError::ArityMismatch {
@@ -2254,7 +2259,7 @@ impl InferCtx<'_> {
     fn variant(
         &mut self,
         expr_id: ExprId,
-        ty_name: StringId,
+        ty_name: QualifiedName,
         var_name: StringId,
         args: &SmallVec<[ExprId; 4]>,
         span: Span,
@@ -2262,23 +2267,21 @@ impl InferCtx<'_> {
         let arg_tys: Vec<TyId> = args.iter().map(|id| self.expr(*id)).collect();
 
         // Resolve type name using module-aware lookup
-        let resolved = self.resolve_type_name(&QualifiedName::local(ty_name));
+        let resolved = self.resolve_type_name(&ty_name);
 
         match resolved {
             None => {
-                let tn = self.env.resolve_string(ty_name);
+                let tn = ty_name.display(&self.env.strings);
                 let vn = self.env.resolve_string(var_name);
                 self.error(TypeError::UnknownType(format!("{tn}.{vn}"), span));
                 TyArena::ERROR
             }
             Some((type_id, qid)) => {
                 // Rewrite AST if name was resolved differently
-                let resolved_id =
-                    self.env.strings.intern_joined(qid.segments());
-                if qid != QualifiedName::local(ty_name) {
+                if qid != ty_name {
                     self.ast.set_expr(
                         expr_id,
-                        Expr::Variant(resolved_id, var_name, args.clone()),
+                        Expr::Variant(qid.clone(), var_name, args.clone()),
                     );
                 }
 
@@ -2290,7 +2293,7 @@ impl InferCtx<'_> {
 
                 match lookup {
                     None => {
-                        let qn = self.env.resolve_string(resolved_id);
+                        let qn = qid.display(&self.env.strings);
                         let vn = self.env.resolve_string(var_name);
                         self.error(TypeError::UnknownType(
                             format!("{qn}.{vn}"),
@@ -2367,7 +2370,7 @@ impl InferCtx<'_> {
                                     self.ty_arena.named(type_id, type_args)
                                 }
                                 _ => {
-                                    let tn = self.env.resolve_string(ty_name);
+                                    let tn = ty_name.display(&self.env.strings);
                                     let vn = self.env.resolve_string(var_name);
                                     self.error(TypeError::UnknownType(
                                         format!("{tn}.{vn}"),
@@ -2421,7 +2424,7 @@ impl InferCtx<'_> {
     fn variant_ctor_fn_type(
         &mut self,
         type_id: TypeId,
-        ty_name: StringId,
+        ty_name: QualifiedName,
         var_name: StringId,
         span: Span,
     ) -> TyId {
@@ -2429,7 +2432,7 @@ impl InferCtx<'_> {
 
         match var_def {
             None => {
-                let tn = self.env.resolve_string(ty_name);
+                let tn = ty_name.display(&self.env.strings);
                 let vn = self.env.resolve_string(var_name);
                 self.error(TypeError::UnknownType(format!("{tn}.{vn}"), span));
                 TyArena::ERROR
@@ -2508,9 +2511,9 @@ impl InferCtx<'_> {
     pub(super) fn scrutinee_compatible_with_variant(
         &self,
         scrutinee_ty: TyId,
-        name: StringId,
+        name: &QualifiedName,
     ) -> bool {
-        let s = self.env.resolve_str(name);
+        let s = self.env.resolve_str(name.local_name());
         match self.ty_arena.get(scrutinee_ty) {
             // Concrete Option/Result: check type name matches
             Ty::Option(_) => s == "Option",
@@ -2521,7 +2524,7 @@ impl InferCtx<'_> {
 
             // Named types: resolve pattern type name and compare TypeIds
             Ty::Named(scrutinee_id, _) => self
-                .resolve_type_name(&QualifiedName::local(name))
+                .resolve_type_name(name)
                 .is_some_and(|(pattern_id, _)| pattern_id == *scrutinee_id),
 
             // Union: at least one member must be compatible
@@ -2592,9 +2595,9 @@ impl InferCtx<'_> {
             | TypePattern::VariantWildcard(ty_name, var_name) => {
                 // Check scrutinee is compatible with variant pattern
                 if !self
-                    .scrutinee_compatible_with_variant(scrutinee_ty, *ty_name)
+                    .scrutinee_compatible_with_variant(scrutinee_ty, ty_name)
                 {
-                    let pat_ty = self.env.resolve_string(*ty_name);
+                    let pat_ty = self.env.resolve_string(ty_name.local_name());
                     self.error(TypeError::IncompatibleVariantPattern {
                         pattern_ty: pat_ty,
                         scrutinee_ty,
@@ -2604,14 +2607,13 @@ impl InferCtx<'_> {
 
                 // Validate that the variant exists
                 let exists = self
-                    .registry
-                    .lookup(&QualifiedName::local(*ty_name))
-                    .and_then(|type_id| {
+                    .resolve_type_name(ty_name)
+                    .and_then(|(type_id, _)| {
                         self.registry.lookup_variant(type_id, *var_name)
                     })
                     .is_some();
                 if !exists {
-                    let tn = self.env.resolve_string(*ty_name);
+                    let tn = self.env.resolve_string(ty_name.local_name());
                     let vn = self.env.resolve_string(*var_name);
                     self.error(TypeError::UnknownType(
                         format!("{tn}.{vn}"),
@@ -2622,9 +2624,9 @@ impl InferCtx<'_> {
             TypePattern::VariantBind(ty_name, var_name, names) => {
                 // Check scrutinee is compatible with variant pattern
                 if !self
-                    .scrutinee_compatible_with_variant(scrutinee_ty, *ty_name)
+                    .scrutinee_compatible_with_variant(scrutinee_ty, ty_name)
                 {
-                    let pat_ty = self.env.resolve_string(*ty_name);
+                    let pat_ty = self.env.resolve_string(ty_name.local_name());
                     self.error(TypeError::IncompatibleVariantPattern {
                         pattern_ty: pat_ty,
                         scrutinee_ty,
@@ -2633,17 +2635,15 @@ impl InferCtx<'_> {
                 }
 
                 // Validate variant and arity; bindings are handled by IF
-                let lookup = self
-                    .registry
-                    .lookup(&QualifiedName::local(*ty_name))
-                    .and_then(|type_id| {
+                let lookup =
+                    self.resolve_type_name(ty_name).and_then(|(type_id, _)| {
                         self.registry
                             .lookup_variant(type_id, *var_name)
                             .map(|v| (type_id, v))
                     });
                 match lookup {
                     None => {
-                        let tn = self.env.resolve_string(*ty_name);
+                        let tn = self.env.resolve_string(ty_name.local_name());
                         let vn = self.env.resolve_string(*var_name);
                         self.error(TypeError::UnknownType(
                             format!("{tn}.{vn}"),

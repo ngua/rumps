@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use async_recursion::async_recursion;
 
 use crate::ast::{InstanceMethodDef, Stmt, StmtId};
-use crate::intern::{QualifiedName, StringId};
+use crate::intern::StringId;
 use crate::interpreter::instance::RuntimeInstance;
 use crate::interpreter::Interpreter;
 use crate::io::IoContext;
@@ -118,13 +118,12 @@ impl<I: IoContext> Interpreter<'_, I> {
             None => Ok(()),
             Some(r) => {
                 let class = r.class;
-                let type_name_id = r.type_name;
+                let type_qn = r.type_name.clone();
                 let mappings = r.methods.clone();
 
                 // Look up the TypeId for the implementing type.
                 // If type doesn't exist, skip; typechecking will report.
-                match self.registry.lookup(&QualifiedName::local(type_name_id))
-                {
+                match self.registry.lookup(&type_qn) {
                     None => Ok(()),
                     Some(type_id) => {
                         // Build method lookup map for O(1) access

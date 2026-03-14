@@ -55,14 +55,14 @@ impl<I: IoContext> Interpreter<'_, I> {
                     }
                 }
             }
-            TypePattern::Variant(ty_name, var_name) => {
-                self.check_variant_zero_arity(v, *ty_name, *var_name, span)
+            TypePattern::Variant(ref ty_name, var_name) => {
+                self.check_variant_zero_arity(v, ty_name, *var_name, span)
             }
-            TypePattern::VariantWildcard(ty_name, var_name) => {
-                self.check_variant(v, *ty_name, *var_name, span)
+            TypePattern::VariantWildcard(ref ty_name, var_name) => {
+                self.check_variant(v, ty_name, *var_name, span)
             }
-            TypePattern::VariantBind(ty_name, var_name, _) => {
-                self.check_variant(v, *ty_name, *var_name, span)
+            TypePattern::VariantBind(ref ty_name, var_name, _) => {
+                self.check_variant(v, ty_name, *var_name, span)
             }
             TypePattern::Object(fields) => {
                 // Structural object check: `is { name: String, age: Int }`
@@ -93,15 +93,12 @@ impl<I: IoContext> Interpreter<'_, I> {
     fn check_variant_zero_arity(
         &self,
         val: &Value,
-        ty_name: StringId,
+        ty_name: &QualifiedName,
         var_name: StringId,
         span: Span,
     ) -> Result<bool> {
-        let (type_id, var_def) = self.lookup_variant(
-            &QualifiedName::local(ty_name),
-            var_name,
-            span,
-        )?;
+        let (type_id, var_def) =
+            self.lookup_variant(ty_name, var_name, span)?;
 
         // Type checker guarantees bare variant patterns match zero-arity variants
         if var_def.arity != 0 {
@@ -123,15 +120,12 @@ impl<I: IoContext> Interpreter<'_, I> {
     pub(super) fn check_variant(
         &self,
         val: &Value,
-        ty_name: StringId,
+        ty_name: &QualifiedName,
         var_name: StringId,
         span: Span,
     ) -> Result<bool> {
-        let (type_id, var_def) = self.lookup_variant(
-            &QualifiedName::local(ty_name),
-            var_name,
-            span,
-        )?;
+        let (type_id, var_def) =
+            self.lookup_variant(ty_name, var_name, span)?;
 
         Ok(match val {
             Value::Tagged(ty_expr, idx, _) => {

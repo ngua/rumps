@@ -45,8 +45,8 @@ use crate::value::{TypeRegistry, ValueArena};
 pub(crate) struct ResolvedInstance {
     /// The class being implemented.
     pub(crate) class: BuiltinClassTag,
-    /// The name of the implementing type (e.g., `"Point"`, `"MyModule.Point"`).
-    pub(crate) type_name: StringId,
+    /// The qualified name of the implementing type (e.g., `Point`, `MyModule.Point`).
+    pub(crate) type_name: QualifiedName,
     /// Method mappings: `(method_name, generated_fn_name)`.
     pub(crate) methods: Vec<(StringId, StringId)>,
 }
@@ -195,7 +195,11 @@ impl<'a> ResolveCtx<'a> {
                                 .lookup_variant(type_id, field)
                                 .and_then(|v| {
                                     (v.arity == 0).then(|| {
-                                        Expr::Variant(name, field, smallvec![])
+                                        Expr::Variant(
+                                            QualifiedName::local(name),
+                                            field,
+                                            smallvec![],
+                                        )
                                     })
                                 })
                         }),
@@ -206,12 +210,11 @@ impl<'a> ResolveCtx<'a> {
         let qualified_variant_expr = variant_expr.or_else(|| {
             let base_path = self.collect_path_segments(base_id)?;
             let qn = QualifiedName::new(base_path.to_vec());
-            let qtype_id = self.arena.strings.intern_joined(qn.segments());
 
             self.registry.lookup(&qn).and_then(|type_id| {
                 self.registry.lookup_variant(type_id, field).and_then(|v| {
                     (v.arity == 0)
-                        .then(|| Expr::Variant(qtype_id, field, smallvec![]))
+                        .then(|| Expr::Variant(qn.clone(), field, smallvec![]))
                 })
             })
         });
@@ -246,39 +249,38 @@ impl<'a> ResolveCtx<'a> {
             .and_then(|callee| match callee {
                 Expr::Field(base_id, var_name) => {
                     // First try simple Type.Variant(args) pattern
-                    let simple_variant =
-                        self.ast.get_expr(base_id).cloned().and_then(|base| {
-                            match base {
-                                Expr::Var(ty_name) => self
-                                    .registry
-                                    .lookup(&QualifiedName::local(ty_name))
-                                    .and_then(|type_id| {
-                                        self.registry
-                                            .lookup_variant(type_id, var_name)
-                                            .map(|_| {
-                                                Expr::Variant(
-                                                    ty_name,
-                                                    var_name,
-                                                    args.clone(),
-                                                )
-                                            })
-                                    }),
-                                _ => None,
-                            }
+                    let simple_variant = self
+                        .ast
+                        .get_expr(base_id)
+                        .cloned()
+                        .and_then(|base| match base {
+                            Expr::Var(ty_name) => self
+                                .registry
+                                .lookup(&QualifiedName::local(ty_name))
+                                .and_then(|type_id| {
+                                    self.registry
+                                        .lookup_variant(type_id, var_name)
+                                        .map(|_| {
+                                            Expr::Variant(
+                                                QualifiedName::local(ty_name),
+                                                var_name,
+                                                args.clone(),
+                                            )
+                                        })
+                                }),
+                            _ => None,
                         });
 
                     // Try module-qualified type: Module.Type.Variant(args)
                     simple_variant.or_else(|| {
                         let base_path = self.collect_path_segments(base_id)?;
                         let qn = QualifiedName::new(base_path.to_vec());
-                        let qtype_id =
-                            self.arena.strings.intern_joined(qn.segments());
 
                         self.registry.lookup(&qn).and_then(|type_id| {
                             self.registry.lookup_variant(type_id, var_name).map(
                                 |_| {
                                     Expr::Variant(
-                                        qtype_id,
+                                        qn.clone(),
                                         var_name,
                                         args.clone(),
                                     )
@@ -302,7 +304,7 @@ impl<'a> ResolveCtx<'a> {
     fn resolve_class_instances_rec(
         &mut self,
         ids: &[StmtId],
-        module: Option<StringId>,
+        module: Option<&QualifiedName>,
         map: &mut InstanceMap,
     ) {
         ids.iter().for_each(|&id| {
@@ -322,16 +324,13 @@ impl<'a> ResolveCtx<'a> {
                 .collect::<Vec<_>>()
                 .into_iter()
                 .for_each(|(name, body)| {
-                    let mod_path = match module {
-                        Some(m) => {
-                            let segs = [m, name];
-                            self.arena.strings.intern_joined(&segs)
-                        }
-                        None => name,
-                    };
+                    let mod_path = module.map_or_else(
+                        || QualifiedName::local(name),
+                        |m| m.child(name),
+                    );
                     self.resolve_class_instances_rec(
                         &body,
-                        Some(mod_path),
+                        Some(&mod_path),
                         map,
                     );
                 });
@@ -341,7 +340,7 @@ impl<'a> ResolveCtx<'a> {
     fn resolve_class_instance(
         &mut self,
         id: StmtId,
-        module: Option<StringId>,
+        module: Option<&QualifiedName>,
     ) -> Option<ResolvedInstance> {
         let stmt = self.ast.get_stmt(id)?;
 
@@ -359,14 +358,11 @@ impl<'a> ResolveCtx<'a> {
 
                 let type_qn = match module {
                     Some(m) if !raw_qn.is_qualified() => {
-                        QualifiedName::local(m).child(raw_qn.local_name())
+                        m.child(raw_qn.local_name())
                     }
                     _ => raw_qn,
                 };
-                let disp = type_qn.display(&self.arena.strings);
-                let type_name = self.arena.strings.intern(&disp);
-
-                let type_name_str = self.arena.strings.resolve(type_name);
+                let type_disp = type_qn.display(&self.arena.strings);
                 let methods = methods.clone();
                 let mappings: Vec<(StringId, StringId)> = methods
                     .iter()
@@ -375,9 +371,7 @@ impl<'a> ResolveCtx<'a> {
                             self.arena.strings.get(m.name).unwrap_or_default();
                         let fn_name =
                             crate::interpreter::instance::instance_fn_name(
-                                class,
-                                &type_name_str,
-                                mn,
+                                class, &type_disp, mn,
                             );
                         let fn_id = self.arena.strings.intern(&fn_name);
                         (m.name, fn_id)
@@ -386,7 +380,7 @@ impl<'a> ResolveCtx<'a> {
 
                 Some(ResolvedInstance {
                     class,
-                    type_name,
+                    type_name: type_qn,
                     methods: mappings,
                 })
             }
@@ -431,7 +425,7 @@ mod tests {
         let (ast, arena) = parse_and_resolve("let x = Option.None");
         let has_variant = ast.expr_ids().any(|id| match ast.get_expr(id) {
             Some(Expr::Variant(ty, var, args)) => {
-                arena.strings.get(*ty) == Some("Option")
+                arena.strings.get(ty.local_name()) == Some("Option")
                     && arena.strings.get(*var) == Some("None")
                     && args.is_empty()
             }
@@ -448,7 +442,7 @@ mod tests {
         let (ast, arena) = parse_and_resolve("let x = Option.Some(42)");
         let has_variant = ast.expr_ids().any(|id| match ast.get_expr(id) {
             Some(Expr::Variant(ty, var, _)) => {
-                arena.strings.get(*ty) == Some("Option")
+                arena.strings.get(ty.local_name()) == Some("Option")
                     && arena.strings.get(*var) == Some("Some")
             }
             _ => false,
@@ -461,7 +455,7 @@ mod tests {
         let (ast, arena) = parse_and_resolve("let x = Result.Ok(42)");
         let has_variant = ast.expr_ids().any(|id| match ast.get_expr(id) {
             Some(Expr::Variant(ty, var, _)) => {
-                arena.strings.get(*ty) == Some("Result")
+                arena.strings.get(ty.local_name()) == Some("Result")
                     && arena.strings.get(*var) == Some("Ok")
             }
             _ => false,
@@ -474,7 +468,7 @@ mod tests {
         let (ast, arena) = parse_and_resolve("let x = Result.Err(\"oops\")");
         let has_variant = ast.expr_ids().any(|id| match ast.get_expr(id) {
             Some(Expr::Variant(ty, var, _)) => {
-                arena.strings.get(*ty) == Some("Result")
+                arena.strings.get(ty.local_name()) == Some("Result")
                     && arena.strings.get(*var) == Some("Err")
             }
             _ => false,
@@ -490,7 +484,7 @@ mod tests {
         let has_variant_obj_x =
             ast.expr_ids().any(|id| match ast.get_expr(id) {
                 Some(Expr::Variant(ty, var, _)) => {
-                    arena.strings.get(*ty) == Some("obj")
+                    arena.strings.get(ty.local_name()) == Some("obj")
                         && arena.strings.get(*var) == Some("x")
                 }
                 _ => false,
@@ -504,7 +498,7 @@ mod tests {
         // Unknown.Foo should remain as Field since Unknown is not a registered type
         let has_variant = ast.expr_ids().any(|id| match ast.get_expr(id) {
             Some(Expr::Variant(ty, _, _)) => {
-                arena.strings.get(*ty) == Some("Unknown")
+                arena.strings.get(ty.local_name()) == Some("Unknown")
             }
             _ => false,
         });

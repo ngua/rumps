@@ -11,7 +11,7 @@ use smallvec::SmallVec;
 
 use super::ty::{BuiltinClass, BuiltinClassTag, TyId, TyVar};
 use super::TypeError;
-use crate::intern::StringId;
+use crate::intern::{QualifiedName, StringId};
 use crate::{Span, TypeId};
 
 /// An associated type definition within a class instance.
@@ -57,7 +57,7 @@ pub(crate) struct Instance {
     /// Currently empty; will be populated when associated types are parsed (Phase 2).
     pub(crate) assoc_types: SmallVec<[AssocTypeDef; 1]>,
     /// Owning module path, or `None` for top-level instances.
-    pub(crate) module: Option<StringId>,
+    pub(crate) module: Option<QualifiedName>,
     /// Source span for error messages.
     pub(crate) span: Span,
 }

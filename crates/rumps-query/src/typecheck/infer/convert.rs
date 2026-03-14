@@ -733,33 +733,23 @@ impl InferCtx<'_> {
         qn: &QualifiedName,
         span: Span,
     ) -> bool {
-        if qn.is_qualified() {
-            // Construct the joined `StringId` for env lookup
-            let joined = qn.display(&self.env.strings);
-            self.env
-                .lookup_str(&joined)
-                .and_then(|sid| self.env.lookup_user_module_type_vis(sid))
-                .is_none_or(|vis| {
-                    if vis == Visibility::Private {
-                        let local =
-                            self.env.resolve_str(qn.local_name()).to_owned();
-                        let module =
-                            qn.parent().map_or_else(String::new, |p| {
-                                p.display(&self.env.strings)
-                            });
-                        self.error(TypeError::PrivateAccess {
-                            module,
-                            name: local,
-                            span,
-                        });
-                        false
-                    } else {
-                        true
-                    }
-                })
-        } else {
-            true
+        let is_private = qn.is_qualified()
+            && self
+                .env
+                .lookup_user_module_type_vis(qn)
+                .is_some_and(|vis| vis == Visibility::Private);
+        if is_private {
+            let local = self.env.resolve_str(qn.local_name()).to_owned();
+            let module = qn
+                .parent()
+                .map_or_else(String::new, |p| p.display(&self.env.strings));
+            self.error(TypeError::PrivateAccess {
+                module,
+                name: local,
+                span,
+            });
         }
+        !is_private
     }
 
     /// Extract the type of a field from a type.
@@ -906,12 +896,13 @@ impl InferCtx<'_> {
         &self,
         name: &QualifiedName,
     ) -> Option<(TypeId, QualifiedName)> {
-        // 1. Check imported types; maps local `StringId` -> qualified `StringId`
+        // 1. Check imported types; maps local `StringId` -> qualified `QualifiedName`
         let local = name.local_name();
         let eff_qn = self
             .env
             .lookup_imported_type(local)
-            .map_or_else(|| name.clone(), QualifiedName::local);
+            .cloned()
+            .unwrap_or_else(|| name.clone());
 
         // 2. Try exact lookup
         self.registry

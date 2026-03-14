@@ -9,7 +9,7 @@ use super::ty::{
     TyId, TyVar,
 };
 use crate::ast::Visibility;
-use crate::intern::{StringId, StringInterner};
+use crate::intern::{QualifiedName, StringId, StringInterner};
 
 /// A module member entry with type scheme and visibility.
 #[derive(Clone, Debug)]
@@ -41,18 +41,19 @@ pub(crate) struct TypeEnv {
     /// Builtin class definitions, indexed by `BuiltinClassTag as usize`.
     class_defs: BuiltinClassDefs,
     /// User-defined module names registered during typechecking.
-    user_modules: HashSet<StringId>,
+    user_modules: HashSet<QualifiedName>,
     /// User module member types and visibility: `module_path -> member_name -> ModuleMember`.
-    user_module_members: HashMap<StringId, HashMap<StringId, ModuleMember>>,
+    user_module_members:
+        HashMap<QualifiedName, HashMap<StringId, ModuleMember>>,
     /// User module type visibility: qualified type name (e.g., `Mod.Type`) -> visibility.
     ///
     /// Used to enforce visibility for `type`, `newtype`, `union` inside modules.
-    user_module_type_vis: HashMap<StringId, Visibility>,
+    user_module_type_vis: HashMap<QualifiedName, Visibility>,
     /// Imported type aliases: unqualified name -> qualified name.
     ///
     /// When `IMPORT M.{ MyType }` is processed, maps `"MyType"` -> `"M.MyType"`.
     /// Checked first during type name resolution.
-    imported_types: HashMap<StringId, StringId>,
+    imported_types: HashMap<StringId, QualifiedName>,
 }
 
 impl TypeEnv {
@@ -87,13 +88,13 @@ impl TypeEnv {
     ///
     /// This tracks that a module with this name has been defined so that
     /// paths like `ModuleName.fn` can be resolved.
-    pub(crate) fn register_user_module(&mut self, name: StringId) {
+    pub(crate) fn register_user_module(&mut self, name: QualifiedName) {
         self.user_modules.insert(name);
     }
 
     /// Check if a name is a registered user module.
-    pub(crate) fn is_user_module(&self, name: StringId) -> bool {
-        self.user_modules.contains(&name)
+    pub(crate) fn is_user_module(&self, name: &QualifiedName) -> bool {
+        self.user_modules.contains(name)
     }
 
     /// Register a member (function or constant) of a user module.
@@ -101,7 +102,7 @@ impl TypeEnv {
     /// Called when typechecking `fun` and `let` inside a `module` block.
     pub(crate) fn register_user_module_member(
         &mut self,
-        module: StringId,
+        module: QualifiedName,
         member: StringId,
         scheme: Scheme,
         vis: Visibility,
@@ -117,21 +118,20 @@ impl TypeEnv {
     /// Returns the member (scheme + visibility) if found.
     pub(crate) fn lookup_user_module_member(
         &self,
-        module: StringId,
+        module: &QualifiedName,
         member: StringId,
     ) -> Option<&ModuleMember> {
         self.user_module_members
-            .get(&module)
+            .get(module)
             .and_then(|m| m.get(&member))
     }
 
     /// Register visibility for a type inside a user module.
     ///
     /// Called for `type`, `newtype`, `union` inside `module` blocks.
-    /// The `qname` is the qualified name (e.g., `Mod.MyType`).
     pub(crate) fn register_user_module_type_vis(
         &mut self,
-        qname: StringId,
+        qname: QualifiedName,
         vis: Visibility,
     ) {
         self.user_module_type_vis.insert(qname, vis);
@@ -142,9 +142,9 @@ impl TypeEnv {
     /// Returns `Some(vis)` if this is a user module type, `None` otherwise.
     pub(crate) fn lookup_user_module_type_vis(
         &self,
-        qname: StringId,
+        qname: &QualifiedName,
     ) -> Option<Visibility> {
-        self.user_module_type_vis.get(&qname).copied()
+        self.user_module_type_vis.get(qname).copied()
     }
 
     /// Get all public members of a user module.
@@ -152,10 +152,10 @@ impl TypeEnv {
     /// Returns `(name_id, scheme)` pairs for all public members.
     pub(crate) fn get_public_user_module_members(
         &self,
-        mod_path: StringId,
+        mod_path: &QualifiedName,
     ) -> Vec<(StringId, Scheme)> {
         self.user_module_members
-            .get(&mod_path)
+            .get(mod_path)
             .map(|members| {
                 members
                     .iter()
@@ -168,40 +168,17 @@ impl TypeEnv {
 
     /// Get all public types in a user module.
     ///
-    /// Returns `(local_name_id, qualified_name_id)` pairs for direct children only.
-    /// Uses `intern` rather than `lookup` for the local name so that types whose
-    /// unqualified name was never independently interned are still returned
-    /// (e.g., a type registered only as `"Mod.Type"` where `"Type"` alone was
-    /// never interned).
+    /// Returns `(local_name, qualified_name)` pairs for direct children only.
     pub(crate) fn get_public_user_module_types(
-        &mut self,
-        mod_path: StringId,
-    ) -> Vec<(StringId, StringId)> {
-        let prefix = self.strings.get(mod_path).map(|s| format!("{}.", s));
-        // Collect `(local_name_string, qname_id)` pairs first, then intern
-        // the local names; this avoids borrowing `self.strings` mutably while
-        // iterating `self.user_module_type_vis`.
-        let pairs: Vec<(String, StringId)> = prefix
-            .map(|prefix| {
-                self.user_module_type_vis
-                    .iter()
-                    .filter_map(|(&qname_id, &vis)| {
-                        self.strings.get(qname_id).and_then(|qname| {
-                            qname
-                                .strip_prefix(&prefix)
-                                .filter(|local| {
-                                    !local.contains('.')
-                                        && vis == Visibility::Public
-                                })
-                                .map(|local| (local.to_owned(), qname_id))
-                        })
-                    })
-                    .collect()
+        &self,
+        mod_path: &QualifiedName,
+    ) -> Vec<(StringId, QualifiedName)> {
+        self.user_module_type_vis
+            .iter()
+            .filter(|(qn, &vis)| {
+                qn.is_direct_child_of(mod_path) && vis == Visibility::Public
             })
-            .unwrap_or_default();
-        pairs
-            .into_iter()
-            .map(|(local, qname_id)| (self.strings.intern(&local), qname_id))
+            .map(|(qn, _)| (qn.local_name(), qn.clone()))
             .collect()
     }
 
@@ -209,18 +186,22 @@ impl TypeEnv {
     ///
     /// Maps a local (unqualified) name to its qualified name. Used when
     /// processing `IMPORT M.{ MyType }`.
-    pub(crate) fn import_type(&mut self, local: StringId, qualified: StringId) {
+    pub(crate) fn import_type(
+        &mut self,
+        local: StringId,
+        qualified: QualifiedName,
+    ) {
         self.imported_types.insert(local, qualified);
     }
 
     /// Look up an imported type by its local `StringId`.
     ///
-    /// Returns the qualified `StringId` if this type was imported.
+    /// Returns the qualified `QualifiedName` if this type was imported.
     pub(crate) fn lookup_imported_type(
         &self,
         local: StringId,
-    ) -> Option<StringId> {
-        self.imported_types.get(&local).copied()
+    ) -> Option<&QualifiedName> {
+        self.imported_types.get(&local)
     }
 
     /// Push a new scope (e.g., entering a function body or block).

@@ -90,7 +90,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     #[async_recursion]
     pub(super) async fn variant(
         &mut self,
-        ty_name: StringId,
+        ty_name: &QualifiedName,
         var_name: StringId,
         args: &[ExprId],
         span: Span,
@@ -98,7 +98,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         // Typechecker validates type names
         let type_id = self
             .registry
-            .lookup(&QualifiedName::local(ty_name))
+            .lookup(ty_name)
             .unwrap_or_else(|| typechecked!("variant", "known type"));
 
         // Typechecker validates variant names

@@ -23,28 +23,23 @@ impl InferCtx<'_> {
     /// Uses the scrutinee type for type parameter substitution.
     pub(super) fn variant_payload_types(
         &mut self,
-        ty_name: &str,
-        var_name: &str,
+        ty_name: &QualifiedName,
+        var_name: StringId,
         scrutinee_ty: TyId,
         span: Span,
     ) -> SmallVec<[TyId; 4]> {
-        let var_name_id = self.env.intern(var_name);
-        let lookup = self
-            .env
-            .lookup_str(ty_name)
-            .and_then(|id| self.registry.lookup(&QualifiedName::local(id)))
-            .and_then(|type_id| {
+        let lookup =
+            self.resolve_type_name(ty_name).and_then(|(type_id, _)| {
                 self.registry
-                    .lookup_variant(type_id, var_name_id)
+                    .lookup_variant(type_id, var_name)
                     .map(|var_def| (type_id, var_def))
             });
 
         match lookup {
             None => {
-                self.error(TypeError::UnknownType(
-                    format!("{ty_name}.{var_name}"),
-                    span,
-                ));
+                let tn = ty_name.display(&self.env.strings);
+                let vn = self.env.resolve_string(var_name);
+                self.error(TypeError::UnknownType(format!("{tn}.{vn}"), span));
                 SmallVec::new()
             }
             Some((type_id, var_def)) => {
@@ -126,7 +121,7 @@ impl InferCtx<'_> {
                     // Check scrutinee is compatible with variant pattern
                     if !self.scrutinee_compatible_with_variant(
                         scrutinee_ty,
-                        ty_name.local_name(),
+                        ty_name,
                     ) {
                         let pat_ty = ty_name.display(&self.env.strings);
                         self.error(TypeError::IncompatibleVariantPattern {
@@ -154,12 +149,10 @@ impl InferCtx<'_> {
                         );
                     }
 
-                    let var_s = self.env.resolve_string(*var_name);
                     let eff = qid.unwrap_or(ty_name.clone());
-                    let ty_s = eff.display(&self.env.strings);
                     let payload_tys = self.variant_payload_types(
-                        &ty_s,
-                        &var_s,
+                        &eff,
+                        *var_name,
                         scrutinee_ty,
                         span,
                     );

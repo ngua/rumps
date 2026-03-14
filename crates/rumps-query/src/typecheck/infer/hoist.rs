@@ -200,10 +200,8 @@ impl InferCtx<'_> {
         body: &[StmtId],
         span: Span,
     ) {
-        // Register the module name first (env still uses `StringId`)
-        let disp = mod_path.display(&self.env.strings);
-        let mod_path_id = self.env.intern(&disp);
-        self.env.register_user_module(mod_path_id);
+        // Register the module name
+        self.env.register_user_module(mod_path.clone());
 
         // Save and set current module for unqualified type resolution
         let prev_module = self.current_module.replace(mod_path.clone());
@@ -253,9 +251,7 @@ impl InferCtx<'_> {
                         self.current_module = saved;
                     }
                     let qn = mod_path.child(*name);
-                    let qn_disp = qn.display(&self.env.strings);
-                    let qname_id = self.env.intern(&qn_disp);
-                    self.env.register_user_module_type_vis(qname_id, vis);
+                    self.env.register_user_module_type_vis(qn, vis);
                 }
 
                 _ => {}
@@ -298,7 +294,7 @@ impl InferCtx<'_> {
                     // Register as module member with provisional type
                     if let Some(scheme) = self.env.lookup(*name).cloned() {
                         self.env.register_user_module_member(
-                            mod_path_id,
+                            mod_path.clone(),
                             *name,
                             scheme,
                             vis,
@@ -322,7 +318,7 @@ impl InferCtx<'_> {
                     let scheme = Scheme::mono(ty);
                     self.env.bind(*const_name, scheme.clone());
                     self.env.register_user_module_member(
-                        mod_path_id,
+                        mod_path.clone(),
                         *const_name,
                         scheme,
                         vis,
@@ -346,7 +342,7 @@ impl InferCtx<'_> {
                         constraints,
                         methods,
                         assoc_types: (),
-                        module: Some(mod_path_id),
+                        module: Some(mod_path.clone()),
                         span: item_span,
                     });
                 }
@@ -415,23 +411,15 @@ impl InferCtx<'_> {
             // Fallback for module-scoped unqualified type names: if `for_ty` is
             // `Unknown` and we're inside a module, try the qualified name.
             let for_ty = if for_ty == TyArena::UNKNOWN {
-                if let Some(mod_id) = module {
+                if let Some(ref mod_qn) = module {
                     let raw_name = self.extract_type_name_from_ast(for_type);
                     if raw_name.contains('.') {
                         for_ty // Already qualified
                     } else {
-                        // Build QualifiedName from module segments + type name
-                        let mod_s = self.env.resolve_str(mod_id).to_owned();
-                        let mut segs: SmallVec<[StringId; 3]> = mod_s
-                            .split('.')
-                            .filter_map(|s| self.env.lookup_str(s))
-                            .collect();
-                        if let Some(name_id) = self.env.lookup_str(&raw_name) {
-                            segs.push(name_id);
-                        }
-                        let qn = QualifiedName::new(segs);
-                        self.registry
-                            .lookup(&qn)
+                        self.env
+                            .lookup_str(&raw_name)
+                            .map(|name_id| mod_qn.child(name_id))
+                            .and_then(|qn| self.registry.lookup(&qn))
                             .map(|tid| self.ty_arena.named(tid, smallvec![]))
                             .unwrap_or(for_ty)
                     }
@@ -494,15 +482,14 @@ impl InferCtx<'_> {
                     // Build method map (empty for hoisting; filled in Pass 2)
                     // Use qualified type name for function name generation to avoid collisions.
                     let type_name_for_fn =
-                        match (self.ty_arena.get(for_ty), module) {
-                            (Ty::Named(_, _), Some(mod_id)) => {
+                        match (self.ty_arena.get(for_ty), &module) {
+                            (Ty::Named(_, _), Some(mod_qn)) => {
                                 let raw_name =
                                     self.extract_type_name_from_ast(for_type);
                                 if raw_name.contains('.') {
                                     raw_name
                                 } else {
-                                    let mp =
-                                        self.env.resolve_str(mod_id).to_owned();
+                                    let mp = mod_qn.display(&self.env.strings);
                                     format!("{}.{}", mp, raw_name)
                                 }
                             }

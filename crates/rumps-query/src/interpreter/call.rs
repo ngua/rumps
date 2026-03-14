@@ -154,20 +154,20 @@ impl<I: IoContext> Interpreter<'_, I> {
             Expr::Field(base_id, ref var_name) => {
                 let maybe_variant =
                     self.ast.get_expr(base_id).and_then(|e| match e {
-                        Expr::Var(ty_name) => self
-                            .registry
-                            .lookup(&QualifiedName::local(*ty_name))
-                            .and_then(|type_id| {
+                        Expr::Var(ty_name) => {
+                            let qn = QualifiedName::local(*ty_name);
+                            self.registry.lookup(&qn).and_then(|type_id| {
                                 self.registry
                                     .lookup_variant(type_id, *var_name)
-                                    .map(|_| (*ty_name, *var_name))
-                            }),
+                                    .map(|_| (qn, *var_name))
+                            })
+                        }
                         _ => None,
                     });
 
-                if let Some((ty_id, var_id)) = maybe_variant {
+                if let Some((ty_qn, var_id)) = maybe_variant {
                     // Handle as variant constructor
-                    self.variant(ty_id, var_id, args, span).await
+                    self.variant(&ty_qn, var_id, args, span).await
                 } else {
                     // Evaluate callee expression and call the result
                     let callee_val = self.eval(callee).await?;

@@ -490,15 +490,15 @@ pub(crate) enum TypePattern {
     Type(AstTypeExprId),
 
     /// Variant check without payload: `is Option.None`.
-    Variant(StringId, StringId),
+    Variant(QualifiedName, StringId),
 
     /// Variant check ignoring payload: `is Option.Some(_)`.
-    VariantWildcard(StringId, StringId),
+    VariantWildcard(QualifiedName, StringId),
 
     /// Variant check with binding: `is Option.Some(val)`.
     ///
     /// Bindings are only visible in the `then` branch of an `if`.
-    VariantBind(StringId, StringId, SmallVec<[StringId; 2]>),
+    VariantBind(QualifiedName, StringId, SmallVec<[StringId; 2]>),
 
     /// Structural object check: `is { name: String, age: Int }`.
     ///
@@ -849,7 +849,7 @@ pub(crate) enum Expr {
     /// for variants with arguments.
     ///
     /// Examples: `Option.None` (no args), `Option.Some(1)`, `Result.Ok(42)`
-    Variant(StringId, StringId, SmallVec<[ExprId; 4]>),
+    Variant(QualifiedName, StringId, SmallVec<[ExprId; 4]>),
 
     /// Namespace path for module functions and constants.
     ///

@@ -500,8 +500,8 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::OptionalField(base, field) => {
                 self.optional_field(base, &field, span).await
             }
-            Expr::Variant(ty, var, args) => {
-                self.variant(ty, var, &args, span).await
+            Expr::Variant(ref ty, var, ref args) => {
+                self.variant(ty, var, args, span).await
             }
             Expr::Path(ref segments) => self.path(segments, span),
             Expr::Is(expr, pattern) => self.is(expr, &pattern, span).await,

@@ -73,20 +73,6 @@ impl StringInterner {
     pub(crate) fn resolve(&self, id: StringId) -> String {
         self.get(id).unwrap_or_default().to_owned()
     }
-
-    /// Join a slice of `StringId`s with `"."` separators.
-    pub(crate) fn join_path(&self, segs: &[StringId]) -> String {
-        segs.iter()
-            .filter_map(|id| self.get(*id))
-            .collect::<Vec<_>>()
-            .join(".")
-    }
-
-    /// Join a slice of `StringId`s with `"."` and intern the result.
-    pub(crate) fn intern_joined(&mut self, segs: &[StringId]) -> StringId {
-        let joined = self.join_path(segs);
-        self.intern(&joined)
-    }
 }
 
 /// A structured module-qualified type name (e.g., `Math.Vector`).
@@ -165,7 +151,6 @@ impl QualifiedName {
     }
 
     /// Whether `self` is a direct child of `parent`.
-    #[allow(dead_code)]
     pub(crate) fn is_direct_child_of(&self, parent: &Self) -> bool {
         self.parent().as_ref() == Some(parent)
     }

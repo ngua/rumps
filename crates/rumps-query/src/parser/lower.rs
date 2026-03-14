@@ -639,7 +639,7 @@ impl<'a> LowerCtx<'a> {
             }
             cst::ExprKind::Variant(ty, var, args) => {
                 let arg_ids = self.exprs(args)?;
-                Expr::Variant(ty, var, arg_ids)
+                Expr::Variant(QualifiedName::local(ty), var, arg_ids)
             }
             cst::ExprKind::Is(inner, pattern) => {
                 let inner_id = self.expr(*inner)?;
@@ -946,12 +946,14 @@ impl<'a> LowerCtx<'a> {
             cst::TypePattern::Type(ty) => {
                 TypePattern::Type(self.type_expr(ty)?)
             }
-            cst::TypePattern::Variant(ty, var) => TypePattern::Variant(ty, var),
+            cst::TypePattern::Variant(ty, var) => {
+                TypePattern::Variant(QualifiedName::local(ty), var)
+            }
             cst::TypePattern::VariantWildcard(ty, var) => {
-                TypePattern::VariantWildcard(ty, var)
+                TypePattern::VariantWildcard(QualifiedName::local(ty), var)
             }
             cst::TypePattern::VariantBind(ty, var, names) => {
-                TypePattern::VariantBind(ty, var, names)
+                TypePattern::VariantBind(QualifiedName::local(ty), var, names)
             }
             cst::TypePattern::Object(fields) => {
                 let lowered = fields
@@ -1446,13 +1448,13 @@ impl<'a> MergeCtx<'a> {
                 Ok(TypePattern::Type(new_ty))
             }
             TypePattern::Variant(ty, var) => {
-                Ok(TypePattern::Variant(*ty, *var))
+                Ok(TypePattern::Variant(ty.clone(), *var))
             }
             TypePattern::VariantWildcard(ty, var) => {
-                Ok(TypePattern::VariantWildcard(*ty, *var))
+                Ok(TypePattern::VariantWildcard(ty.clone(), *var))
             }
             TypePattern::VariantBind(ty, var, binds) => {
-                Ok(TypePattern::VariantBind(*ty, *var, binds.clone()))
+                Ok(TypePattern::VariantBind(ty.clone(), *var, binds.clone()))
             }
             TypePattern::Object(fields) => {
                 let new_fields: Result<SmallVec<_>> = fields

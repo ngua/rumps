@@ -62,7 +62,7 @@ pub(super) struct ClassInstanceInput<'a, A = ()> {
     pub(super) constraints: &'a SmallVec<[(StringId, AstClassConstraints); 2]>,
     pub(super) methods: &'a SmallVec<[InstanceMethodDef; 4]>,
     pub(super) assoc_types: A,
-    pub(super) module: Option<StringId>,
+    pub(super) module: Option<QualifiedName>,
     pub(super) span: Span,
 }
 

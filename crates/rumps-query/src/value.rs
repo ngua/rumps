@@ -1538,13 +1538,6 @@ impl TypeRegistry {
         id
     }
 
-    /// Insert an alias so that `alias` also resolves to the same `TypeId` as `name`.
-    ///
-    /// Used to make dot-joined `StringId` lookups work for multi-segment names.
-    pub(crate) fn alias(&mut self, alias: QualifiedName, id: TypeId) {
-        self.by_name.insert(alias, id);
-    }
-
     pub(crate) fn get_def(&self, id: TypeId) -> Option<&TypeDef> {
         self.defs.get(id.idx())
     }
@@ -2185,7 +2178,7 @@ impl TypeRegistry {
             })
             .collect();
 
-        let id = self.register(
+        self.register(
             TypeDef::Sum {
                 name: name_id,
                 type_params: type_param_ids,
@@ -2193,10 +2186,6 @@ impl TypeRegistry {
             },
             qn.clone(),
         );
-        // Alias the dot-joined form so legacy `StringId`-based lookups work
-        if qn.is_qualified() {
-            self.alias(QualifiedName::local(name_id), id);
-        }
     }
 
     /// Register a single union declaration.
@@ -2224,7 +2213,7 @@ impl TypeRegistry {
             })
             .collect();
 
-        let id = self.register(
+        self.register(
             TypeDef::Union {
                 name: name_id,
                 type_params: type_param_ids,
@@ -2232,10 +2221,6 @@ impl TypeRegistry {
             },
             qn.clone(),
         );
-        // Alias the dot-joined form so legacy `StringId`-based lookups work
-        if qn.is_qualified() {
-            self.alias(QualifiedName::local(name_id), id);
-        }
     }
 
     /// Register a single newtype alias declaration.
@@ -2255,7 +2240,7 @@ impl TypeRegistry {
         let type_param_ids: SmallVec<[StringId; 2]> =
             type_params.iter().map(|tp| tp.name).collect();
 
-        let id = self.register(
+        self.register(
             TypeDef::Alias {
                 name: name_id,
                 type_params: type_param_ids,
@@ -2263,10 +2248,6 @@ impl TypeRegistry {
             },
             qn.clone(),
         );
-        // Alias the dot-joined form so legacy `StringId`-based lookups work
-        if qn.is_qualified() {
-            self.alias(QualifiedName::local(name_id), id);
-        }
     }
 
     fn len(&self) -> usize {

@@ -5,7 +5,7 @@ use smallvec::SmallVec;
 
 use super::Interpreter;
 use crate::ast::{Expr, ExprId, MatchArm, PostfixOp, StmtId, TypePattern};
-use crate::intern::StringId;
+use crate::intern::{QualifiedName, StringId};
 use crate::io::IoContext;
 use crate::value::{TypeId, Value};
 use crate::{Error, Result, Span};
@@ -205,7 +205,10 @@ impl<I: IoContext> Interpreter<'_, I> {
         // Check if condition is `Expr::Is` with bindings
         let cond_expr = self.ast.get_expr(cond).cloned();
         match cond_expr {
-            Some(Expr::Is(expr, TypePattern::VariantBind(ty, var, names))) => {
+            Some(Expr::Is(
+                expr,
+                TypePattern::VariantBind(ref ty, var, names),
+            )) => {
                 self.if_with_bindings(expr, ty, var, &names, then_br, else_br)
                     .await
             }
@@ -248,7 +251,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     async fn if_with_bindings(
         &mut self,
         expr: ExprId,
-        ty_name: StringId,
+        ty_name: &QualifiedName,
         var_name: StringId,
         names: &[StringId],
         then_br: ExprId,

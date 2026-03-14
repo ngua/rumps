@@ -171,9 +171,7 @@ impl InferCtx<'_> {
     ) {
         // Register the module name FIRST so self-references like
         // `Geometry.pi` from within `Geometry.area` resolve correctly.
-        let disp = mod_path.display(&self.env.strings);
-        let mod_path_id = self.env.intern(&disp);
-        self.env.register_user_module(mod_path_id);
+        self.env.register_user_module(mod_path.clone());
 
         // Save and set current module for unqualified type resolution
         let prev_module = self.current_module.replace(mod_path.clone());
@@ -191,7 +189,7 @@ impl InferCtx<'_> {
                     // Register as module member with visibility
                     if let Some(scheme) = self.env.lookup(*name).cloned() {
                         self.env.register_user_module_member(
-                            mod_path_id,
+                            mod_path.clone(),
                             *name,
                             scheme,
                             vis,
@@ -209,7 +207,7 @@ impl InferCtx<'_> {
                                 self.env.lookup(*const_name).cloned()
                             {
                                 self.env.register_user_module_member(
-                                    mod_path_id,
+                                    mod_path.clone(),
                                     *const_name,
                                     scheme,
                                     vis,
@@ -250,9 +248,7 @@ impl InferCtx<'_> {
                     ref def,
                 }) => {
                     let qn = mod_path.child(*name);
-                    let qn_disp = qn.display(&self.env.strings);
-                    let qname_id = self.env.intern(&qn_disp);
-                    self.env.register_user_module_type_vis(qname_id, vis);
+                    self.env.register_user_module_type_vis(qn, vis);
                     self.validate_type_decl_body(type_params, def);
                 }
                 Some(Stmt::Union {
@@ -262,9 +258,7 @@ impl InferCtx<'_> {
                     ref members,
                 }) => {
                     let qn = mod_path.child(*name);
-                    let qn_disp = qn.display(&self.env.strings);
-                    let qname_id = self.env.intern(&qn_disp);
-                    self.env.register_user_module_type_vis(qname_id, vis);
+                    self.env.register_user_module_type_vis(qn, vis);
                     let subst = self.type_param_subst(type_params);
                     members.iter().for_each(|m| {
                         self.ast_type_to_ty(*m, &subst);
@@ -277,9 +271,7 @@ impl InferCtx<'_> {
                     target,
                 }) => {
                     let qn = mod_path.child(*name);
-                    let qn_disp = qn.display(&self.env.strings);
-                    let qname_id = self.env.intern(&qn_disp);
-                    self.env.register_user_module_type_vis(qname_id, vis);
+                    self.env.register_user_module_type_vis(qn, vis);
                     let subst = self.type_param_subst(type_params);
                     self.ast_type_to_ty(target, &subst);
                 }
@@ -304,7 +296,7 @@ impl InferCtx<'_> {
                         constraints,
                         methods,
                         assoc_types,
-                        module: Some(mod_path_id),
+                        module: Some(mod_path.clone()),
                         span: item_span,
                     });
                 }
@@ -324,17 +316,17 @@ impl InferCtx<'_> {
     /// Called during both hoisting (for type imports) and Pass 2 (for full
     /// processing). Visibility is `pub(super)` so `hoist.rs` can call it.
     pub(super) fn import_stmt(&mut self, import: &Import, span: Span) {
-        let mod_path_str = self.env.strings.join_path(&import.path);
-        let mod_path_id = self.env.intern(&mod_path_str);
+        let mod_qn = QualifiedName::new(import.path.to_vec());
 
         // Check if module exists (builtin or user-defined)
         let is_builtin = import
             .path
             .first()
             .is_some_and(|&name| self.runtime_env.is_builtin_module(name));
-        let is_user = self.env.is_user_module(mod_path_id);
+        let is_user = self.env.is_user_module(&mod_qn);
 
         if !is_builtin && !is_user {
+            let mod_path_str = mod_qn.display(&self.env.strings);
             self.error(TypeError::Custom {
                 msg: format!("unknown module `{}`", mod_path_str),
                 span,
@@ -342,9 +334,13 @@ impl InferCtx<'_> {
             // Continue to gather more errors
         }
 
-        // Mark valid modules as imported (enables class instance lookup)
+        // Mark valid modules as imported (enables class instance lookup).
+        // `mark_module_imported` uses `StringId` (for scope-based tracking);
+        // use the root path segment to track module imports.
         if is_builtin || is_user {
-            self.env.mark_module_imported(mod_path_id);
+            if let Some(&name) = import.path.first() {
+                self.env.mark_module_imported(name);
+            }
         }
 
         // Collect exclusions and check for wildcard
@@ -387,7 +383,7 @@ impl InferCtx<'_> {
             // Get public members from user module
             if is_user {
                 self.env
-                    .get_public_user_module_members(mod_path_id)
+                    .get_public_user_module_members(&mod_qn)
                     .into_iter()
                     .for_each(|(name_id, scheme)| {
                         if !exclusions.contains(&name_id) {
@@ -397,11 +393,11 @@ impl InferCtx<'_> {
 
                 // Import public types
                 self.env
-                    .get_public_user_module_types(mod_path_id)
+                    .get_public_user_module_types(&mod_qn)
                     .into_iter()
-                    .for_each(|(local_id, qname_id)| {
+                    .for_each(|(local_id, qn)| {
                         if !exclusions.contains(&local_id) {
-                            self.env.import_type(local_id, qname_id);
+                            self.env.import_type(local_id, qn);
                         }
                     });
             }
@@ -428,9 +424,9 @@ impl InferCtx<'_> {
                     });
 
                 // Then try user module (check visibility)
-                let user =
-                    self.env.lookup_user_module_member(mod_path_id, *name);
+                let user = self.env.lookup_user_module_member(&mod_qn, *name);
 
+                let mod_path_str = mod_qn.display(&self.env.strings);
                 match (builtin, user) {
                     (Some(s), _) => self.env.bind(bind_id, s),
                     (None, Some(m)) if m.vis == Visibility::Public => {
@@ -447,12 +443,11 @@ impl InferCtx<'_> {
                     }
                     (None, None) => {
                         // Check if it's a type
-                        let qname = format!("{}.{}", mod_path_str, n);
-                        let qname_id = self.env.intern(&qname);
-                        match self.env.lookup_user_module_type_vis(qname_id) {
+                        let type_qn = mod_qn.child(*name);
+                        match self.env.lookup_user_module_type_vis(&type_qn) {
                             Some(Visibility::Public) => {
                                 // Register as imported type
-                                self.env.import_type(bind_id, qname_id);
+                                self.env.import_type(bind_id, type_qn);
                             }
                             Some(Visibility::Private) => {
                                 self.error(TypeError::Custom {
