@@ -16,7 +16,7 @@ use crate::ast::{
     ExprId, Import, ImportItem, OutputFormat, OutputTarget, RefTarget, Stmt,
     StmtId, TypeDefAst, TypeParam, UnOp, Visibility, WriteExpr,
 };
-use crate::intern::StringId;
+use crate::intern::{QualifiedName, StringId};
 use crate::typecheck::error::TypeError;
 use crate::typecheck::instance::{self, Instance};
 use crate::typecheck::ty::{
@@ -152,7 +152,7 @@ impl InferCtx<'_> {
         body: &[StmtId],
         span: Span,
     ) {
-        self.user_module(mod_name, body, span)
+        self.user_module(QualifiedName::local(mod_name), body, span)
     }
 
     /// Infer types for a user-defined module.
@@ -163,13 +163,20 @@ impl InferCtx<'_> {
     ///
     /// The `mod_path` is the fully-qualified module path (e.g., `"Outer.Inner"`
     /// for a nested module).
-    fn user_module(&mut self, mod_path: StringId, body: &[StmtId], span: Span) {
+    fn user_module(
+        &mut self,
+        mod_path: QualifiedName,
+        body: &[StmtId],
+        span: Span,
+    ) {
         // Register the module name FIRST so self-references like
         // `Geometry.pi` from within `Geometry.area` resolve correctly.
-        self.env.register_user_module(mod_path);
+        let disp = mod_path.display(&self.env.strings);
+        let mod_path_id = self.env.intern(&disp);
+        self.env.register_user_module(mod_path_id);
 
         // Save and set current module for unqualified type resolution
-        let prev_module = self.current_module.replace(mod_path);
+        let prev_module = self.current_module.replace(mod_path.clone());
 
         // Typecheck each statement and validate it's an allowed item type.
         // We also collect type information for registration.
@@ -184,7 +191,10 @@ impl InferCtx<'_> {
                     // Register as module member with visibility
                     if let Some(scheme) = self.env.lookup(*name).cloned() {
                         self.env.register_user_module_member(
-                            mod_path, *name, scheme, vis,
+                            mod_path_id,
+                            *name,
+                            scheme,
+                            vis,
                         );
                     }
                 }
@@ -199,7 +209,7 @@ impl InferCtx<'_> {
                                 self.env.lookup(*const_name).cloned()
                             {
                                 self.env.register_user_module_member(
-                                    mod_path,
+                                    mod_path_id,
                                     *const_name,
                                     scheme,
                                     vis,
@@ -220,13 +230,7 @@ impl InferCtx<'_> {
 
                 Some(Stmt::Module { ref name, ref body }) => {
                     // Nested module; recurse with qualified path
-                    let nested = format!(
-                        "{}.{}",
-                        self.env.resolve_str(mod_path),
-                        self.env.resolve_str(*name)
-                    );
-                    let nested_id = self.env.intern(&nested);
-                    self.user_module(nested_id, body, item_span);
+                    self.user_module(mod_path.child(*name), body, item_span);
                 }
 
                 // Invalid statements inside a module (SET/kill/write are now
@@ -245,12 +249,9 @@ impl InferCtx<'_> {
                     ref type_params,
                     ref def,
                 }) => {
-                    let qname = format!(
-                        "{}.{}",
-                        self.env.resolve_str(mod_path),
-                        self.env.resolve_str(*name)
-                    );
-                    let qname_id = self.env.intern(&qname);
+                    let qn = mod_path.child(*name);
+                    let qn_disp = qn.display(&self.env.strings);
+                    let qname_id = self.env.intern(&qn_disp);
                     self.env.register_user_module_type_vis(qname_id, vis);
                     self.validate_type_decl_body(type_params, def);
                 }
@@ -260,12 +261,9 @@ impl InferCtx<'_> {
                     ref type_params,
                     ref members,
                 }) => {
-                    let qname = format!(
-                        "{}.{}",
-                        self.env.resolve_str(mod_path),
-                        self.env.resolve_str(*name)
-                    );
-                    let qname_id = self.env.intern(&qname);
+                    let qn = mod_path.child(*name);
+                    let qn_disp = qn.display(&self.env.strings);
+                    let qname_id = self.env.intern(&qn_disp);
                     self.env.register_user_module_type_vis(qname_id, vis);
                     let subst = self.type_param_subst(type_params);
                     members.iter().for_each(|m| {
@@ -278,12 +276,9 @@ impl InferCtx<'_> {
                     ref type_params,
                     target,
                 }) => {
-                    let qname = format!(
-                        "{}.{}",
-                        self.env.resolve_str(mod_path),
-                        self.env.resolve_str(*name)
-                    );
-                    let qname_id = self.env.intern(&qname);
+                    let qn = mod_path.child(*name);
+                    let qn_disp = qn.display(&self.env.strings);
+                    let qname_id = self.env.intern(&qn_disp);
                     self.env.register_user_module_type_vis(qname_id, vis);
                     let subst = self.type_param_subst(type_params);
                     self.ast_type_to_ty(target, &subst);
@@ -309,7 +304,7 @@ impl InferCtx<'_> {
                         constraints,
                         methods,
                         assoc_types,
-                        module: Some(mod_path),
+                        module: Some(mod_path_id),
                         span: item_span,
                     });
                 }
@@ -1255,11 +1250,8 @@ impl InferCtx<'_> {
         self.ast
             .get_type_expr(id)
             .and_then(|te| match te {
-                AstTypeExpr::Named(name) => {
-                    self.env.get_str(*name).map(|s| s.to_owned())
-                }
-                AstTypeExpr::App(name, _) => {
-                    self.env.get_str(*name).map(|s| s.to_owned())
+                AstTypeExpr::Named(name) | AstTypeExpr::App(name, _) => {
+                    Some(name.display(&self.env.strings))
                 }
                 _ => None,
             })

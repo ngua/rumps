@@ -6,7 +6,7 @@ use smallvec::SmallVec;
 use super::Interpreter;
 use crate::ast::{Expr, ExprId};
 use crate::env::{PrimCtx, PrimFn};
-use crate::intern::StringId;
+use crate::intern::{QualifiedName, StringId};
 use crate::io::IoContext;
 use crate::value::{CapturedEnv, FunctionDef, TypeExprId, Value, ValueId};
 use crate::{Result, Span};
@@ -154,13 +154,14 @@ impl<I: IoContext> Interpreter<'_, I> {
             Expr::Field(base_id, ref var_name) => {
                 let maybe_variant =
                     self.ast.get_expr(base_id).and_then(|e| match e {
-                        Expr::Var(ty_name) => {
-                            self.registry.lookup(*ty_name).and_then(|type_id| {
+                        Expr::Var(ty_name) => self
+                            .registry
+                            .lookup(&QualifiedName::local(*ty_name))
+                            .and_then(|type_id| {
                                 self.registry
                                     .lookup_variant(type_id, *var_name)
                                     .map(|_| (*ty_name, *var_name))
-                            })
-                        }
+                            }),
                         _ => None,
                     });
 

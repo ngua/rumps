@@ -8,7 +8,7 @@ use smallvec::{smallvec, SmallVec};
 
 use super::{Constraint, InferCtx};
 use crate::ast::{AstTypeExpr, AstTypeExprId, Visibility};
-use crate::intern::StringId;
+use crate::intern::{QualifiedName, StringId};
 use crate::typecheck::error::TypeError;
 use crate::typecheck::ty::{BuiltinClass, BuiltinClassTag, Ty, TyArena, TyId};
 use crate::value::{TypeDef, TypeId};
@@ -342,89 +342,92 @@ impl InferCtx<'_> {
                 AstTypeExpr::Wildcard => self.fresh(),
                 AstTypeExpr::Named(name) => {
                     // Check substitution first (for type params)
-                    subst.get(name).copied().unwrap_or_else(|| {
-                        let span =
-                            self.ast.type_expr_span(id).unwrap_or_default();
+                    subst.get(&name.local_name()).copied().unwrap_or_else(
+                        || {
+                            let span =
+                                self.ast.type_expr_span(id).unwrap_or_default();
 
-                        // Try module-aware resolution for user types
-                        let resolved = self.resolve_type_name(*name);
-                        match resolved {
-                            Some((type_id, qid)) => {
-                                // Check visibility
-                                if !self.check_type_visibility(qid, span) {
-                                    TyArena::ERROR
-                                } else {
-                                    // Rewrite AST if name was resolved differently
-                                    if qid != *name {
-                                        self.ast.set_type_expr(
-                                            id,
-                                            AstTypeExpr::Named(qid),
-                                        );
-                                    }
-                                    // Check arity; builtins use expected_type_arity
-                                    let eff = self.env.resolve_str(qid);
-                                    let exp = self
-                                        .registry
-                                        .type_param_count(type_id)
-                                        .or_else(|| {
-                                            Self::expected_type_arity(eff)
-                                        })
-                                        .unwrap_or(0);
-                                    if exp > 0 {
-                                        let n = self.env.resolve_string(qid);
-                                        self.error(
-                                            TypeError::TypeArityMismatch {
-                                                name: n,
-                                                expected: exp,
-                                                got: 0,
-                                                span,
-                                            },
-                                        );
+                            // Try module-aware resolution for user types
+                            let resolved = self.resolve_type_name(name);
+                            match resolved {
+                                Some((type_id, qid)) => {
+                                    // Check visibility
+                                    if !self.check_type_visibility(&qid, span) {
                                         TyArena::ERROR
                                     } else {
-                                        self.type_id_to_ty(type_id)
+                                        // Check arity; builtins use expected_type_arity
+                                        let eff =
+                                            qid.display(&self.env.strings);
+                                        let exp = self
+                                            .registry
+                                            .type_param_count(type_id)
+                                            .or_else(|| {
+                                                Self::expected_type_arity(&eff)
+                                            })
+                                            .unwrap_or(0);
+                                        // Rewrite AST if name was resolved differently
+                                        if qid != *name {
+                                            self.ast.set_type_expr(
+                                                id,
+                                                AstTypeExpr::Named(qid),
+                                            );
+                                        }
+                                        if exp > 0 {
+                                            self.error(
+                                                TypeError::TypeArityMismatch {
+                                                    name: eff,
+                                                    expected: exp,
+                                                    got: 0,
+                                                    span,
+                                                },
+                                            );
+                                            TyArena::ERROR
+                                        } else {
+                                            self.type_id_to_ty(type_id)
+                                        }
+                                    }
+                                }
+                                None => {
+                                    let name_s =
+                                        name.display(&self.env.strings);
+                                    // Try builtin types
+                                    let expected =
+                                        Self::expected_type_arity(&name_s);
+                                    if let Some(exp) = expected {
+                                        if exp > 0 {
+                                            self.error(
+                                                TypeError::TypeArityMismatch {
+                                                    name: name_s,
+                                                    expected: exp,
+                                                    got: 0,
+                                                    span,
+                                                },
+                                            );
+                                            TyArena::ERROR
+                                        } else {
+                                            self.named_type_to_ty(&name_s)
+                                        }
+                                    } else {
+                                        let ty = self.named_type_to_ty(&name_s);
+                                        if ty == TyArena::UNKNOWN {
+                                            self.error(TypeError::UnknownType(
+                                                name_s, span,
+                                            ));
+                                            TyArena::ERROR
+                                        } else {
+                                            ty
+                                        }
                                     }
                                 }
                             }
-                            None => {
-                                let name_s = self.env.resolve_string(*name);
-                                // Try builtin types
-                                let expected =
-                                    Self::expected_type_arity(&name_s);
-                                if let Some(exp) = expected {
-                                    if exp > 0 {
-                                        self.error(
-                                            TypeError::TypeArityMismatch {
-                                                name: name_s,
-                                                expected: exp,
-                                                got: 0,
-                                                span,
-                                            },
-                                        );
-                                        TyArena::ERROR
-                                    } else {
-                                        self.named_type_to_ty(&name_s)
-                                    }
-                                } else {
-                                    let ty = self.named_type_to_ty(&name_s);
-                                    if ty == TyArena::UNKNOWN {
-                                        self.error(TypeError::UnknownType(
-                                            name_s, span,
-                                        ));
-                                        TyArena::ERROR
-                                    } else {
-                                        ty
-                                    }
-                                }
-                            }
-                        }
-                    })
+                        },
+                    )
                 }
                 AstTypeExpr::App(name, args) => {
                     let span = self.ast.type_expr_span(id).unwrap_or_default();
 
                     // Try module-aware resolution for user types
-                    let resolved = self.resolve_type_name(*name);
+                    let resolved = self.resolve_type_name(name);
                     // Check for user-defined type (not builtin)
                     let user_def = resolved.and_then(|(tid, qid)| {
                         self.registry
@@ -434,9 +437,10 @@ impl InferCtx<'_> {
                     match user_def {
                         Some((type_id, qid, exp)) => {
                             // User-defined parameterized type
-                            if !self.check_type_visibility(qid, span) {
+                            if !self.check_type_visibility(&qid, span) {
                                 TyArena::ERROR
                             } else {
+                                let n = qid.display(&self.env.strings);
                                 // Rewrite AST if name was resolved differently
                                 if qid != *name {
                                     self.ast.set_type_expr(
@@ -446,7 +450,6 @@ impl InferCtx<'_> {
                                 }
                                 // Check arity
                                 if args.len() != exp {
-                                    let n = self.env.resolve_string(qid);
                                     self.error(TypeError::TypeArityMismatch {
                                         name: n,
                                         expected: exp,
@@ -465,7 +468,7 @@ impl InferCtx<'_> {
                             }
                         }
                         None => {
-                            let name_s = self.env.resolve_string(*name);
+                            let name_s = name.display(&self.env.strings);
                             // Builtin or unknown parameterized type
                             let expected = Self::expected_type_arity(&name_s);
                             if let Some(exp) = expected {
@@ -550,10 +553,10 @@ impl InferCtx<'_> {
                         .iter()
                         .map(|&a| self.ast_type_to_ty(a, subst))
                         .collect();
-                    match subst.get(name).copied() {
+                    match subst.get(&name.local_name()).copied() {
                         None => {
                             self.error(TypeError::UnknownType(
-                                self.env.resolve_string(*name),
+                                name.display(&self.env.strings),
                                 span,
                             ));
                             TyArena::ERROR
@@ -613,7 +616,7 @@ impl InferCtx<'_> {
             // Look up in registry
             self.env
                 .lookup_str(name)
-                .and_then(|id| self.registry.lookup(id))
+                .and_then(|id| self.registry.lookup(&QualifiedName::local(id)))
                 .map_or(TyArena::UNKNOWN, |ty_id| {
                     self.expand_alias_or_named(ty_id, smallvec![])
                 })
@@ -698,7 +701,9 @@ impl InferCtx<'_> {
                 // User-defined parameterized type
                 self.env
                     .lookup_str(name)
-                    .and_then(|id| self.registry.lookup(id))
+                    .and_then(|id| {
+                        self.registry.lookup(&QualifiedName::local(id))
+                    })
                     .map_or(TyArena::UNKNOWN, |ty_id| {
                         self.expand_alias_or_named(ty_id, args)
                     })
@@ -722,25 +727,29 @@ impl InferCtx<'_> {
     /// Returns `true` if the type is accessible, `false` if private.
     /// Emits a `PrivateAccess` error for private types.
     ///
-    /// Non-module types (no `.` in name) always return `true`.
-    fn check_type_visibility(&mut self, name: StringId, span: Span) -> bool {
-        let has_dot = {
-            let s = self.env.resolve_str(name);
-            s.contains('.')
-        };
-        if has_dot {
+    /// Unqualified (single-segment) names always return `true`.
+    fn check_type_visibility(
+        &mut self,
+        qn: &QualifiedName,
+        span: Span,
+    ) -> bool {
+        if qn.is_qualified() {
+            // Construct the joined `StringId` for env lookup
+            let joined = qn.display(&self.env.strings);
             self.env
-                .lookup_user_module_type_vis(name)
+                .lookup_str(&joined)
+                .and_then(|sid| self.env.lookup_user_module_type_vis(sid))
                 .is_none_or(|vis| {
                     if vis == Visibility::Private {
-                        let name_s = self.env.resolve_string(name);
-                        let parts: Vec<_> = name_s.split('.').collect();
-                        let (tn, mp) = parts
-                            .split_last()
-                            .map_or(("", vec![]), |(t, m)| (*t, m.to_vec()));
+                        let local =
+                            self.env.resolve_str(qn.local_name()).to_owned();
+                        let module =
+                            qn.parent().map_or_else(String::new, |p| {
+                                p.display(&self.env.strings)
+                            });
                         self.error(TypeError::PrivateAccess {
-                            module: mp.join("."),
-                            name: tn.to_string(),
+                            module,
+                            name: local,
                             span,
                         });
                         false
@@ -887,7 +896,7 @@ impl InferCtx<'_> {
         }
     }
 
-    /// Resolve a type name, returning `(TypeId, qualified_name)` if found.
+    /// Resolve a type name, returning `(TypeId, QualifiedName)` if found.
     ///
     /// Resolution order:
     /// 1. Check imported types first
@@ -895,40 +904,44 @@ impl InferCtx<'_> {
     /// 3. If inside a module, try prefixing with current module, then parent
     pub(super) fn resolve_type_name(
         &self,
-        name: StringId,
-    ) -> Option<(TypeId, StringId)> {
-        // 1. Check imported types
-        let eff = self.env.lookup_imported_type(name).unwrap_or(name);
+        name: &QualifiedName,
+    ) -> Option<(TypeId, QualifiedName)> {
+        // 1. Check imported types; maps local `StringId` -> qualified `StringId`
+        let local = name.local_name();
+        let eff_qn = self
+            .env
+            .lookup_imported_type(local)
+            .map_or_else(|| name.clone(), QualifiedName::local);
 
-        // 2. Try exact lookup (`StringId` maps directly to the registry)
-        self.registry.lookup(eff).map(|id| (id, eff)).or_else(|| {
-            // 3. Try module prefixes (only if not already qualified)
-            let eff_s = self.env.resolve_str(eff);
-            if eff_s.contains('.') {
-                None
-            } else {
-                self.current_module.and_then(|mod_id| {
-                    let mod_s = self.env.resolve_str(mod_id);
-                    std::iter::successors(Some(mod_s), |p| {
-                        p.rsplit_once('.').map(|(parent, _)| parent)
+        // 2. Try exact lookup
+        self.registry
+            .lookup(&eff_qn)
+            .map(|id| (id, eff_qn.clone()))
+            .or_else(|| {
+                // 3. Try module prefixes (only if not already qualified)
+                if eff_qn.is_qualified() {
+                    None
+                } else {
+                    let eff_local = eff_qn.local_name();
+                    self.current_module.as_ref().and_then(|mod_qn| {
+                        // Try current module, then each ancestor
+                        std::iter::once(mod_qn.clone())
+                            .chain(mod_qn.ancestors())
+                            .find_map(|prefix| {
+                                let qn = prefix.child(eff_local);
+                                self.registry.lookup(&qn).map(|id| (id, qn))
+                            })
                     })
-                    .find_map(|prefix| {
-                        let qname = format!("{prefix}.{eff_s}");
-                        self.env.lookup_str(&qname).and_then(|qid| {
-                            self.registry.lookup(qid).map(|id| (id, qid))
-                        })
-                    })
-                })
-            }
-        })
+                }
+            })
     }
 
     /// Check if `name` refers to a known (builtin or user-defined) type,
     /// as opposed to a type variable.
-    pub(super) fn is_known_type_name(&self, name: StringId) -> bool {
-        let s = self.env.resolve_str(name);
-        Self::builtin_type_from_name(s).is_some()
-            || Self::expected_type_arity(s).is_some()
+    pub(super) fn is_known_type_name(&self, name: &QualifiedName) -> bool {
+        let s = name.display(&self.env.strings);
+        Self::builtin_type_from_name(&s).is_some()
+            || Self::expected_type_arity(&s).is_some()
             || self.resolve_type_name(name).is_some()
     }
 
@@ -973,12 +986,12 @@ impl InferCtx<'_> {
         if let Some(te) = self.ast.get_type_expr(id).cloned() {
             match te {
                 AstTypeExpr::Named(name) => {
-                    if !self.is_known_type_name(name) {
-                        out.push(name);
+                    if !self.is_known_type_name(&name) {
+                        out.push(name.local_name());
                     }
                 }
                 AstTypeExpr::VarApp(name, args) => {
-                    out.push(name);
+                    out.push(name.local_name());
                     args.iter()
                         .for_each(|a| self.collect_type_vars_rec(*a, out));
                 }

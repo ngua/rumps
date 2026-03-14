@@ -6,7 +6,7 @@ use super::Interpreter;
 use crate::ast::{
     BindingPattern, MatchPattern, MatchPatternId, RestPattern, TypePattern,
 };
-use crate::intern::StringId;
+use crate::intern::{QualifiedName, StringId};
 use crate::io::IoContext;
 use crate::value::{TypeId, Value, ValueId};
 use crate::{Result, Span};
@@ -97,8 +97,11 @@ impl<I: IoContext> Interpreter<'_, I> {
         var_name: StringId,
         span: Span,
     ) -> Result<bool> {
-        let (type_id, var_def) =
-            self.lookup_variant(ty_name, var_name, span)?;
+        let (type_id, var_def) = self.lookup_variant(
+            &QualifiedName::local(ty_name),
+            var_name,
+            span,
+        )?;
 
         // Type checker guarantees bare variant patterns match zero-arity variants
         if var_def.arity != 0 {
@@ -124,8 +127,11 @@ impl<I: IoContext> Interpreter<'_, I> {
         var_name: StringId,
         span: Span,
     ) -> Result<bool> {
-        let (type_id, var_def) =
-            self.lookup_variant(ty_name, var_name, span)?;
+        let (type_id, var_def) = self.lookup_variant(
+            &QualifiedName::local(ty_name),
+            var_name,
+            span,
+        )?;
 
         Ok(match val {
             Value::Tagged(ty_expr, idx, _) => {
@@ -143,7 +149,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Typechecker validates that type and variant names are valid.
     pub(super) fn lookup_variant(
         &self,
-        ty_name: StringId,
+        ty_name: &QualifiedName,
         var_name: StringId,
         _span: Span,
     ) -> Result<(TypeId, crate::value::VariantDef)> {
@@ -215,7 +221,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             // Structural patterns use unwrapped value
             MatchPattern::Variant(ty_name, var_name, sub_pats) => {
-                self.try_match_variant(*ty_name, *var_name, sub_pats, v, span)
+                self.try_match_variant(ty_name, *var_name, sub_pats, v, span)
             }
             MatchPattern::Object(fields) => {
                 self.try_match_object(fields, v, span)
@@ -254,7 +260,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Try to match a variant pattern against a value.
     fn try_match_variant(
         &mut self,
-        ty_name: StringId,
+        ty_name: &QualifiedName,
         var_name: StringId,
         sub_pats: &[MatchPatternId],
         val: &Value,

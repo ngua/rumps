@@ -5,6 +5,7 @@
 //! (`ValueArena`) and type checker (`TypeEnv`, `Ty::Object`).
 
 use indexmap::IndexSet;
+use smallvec::SmallVec;
 
 /// Index into a string intern table.
 ///
@@ -85,5 +86,93 @@ impl StringInterner {
     pub(crate) fn intern_joined(&mut self, segs: &[StringId]) -> StringId {
         let joined = self.join_path(segs);
         self.intern(&joined)
+    }
+}
+
+/// A structured module-qualified type name (e.g., `Math.Vector`).
+///
+/// Stores path segments as `SmallVec<[StringId; 3]>`, eliminating
+/// string munging for qualified name operations.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct QualifiedName {
+    segs: SmallVec<[StringId; 3]>,
+}
+
+impl QualifiedName {
+    /// Single-segment (unqualified) name.
+    pub(crate) fn local(name: StringId) -> Self {
+        Self {
+            segs: SmallVec::from_elem(name, 1),
+        }
+    }
+
+    /// From segments.
+    pub(crate) fn new(segs: impl Into<SmallVec<[StringId; 3]>>) -> Self {
+        Self { segs: segs.into() }
+    }
+
+    /// Append a segment, producing a child name.
+    pub(crate) fn child(&self, name: StringId) -> Self {
+        let mut s = self.segs.clone();
+        s.push(name);
+        Self { segs: s }
+    }
+
+    /// Whether this name has more than one segment.
+    pub(crate) fn is_qualified(&self) -> bool {
+        self.segs.len() > 1
+    }
+
+    /// Last segment (the local/unqualified name).
+    pub(crate) fn local_name(&self) -> StringId {
+        self.segs
+            .last()
+            .copied()
+            .unwrap_or_else(|| invariant!("QualifiedName is non-empty"))
+    }
+
+    /// All but the last segment, or `None` if single.
+    pub(crate) fn parent(&self) -> Option<Self> {
+        if self.segs.len() > 1 {
+            Some(Self {
+                segs: self.segs[..self.segs.len() - 1].into(),
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Borrow the segments.
+    pub(crate) fn segments(&self) -> &[StringId] {
+        &self.segs
+    }
+
+    /// Iterate parent, grandparent, ... (for module walk-up).
+    pub(crate) fn ancestors(&self) -> impl Iterator<Item = Self> {
+        let segs = self.segs.clone();
+        (1..segs.len()).rev().map(move |i| Self {
+            segs: segs[..i].into(),
+        })
+    }
+
+    /// Dot-joined display string for error messages.
+    pub(crate) fn display(&self, interner: &StringInterner) -> String {
+        self.segs
+            .iter()
+            .filter_map(|id| interner.get(*id))
+            .collect::<Vec<_>>()
+            .join(".")
+    }
+
+    /// Whether `self` is a direct child of `parent`.
+    #[allow(dead_code)]
+    pub(crate) fn is_direct_child_of(&self, parent: &Self) -> bool {
+        self.parent().as_ref() == Some(parent)
+    }
+}
+
+impl From<StringId> for QualifiedName {
+    fn from(id: StringId) -> Self {
+        Self::local(id)
     }
 }

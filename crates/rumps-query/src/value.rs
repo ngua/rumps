@@ -22,7 +22,7 @@ use smallvec::{smallvec, SmallVec};
 use crate::ast::{
     Ast, AstTypeExprId, ExprId, Stmt, StmtId, TypeDefAst, TypeParam,
 };
-use crate::intern::{StringId, StringInterner};
+use crate::intern::{QualifiedName, StringId, StringInterner};
 use crate::typecheck::{Ty, TyArena, TyId};
 use crate::Span;
 
@@ -1503,7 +1503,7 @@ impl TypeExprArena {
 #[derive(Clone, Debug)]
 pub(crate) struct TypeRegistry {
     defs: Vec<TypeDef>,
-    by_name: HashMap<StringId, TypeId>,
+    by_name: HashMap<QualifiedName, TypeId>,
 }
 
 /// Context for union type registration.
@@ -1530,21 +1530,28 @@ impl TypeRegistry {
     pub(crate) fn register(
         &mut self,
         def: TypeDef,
-        name_id: StringId,
+        name: QualifiedName,
     ) -> TypeId {
         let id = TypeId(self.defs.len() as u32);
-        self.by_name.insert(name_id, id);
+        self.by_name.insert(name, id);
         self.defs.push(def);
         id
+    }
+
+    /// Insert an alias so that `alias` also resolves to the same `TypeId` as `name`.
+    ///
+    /// Used to make dot-joined `StringId` lookups work for multi-segment names.
+    pub(crate) fn alias(&mut self, alias: QualifiedName, id: TypeId) {
+        self.by_name.insert(alias, id);
     }
 
     pub(crate) fn get_def(&self, id: TypeId) -> Option<&TypeDef> {
         self.defs.get(id.idx())
     }
 
-    /// Look up a type by its name.
-    pub(crate) fn lookup(&self, name: StringId) -> Option<TypeId> {
-        self.by_name.get(&name).copied()
+    /// Look up a type by its qualified name.
+    pub(crate) fn lookup(&self, name: &QualifiedName) -> Option<TypeId> {
+        self.by_name.get(name).copied()
     }
 
     /// Get the name of a type for error messages.
@@ -1622,7 +1629,7 @@ impl TypeRegistry {
         self.by_name
             .iter()
             .find(|(_, &tid)| tid == id)
-            .and_then(|(name_id, _)| arena.get_str(*name_id))
+            .and_then(|(qn, _)| arena.get_str(qn.local_name()))
     }
 
     /// Register all built-in types (called from `new`).
@@ -1636,19 +1643,22 @@ impl TypeRegistry {
     ) {
         // Primitives (indices 0-5)
         let bool_name = arena.intern("Bool");
-        self.register(TypeDef::Builtin(BuiltinType::Bool), bool_name);
+        self.register(TypeDef::Builtin(BuiltinType::Bool), bool_name.into());
 
         let int_name = arena.intern("Int");
-        self.register(TypeDef::Builtin(BuiltinType::Int), int_name);
+        self.register(TypeDef::Builtin(BuiltinType::Int), int_name.into());
 
         let float_name = arena.intern("Float");
-        self.register(TypeDef::Builtin(BuiltinType::Float), float_name);
+        self.register(TypeDef::Builtin(BuiltinType::Float), float_name.into());
 
         let string_name = arena.intern("String");
-        self.register(TypeDef::Builtin(BuiltinType::String), string_name);
+        self.register(
+            TypeDef::Builtin(BuiltinType::String),
+            string_name.into(),
+        );
 
         let array_name = arena.intern("Array");
-        self.register(TypeDef::Builtin(BuiltinType::Array), array_name);
+        self.register(TypeDef::Builtin(BuiltinType::Array), array_name.into());
 
         // Object at index 5: registered internally but NOT user-accessible.
         // Users should use structural object types: `{ field: Type, ... }`
@@ -1682,7 +1692,7 @@ impl TypeRegistry {
                     },
                 ],
             },
-            option_name,
+            option_name.into(),
         );
         if opt != TypeId::OPTION {
             invariant!("Option registered at expected index");
@@ -1715,7 +1725,7 @@ impl TypeRegistry {
                     },
                 ],
             },
-            result_name,
+            result_name.into(),
         );
         if res != TypeId::RESULT {
             invariant!("Result registered at expected index");
@@ -1723,7 +1733,8 @@ impl TypeRegistry {
 
         // Char at index 8
         let char_name = arena.intern("Char");
-        let ch = self.register(TypeDef::Builtin(BuiltinType::Char), char_name);
+        let ch = self
+            .register(TypeDef::Builtin(BuiltinType::Char), char_name.into());
         if ch != TypeId::CHAR {
             invariant!("Char registered at expected index");
         }
@@ -1731,47 +1742,48 @@ impl TypeRegistry {
         // Tuple at index 9 (registered for type lookup, though Tuple types use
         // TypeExpr::Tuple rather than TypeExpr::App)
         let tuple_name = arena.intern("Tuple");
-        let tup =
-            self.register(TypeDef::Builtin(BuiltinType::Tuple), tuple_name);
+        let tup = self
+            .register(TypeDef::Builtin(BuiltinType::Tuple), tuple_name.into());
         if tup != TypeId::TUPLE {
             invariant!("Tuple registered at expected index");
         }
 
         // Map[K, V] at index 10
         let map_name = arena.intern("Map");
-        let map = self.register(TypeDef::Builtin(BuiltinType::Map), map_name);
+        let map =
+            self.register(TypeDef::Builtin(BuiltinType::Map), map_name.into());
         if map != TypeId::MAP {
             invariant!("Map registered at expected index");
         }
 
         // Time at index 11
         let time_name = arena.intern("Time");
-        let time =
-            self.register(TypeDef::Builtin(BuiltinType::Time), time_name);
+        let time = self
+            .register(TypeDef::Builtin(BuiltinType::Time), time_name.into());
         if time != TypeId::TIME {
             invariant!("Time registered at expected index");
         }
 
         // Range at index 12
         let range_name = arena.intern("Range");
-        let range =
-            self.register(TypeDef::Builtin(BuiltinType::Range), range_name);
+        let range = self
+            .register(TypeDef::Builtin(BuiltinType::Range), range_name.into());
         if range != TypeId::RANGE {
             invariant!("Range registered at expected index");
         }
 
         // Unit at index 13
         let unit_name = arena.intern("Unit");
-        let unit =
-            self.register(TypeDef::Builtin(BuiltinType::Unit), unit_name);
+        let unit = self
+            .register(TypeDef::Builtin(BuiltinType::Unit), unit_name.into());
         if unit != TypeId::UNIT {
             invariant!("Unit registered at expected index");
         }
 
         // Json at index 14
         let json_name = arena.intern("Json");
-        let json =
-            self.register(TypeDef::Builtin(BuiltinType::Json), json_name);
+        let json = self
+            .register(TypeDef::Builtin(BuiltinType::Json), json_name.into());
         if json != TypeId::JSON {
             invariant!("Json registered at expected index");
         }
@@ -1792,7 +1804,7 @@ impl TypeRegistry {
                 type_params: SmallVec::new(),
                 members: storable_members,
             },
-            storable_name,
+            storable_name.into(),
         );
         if storable != TypeId::STORABLE {
             invariant!("Storable registered at expected index");
@@ -1812,7 +1824,7 @@ impl TypeRegistry {
                 type_params: SmallVec::new(),
                 members: scalar_members,
             },
-            scalar_name,
+            scalar_name.into(),
         );
         if scalar != TypeId::SCALAR {
             invariant!("Scalar registered at expected index");
@@ -1849,7 +1861,7 @@ impl TypeRegistry {
                     },
                 ],
             },
-            ordering_name,
+            ordering_name.into(),
         );
         if ordering != TypeId::ORDERING {
             invariant!("Ordering registered at expected index");
@@ -1857,8 +1869,10 @@ impl TypeRegistry {
 
         // FilePath at index 18
         let filepath_name = arena.intern("FilePath");
-        let filepath = self
-            .register(TypeDef::Builtin(BuiltinType::FilePath), filepath_name);
+        let filepath = self.register(
+            TypeDef::Builtin(BuiltinType::FilePath),
+            filepath_name.into(),
+        );
         if filepath != TypeId::FILEPATH {
             invariant!("FilePath registered at expected index");
         }
@@ -1889,7 +1903,7 @@ impl TypeRegistry {
                     },
                 ],
             },
-            path_name,
+            path_name.into(),
         );
         if path != TypeId::PATH {
             invariant!("Path registered at expected index");
@@ -1897,8 +1911,8 @@ impl TypeRegistry {
 
         // Regex at index 20
         let regex_name = arena.intern("Regex");
-        let regex =
-            self.register(TypeDef::Builtin(BuiltinType::Regex), regex_name);
+        let regex = self
+            .register(TypeDef::Builtin(BuiltinType::Regex), regex_name.into());
         if regex != TypeId::REGEX {
             invariant!("Regex registered at expected index");
         }
@@ -1941,7 +1955,7 @@ impl TypeRegistry {
                     },
                 ],
             },
-            data_status_name,
+            data_status_name.into(),
         );
         if data_status != TypeId::DATA_STATUS {
             invariant!("DataStatus registered at expected index");
@@ -1963,7 +1977,7 @@ impl TypeRegistry {
                 type_params: SmallVec::new(),
                 members: subscript_members,
             },
-            subscript_name,
+            subscript_name.into(),
         );
         if subscript != TypeId::SUBSCRIPT {
             invariant!("Subscript registered at expected index");
@@ -2007,7 +2021,7 @@ impl TypeRegistry {
                     },
                 ],
             },
-            error_name,
+            error_name.into(),
         );
         if error != TypeId::ERROR {
             invariant!("Error registered at expected index");
@@ -2015,24 +2029,26 @@ impl TypeRegistry {
 
         // Word at index 24
         let word_name = arena.intern("Word");
-        let word =
-            self.register(TypeDef::Builtin(BuiltinType::Word), word_name);
+        let word = self
+            .register(TypeDef::Builtin(BuiltinType::Word), word_name.into());
         if word != TypeId::WORD {
             invariant!("Word registered at expected index");
         }
 
         // Local at index 25
         let local_name = arena.intern("Local");
-        let local_ty =
-            self.register(TypeDef::Builtin(BuiltinType::Local), local_name);
+        let local_ty = self
+            .register(TypeDef::Builtin(BuiltinType::Local), local_name.into());
         if local_ty != TypeId::LOCAL {
             invariant!("Local registered at expected index");
         }
 
         // Global at index 26
         let global_name = arena.intern("Global");
-        let global_ty =
-            self.register(TypeDef::Builtin(BuiltinType::Global), global_name);
+        let global_ty = self.register(
+            TypeDef::Builtin(BuiltinType::Global),
+            global_name.into(),
+        );
         if global_ty != TypeId::GLOBAL {
             invariant!("Global registered at expected index");
         }
@@ -2049,7 +2065,7 @@ impl TypeRegistry {
                 type_params: SmallVec::new(),
                 members: ref_members,
             },
-            ref_name,
+            ref_name.into(),
         );
         if ref_ty != TypeId::REF {
             invariant!("Ref registered at expected index");
@@ -2083,7 +2099,7 @@ impl TypeRegistry {
     fn register_stmts_with_prefix(
         &mut self,
         stmts: &[StmtId],
-        prefix: Option<&str>,
+        prefix: Option<&QualifiedName>,
         ctx: &mut UnionRegCtx,
     ) {
         stmts.iter().for_each(|id| {
@@ -2094,13 +2110,11 @@ impl TypeRegistry {
                     def,
                     ..
                 } => {
-                    let n = ctx.arena.strings.get(*name).unwrap_or_default();
-                    let qname = if let Some(p) = prefix {
-                        format!("{}.{}", p, n)
-                    } else {
-                        n.to_owned()
-                    };
-                    self.register_type(&qname, type_params, def, ctx.arena);
+                    let qn = prefix.map_or_else(
+                        || QualifiedName::local(*name),
+                        |p| p.child(*name),
+                    );
+                    self.register_type(qn, type_params, def, ctx.arena);
                 }
                 Stmt::Union {
                     name,
@@ -2108,13 +2122,11 @@ impl TypeRegistry {
                     members,
                     ..
                 } => {
-                    let n = ctx.arena.strings.get(*name).unwrap_or_default();
-                    let qname = if let Some(p) = prefix {
-                        format!("{}.{}", p, n)
-                    } else {
-                        n.to_owned()
-                    };
-                    self.register_union(&qname, type_params, members, ctx);
+                    let qn = prefix.map_or_else(
+                        || QualifiedName::local(*name),
+                        |p| p.child(*name),
+                    );
+                    self.register_union(qn, type_params, members, ctx);
                 }
                 Stmt::NewType {
                     name,
@@ -2122,26 +2134,17 @@ impl TypeRegistry {
                     target,
                     ..
                 } => {
-                    let n = ctx.arena.strings.get(*name).unwrap_or_default();
-                    let qname = if let Some(p) = prefix {
-                        format!("{}.{}", p, n)
-                    } else {
-                        n.to_owned()
-                    };
-                    self.register_alias(
-                        &qname,
-                        type_params,
-                        *target,
-                        ctx.arena,
+                    let qn = prefix.map_or_else(
+                        || QualifiedName::local(*name),
+                        |p| p.child(*name),
                     );
+                    self.register_alias(qn, type_params, *target, ctx.arena);
                 }
                 Stmt::Module { name, body } => {
-                    let n = ctx.arena.strings.get(*name).unwrap_or_default();
-                    let new_prefix = if let Some(p) = prefix {
-                        format!("{}.{}", p, n)
-                    } else {
-                        n.to_owned()
-                    };
+                    let new_prefix = prefix.map_or_else(
+                        || QualifiedName::local(*name),
+                        |p| p.child(*name),
+                    );
                     self.register_stmts_with_prefix(
                         body,
                         Some(&new_prefix),
@@ -2158,12 +2161,13 @@ impl TypeRegistry {
     /// If a type with the same name already exists, it is shadowed.
     fn register_type(
         &mut self,
-        name: &str,
+        qn: QualifiedName,
         type_params: &[TypeParam],
         def: &TypeDefAst,
         arena: &mut ValueArena,
     ) {
-        let name_id = arena.intern(name);
+        let disp = qn.display(&arena.strings);
+        let name_id = arena.intern(&disp);
 
         // Type parameters already have `StringId`; use directly
         let type_param_ids: SmallVec<[StringId; 2]> =
@@ -2181,14 +2185,18 @@ impl TypeRegistry {
             })
             .collect();
 
-        self.register(
+        let id = self.register(
             TypeDef::Sum {
                 name: name_id,
                 type_params: type_param_ids,
                 variants: variant_defs,
             },
-            name_id,
+            qn.clone(),
         );
+        // Alias the dot-joined form so legacy `StringId`-based lookups work
+        if qn.is_qualified() {
+            self.alias(QualifiedName::local(name_id), id);
+        }
     }
 
     /// Register a single union declaration.
@@ -2196,12 +2204,13 @@ impl TypeRegistry {
     /// If a type with the same name already exists, it is shadowed.
     fn register_union(
         &mut self,
-        name: &str,
+        qn: QualifiedName,
         type_params: &[TypeParam],
         ast_members: &[AstTypeExprId],
         ctx: &mut UnionRegCtx,
     ) {
-        let name_id = ctx.arena.intern(name);
+        let disp = qn.display(&ctx.arena.strings);
+        let name_id = ctx.arena.intern(&disp);
 
         // Type parameters already have `StringId`; use directly
         let type_param_ids: SmallVec<[StringId; 2]> =
@@ -2215,14 +2224,18 @@ impl TypeRegistry {
             })
             .collect();
 
-        self.register(
+        let id = self.register(
             TypeDef::Union {
                 name: name_id,
                 type_params: type_param_ids,
                 members,
             },
-            name_id,
+            qn.clone(),
         );
+        // Alias the dot-joined form so legacy `StringId`-based lookups work
+        if qn.is_qualified() {
+            self.alias(QualifiedName::local(name_id), id);
+        }
     }
 
     /// Register a single newtype alias declaration.
@@ -2230,25 +2243,30 @@ impl TypeRegistry {
     /// If a type with the same name already exists, it is shadowed.
     fn register_alias(
         &mut self,
-        name: &str,
+        qn: QualifiedName,
         type_params: &[TypeParam],
         target: AstTypeExprId,
         arena: &mut ValueArena,
     ) {
-        let name_id = arena.intern(name);
+        let disp = qn.display(&arena.strings);
+        let name_id = arena.intern(&disp);
 
         // Type parameters already have `StringId`; use directly
         let type_param_ids: SmallVec<[StringId; 2]> =
             type_params.iter().map(|tp| tp.name).collect();
 
-        self.register(
+        let id = self.register(
             TypeDef::Alias {
                 name: name_id,
                 type_params: type_param_ids,
                 target,
             },
-            name_id,
+            qn.clone(),
         );
+        // Alias the dot-joined form so legacy `StringId`-based lookups work
+        if qn.is_qualified() {
+            self.alias(QualifiedName::local(name_id), id);
+        }
     }
 
     fn len(&self) -> usize {
@@ -2282,13 +2300,13 @@ fn resolve_type_expr(
             typechecked!("type resolution", "no wildcard at runtime")
         }
         AstTypeExpr::Named(name) => {
-            let ty_id = registry.lookup(*name).unwrap_or_else(|| {
+            let ty_id = registry.lookup(name).unwrap_or_else(|| {
                 typechecked!("type reference", "type is defined")
             });
             type_exprs.named(ty_id)
         }
         AstTypeExpr::App(name, args) => {
-            let base = registry.lookup(*name).unwrap_or_else(|| {
+            let base = registry.lookup(name).unwrap_or_else(|| {
                 typechecked!("type reference", "type is defined")
             });
             let arg_ids: SmallVec<[TypeExprId; 2]> = args

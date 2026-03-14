@@ -19,7 +19,7 @@ use crate::ast::{
     SubscriptElem, TransactionModifiers, TypeDefAst, TypeParam, TypePattern,
     VariantAst, Visibility, WriteExpr,
 };
-use crate::intern::{StringId, StringInterner};
+use crate::intern::{QualifiedName, StringId, StringInterner};
 use crate::typecheck::BuiltinClass;
 use crate::value::TypeId;
 use crate::{Error, Result};
@@ -886,22 +886,22 @@ impl<'a> LowerCtx<'a> {
         let te = match ty.kind {
             cst::TypeExprKind::Wildcard => AstTypeExpr::Wildcard,
             cst::TypeExprKind::Named(segs) => {
-                AstTypeExpr::Named(self.interner.intern_joined(&segs))
+                AstTypeExpr::Named(QualifiedName::new(segs))
             }
             cst::TypeExprKind::App(segs, params) => {
                 let param_ids = params
                     .into_iter()
                     .map(|t| self.type_expr(t))
                     .collect::<Result<SmallVec<_>>>()?;
-                let name = self.interner.intern_joined(&segs);
                 let is_tv = segs.len() == 1
                     && segs
                         .first()
                         .is_some_and(|id| self.type_params.contains(id));
+                let qn = QualifiedName::new(segs);
                 if is_tv {
-                    AstTypeExpr::VarApp(name, param_ids)
+                    AstTypeExpr::VarApp(qn, param_ids)
                 } else {
-                    AstTypeExpr::App(name, param_ids)
+                    AstTypeExpr::App(qn, param_ids)
                 }
             }
             cst::TypeExprKind::Fn(params, ret) => {
@@ -1006,11 +1006,7 @@ impl<'a> LowerCtx<'a> {
                     .into_iter()
                     .map(|p| self.match_pattern(p))
                     .collect::<Result<SmallVec<_>>>()?;
-                MatchPattern::Variant(
-                    self.interner.intern_joined(&ty),
-                    var,
-                    sub_ids,
-                )
+                MatchPattern::Variant(QualifiedName::new(ty), var, sub_ids)
             }
             cst::MatchPattern::Object(fields) => {
                 let field_ids = fields

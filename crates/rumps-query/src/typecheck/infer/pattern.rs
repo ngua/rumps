@@ -10,7 +10,7 @@ use smallvec::{smallvec, SmallVec};
 
 use super::InferCtx;
 use crate::ast::{Literal, MatchArm, MatchPattern, MatchPatternId};
-use crate::intern::StringId;
+use crate::intern::{QualifiedName, StringId};
 use crate::typecheck::error::TypeError;
 use crate::typecheck::ty::{Scheme, Ty, TyArena, TyId};
 use crate::value::{TypeDef, TypeId};
@@ -32,7 +32,7 @@ impl InferCtx<'_> {
         let lookup = self
             .env
             .lookup_str(ty_name)
-            .and_then(|id| self.registry.lookup(id))
+            .and_then(|id| self.registry.lookup(&QualifiedName::local(id)))
             .and_then(|type_id| {
                 self.registry
                     .lookup_variant(type_id, var_name_id)
@@ -126,9 +126,9 @@ impl InferCtx<'_> {
                     // Check scrutinee is compatible with variant pattern
                     if !self.scrutinee_compatible_with_variant(
                         scrutinee_ty,
-                        *ty_name,
+                        ty_name.local_name(),
                     ) {
-                        let pat_ty = self.env.resolve_string(*ty_name);
+                        let pat_ty = ty_name.display(&self.env.strings);
                         self.error(TypeError::IncompatibleVariantPattern {
                             pattern_ty: pat_ty,
                             scrutinee_ty,
@@ -138,16 +138,16 @@ impl InferCtx<'_> {
 
                     // Resolve type name using module-aware lookup
                     let qid = self
-                        .resolve_type_name(*ty_name)
+                        .resolve_type_name(ty_name)
                         .map(|(_, qid)| qid)
-                        .filter(|&qid| qid != *ty_name);
+                        .filter(|qid| *qid != *ty_name);
 
                     // Rewrite AST if name was resolved differently
-                    if let Some(qid) = qid {
+                    if let Some(ref qid) = qid {
                         self.ast.set_pattern(
                             pat_id,
                             MatchPattern::Variant(
-                                qid,
+                                qid.clone(),
                                 *var_name,
                                 sub_pats.clone(),
                             ),
@@ -155,8 +155,8 @@ impl InferCtx<'_> {
                     }
 
                     let var_s = self.env.resolve_string(*var_name);
-                    let eff = qid.unwrap_or(*ty_name);
-                    let ty_s = self.env.resolve_string(eff);
+                    let eff = qid.unwrap_or(ty_name.clone());
+                    let ty_s = eff.display(&self.env.strings);
                     let payload_tys = self.variant_payload_types(
                         &ty_s,
                         &var_s,
@@ -319,7 +319,7 @@ impl InferCtx<'_> {
                 }
 
                 Ty::Option(_) => {
-                    let oid = self.env.intern("Option");
+                    let oid = QualifiedName::local(self.env.intern("Option"));
                     let sid = self.env.intern("Some");
                     let nid = self.env.intern("None");
                     let has_some = unguarded.iter().any(|arm| {
@@ -334,7 +334,7 @@ impl InferCtx<'_> {
                 }
 
                 Ty::Result(_, _) => {
-                    let rid = self.env.intern("Result");
+                    let rid = QualifiedName::local(self.env.intern("Result"));
                     let ok = self.env.intern("Ok");
                     let er = self.env.intern("Err");
                     let has_ok = unguarded.iter().any(|arm| {
@@ -371,7 +371,7 @@ impl InferCtx<'_> {
                 }
 
                 Ty::Ordering => {
-                    let oid = self.env.intern("Ordering");
+                    let oid = QualifiedName::local(self.env.intern("Ordering"));
                     let lt = self.env.intern("Lt");
                     let eq = self.env.intern("Eq");
                     let gt = self.env.intern("Gt");
@@ -390,7 +390,8 @@ impl InferCtx<'_> {
                 }
 
                 Ty::DataStatus => {
-                    let did = self.env.intern("DataStatus");
+                    let did =
+                        QualifiedName::local(self.env.intern("DataStatus"));
                     let nd = self.env.intern("NoData");
                     let hv = self.env.intern("HasValue");
                     let hd = self.env.intern("HasDescendants");
@@ -413,7 +414,7 @@ impl InferCtx<'_> {
                 }
 
                 Ty::RuntimeError => {
-                    let eid = self.env.intern("Error");
+                    let eid = QualifiedName::local(self.env.intern("Error"));
                     let vars = [
                         self.env.intern("Runtime"),
                         self.env.intern("Raise"),

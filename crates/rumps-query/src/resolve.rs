@@ -33,7 +33,7 @@ use smallvec::{smallvec, SmallVec};
 
 use crate::ast::{Ast, AstTypeExpr, Expr, ExprId, Stmt, StmtId};
 use crate::env::BUILTIN_MODULE_NAMES;
-use crate::intern::StringId;
+use crate::intern::{QualifiedName, StringId};
 use crate::typecheck::BuiltinClassTag;
 use crate::value::{TypeRegistry, ValueArena};
 
@@ -187,8 +187,10 @@ impl<'a> ResolveCtx<'a> {
                 .get_expr(base_id)
                 .cloned()
                 .and_then(|base| match base {
-                    Expr::Var(name) => {
-                        self.registry.lookup(name).and_then(|type_id| {
+                    Expr::Var(name) => self
+                        .registry
+                        .lookup(&QualifiedName::local(name))
+                        .and_then(|type_id| {
                             self.registry
                                 .lookup_variant(type_id, field)
                                 .and_then(|v| {
@@ -196,17 +198,17 @@ impl<'a> ResolveCtx<'a> {
                                         Expr::Variant(name, field, smallvec![])
                                     })
                                 })
-                        })
-                    }
+                        }),
                     _ => None,
                 });
 
         // Check for module-qualified type variant: Module.Type.Variant
         let qualified_variant_expr = variant_expr.or_else(|| {
             let base_path = self.collect_path_segments(base_id)?;
-            let qtype_id = self.arena.strings.intern_joined(&base_path);
+            let qn = QualifiedName::new(base_path.to_vec());
+            let qtype_id = self.arena.strings.intern_joined(qn.segments());
 
-            self.registry.lookup(qtype_id).and_then(|type_id| {
+            self.registry.lookup(&qn).and_then(|type_id| {
                 self.registry.lookup_variant(type_id, field).and_then(|v| {
                     (v.arity == 0)
                         .then(|| Expr::Variant(qtype_id, field, smallvec![]))
@@ -249,7 +251,7 @@ impl<'a> ResolveCtx<'a> {
                             match base {
                                 Expr::Var(ty_name) => self
                                     .registry
-                                    .lookup(ty_name)
+                                    .lookup(&QualifiedName::local(ty_name))
                                     .and_then(|type_id| {
                                         self.registry
                                             .lookup_variant(type_id, var_name)
@@ -268,10 +270,11 @@ impl<'a> ResolveCtx<'a> {
                     // Try module-qualified type: Module.Type.Variant(args)
                     simple_variant.or_else(|| {
                         let base_path = self.collect_path_segments(base_id)?;
+                        let qn = QualifiedName::new(base_path.to_vec());
                         let qtype_id =
-                            self.arena.strings.intern_joined(&base_path);
+                            self.arena.strings.intern_joined(qn.segments());
 
-                        self.registry.lookup(qtype_id).and_then(|type_id| {
+                        self.registry.lookup(&qn).and_then(|type_id| {
                             self.registry.lookup_variant(type_id, var_name).map(
                                 |_| {
                                     Expr::Variant(
@@ -352,17 +355,16 @@ impl<'a> ResolveCtx<'a> {
                 let cn =
                     self.arena.strings.get(*class_name).unwrap_or_default();
                 let class = BuiltinClassTag::from_str(cn)?;
-                let raw_id = Self::extract_type_name_id(self.ast, *for_type)?;
+                let raw_qn = Self::extract_type_qn(self.ast, *for_type)?;
 
-                let raw_str =
-                    self.arena.strings.get(raw_id).unwrap_or_default();
-                let type_name = match module {
-                    Some(m) if !raw_str.contains('.') => {
-                        let segs = [m, raw_id];
-                        self.arena.strings.intern_joined(&segs)
+                let type_qn = match module {
+                    Some(m) if !raw_qn.is_qualified() => {
+                        QualifiedName::local(m).child(raw_qn.local_name())
                     }
-                    _ => raw_id,
+                    _ => raw_qn,
                 };
+                let disp = type_qn.display(&self.arena.strings);
+                let type_name = self.arena.strings.intern(&disp);
 
                 let type_name_str = self.arena.strings.resolve(type_name);
                 let methods = methods.clone();
@@ -392,14 +394,15 @@ impl<'a> ResolveCtx<'a> {
         }
     }
 
-    /// Extract the type name `StringId` from an `AstTypeExpr`.
-    fn extract_type_name_id(
+    /// Extract the type name `QualifiedName` from an `AstTypeExpr`.
+    fn extract_type_qn(
         ast: &Ast,
         id: crate::ast::AstTypeExprId,
-    ) -> Option<StringId> {
+    ) -> Option<QualifiedName> {
         ast.get_type_expr(id).and_then(|te| match te {
-            AstTypeExpr::Named(name) => Some(*name),
-            AstTypeExpr::App(name, _) => Some(*name),
+            AstTypeExpr::Named(name) | AstTypeExpr::App(name, _) => {
+                Some(name.clone())
+            }
             _ => None,
         })
     }

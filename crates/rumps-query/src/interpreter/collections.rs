@@ -6,7 +6,7 @@ use smallvec::{smallvec, SmallVec};
 
 use super::Interpreter;
 use crate::ast::{ArrayElem, Expr, ExprId, ObjectEntry};
-use crate::intern::StringId;
+use crate::intern::{QualifiedName, StringId};
 use crate::io::IoContext;
 use crate::value::{MapKey, TypeExprId, TypeId, Value, ValueId};
 use crate::{Error, Result, Span};
@@ -670,13 +670,14 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<Value> {
         // Check if base is a type name (for user-defined types registered at runtime)
         let maybe_type_path = self.ast.get_expr(base).and_then(|e| match e {
-            Expr::Var(ty_name) => {
-                self.registry.lookup(*ty_name).and_then(|type_id| {
+            Expr::Var(ty_name) => self
+                .registry
+                .lookup(&QualifiedName::local(*ty_name))
+                .and_then(|type_id| {
                     self.registry.lookup_variant(type_id, *field).and_then(
                         |v| (v.arity == 0).then_some((*ty_name, *field)),
                     )
-                })
-            }
+                }),
             _ => None,
         });
 

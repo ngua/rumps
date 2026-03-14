@@ -17,7 +17,7 @@ use crate::ast::{
     TxnId, TypeParam, TypePattern, UnOp, Visibility,
 };
 use crate::env::TxnReq;
-use crate::intern::StringId;
+use crate::intern::{QualifiedName, StringId};
 use crate::typecheck::error::TypeError;
 use crate::typecheck::ty::{
     BuiltinClass, BuiltinClassTag, MethodSpec, Scheme, Subst, TrackKind, Ty,
@@ -1384,7 +1384,7 @@ impl InferCtx<'_> {
         // Try to resolve as a type with a variant (any arity)
         let field_id = self.env.intern(field);
         let variant_lookup = ty_name_opt.and_then(|ty_name_id| {
-            self.resolve_type_name(ty_name_id)
+            self.resolve_type_name(&QualifiedName::local(ty_name_id))
                 .and_then(|(type_id, qid)| {
                     self.registry
                         .lookup_variant(type_id, field_id)
@@ -1394,10 +1394,13 @@ impl InferCtx<'_> {
 
         match variant_lookup {
             Some((type_id, resolved_id, 0)) => {
-                // Zero-arity variant: rewrite AST to Variant expression
+                // Zero-arity variant: rewrite AST to Variant expression;
+                // use dot-joined `StringId` for the type name
+                let rid =
+                    self.env.strings.intern_joined(resolved_id.segments());
                 self.ast.set_expr(
                     expr_id,
-                    Expr::Variant(resolved_id, field_id, smallvec![]),
+                    Expr::Variant(rid, field_id, smallvec![]),
                 );
                 // Return the variant type
                 self.variant_type_for_nullary(type_id)
@@ -1406,7 +1409,9 @@ impl InferCtx<'_> {
                 // Non-zero-arity variant: return a function type for the
                 // constructor. The AST will be rewritten to `Variant` by
                 // `call` when this is invoked.
-                self.variant_ctor_fn_type(type_id, resolved_id, field_id, span)
+                let rid =
+                    self.env.strings.intern_joined(resolved_id.segments());
+                self.variant_ctor_fn_type(type_id, rid, field_id, span)
             }
             None => {
                 // Regular field access
@@ -1971,7 +1976,7 @@ impl InferCtx<'_> {
 
         // Try to resolve as variant constructor
         let resolved = variant_info.and_then(|(ty_name_id, var_name_id)| {
-            self.resolve_type_name(ty_name_id)
+            self.resolve_type_name(&QualifiedName::local(ty_name_id))
                 .and_then(|(type_id, qid)| {
                     self.registry
                         .lookup_variant(type_id, var_name_id)
@@ -1982,13 +1987,15 @@ impl InferCtx<'_> {
 
         match resolved {
             Some((qid, var_name_id)) => {
-                // Rewrite AST to Variant expression
+                // Rewrite AST to Variant expression; use dot-joined `StringId`
+                let resolved_id =
+                    self.env.strings.intern_joined(qid.segments());
                 self.ast.set_expr(
                     expr_id,
-                    Expr::Variant(qid, var_name_id, args.clone()),
+                    Expr::Variant(resolved_id, var_name_id, args.clone()),
                 );
                 // Delegate to variant method
-                self.variant(expr_id, qid, var_name_id, args, span)
+                self.variant(expr_id, resolved_id, var_name_id, args, span)
             }
             None => self.call(callee_id, args, span),
         }
@@ -2255,7 +2262,7 @@ impl InferCtx<'_> {
         let arg_tys: Vec<TyId> = args.iter().map(|id| self.expr(*id)).collect();
 
         // Resolve type name using module-aware lookup
-        let resolved = self.resolve_type_name(ty_name);
+        let resolved = self.resolve_type_name(&QualifiedName::local(ty_name));
 
         match resolved {
             None => {
@@ -2266,10 +2273,12 @@ impl InferCtx<'_> {
             }
             Some((type_id, qid)) => {
                 // Rewrite AST if name was resolved differently
-                if qid != ty_name {
+                let resolved_id =
+                    self.env.strings.intern_joined(qid.segments());
+                if qid != QualifiedName::local(ty_name) {
                     self.ast.set_expr(
                         expr_id,
-                        Expr::Variant(qid, var_name, args.clone()),
+                        Expr::Variant(resolved_id, var_name, args.clone()),
                     );
                 }
 
@@ -2281,7 +2290,7 @@ impl InferCtx<'_> {
 
                 match lookup {
                     None => {
-                        let qn = self.env.resolve_string(qid);
+                        let qn = self.env.resolve_string(resolved_id);
                         let vn = self.env.resolve_string(var_name);
                         self.error(TypeError::UnknownType(
                             format!("{qn}.{vn}"),
@@ -2512,7 +2521,7 @@ impl InferCtx<'_> {
 
             // Named types: resolve pattern type name and compare TypeIds
             Ty::Named(scrutinee_id, _) => self
-                .resolve_type_name(name)
+                .resolve_type_name(&QualifiedName::local(name))
                 .is_some_and(|(pattern_id, _)| pattern_id == *scrutinee_id),
 
             // Union: at least one member must be compatible
@@ -2596,7 +2605,7 @@ impl InferCtx<'_> {
                 // Validate that the variant exists
                 let exists = self
                     .registry
-                    .lookup(*ty_name)
+                    .lookup(&QualifiedName::local(*ty_name))
                     .and_then(|type_id| {
                         self.registry.lookup_variant(type_id, *var_name)
                     })
@@ -2624,8 +2633,10 @@ impl InferCtx<'_> {
                 }
 
                 // Validate variant and arity; bindings are handled by IF
-                let lookup =
-                    self.registry.lookup(*ty_name).and_then(|type_id| {
+                let lookup = self
+                    .registry
+                    .lookup(&QualifiedName::local(*ty_name))
+                    .and_then(|type_id| {
                         self.registry
                             .lookup_variant(type_id, *var_name)
                             .map(|v| (type_id, v))

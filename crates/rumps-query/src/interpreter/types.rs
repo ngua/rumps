@@ -150,12 +150,12 @@ impl<I: IoContext> Interpreter<'_, I> {
                 // from a generic function; return None to indicate unresolved
                 Ok(self
                     .registry
-                    .lookup(name)
+                    .lookup(&name)
                     .map(|ty_id| self.type_exprs.named(ty_id)))
             }
             AstTypeExpr::App(name, params) => {
                 // If base type is not in registry, it's a type parameter
-                let ty_id = match self.registry.lookup(name) {
+                let ty_id = match self.registry.lookup(&name) {
                     Some(id) => id,
                     None => {
                         // Unresolved type param in App position
@@ -800,12 +800,12 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             AstTypeExpr::Named(name) => {
                 // Check if it's a type parameter
-                if let Some(&ty) = subst.get(&name) {
+                if let Some(&ty) = subst.get(&name.local_name()) {
                     Ok(ty)
                 } else {
                     // Regular type lookup; type checker guarantees it exists
                     let ty_id =
-                        self.registry.lookup(name).unwrap_or_else(|| {
+                        self.registry.lookup(&name).unwrap_or_else(|| {
                             typechecked!("type lookup", "known type")
                         });
                     Ok(self.type_exprs.named(ty_id))
@@ -813,7 +813,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             AstTypeExpr::App(name, params) => {
                 // Type checker guarantees the type exists
-                let ty_id = self.registry.lookup(name).unwrap_or_else(|| {
+                let ty_id = self.registry.lookup(&name).unwrap_or_else(|| {
                     typechecked!("type lookup", "known type")
                 });
                 let resolved: Result<SmallVec<[TypeExprId; 2]>> = params
@@ -857,7 +857,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             // VarApp (`F[T]`) contains a type variable; check substitution
             AstTypeExpr::VarApp(name, params) => {
-                if let Some(&ty) = subst.get(&name) {
+                if let Some(&ty) = subst.get(&name.local_name()) {
                     // Substituted to concrete base; resolve args and apply
                     let base = self.type_exprs.base_type(ty);
                     let resolved: Result<SmallVec<[TypeExprId; 2]>> = params
@@ -1056,7 +1056,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             AstTypeExpr::Wildcard => Ok(true),
             // App(name, args): check base type and recursively check type args
             AstTypeExpr::App(name, ast_args) => {
-                let type_id = match self.registry.lookup(name) {
+                let type_id = match self.registry.lookup(&name) {
                     Some(id) => id,
                     None => invariant!("AST type to be known"),
                 };
@@ -1115,13 +1115,13 @@ impl<I: IoContext> Interpreter<'_, I> {
         match ast_ty {
             AstTypeExpr::Wildcard => true,
             AstTypeExpr::Named(name) => {
-                self.registry.lookup(name).is_some_and(|expected| {
+                self.registry.lookup(&name).is_some_and(|expected| {
                     self.type_exprs.base_type(ty) == Some(expected)
                         && self.type_exprs.type_args(ty).is_none()
                 })
             }
             AstTypeExpr::App(name, ast_args) => {
-                self.registry.lookup(name).is_some_and(|expected| {
+                self.registry.lookup(&name).is_some_and(|expected| {
                     self.type_exprs.base_type(ty) == Some(expected)
                         && self.type_args_match_ast(ty, &ast_args)
                 })

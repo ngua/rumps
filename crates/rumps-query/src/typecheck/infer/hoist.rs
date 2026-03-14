@@ -11,7 +11,7 @@ use smallvec::{smallvec, SmallVec};
 
 use super::{ClassInstanceInput, InferCtx};
 use crate::ast::{AstTypeExprId, BindingPattern, Stmt, StmtId, TypeParam};
-use crate::intern::StringId;
+use crate::intern::{QualifiedName, StringId};
 use crate::typecheck::error::TypeError;
 use crate::typecheck::instance::Instance;
 use crate::typecheck::ty::{
@@ -38,7 +38,7 @@ impl InferCtx<'_> {
             let stmt = self.ast.get_stmt(id).cloned();
             if let Some(Stmt::Module { ref name, ref body }) = stmt {
                 let span = self.ast.stmt_span(id).unwrap_or_default();
-                self.hoist_module(*name, body, span);
+                self.hoist_module(QualifiedName::local(*name), body, span);
             }
         });
 
@@ -196,15 +196,17 @@ impl InferCtx<'_> {
     /// 3. Process functions, LETs, and class instances
     fn hoist_module(
         &mut self,
-        mod_path: StringId,
+        mod_path: QualifiedName,
         body: &[StmtId],
         span: Span,
     ) {
-        // Register the module name first
-        self.env.register_user_module(mod_path);
+        // Register the module name first (env still uses `StringId`)
+        let disp = mod_path.display(&self.env.strings);
+        let mod_path_id = self.env.intern(&disp);
+        self.env.register_user_module(mod_path_id);
 
         // Save and set current module for unqualified type resolution
-        let prev_module = self.current_module.replace(mod_path);
+        let prev_module = self.current_module.replace(mod_path.clone());
 
         // Phase 1: Process nested modules and type declarations
         body.iter().for_each(|&id| {
@@ -214,13 +216,7 @@ impl InferCtx<'_> {
             match item {
                 Some(Stmt::Module { ref name, ref body }) => {
                     // Nested module; recurse with qualified path
-                    let nested = format!(
-                        "{}.{}",
-                        self.env.resolve_str(mod_path),
-                        self.env.resolve_str(*name)
-                    );
-                    let nested_id = self.env.intern(&nested);
-                    self.hoist_module(nested_id, body, item_span);
+                    self.hoist_module(mod_path.child(*name), body, item_span);
                 }
 
                 // TYPE/union/newtype: register visibility for imports.
@@ -241,31 +237,24 @@ impl InferCtx<'_> {
                             span: item_span,
                         });
                     // Check for shadowing from parent modules
-                    } else {
-                        let mp =
-                            self.env.resolve_str(mod_path).to_owned();
-                        if let Some(parent) =
-                            mp.rsplit_once('.').map(|(p, _)| p)
-                        {
-                            // Temporarily set current_module to parent for lookup
-                            let parent_id = self.env.intern(parent);
-                            let saved =
-                                self.current_module.replace(parent_id);
-                            if self.resolve_type_name(*name).is_some() {
-                                self.error(TypeError::Custom {
-                                    msg: format!(
-                                        "type `{}` already in scope from outer module",
-                                        n
-                                    ),
-                                    span: item_span,
-                                });
-                            }
-                            self.current_module = saved;
+                    } else if let Some(parent) = mod_path.parent() {
+                        // Temporarily set current_module to parent for lookup
+                        let saved =
+                            self.current_module.replace(parent);
+                        if self.resolve_type_name(&QualifiedName::local(*name)).is_some() {
+                            self.error(TypeError::Custom {
+                                msg: format!(
+                                    "type `{}` already in scope from outer module",
+                                    n
+                                ),
+                                span: item_span,
+                            });
                         }
+                        self.current_module = saved;
                     }
-                    let mp = self.env.resolve_str(mod_path);
-                    let qname = format!("{}.{}", mp, n);
-                    let qname_id = self.env.intern(&qname);
+                    let qn = mod_path.child(*name);
+                    let qn_disp = qn.display(&self.env.strings);
+                    let qname_id = self.env.intern(&qn_disp);
                     self.env.register_user_module_type_vis(qname_id, vis);
                 }
 
@@ -309,7 +298,10 @@ impl InferCtx<'_> {
                     // Register as module member with provisional type
                     if let Some(scheme) = self.env.lookup(*name).cloned() {
                         self.env.register_user_module_member(
-                            mod_path, *name, scheme, vis,
+                            mod_path_id,
+                            *name,
+                            scheme,
+                            vis,
                         );
                     }
                 }
@@ -330,7 +322,7 @@ impl InferCtx<'_> {
                     let scheme = Scheme::mono(ty);
                     self.env.bind(*const_name, scheme.clone());
                     self.env.register_user_module_member(
-                        mod_path,
+                        mod_path_id,
                         *const_name,
                         scheme,
                         vis,
@@ -354,7 +346,7 @@ impl InferCtx<'_> {
                         constraints,
                         methods,
                         assoc_types: (),
-                        module: Some(mod_path),
+                        module: Some(mod_path_id),
                         span: item_span,
                     });
                 }
@@ -428,11 +420,18 @@ impl InferCtx<'_> {
                     if raw_name.contains('.') {
                         for_ty // Already qualified
                     } else {
-                        let mp = self.env.resolve_str(mod_id).to_owned();
-                        let qname = format!("{}.{}", mp, raw_name);
-                        let qname_id = self.env.intern(&qname);
+                        // Build QualifiedName from module segments + type name
+                        let mod_s = self.env.resolve_str(mod_id).to_owned();
+                        let mut segs: SmallVec<[StringId; 3]> = mod_s
+                            .split('.')
+                            .filter_map(|s| self.env.lookup_str(s))
+                            .collect();
+                        if let Some(name_id) = self.env.lookup_str(&raw_name) {
+                            segs.push(name_id);
+                        }
+                        let qn = QualifiedName::new(segs);
                         self.registry
-                            .lookup(qname_id)
+                            .lookup(&qn)
                             .map(|tid| self.ty_arena.named(tid, smallvec![]))
                             .unwrap_or(for_ty)
                     }

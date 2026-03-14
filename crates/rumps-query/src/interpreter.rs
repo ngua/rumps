@@ -122,7 +122,7 @@ use crate::ast::{
     TypePattern, UnOp, WriteExpr,
 };
 use crate::env::Environment;
-use crate::intern::{StringId, StringInterner};
+use crate::intern::{QualifiedName, StringId, StringInterner};
 use crate::io::IoContext;
 use crate::resolve::ResolveCtx;
 use crate::value::{
@@ -1087,7 +1087,11 @@ impl<I: IoContext> Interpreter<'_, I> {
 
         // Skip if already registered (from register_from_ast before type
         // checking). This makes type registration idempotent.
-        if self.registry.lookup(name_id).is_none() {
+        if self
+            .registry
+            .lookup(&QualifiedName::local(name_id))
+            .is_none()
+        {
             let TypeDefAst::Sum(variants) = def;
 
             // Validate payload types reference only declared type params
@@ -1121,7 +1125,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     type_params: type_param_ids,
                     variants: variant_defs,
                 },
-                name_id,
+                name_id.into(),
             );
         }
 
@@ -1143,7 +1147,11 @@ impl<I: IoContext> Interpreter<'_, I> {
         let name_id = self.arena.intern(name);
 
         // Skip if already registered (idempotent)
-        if self.registry.lookup(name_id).is_none() {
+        if self
+            .registry
+            .lookup(&QualifiedName::local(name_id))
+            .is_none()
+        {
             // Validate target type references only declared type params
             self.validate_type_params(target, type_params, span)?;
 
@@ -1158,7 +1166,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     type_params: type_param_ids,
                     target,
                 },
-                name_id,
+                name_id.into(),
             );
         }
 
@@ -1179,7 +1187,11 @@ impl<I: IoContext> Interpreter<'_, I> {
         let name_id = self.arena.intern(name);
 
         // Skip if already registered (idempotent; type registered during type-check phase)
-        if self.registry.lookup(name_id).is_some() {
+        if self
+            .registry
+            .lookup(&QualifiedName::local(name_id))
+            .is_some()
+        {
             Ok(())
         } else {
             // Validate member types reference only declared type params
@@ -1204,7 +1216,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     type_params: type_param_ids,
                     members: member_exprs?,
                 },
-                name_id,
+                name_id.into(),
             );
 
             Ok(())
@@ -1225,8 +1237,9 @@ impl<I: IoContext> Interpreter<'_, I> {
             // Wildcard doesn't need validation
             AstTypeExpr::Wildcard => Ok(()),
             AstTypeExpr::Named(n) => {
-                let is_registered = self.registry.lookup(*n).is_some();
-                let is_declared = declared.iter().any(|tp| tp.name == *n);
+                let is_registered = self.registry.lookup(n).is_some();
+                let is_declared =
+                    declared.iter().any(|tp| tp.name == n.local_name());
                 if is_registered || is_declared {
                     Ok(())
                 } else {

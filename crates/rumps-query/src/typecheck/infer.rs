@@ -46,7 +46,7 @@ use crate::ast::{
 };
 use crate::env::Environment;
 use crate::error::Result;
-use crate::intern::{StringId, StringInterner};
+use crate::intern::{QualifiedName, StringId, StringInterner};
 use crate::value::{TypeExprArena, TypeId, TypeRegistry};
 use crate::Span;
 
@@ -273,11 +273,11 @@ pub(crate) struct InferCtx<'a> {
     /// definitions. Enables resolution of bare associated type references
     /// like `:Index` to the concrete types defined in the current instance.
     pub(super) class_context: Option<ClassContext>,
-    /// Current module path during typechecking (e.g., `"Outer.Inner"`).
+    /// Current module path during typechecking (e.g., `Math.Vector`).
     ///
-    /// `None` when at top-level; `Some(path_id)` inside a module.
+    /// `None` when at top-level; `Some(qn)` inside a module.
     /// Used to resolve unqualified type names within modules.
-    pub(super) current_module: Option<StringId>,
+    pub(super) current_module: Option<QualifiedName>,
     /// Whether running in interactive mode (no `main` required).
     ///
     /// In interactive mode, top-level expression statements are allowed and

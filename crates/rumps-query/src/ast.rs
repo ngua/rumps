@@ -9,7 +9,7 @@
 use rumps_types::Name;
 use smallvec::SmallVec;
 
-use crate::intern::{StringId, StringInterner};
+use crate::intern::{QualifiedName, StringId, StringInterner};
 use crate::typecheck::{BuiltinClass, BuiltinClassTag};
 use crate::{Error, Result, Span};
 
@@ -296,17 +296,17 @@ pub(crate) enum AstTypeExpr {
     /// `Option.Some("hello")`.
     Wildcard,
 
-    /// Simple named type: `Int`, `String`, `Option`, etc.
-    Named(StringId),
+    /// Simple named type: `Int`, `String`, `Option`, `Math.Vector`, etc.
+    Named(QualifiedName),
 
     /// Parameterized type: `Array[Int]`, `Option[String]`, `Result[Int, String]`.
-    App(StringId, SmallVec<[AstTypeExprId; 2]>),
+    App(QualifiedName, SmallVec<[AstTypeExprId; 2]>),
 
     /// Type variable application: `F[T]` where `F` is a type parameter.
     ///
     /// Distinguished from `App` during lowering when the name is a known type
     /// parameter. Converted to `Ty::Apply` during typechecking.
-    VarApp(StringId, SmallVec<[AstTypeExprId; 2]>),
+    VarApp(QualifiedName, SmallVec<[AstTypeExprId; 2]>),
 
     /// Function type: `(Int, Int) -> Int`, `Int -> Int`, `() -> String`.
     ///
@@ -532,7 +532,7 @@ pub(crate) enum MatchPattern {
     ///
     /// Matches a tagged value if the type and variant match, then recursively
     /// matches the payloads against the sub-patterns.
-    Variant(StringId, StringId, SmallVec<[MatchPatternId; 2]>),
+    Variant(QualifiedName, StringId, SmallVec<[MatchPatternId; 2]>),
 
     /// Object destructuring: `{ name, age }`, `{ name, role: "admin" }`
     ///

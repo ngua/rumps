@@ -27,7 +27,7 @@
 use smallvec::SmallVec;
 
 use super::Interpreter;
-use crate::intern::StringId;
+use crate::intern::{QualifiedName, StringId};
 use crate::io::IoContext;
 use crate::value::Value;
 use crate::{Result, Span};
@@ -118,7 +118,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 // Typechecker validates type names
                 let type_id = self
                     .registry
-                    .lookup(*ty_name)
+                    .lookup(&QualifiedName::local(*ty_name))
                     .unwrap_or_else(|| typechecked!("type path", "known type"));
 
                 // Typechecker validates variant names

@@ -6,7 +6,7 @@ use smallvec::{smallvec, SmallVec};
 use super::class::ClassCtx;
 use super::Interpreter;
 use crate::ast::ExprId;
-use crate::intern::StringId;
+use crate::intern::{QualifiedName, StringId};
 use crate::io::IoContext;
 use crate::typecheck::BuiltinClassTag;
 use crate::value::{TypeExprId, TypeId, Value, ValueId};
@@ -98,7 +98,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         // Typechecker validates type names
         let type_id = self
             .registry
-            .lookup(ty_name)
+            .lookup(&QualifiedName::local(ty_name))
             .unwrap_or_else(|| typechecked!("variant", "known type"));
 
         // Typechecker validates variant names
