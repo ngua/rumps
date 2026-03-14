@@ -24,7 +24,7 @@ use smallvec::SmallVec;
 use super::error::TypeError;
 use super::infer::{Constraint, InferCtx};
 use super::ty::{
-    BuiltinClass, BuiltinClassTag, Subst, Ty, TyArena, TyId, TyVar,
+    BuiltinClass, BuiltinClassTag, Rename, Ty, TyArena, TyId, TyVar,
 };
 use crate::ast::AstTypeExpr;
 use crate::intern::StringId;
@@ -33,8 +33,7 @@ use crate::Span;
 
 /// Result of a unification attempt.
 ///
-/// With union-find, successful unification mutates the UF in-place;
-/// there is no `Subst` to return.
+/// With union-find, successful unification mutates the UF in-place.
 pub(crate) type UnifyResult = Result<(), TypeError>;
 
 impl<'a> InferCtx<'a> {
@@ -2002,7 +2001,7 @@ impl<'a> InferCtx<'a> {
                                     if let Some(&inst_inner) =
                                         inst.class_args.first()
                                     {
-                                        let param_subst = Subst(
+                                        let param_subst = Rename(
                                             inst.type_params
                                                 .iter()
                                                 .zip(type_args.iter())
@@ -2082,7 +2081,7 @@ impl<'a> InferCtx<'a> {
                                     if let Some(&inst_elem) =
                                         inst.class_args.first()
                                     {
-                                        let param_subst = Subst(
+                                        let param_subst = Rename(
                                             inst.type_params
                                                 .iter()
                                                 .zip(type_args.iter())
@@ -2167,7 +2166,7 @@ impl<'a> InferCtx<'a> {
                             .cloned()
                         {
                             Some(inst) => {
-                                let param_subst = Subst(
+                                let param_subst = Rename(
                                     inst.type_params
                                         .iter()
                                         .zip(type_args.iter())
@@ -2254,7 +2253,7 @@ impl<'a> InferCtx<'a> {
                                     if let Some(&inst_elem) =
                                         inst.class_args.first()
                                     {
-                                        let param_subst = Subst(
+                                        let param_subst = Rename(
                                             inst.type_params
                                                 .iter()
                                                 .zip(type_args.iter())
@@ -2332,7 +2331,7 @@ impl<'a> InferCtx<'a> {
                                     if let Some(&inst_elem) =
                                         inst.class_args.first()
                                     {
-                                        let param_subst = Subst(
+                                        let param_subst = Rename(
                                             inst.type_params
                                                 .iter()
                                                 .zip(type_args.iter())
@@ -2410,7 +2409,7 @@ impl<'a> InferCtx<'a> {
                                     if let Some(&inst_elem) =
                                         inst.class_args.first()
                                     {
-                                        let param_subst = Subst(
+                                        let param_subst = Rename(
                                             inst.type_params
                                                 .iter()
                                                 .zip(type_args.iter())
@@ -2462,7 +2461,7 @@ impl<'a> InferCtx<'a> {
         type_args: &[TyId],
         span: Span,
     ) {
-        let inst_subst = Subst(
+        let inst_subst = Rename(
             inst.type_params
                 .iter()
                 .zip(type_args.iter())
@@ -2713,9 +2712,9 @@ impl<'a> InferCtx<'a> {
                             // Find the associated type definition
                             match inst.get_assoc_type(assoc_name) {
                                 Some(assoc_def) => {
-                                    // Substitute type parameters
+                                    // Rename type parameters
                                     let assoc_ty = assoc_def.ty;
-                                    let param_subst = Subst(
+                                    let param_rename = Rename(
                                         inst.type_params
                                             .iter()
                                             .zip(type_args.iter())
@@ -2724,7 +2723,7 @@ impl<'a> InferCtx<'a> {
                                     );
                                     Ok(self
                                         .ty_arena
-                                        .apply(assoc_ty, &param_subst))
+                                        .apply(assoc_ty, &param_rename))
                                 }
                                 None => Err(TypeError::MissingAssocType {
                                     class,
@@ -2923,11 +2922,11 @@ mod tests {
         let constraint =
             BuiltinClass::Hkt(BuiltinClassTag::Iterable, Some(var_id));
 
-        // Create substitution: T -> Int
-        let subst = Subst::singleton(t, TyArena::INT);
+        // Create rename: T -> Int
+        let rename = Rename::singleton(t, TyArena::INT);
 
-        // Apply substitution to constraint
-        let resolved = constraint.apply(&subst, &mut a);
+        // Apply rename to constraint
+        let resolved = constraint.apply(&rename, &mut a);
 
         // Should now be `Iterable(Some(Int))`
         assert!(
@@ -2938,7 +2937,7 @@ mod tests {
                     Some(TyArena::INT)
                 )
             ),
-            "constraint should be Iterable(Some(Int)) after substitution"
+            "constraint should be Iterable(Some(Int)) after rename"
         );
     }
 }

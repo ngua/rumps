@@ -1,6 +1,6 @@
 //! Union-find (disjoint set) for type variable binding.
 //!
-//! Replaces the naive `Subst` (`HashMap<TyVar, TyId>`) with a near-linear
+//! Replaces the naive substitution (`HashMap<TyVar, TyId>`) with a near-linear
 //! amortized data structure using path compression and union-by-rank.
 
 use std::collections::HashSet;

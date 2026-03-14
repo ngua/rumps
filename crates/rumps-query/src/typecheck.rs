@@ -29,7 +29,7 @@ pub(crate) use infer::{Constraint, InferCtx};
 pub(crate) use instance::{Instance, InstanceRegistry};
 pub(crate) use ty::{
     BuiltinClass, BuiltinClassDef, BuiltinClassDefs, BuiltinClassTag,
-    ClassShape, Scheme, Subst, Ty, TyArena, TyId, TyVar,
+    ClassShape, Scheme, Ty, TyArena, TyId, TyVar,
 };
 
 use crate::ast::ExprId;

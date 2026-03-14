@@ -1,7 +1,7 @@
 //! Type representation for static type checking.
 //!
 //! Defines the core types: `Ty` (types), `TyVar` (type variables), `Scheme`
-//! (polymorphic type schemes), and `Subst` (type substitutions).
+//! (polymorphic type schemes), and `Rename` (local type variable renames).
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -787,15 +787,15 @@ impl<T> BuiltinClass<T> {
 }
 
 impl BuiltinClass<TyId> {
-    /// Apply a substitution to any inner types.
-    pub(crate) fn apply(&self, subst: &Subst, arena: &mut TyArena) -> Self {
+    /// Apply a local rename to any inner types.
+    pub(crate) fn apply(&self, rename: &Rename, arena: &mut TyArena) -> Self {
         match *self {
             Self::Simple(t) => Self::Simple(t),
             Self::Hkt(t, opt) => {
-                Self::Hkt(t, opt.map(|id| arena.apply(id, subst)))
+                Self::Hkt(t, opt.map(|id| arena.apply(id, rename)))
             }
             Self::Parameterized(t, id) => {
-                Self::Parameterized(t, arena.apply(id, subst))
+                Self::Parameterized(t, arena.apply(id, rename))
             }
         }
     }
@@ -1432,24 +1432,26 @@ impl TyArena {
         }
     }
 
-    /// Apply a substitution, returning a (possibly new) `TyId`.
+    /// Apply a local rename, returning a (possibly new) `TyId`.
     ///
-    /// Returns the original `id` when no substitution applies.
-    pub(crate) fn apply(&mut self, id: TyId, subst: &Subst) -> TyId {
-        if subst.is_empty() {
+    /// Returns the original `id` when no rename applies.
+    pub(crate) fn apply(&mut self, id: TyId, rename: &Rename) -> TyId {
+        if rename.is_empty() {
             id
         } else {
             // Clone the shallow `Ty` to avoid borrow conflicts with
             // recursive `&mut self` calls. Cheap: variants now hold
             // `TyId` (Copy) / `SmallVec<[TyId; 4]>`.
             let ty = self.get(id).clone();
-            self.apply_inner(id, ty, subst)
+            self.apply_inner(id, ty, rename)
         }
     }
 
-    fn apply_inner(&mut self, id: TyId, ty: Ty, subst: &Subst) -> TyId {
+    fn apply_inner(&mut self, id: TyId, ty: Ty, rename: &Rename) -> TyId {
         match ty {
-            Ty::Var(v) => subst.0.get(&v).map_or(id, |&t| self.apply(t, subst)),
+            Ty::Var(v) => {
+                rename.0.get(&v).map_or(id, |&t| self.apply(t, rename))
+            }
             // Primitives: no change
             Ty::Bool
             | Ty::Int
@@ -1472,7 +1474,7 @@ impl TyArena {
             | Ty::Unknown
             | Ty::Error => id,
             Ty::Array(inner) => {
-                let n = self.apply(inner, subst);
+                let n = self.apply(inner, rename);
                 if n == inner {
                     id
                 } else {
@@ -1480,7 +1482,7 @@ impl TyArena {
                 }
             }
             Ty::Option(inner) => {
-                let n = self.apply(inner, subst);
+                let n = self.apply(inner, rename);
                 if n == inner {
                     id
                 } else {
@@ -1488,8 +1490,8 @@ impl TyArena {
                 }
             }
             Ty::Result(ok, err) => {
-                let nok = self.apply(ok, subst);
-                let nerr = self.apply(err, subst);
+                let nok = self.apply(ok, rename);
+                let nerr = self.apply(err, rename);
                 if nok == ok && nerr == err {
                     id
                 } else {
@@ -1497,8 +1499,8 @@ impl TyArena {
                 }
             }
             Ty::Map(k, v) => {
-                let nk = self.apply(k, subst);
-                let nv = self.apply(v, subst);
+                let nk = self.apply(k, rename);
+                let nv = self.apply(v, rename);
                 if nk == k && nv == v {
                     id
                 } else {
@@ -1507,7 +1509,7 @@ impl TyArena {
             }
             Ty::Tuple(ref ts) => {
                 let nts: SmallVec<[TyId; 4]> =
-                    ts.iter().map(|&t| self.apply(t, subst)).collect();
+                    ts.iter().map(|&t| self.apply(t, rename)).collect();
                 if nts == *ts {
                     id
                 } else {
@@ -1516,8 +1518,8 @@ impl TyArena {
             }
             Ty::Fn(ref params, ret) => {
                 let np: SmallVec<[TyId; 4]> =
-                    params.iter().map(|&t| self.apply(t, subst)).collect();
-                let nr = self.apply(ret, subst);
+                    params.iter().map(|&t| self.apply(t, rename)).collect();
+                let nr = self.apply(ret, rename);
                 if np == *params && nr == ret {
                     id
                 } else {
@@ -1527,7 +1529,7 @@ impl TyArena {
             Ty::Object(ref fields) => {
                 let nf: IndexMap<StringId, TyId> = fields
                     .iter()
-                    .map(|(&k, &t)| (k, self.apply(t, subst)))
+                    .map(|(&k, &t)| (k, self.apply(t, rename)))
                     .collect();
                 if nf == *fields {
                     id
@@ -1537,7 +1539,7 @@ impl TyArena {
             }
             Ty::Union(ref members) => {
                 let nm: SmallVec<[TyId; 4]> =
-                    members.iter().map(|&t| self.apply(t, subst)).collect();
+                    members.iter().map(|&t| self.apply(t, rename)).collect();
                 if nm == *members {
                     id
                 } else {
@@ -1546,7 +1548,7 @@ impl TyArena {
             }
             Ty::Named(type_id, ref args) => {
                 let na: SmallVec<[TyId; 4]> =
-                    args.iter().map(|&t| self.apply(t, subst)).collect();
+                    args.iter().map(|&t| self.apply(t, rename)).collect();
                 if na == *args {
                     id
                 } else {
@@ -1555,9 +1557,9 @@ impl TyArena {
             }
             Ty::Apply(v, ref args) => {
                 let na: SmallVec<[TyId; 4]> =
-                    args.iter().map(|&t| self.apply(t, subst)).collect();
-                // Resolve the type variable through the substitution chain
-                let ctor_id = subst.0.get(&v).map(|&t| self.apply(t, subst));
+                    args.iter().map(|&t| self.apply(t, rename)).collect();
+                // Resolve the type variable through the rename chain
+                let ctor_id = rename.0.get(&v).map(|&t| self.apply(t, rename));
                 match ctor_id {
                     None => {
                         if na == *args {
@@ -1604,7 +1606,7 @@ impl TyArena {
                     }
                 }
             }
-            Ty::AssocType(v, class, name) => match subst.0.get(&v) {
+            Ty::AssocType(v, class, name) => match rename.0.get(&v) {
                 Some(&vid) => {
                     let resolved = self.get(vid).clone();
                     match resolved {
@@ -1730,7 +1732,7 @@ impl Scheme {
                 self.vars.iter().map(|v| v.idx()).max().unwrap_or(0);
             uf.reserve_through(max_scheme);
 
-            let subst = Subst(
+            let rename = Rename(
                 self.vars
                     .iter()
                     .map(|v| {
@@ -1739,17 +1741,17 @@ impl Scheme {
                     })
                     .collect(),
             );
-            let ty = arena.apply(self.ty, &subst);
+            let ty = arena.apply(self.ty, &rename);
             let constraints = self
                 .constraints
                 .iter()
                 .map(|(v, class)| {
-                    let ty = subst
+                    let ty = rename
                         .0
                         .get(v)
                         .copied()
                         .unwrap_or_else(|| arena.alloc(Ty::Var(*v)));
-                    let class = class.apply(&subst, arena);
+                    let class = class.apply(&rename, arena);
                     (ty, class)
                 })
                 .collect();
@@ -1774,43 +1776,19 @@ impl Scheme {
     }
 }
 
-/// A substitution mapping type variables to interned types.
+/// A local type variable rename; used for alpha-renaming in scheme
+/// instantiation and instance constraint checking, not for global
+/// constraint solving (which uses `UnionFind`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Subst(pub(crate) HashMap<TyVar, TyId>);
+pub(crate) struct Rename(pub(crate) HashMap<TyVar, TyId>);
 
-impl Subst {
-    /// Empty substitution.
-    pub(crate) fn empty() -> Self {
-        Self(HashMap::new())
-    }
-
-    /// Substitution mapping a single variable.
+impl Rename {
+    /// Rename mapping a single variable.
     pub(crate) fn singleton(v: TyVar, ty: TyId) -> Self {
         Self(std::iter::once((v, ty)).collect())
     }
 
-    /// Compose two substitutions: `self . other`.
-    ///
-    /// Applying the result is equivalent to applying `other` then `self`.
-    pub(crate) fn compose(&self, other: &Self, arena: &mut TyArena) -> Self {
-        let applied: HashMap<TyVar, TyId> = other
-            .0
-            .iter()
-            .map(|(v, &t)| (*v, arena.apply(t, self)))
-            .collect();
-        let mut merged = self.0.clone();
-        applied.into_iter().for_each(|(v, t)| {
-            merged.entry(v).or_insert(t);
-        });
-        Self(merged)
-    }
-
-    /// Extend this substitution with a new binding.
-    pub(crate) fn extend(&mut self, v: TyVar, ty: TyId) {
-        self.0.insert(v, ty);
-    }
-
-    /// Check if this substitution is empty.
+    /// Check if this rename is empty.
     pub(crate) fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -1875,36 +1853,36 @@ mod tests {
     }
 
     #[test]
-    fn apply_subst_var() {
+    fn apply_rename_var() {
         let mut a = TyArena::new();
         let v = TyVar::new(0);
         let vid = a.var(0);
-        let subst = Subst::singleton(v, TyArena::INT);
-        let res = a.apply(vid, &subst);
+        let rename = Rename::singleton(v, TyArena::INT);
+        let res = a.apply(vid, &rename);
         assert_eq!(res, TyArena::INT);
     }
 
     #[test]
-    fn apply_subst_nested() {
+    fn apply_rename_nested() {
         let mut a = TyArena::new();
         let v = TyVar::new(0);
         let vid = a.var(0);
         let arr = a.array(vid);
-        let subst = Subst::singleton(v, TyArena::STRING);
-        let res = a.apply(arr, &subst);
-        let applied_vid = a.apply(vid, &subst);
+        let rename = Rename::singleton(v, TyArena::STRING);
+        let res = a.apply(arr, &rename);
+        let applied_vid = a.apply(vid, &rename);
         assert_eq!(*a.get(res), Ty::Array(applied_vid));
     }
 
     #[test]
-    fn apply_subst_no_match() {
+    fn apply_rename_no_match() {
         let mut a = TyArena::new();
         let v = TyVar::new(0);
         let _w = TyVar::new(1);
         let wid = a.var(1);
-        let subst = Subst::singleton(v, TyArena::INT);
-        let res = a.apply(wid, &subst);
-        // No substitution for `w`; should return same id
+        let rename = Rename::singleton(v, TyArena::INT);
+        let res = a.apply(wid, &rename);
+        // No rename for `w`; should return same id
         assert_eq!(res, wid);
     }
 
@@ -1958,37 +1936,6 @@ mod tests {
         let fv = s.free_vars(&a, &mut uf);
         assert!(!fv.contains(&va)); // bound
         assert!(fv.contains(&vb)); // free
-    }
-
-    #[test]
-    fn subst_compose() {
-        let mut a = TyArena::new();
-        let va = TyVar::new(0);
-        let vb = TyVar::new(1);
-        let va_id = a.var(0);
-        let vb_id = a.var(1);
-        // s1: a -> Int, s2: b -> a
-        // composed: b -> Int, a -> Int
-        let s1 = Subst::singleton(va, TyArena::INT);
-        let s2 = Subst::singleton(vb, va_id);
-        let composed = s1.compose(&s2, &mut a);
-        let res_b = a.apply(vb_id, &composed);
-        let res_a = a.apply(va_id, &composed);
-        assert_eq!(res_b, TyArena::INT);
-        assert_eq!(res_a, TyArena::INT);
-    }
-
-    #[test]
-    fn subst_extend() {
-        let mut a = TyArena::new();
-        let va = TyVar::new(0);
-        let vb = TyVar::new(1);
-        let va_id = a.var(0);
-        let vb_id = a.var(1);
-        let mut s = Subst::singleton(va, TyArena::INT);
-        s.extend(vb, TyArena::STRING);
-        assert_eq!(a.apply(va_id, &s), TyArena::INT);
-        assert_eq!(a.apply(vb_id, &s), TyArena::STRING);
     }
 
     // --- Union type tests ---
@@ -2054,13 +2001,13 @@ mod tests {
     }
 
     #[test]
-    fn union_apply_subst() {
+    fn union_apply_rename() {
         let mut a = TyArena::new();
         let v = TyVar::new(0);
         let vid = a.var(0);
         let u = a.alloc(Ty::Union(smallvec![TyArena::INT, vid]));
-        let subst = Subst::singleton(v, TyArena::BOOL);
-        let res = a.apply(u, &subst);
+        let rename = Rename::singleton(v, TyArena::BOOL);
+        let res = a.apply(u, &rename);
         match a.get(res) {
             Ty::Union(ms) => {
                 assert_eq!(ms.len(), 2);
@@ -2072,26 +2019,26 @@ mod tests {
     }
 
     #[test]
-    fn union_apply_subst_no_match() {
+    fn union_apply_rename_no_match() {
         let mut a = TyArena::new();
         let v = TyVar::new(0);
         let wid = a.var(1);
         let u = a.alloc(Ty::Union(smallvec![TyArena::INT, wid]));
-        let subst = Subst::singleton(v, TyArena::BOOL);
-        let res = a.apply(u, &subst);
-        // No change; `w` not in subst
+        let rename = Rename::singleton(v, TyArena::BOOL);
+        let res = a.apply(u, &rename);
+        // No change; `w` not in rename
         assert_eq!(res, u);
     }
 
     #[test]
-    fn union_apply_subst_nested() {
+    fn union_apply_rename_nested() {
         let mut a = TyArena::new();
         let v = TyVar::new(0);
         let vid = a.var(0);
         let opt = a.option(vid);
         let u = a.alloc(Ty::Union(smallvec![TyArena::INT, opt]));
-        let subst = Subst::singleton(v, TyArena::STRING);
-        let res = a.apply(u, &subst);
+        let rename = Rename::singleton(v, TyArena::STRING);
+        let res = a.apply(u, &rename);
         match a.get(res) {
             Ty::Union(ms) => {
                 assert_eq!(ms[0], TyArena::INT);

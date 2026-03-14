@@ -20,7 +20,7 @@ use crate::intern::{QualifiedName, StringId};
 use crate::typecheck::error::TypeError;
 use crate::typecheck::instance::{self, Instance};
 use crate::typecheck::ty::{
-    BuiltinClass, BuiltinClassTag, Scheme, Subst, Ty, TyArena, TyId, TyVar,
+    BuiltinClass, BuiltinClassTag, Rename, Scheme, Ty, TyArena, TyId, TyVar,
 };
 use crate::value::{TypeDef, TypeId};
 use crate::Span;
@@ -1338,10 +1338,10 @@ impl InferCtx<'_> {
 
     /// Recursively substitute a type variable with a concrete type.
     ///
-    /// Delegates to `TyArena::apply` with a singleton substitution.
+    /// Delegates to `TyArena::apply` with a singleton rename.
     fn subst_tyvar(&mut self, ty: TyId, var: TyVar, replacement: TyId) -> TyId {
-        let subst = Subst::singleton(var, replacement);
-        self.ty_arena.apply(ty, &subst)
+        let rename = Rename::singleton(var, replacement);
+        self.ty_arena.apply(ty, &rename)
     }
 
     /// Build a type parameter substitution map from a list of `TypeParam`s.

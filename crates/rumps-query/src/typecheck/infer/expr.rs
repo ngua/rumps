@@ -20,7 +20,7 @@ use crate::env::TxnReq;
 use crate::intern::{QualifiedName, StringId};
 use crate::typecheck::error::TypeError;
 use crate::typecheck::ty::{
-    BuiltinClass, BuiltinClassTag, MethodSpec, Scheme, Subst, TrackKind, Ty,
+    BuiltinClass, BuiltinClassTag, MethodSpec, Rename, Scheme, TrackKind, Ty,
     TyArena, TyId, TyVar,
 };
 use crate::value::{TypeDef, TypeId};
@@ -454,14 +454,14 @@ impl InferCtx<'_> {
                                                             arg_id,
                                                             &empty_subst,
                                                         );
-                                                    let subst = Subst(
+                                                    let rename = Rename(
                                                         std::iter::once((
                                                             v, arg_ty,
                                                         ))
                                                         .collect(),
                                                     );
                                                     self.ty_arena
-                                                        .apply(ty, &subst)
+                                                        .apply(ty, &rename)
                                                 }
                                                 None => {
                                                     self.error(TypeError::Custom {
@@ -1573,7 +1573,7 @@ impl InferCtx<'_> {
                 ) {
                     Some(inst) => {
                         // Build substitution from instance type params to actual type args
-                        let param_subst = Subst(
+                        let param_subst = Rename(
                             inst.type_params
                                 .iter()
                                 .zip(type_args.iter())
@@ -1698,7 +1698,7 @@ impl InferCtx<'_> {
                 ) {
                     Some(inst) => {
                         // Build substitution from instance type params to actual type args
-                        let param_subst = Subst(
+                        let param_subst = Rename(
                             inst.type_params
                                 .iter()
                                 .zip(type_args.iter())
