@@ -1994,6 +1994,12 @@ impl<'a> InferCtx<'a> {
                                         &[],
                                         span,
                                     );
+                                } else {
+                                    self.error(TypeError::InvalidCast {
+                                        from: ty,
+                                        to,
+                                        span,
+                                    });
                                 }
                             }
                             None => {
