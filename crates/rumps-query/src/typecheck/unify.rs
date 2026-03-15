@@ -293,7 +293,7 @@ impl<'a> InferCtx<'a> {
             }
 
             // Union types: structural equality (same members, order-independent)
-            (Ty::Union(members1), Ty::Union(members2)) => {
+            (Ty::Union(_, members1), Ty::Union(_, members2)) => {
                 if members1.len() != members2.len() {
                     Err(TypeError::Mismatch {
                         expected: t2,
@@ -317,7 +317,7 @@ impl<'a> InferCtx<'a> {
             }
 
             // Concrete type with union: T unifies if it matches any member
-            (_, Ty::Union(members)) => {
+            (_, Ty::Union(_, members)) => {
                 let ms: SmallVec<[TyId; 4]> = members.clone();
                 ms.iter()
                     .find_map(|&m| {
@@ -338,7 +338,7 @@ impl<'a> InferCtx<'a> {
                         })
                     })
             }
-            (Ty::Union(members), _) => {
+            (Ty::Union(_, members), _) => {
                 let ms: SmallVec<[TyId; 4]> = members.clone();
                 ms.iter()
                     .find_map(|&m| {
@@ -1009,20 +1009,33 @@ impl<'a> InferCtx<'a> {
             BuiltinClass::Simple(BuiltinClassTag::Numeric) => match ty_shape {
                 Ty::Int | Ty::Word | Ty::Float => {}
                 Ty::Var(_) | Ty::Error | Ty::Unknown => {}
-                Ty::Union(members) => {
-                    // At least one member must be numeric (for literal coercion)
-                    let any_numeric = members.iter().any(|&m| {
-                        matches!(
-                            self.ty_arena.get(m),
-                            Ty::Int | Ty::Word | Ty::Float
-                        )
-                    });
-                    if !any_numeric {
-                        self.error(TypeError::UnsatisfiedClass(
-                            BuiltinClass::Simple(BuiltinClassTag::Numeric),
-                            ty,
-                            span,
-                        ));
+                Ty::Union(prov, members) => {
+                    match prov.and_then(|id| {
+                        self.instance_registry
+                            .lookup(BuiltinClassTag::Numeric, id)
+                            .cloned()
+                    }) {
+                        Some(inst) => {
+                            self.check_instance_constraints(&inst, &[], span);
+                        }
+                        None => {
+                            // At least one member must be numeric (for literal coercion)
+                            let any_numeric = members.iter().any(|&m| {
+                                matches!(
+                                    self.ty_arena.get(m),
+                                    Ty::Int | Ty::Word | Ty::Float
+                                )
+                            });
+                            if !any_numeric {
+                                self.error(TypeError::UnsatisfiedClass(
+                                    BuiltinClass::Simple(
+                                        BuiltinClassTag::Numeric,
+                                    ),
+                                    ty,
+                                    span,
+                                ));
+                            }
+                        }
                     }
                 }
                 Ty::Named(id, ref type_args) => {
@@ -1084,10 +1097,25 @@ impl<'a> InferCtx<'a> {
                 match self.ty_arena.get(ty).clone() {
                     Ty::Bool | Ty::Int | Ty::Word => {}
                     Ty::Var(_) | Ty::Error | Ty::Unknown => {}
-                    Ty::Union(members) => {
-                        members.iter().for_each(|m| {
-                            self.satisfies_class(class, *m, span)
-                        });
+                    Ty::Union(prov, members) => {
+                        match prov.and_then(|id| {
+                            self.instance_registry
+                                .lookup(BuiltinClassTag::BitLike, id)
+                                .cloned()
+                        }) {
+                            Some(inst) => {
+                                self.check_instance_constraints(
+                                    &inst,
+                                    &[],
+                                    span,
+                                );
+                            }
+                            None => {
+                                members.iter().for_each(|m| {
+                                    self.satisfies_class(class, *m, span)
+                                });
+                            }
+                        }
                     }
                     Ty::Named(id, type_args) => {
                         match self
@@ -1137,10 +1165,25 @@ impl<'a> InferCtx<'a> {
                 match self.ty_arena.get(ty).clone() {
                     Ty::Int | Ty::Float => {}
                     Ty::Var(_) | Ty::Error | Ty::Unknown => {}
-                    Ty::Union(members) => {
-                        members.iter().for_each(|m| {
-                            self.satisfies_class(class, *m, span)
-                        });
+                    Ty::Union(prov, members) => {
+                        match prov.and_then(|id| {
+                            self.instance_registry
+                                .lookup(BuiltinClassTag::Negatable, id)
+                                .cloned()
+                        }) {
+                            Some(inst) => {
+                                self.check_instance_constraints(
+                                    &inst,
+                                    &[],
+                                    span,
+                                );
+                            }
+                            None => {
+                                members.iter().for_each(|m| {
+                                    self.satisfies_class(class, *m, span)
+                                });
+                            }
+                        }
                     }
                     Ty::Named(id, type_args) => {
                         match self
@@ -1175,89 +1218,82 @@ impl<'a> InferCtx<'a> {
             }
 
             // `Ord`: primitives + containers (if elements are `Ord`)
-            BuiltinClass::Simple(BuiltinClassTag::Ord) => match self
-                .ty_arena
-                .get(ty)
-                .clone()
-            {
-                Ty::Bool
-                | Ty::Int
-                | Ty::Word
-                | Ty::Float
-                | Ty::Char
-                | Ty::String
-                | Ty::Time
-                | Ty::Ordering => {}
-                Ty::Var(_) | Ty::Error | Ty::Unknown => {}
-                // `Array[T]` is `Ord` if `T: Ord` (lexicographic)
-                Ty::Array(elem) => {
-                    self.satisfies_class(class, elem, span);
-                }
-                // Tuples are `Ord` if all elements are `Ord` (lexicographic)
-                Ty::Tuple(elems) => {
-                    elems.iter().for_each(|e| {
-                        self.satisfies_class(class, *e, span);
-                    });
-                }
-                // `Option[T]` is `Ord` if `T: Ord` (`None < Some`)
-                Ty::Option(inner) => {
-                    self.satisfies_class(class, inner, span);
-                }
-                // `Result[T, E]` is `Ord` if `T: Ord` and `E: Ord` (`Err < Ok`)
-                Ty::Result(ok, err) => {
-                    self.satisfies_class(class, ok, span);
-                    self.satisfies_class(class, err, span);
-                }
-                // `Map[K, V]` is `Ord` if `K: Ord` and `V: Ord` (sorted by key)
-                Ty::Map(k, v) => {
-                    self.satisfies_class(class, k, span);
-                    self.satisfies_class(class, v, span);
-                }
-                Ty::Union(members) => {
-                    members
-                        .iter()
-                        .for_each(|m| self.satisfies_class(class, *m, span));
-                }
-                Ty::Named(id, args) => {
-                    // FIXME: Special case for union types. This is necessary because
-                    // unions are represented as `Ty::Named(union_id, ...)` rather than
-                    // `Ty::Union([members...])`. Once unions are properly represented
-                    // at the type level, this special case can be removed.
-                    if let Some(def) = self.registry.get_def(id) {
-                        if let crate::value::TypeDef::Union {
-                            members, ..
-                        } = def
-                        {
-                            // Union is Ord if all members are Ord
-                            members.iter().for_each(|member_id| {
-                                let member_ty =
-                                    self.type_expr_to_ty(*member_id);
-                                self.satisfies_class(class, member_ty, span);
-                            });
-                        } else {
-                            // Not a union, check instance registry
-                            match self
-                                .instance_registry
+            BuiltinClass::Simple(BuiltinClassTag::Ord) => {
+                match self.ty_arena.get(ty).clone() {
+                    Ty::Bool
+                    | Ty::Int
+                    | Ty::Word
+                    | Ty::Float
+                    | Ty::Char
+                    | Ty::String
+                    | Ty::Time
+                    | Ty::Ordering => {}
+                    Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+                    // `Array[T]` is `Ord` if `T: Ord` (lexicographic)
+                    Ty::Array(elem) => {
+                        self.satisfies_class(class, elem, span);
+                    }
+                    // Tuples are `Ord` if all elements are `Ord` (lexicographic)
+                    Ty::Tuple(elems) => {
+                        elems.iter().for_each(|e| {
+                            self.satisfies_class(class, *e, span);
+                        });
+                    }
+                    // `Option[T]` is `Ord` if `T: Ord` (`None < Some`)
+                    Ty::Option(inner) => {
+                        self.satisfies_class(class, inner, span);
+                    }
+                    // `Result[T, E]` is `Ord` if `T: Ord` and `E: Ord` (`Err < Ok`)
+                    Ty::Result(ok, err) => {
+                        self.satisfies_class(class, ok, span);
+                        self.satisfies_class(class, err, span);
+                    }
+                    // `Map[K, V]` is `Ord` if `K: Ord` and `V: Ord` (sorted by key)
+                    Ty::Map(k, v) => {
+                        self.satisfies_class(class, k, span);
+                        self.satisfies_class(class, v, span);
+                    }
+                    Ty::Union(prov, members) => {
+                        match prov.and_then(|id| {
+                            self.instance_registry
                                 .lookup(BuiltinClassTag::Ord, id)
                                 .cloned()
-                            {
-                                Some(inst) => {
-                                    self.check_instance_constraints(
-                                        &inst, &args, span,
-                                    );
-                                }
-                                None => {
-                                    self.error(TypeError::UnsatisfiedClass(
-                                        BuiltinClass::Simple(
-                                            BuiltinClassTag::Ord,
-                                        ),
-                                        ty,
-                                        span,
-                                    ));
-                                }
+                        }) {
+                            Some(inst) => {
+                                self.check_instance_constraints(
+                                    &inst,
+                                    &[],
+                                    span,
+                                );
+                            }
+                            None => {
+                                members.iter().for_each(|m| {
+                                    self.satisfies_class(class, *m, span)
+                                });
                             }
                         }
-                    } else {
+                    }
+                    Ty::Named(id, args) => {
+                        match self
+                            .instance_registry
+                            .lookup(BuiltinClassTag::Ord, id)
+                            .cloned()
+                        {
+                            Some(inst) => {
+                                self.check_instance_constraints(
+                                    &inst, &args, span,
+                                );
+                            }
+                            None => {
+                                self.error(TypeError::UnsatisfiedClass(
+                                    BuiltinClass::Simple(BuiltinClassTag::Ord),
+                                    ty,
+                                    span,
+                                ));
+                            }
+                        }
+                    }
+                    _ => {
                         self.error(TypeError::UnsatisfiedClass(
                             BuiltinClass::Simple(BuiltinClassTag::Ord),
                             ty,
@@ -1265,108 +1301,94 @@ impl<'a> InferCtx<'a> {
                         ));
                     }
                 }
-                _ => {
-                    self.error(TypeError::UnsatisfiedClass(
-                        BuiltinClass::Simple(BuiltinClassTag::Ord),
-                        ty,
-                        span,
-                    ));
-                }
-            },
+            }
 
             // `Eq`: primitives + containers (if elements are `Eq`)
-            BuiltinClass::Simple(BuiltinClassTag::Eq) => match self
-                .ty_arena
-                .get(ty)
-                .clone()
-            {
-                Ty::Unit
-                | Ty::Bool
-                | Ty::Int
-                | Ty::Word
-                | Ty::Float
-                | Ty::Char
-                | Ty::String
-                | Ty::Time
-                | Ty::FilePath
-                | Ty::Json => {}
-                Ty::Local | Ty::Global => {}
-                Ty::Var(_) | Ty::Error | Ty::Unknown => {}
-                // `Array[T]` is `Eq` if `T: Eq`
-                Ty::Array(elem) => {
-                    self.satisfies_class(class, elem, span);
-                }
-                // `Tuple[T1, T2, ...]` is `Eq` if all elements are `Eq`
-                Ty::Tuple(elems) => {
-                    elems.iter().for_each(|e| {
-                        self.satisfies_class(class, *e, span);
-                    });
-                }
-                // `Map[K, V]` is `Eq` if `K: Eq` and `V: Eq`
-                Ty::Map(k, v) => {
-                    self.satisfies_class(class, k, span);
-                    self.satisfies_class(class, v, span);
-                }
-                // `Option[T]` is `Eq` if `T: Eq`
-                Ty::Option(inner) => {
-                    self.satisfies_class(class, inner, span);
-                }
-                // `Result[T, E]` is `Eq` if `T: Eq` and `E: Eq`
-                Ty::Result(ok, err) => {
-                    self.satisfies_class(class, ok, span);
-                    self.satisfies_class(class, err, span);
-                }
-                // `Object` is `Eq` if all field types are `Eq`
-                Ty::Object(fields) => {
-                    fields.values().for_each(|t| {
-                        self.satisfies_class(class, *t, span);
-                    });
-                }
-                Ty::Union(members) => {
-                    members
-                        .iter()
-                        .for_each(|m| self.satisfies_class(class, *m, span));
-                }
-                Ty::Named(id, args) => {
-                    // FIXME: Special case for union types. This is necessary because
-                    // unions are represented as `Ty::Named(union_id, ...)` rather than
-                    // `Ty::Union([members...])`. Once unions are properly represented
-                    // at the type level, this special case can be removed.
-                    if let Some(def) = self.registry.get_def(id) {
-                        if let crate::value::TypeDef::Union {
-                            members, ..
-                        } = def
-                        {
-                            // Union is Eq if all members are Eq
-                            members.iter().for_each(|member_id| {
-                                let member_ty =
-                                    self.type_expr_to_ty(*member_id);
-                                self.satisfies_class(class, member_ty, span);
-                            });
-                        } else {
-                            // Not a union, check instance registry
-                            match self
-                                .instance_registry
+            BuiltinClass::Simple(BuiltinClassTag::Eq) => {
+                match self.ty_arena.get(ty).clone() {
+                    Ty::Unit
+                    | Ty::Bool
+                    | Ty::Int
+                    | Ty::Word
+                    | Ty::Float
+                    | Ty::Char
+                    | Ty::String
+                    | Ty::Time
+                    | Ty::FilePath
+                    | Ty::Json => {}
+                    Ty::Local | Ty::Global => {}
+                    Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+                    // `Array[T]` is `Eq` if `T: Eq`
+                    Ty::Array(elem) => {
+                        self.satisfies_class(class, elem, span);
+                    }
+                    // `Tuple[T1, T2, ...]` is `Eq` if all elements are `Eq`
+                    Ty::Tuple(elems) => {
+                        elems.iter().for_each(|e| {
+                            self.satisfies_class(class, *e, span);
+                        });
+                    }
+                    // `Map[K, V]` is `Eq` if `K: Eq` and `V: Eq`
+                    Ty::Map(k, v) => {
+                        self.satisfies_class(class, k, span);
+                        self.satisfies_class(class, v, span);
+                    }
+                    // `Option[T]` is `Eq` if `T: Eq`
+                    Ty::Option(inner) => {
+                        self.satisfies_class(class, inner, span);
+                    }
+                    // `Result[T, E]` is `Eq` if `T: Eq` and `E: Eq`
+                    Ty::Result(ok, err) => {
+                        self.satisfies_class(class, ok, span);
+                        self.satisfies_class(class, err, span);
+                    }
+                    // `Object` is `Eq` if all field types are `Eq`
+                    Ty::Object(fields) => {
+                        fields.values().for_each(|t| {
+                            self.satisfies_class(class, *t, span);
+                        });
+                    }
+                    Ty::Union(prov, members) => {
+                        match prov.and_then(|id| {
+                            self.instance_registry
                                 .lookup(BuiltinClassTag::Eq, id)
                                 .cloned()
-                            {
-                                Some(inst) => {
-                                    self.check_instance_constraints(
-                                        &inst, &args, span,
-                                    );
-                                }
-                                None => {
-                                    self.error(TypeError::UnsatisfiedClass(
-                                        BuiltinClass::Simple(
-                                            BuiltinClassTag::Eq,
-                                        ),
-                                        ty,
-                                        span,
-                                    ));
-                                }
+                        }) {
+                            Some(inst) => {
+                                self.check_instance_constraints(
+                                    &inst,
+                                    &[],
+                                    span,
+                                );
+                            }
+                            None => {
+                                members.iter().for_each(|m| {
+                                    self.satisfies_class(class, *m, span)
+                                });
                             }
                         }
-                    } else {
+                    }
+                    Ty::Named(id, args) => {
+                        match self
+                            .instance_registry
+                            .lookup(BuiltinClassTag::Eq, id)
+                            .cloned()
+                        {
+                            Some(inst) => {
+                                self.check_instance_constraints(
+                                    &inst, &args, span,
+                                );
+                            }
+                            None => {
+                                self.error(TypeError::UnsatisfiedClass(
+                                    BuiltinClass::Simple(BuiltinClassTag::Eq),
+                                    ty,
+                                    span,
+                                ));
+                            }
+                        }
+                    }
+                    _ => {
                         self.error(TypeError::UnsatisfiedClass(
                             BuiltinClass::Simple(BuiltinClassTag::Eq),
                             ty,
@@ -1374,14 +1396,7 @@ impl<'a> InferCtx<'a> {
                         ));
                     }
                 }
-                _ => {
-                    self.error(TypeError::UnsatisfiedClass(
-                        BuiltinClass::Simple(BuiltinClassTag::Eq),
-                        ty,
-                        span,
-                    ));
-                }
-            },
+            }
 
             // `Display`: everything except `Fn`
             BuiltinClass::Simple(BuiltinClassTag::Display) => {
@@ -1418,10 +1433,25 @@ impl<'a> InferCtx<'a> {
                             span,
                         ));
                     }
-                    Ty::Union(members) => {
-                        members.iter().for_each(|m| {
-                            self.satisfies_class(class, *m, span)
-                        });
+                    Ty::Union(prov, members) => {
+                        match prov.and_then(|id| {
+                            self.instance_registry
+                                .lookup(BuiltinClassTag::Display, id)
+                                .cloned()
+                        }) {
+                            Some(inst) => {
+                                self.check_instance_constraints(
+                                    &inst,
+                                    &[],
+                                    span,
+                                );
+                            }
+                            None => {
+                                members.iter().for_each(|m| {
+                                    self.satisfies_class(class, *m, span)
+                                });
+                            }
+                        }
                     }
                     Ty::Named(id, args) => {
                         match self
@@ -1457,10 +1487,21 @@ impl<'a> InferCtx<'a> {
             {
                 Ty::String | Ty::Array(_) | Ty::Map(_, _) | Ty::Option(_) => {}
                 Ty::Var(_) | Ty::Error | Ty::Unknown => {}
-                Ty::Union(members) => {
-                    members
-                        .iter()
-                        .for_each(|m| self.satisfies_class(class, *m, span));
+                Ty::Union(prov, members) => {
+                    match prov.and_then(|id| {
+                        self.instance_registry
+                            .lookup(BuiltinClassTag::Monoid, id)
+                            .cloned()
+                    }) {
+                        Some(inst) => {
+                            self.check_instance_constraints(&inst, &[], span);
+                        }
+                        None => {
+                            members.iter().for_each(|m| {
+                                self.satisfies_class(class, *m, span)
+                            });
+                        }
+                    }
                 }
                 Ty::Named(id, type_args) => {
                     match self
@@ -1511,7 +1552,7 @@ impl<'a> InferCtx<'a> {
                             span,
                         });
                     }
-                    (Ty::Union(members), Ty::String) => {
+                    (Ty::Union(_, members), Ty::String) => {
                         let ms: SmallVec<[TyId; 4]> = members.clone();
                         ms.iter().for_each(|m| {
                             self.satisfies_class(
@@ -1618,7 +1659,7 @@ impl<'a> InferCtx<'a> {
                             )
                         });
                     }
-                    (Ty::Union(members), Ty::Json) => {
+                    (Ty::Union(_, members), Ty::Json) => {
                         let ms: SmallVec<[TyId; 4]> = members.clone();
                         ms.iter().for_each(|m| {
                             self.satisfies_class(
@@ -1659,7 +1700,9 @@ impl<'a> InferCtx<'a> {
                         if *id == crate::TypeId::PATH => {}
 
                     // Storable to member type
-                    (Ty::Named(id, _), _) if *id == crate::TypeId::STORABLE => {
+                    (Ty::Union(Some(id), _), _)
+                        if *id == crate::TypeId::STORABLE =>
+                    {
                         if !TyArena::STORABLE_MEMBERS.contains(&to) {
                             self.error(TypeError::InvalidCast {
                                 from: ty,
@@ -1670,7 +1713,7 @@ impl<'a> InferCtx<'a> {
                     }
 
                     // Member to union type
-                    (_, Ty::Named(id, _))
+                    (_, Ty::Union(Some(id), _))
                         if *id == crate::TypeId::STORABLE
                             || *id == crate::TypeId::SCALAR
                             || *id == crate::TypeId::SUBSCRIPT =>
@@ -1693,18 +1736,43 @@ impl<'a> InferCtx<'a> {
                     }
 
                     // Union handling
-                    (Ty::Union(members), _) => {
-                        let ms: SmallVec<[TyId; 4]> = members.clone();
-                        ms.iter().for_each(|m| {
-                            self.satisfies_class(
-                                &BuiltinClass::Parameterized(
-                                    BuiltinClassTag::Into,
-                                    to,
-                                ),
-                                *m,
-                                span,
-                            )
-                        });
+                    (Ty::Union(prov, members), _) => {
+                        match prov.and_then(|id| {
+                            self.instance_registry
+                                .lookup(BuiltinClassTag::Into, id)
+                                .cloned()
+                        }) {
+                            Some(inst) => {
+                                let inst_target =
+                                    inst.class_args.first().copied();
+                                if inst_target == Some(to) {
+                                    self.check_instance_constraints(
+                                        &inst,
+                                        &[],
+                                        span,
+                                    );
+                                } else {
+                                    self.error(TypeError::InvalidCast {
+                                        from: ty,
+                                        to,
+                                        span,
+                                    });
+                                }
+                            }
+                            None => {
+                                let ms: SmallVec<[TyId; 4]> = members.clone();
+                                ms.iter().for_each(|m| {
+                                    self.satisfies_class(
+                                        &BuiltinClass::Parameterized(
+                                            BuiltinClassTag::Into,
+                                            to,
+                                        ),
+                                        *m,
+                                        span,
+                                    )
+                                });
+                            }
+                        }
                     }
 
                     // User type with Into instance
@@ -1912,18 +1980,36 @@ impl<'a> InferCtx<'a> {
                     }
 
                     // Union handling
-                    (Ty::Union(members), _) => {
-                        let ms: SmallVec<[TyId; 4]> = members.clone();
-                        ms.iter().for_each(|m| {
-                            self.satisfies_class(
-                                &BuiltinClass::Parameterized(
-                                    BuiltinClassTag::TryInto,
-                                    to,
-                                ),
-                                *m,
-                                span,
-                            )
-                        });
+                    (Ty::Union(prov, members), _) => {
+                        match prov.and_then(|id| {
+                            self.instance_registry
+                                .lookup(BuiltinClassTag::TryInto, id)
+                                .cloned()
+                        }) {
+                            Some(inst) => {
+                                if inst.class_args.first().copied() == Some(to)
+                                {
+                                    self.check_instance_constraints(
+                                        &inst,
+                                        &[],
+                                        span,
+                                    );
+                                }
+                            }
+                            None => {
+                                let ms: SmallVec<[TyId; 4]> = members.clone();
+                                ms.iter().for_each(|m| {
+                                    self.satisfies_class(
+                                        &BuiltinClass::Parameterized(
+                                            BuiltinClassTag::TryInto,
+                                            to,
+                                        ),
+                                        *m,
+                                        span,
+                                    )
+                                });
+                            }
+                        }
                     }
 
                     // User type with TryInto instance
@@ -1971,7 +2057,7 @@ impl<'a> InferCtx<'a> {
                             }
                         }
                     }
-                    Ty::Union(members) => {
+                    Ty::Union(_, members) => {
                         members.iter().for_each(|m| {
                             self.satisfies_class(class, *m, span)
                         });
@@ -2064,7 +2150,7 @@ impl<'a> InferCtx<'a> {
                             }
                         }
                     }
-                    Ty::Union(members) => {
+                    Ty::Union(_, members) => {
                         members.iter().for_each(|m| {
                             self.satisfies_class(class, *m, span)
                         });
@@ -2153,7 +2239,7 @@ impl<'a> InferCtx<'a> {
                             self.error(e);
                         }
                     }
-                    Ty::Union(members) => {
+                    Ty::Union(_, members) => {
                         members.iter().for_each(|m| {
                             self.satisfies_class(class, *m, span)
                         });
@@ -2236,7 +2322,7 @@ impl<'a> InferCtx<'a> {
                             }
                         }
                     }
-                    Ty::Union(members) => {
+                    Ty::Union(_, members) => {
                         members.iter().for_each(|m| {
                             self.satisfies_class(class, *m, span)
                         });
@@ -2314,7 +2400,7 @@ impl<'a> InferCtx<'a> {
                             }
                         }
                     }
-                    Ty::Union(members) => {
+                    Ty::Union(_, members) => {
                         members.iter().for_each(|m| {
                             self.satisfies_class(class, *m, span)
                         });
@@ -2392,7 +2478,7 @@ impl<'a> InferCtx<'a> {
                             }
                         }
                     }
-                    Ty::Union(members) => {
+                    Ty::Union(_, members) => {
                         members.iter().for_each(|m| {
                             self.satisfies_class(class, *m, span)
                         });
@@ -2634,7 +2720,7 @@ impl<'a> InferCtx<'a> {
             }
 
             // Union: all members must have the field with compatible types
-            Ty::Union(ref members) => {
+            Ty::Union(_, ref members) => {
                 let ms: SmallVec<[TyId; 4]> = members.clone();
                 ms.iter().for_each(|&m| {
                     self.check_has_field(m, field, field_ty, span);

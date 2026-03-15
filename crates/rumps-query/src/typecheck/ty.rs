@@ -902,6 +902,12 @@ impl fmt::Display for TyId {
 ///
 /// Unlike runtime `TypeExpr`, these include type variables (`Var`) for
 /// inference and structural object types.
+///
+/// NOTE: `PartialEq` is derived intentionally; in particular, two `Union`s
+/// with identical members but different provenance (`None` vs `Some(id)`)
+/// are considered distinct. This is desired because provenance tracks
+/// whether a union originated from a named type definition, which affects
+/// display, error messages, and cast semantics.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Ty {
     /// Unresolved type variable (from inference).
@@ -946,27 +952,20 @@ pub(crate) enum Ty {
     /// Anonymous structural record; compatible if fields match.
     Object(IndexMap<StringId, TyId>),
 
-    /// Anonymous union type; value is one of the member types.
+    /// Union type; value is one of the member types.
     ///
-    /// For inline `Int | String` syntax. Named unions (`Storable`, `Scalar`,
-    /// user-defined `union`) use `Named(TypeId, params)` instead.
+    /// The optional `TypeId` is the provenance: `Some(id)` for named unions
+    /// (`Storable`, `Scalar`, user-defined `union`), `None` for anonymous
+    /// inline unions (`Int | String`).
     ///
-    /// # Why Named Unions Are Separate
-    ///
-    /// Named unions preserve nominal identity, which matters for:
-    ///
-    /// 1. **Special `AS` semantics**: `Storable` has infallible `AS` casts that
-    ///    may fail at runtime with `Error::RuntimeType`. Anonymous unions don't
-    ///    have this special case; `x AS T` on an anonymous union is a static error.
-    ///
-    /// 2. **Type parameters**: Named unions can be generic (`union F[T] = Int | Option[T]`),
-    ///    requiring parameter substitution during type checking.
-    ///
-    /// 3. **Error messages**: Named unions display their registered name (`Storable`)
-    ///    rather than the expanded member list.
-    Union(SmallVec<[TyId; 4]>),
+    /// Provenance preserves nominal identity for:
+    /// - **`AS` semantics**: `Storable` has infallible `AS` casts that may
+    ///   fail at runtime with `Error::RuntimeType`.
+    /// - **Error messages**: named unions display their registered name
+    ///   rather than the expanded member list.
+    Union(Option<TypeId>, SmallVec<[TyId; 4]>),
 
-    /// User-defined type (sum types, aliases, unions) with type parameters.
+    /// User-defined type (sum types, aliases) with type parameters.
     Named(TypeId, SmallVec<[TyId; 4]>),
 
     /// Higher-kinded type application: `F[U]` where `F` is a type variable.
@@ -1025,7 +1024,10 @@ impl std::hash::Hash for Ty {
                 pairs.sort_by_key(|(&k, _)| k);
                 pairs.hash(state);
             }
-            Self::Union(ms) => ms.hash(state),
+            Self::Union(prov, ms) => {
+                prov.hash(state);
+                ms.hash(state);
+            }
             Self::Named(id, args) => {
                 id.hash(state);
                 args.hash(state);
@@ -1067,11 +1069,11 @@ impl std::hash::Hash for Ty {
 impl Ty {
     /// Check if this type is a database reference type.
     ///
-    /// Returns `true` for `Local`, `Global`, or the named union `Ref`.
+    /// Returns `true` for `Local`, `Global`, or the `Ref` union.
     pub(crate) fn is_ref(&self) -> bool {
         matches!(
             self,
-            Self::Local | Self::Global | Self::Named(TypeId::REF, _)
+            Self::Local | Self::Global | Self::Union(Some(TypeId::REF), _)
         )
     }
 }
@@ -1107,6 +1109,12 @@ impl TyArena {
     pub(crate) const GLOBAL: TyId = TyId(17);
     pub(crate) const UNKNOWN: TyId = TyId(18);
     pub(crate) const ERROR: TyId = TyId(19);
+
+    // Pre-interned builtin union `TyId`s (order must match `new()`).
+    pub(crate) const STORABLE: TyId = TyId(20);
+    pub(crate) const SCALAR: TyId = TyId(21);
+    pub(crate) const SUBSCRIPT: TyId = TyId(22);
+    pub(crate) const REF: TyId = TyId(23);
 
     /// Member types of the `Storable` union.
     pub(crate) const STORABLE_MEMBERS: &'static [TyId] = &[
@@ -1158,6 +1166,22 @@ impl TyArena {
             Ty::Global,       // 17
             Ty::Unknown,      // 18
             Ty::Error,        // 19
+            Ty::Union(
+                Some(TypeId::STORABLE),
+                Self::STORABLE_MEMBERS.iter().copied().collect(),
+            ), // 20
+            Ty::Union(
+                Some(TypeId::SCALAR),
+                Self::SCALAR_MEMBERS.iter().copied().collect(),
+            ), // 21
+            Ty::Union(
+                Some(TypeId::SUBSCRIPT),
+                Self::SUBSCRIPT_MEMBERS.iter().copied().collect(),
+            ), // 22
+            Ty::Union(
+                Some(TypeId::REF),
+                Self::REF_MEMBERS.iter().copied().collect(),
+            ), // 23
         ];
         let index = tys
             .iter()
@@ -1234,6 +1258,26 @@ impl TyArena {
         self.alloc(Ty::Named(id, args))
     }
 
+    /// Pre-interned `TyId` for the `Storable` union.
+    pub(crate) fn storable(&self) -> TyId {
+        Self::STORABLE
+    }
+
+    /// Pre-interned `TyId` for the `Scalar` union.
+    pub(crate) fn scalar(&self) -> TyId {
+        Self::SCALAR
+    }
+
+    /// Pre-interned `TyId` for the `Subscript` union.
+    pub(crate) fn subscript(&self) -> TyId {
+        Self::SUBSCRIPT
+    }
+
+    /// Pre-interned `TyId` for the `Ref` union.
+    pub(crate) fn ref_ty(&self) -> TyId {
+        Self::REF
+    }
+
     // --- Recursive operations ---
 
     /// Check if type variable `v` occurs anywhere in the type tree.
@@ -1269,7 +1313,7 @@ impl TyArena {
                     || self.occurs(*ret, v)
             }
             Ty::Object(fields) => fields.values().any(|&t| self.occurs(t, v)),
-            Ty::Union(members) => members.iter().any(|&t| self.occurs(t, v)),
+            Ty::Union(_, members) => members.iter().any(|&t| self.occurs(t, v)),
             Ty::Named(_, args) => args.iter().any(|&t| self.occurs(t, v)),
             Ty::Apply(w, args) => {
                 *w == v || args.iter().any(|&t| self.occurs(t, v))
@@ -1332,7 +1376,7 @@ impl TyArena {
             Ty::Object(fields) => {
                 fields.values().any(|&t| self.occurs_uf(t, v, uf))
             }
-            Ty::Union(members) => {
+            Ty::Union(_, members) => {
                 members.iter().any(|&t| self.occurs_uf(t, v, uf))
             }
             Ty::Named(_, args) => {
@@ -1416,7 +1460,7 @@ impl TyArena {
                     .values()
                     .for_each(|&t| self.collect_free_vars(t, acc));
             }
-            Ty::Union(members) => {
+            Ty::Union(_, members) => {
                 members.iter().for_each(|&t| self.collect_free_vars(t, acc));
             }
             Ty::Named(_, args) => {
@@ -1537,13 +1581,13 @@ impl TyArena {
                     self.alloc(Ty::Object(nf))
                 }
             }
-            Ty::Union(ref members) => {
+            Ty::Union(prov, ref members) => {
                 let nm: SmallVec<[TyId; 4]> =
                     members.iter().map(|&t| self.apply(t, rename)).collect();
                 if nm == *members {
                     id
                 } else {
-                    self.alloc(Ty::Union(nm))
+                    self.alloc(Ty::Union(prov, nm))
                 }
             }
             Ty::Named(type_id, ref args) => {
@@ -1943,7 +1987,8 @@ mod tests {
     #[test]
     fn union_free_vars_empty() {
         let mut a = TyArena::new();
-        let u = a.alloc(Ty::Union(smallvec![TyArena::INT, TyArena::STRING]));
+        let u =
+            a.alloc(Ty::Union(None, smallvec![TyArena::INT, TyArena::STRING]));
         assert!(a.free_vars(u).is_empty());
     }
 
@@ -1952,8 +1997,10 @@ mod tests {
         let mut a = TyArena::new();
         let v = TyVar::new(0);
         let vid = a.var(0);
-        let u =
-            a.alloc(Ty::Union(smallvec![TyArena::INT, vid, TyArena::STRING]));
+        let u = a.alloc(Ty::Union(
+            None,
+            smallvec![TyArena::INT, vid, TyArena::STRING],
+        ));
         let fv = a.free_vars(u);
         assert!(fv.contains(&v));
         assert_eq!(fv.len(), 1);
@@ -1966,7 +2013,7 @@ mod tests {
         let vb = TyVar::new(1);
         let aid = a.var(0);
         let bid = a.var(1);
-        let u = a.alloc(Ty::Union(smallvec![aid, bid]));
+        let u = a.alloc(Ty::Union(None, smallvec![aid, bid]));
         let fv = a.free_vars(u);
         assert!(fv.contains(&va));
         assert!(fv.contains(&vb));
@@ -1978,7 +2025,7 @@ mod tests {
         let mut a = TyArena::new();
         let v = TyVar::new(0);
         let vid = a.var(0);
-        let u = a.alloc(Ty::Union(smallvec![TyArena::INT, vid]));
+        let u = a.alloc(Ty::Union(None, smallvec![TyArena::INT, vid]));
         assert!(a.occurs(u, v));
     }
 
@@ -1986,7 +2033,8 @@ mod tests {
     fn union_occurs_negative() {
         let mut a = TyArena::new();
         let v = TyVar::new(0);
-        let u = a.alloc(Ty::Union(smallvec![TyArena::INT, TyArena::STRING]));
+        let u =
+            a.alloc(Ty::Union(None, smallvec![TyArena::INT, TyArena::STRING]));
         assert!(!a.occurs(u, v));
     }
 
@@ -1996,7 +2044,7 @@ mod tests {
         let v = TyVar::new(0);
         let vid = a.var(0);
         let arr = a.array(vid);
-        let u = a.alloc(Ty::Union(smallvec![TyArena::INT, arr]));
+        let u = a.alloc(Ty::Union(None, smallvec![TyArena::INT, arr]));
         assert!(a.occurs(u, v));
     }
 
@@ -2005,11 +2053,11 @@ mod tests {
         let mut a = TyArena::new();
         let v = TyVar::new(0);
         let vid = a.var(0);
-        let u = a.alloc(Ty::Union(smallvec![TyArena::INT, vid]));
+        let u = a.alloc(Ty::Union(None, smallvec![TyArena::INT, vid]));
         let rename = Rename::singleton(v, TyArena::BOOL);
         let res = a.apply(u, &rename);
         match a.get(res) {
-            Ty::Union(ms) => {
+            Ty::Union(_, ms) => {
                 assert_eq!(ms.len(), 2);
                 assert_eq!(ms[0], TyArena::INT);
                 assert_eq!(ms[1], TyArena::BOOL);
@@ -2023,7 +2071,7 @@ mod tests {
         let mut a = TyArena::new();
         let v = TyVar::new(0);
         let wid = a.var(1);
-        let u = a.alloc(Ty::Union(smallvec![TyArena::INT, wid]));
+        let u = a.alloc(Ty::Union(None, smallvec![TyArena::INT, wid]));
         let rename = Rename::singleton(v, TyArena::BOOL);
         let res = a.apply(u, &rename);
         // No change; `w` not in rename
@@ -2036,11 +2084,11 @@ mod tests {
         let v = TyVar::new(0);
         let vid = a.var(0);
         let opt = a.option(vid);
-        let u = a.alloc(Ty::Union(smallvec![TyArena::INT, opt]));
+        let u = a.alloc(Ty::Union(None, smallvec![TyArena::INT, opt]));
         let rename = Rename::singleton(v, TyArena::STRING);
         let res = a.apply(u, &rename);
         match a.get(res) {
-            Ty::Union(ms) => {
+            Ty::Union(_, ms) => {
                 assert_eq!(ms[0], TyArena::INT);
                 assert_eq!(*a.get(ms[1]), Ty::Option(TyArena::STRING));
             }

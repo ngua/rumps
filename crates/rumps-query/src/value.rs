@@ -1375,7 +1375,7 @@ impl TypeExprArena {
                     .collect();
                 self.object(converted)
             }
-            Ty::Union(members) => {
+            Ty::Union(_, members) => {
                 let members = members.clone();
                 let member_ids: SmallVec<[_; 4]> =
                     members.iter().map(|&m| self.intern_ty(m, ta)).collect();
@@ -1477,7 +1477,7 @@ impl TypeExprArena {
                     .collect();
                 self.object(converted)
             }
-            Ty::Union(members) => {
+            Ty::Union(_, members) => {
                 let members = members.clone();
                 let member_ids: SmallVec<[_; 4]> = members
                     .iter()

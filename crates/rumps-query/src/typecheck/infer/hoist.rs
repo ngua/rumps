@@ -439,7 +439,7 @@ impl InferCtx<'_> {
             // Extract TypeId; for primitives, use `primitive_type_id`
             let for_ty_ref = self.ty_arena.get(for_ty).clone();
             let type_id_opt = match &for_ty_ref {
-                Ty::Named(id, _) => Some(*id),
+                Ty::Named(id, _) | Ty::Union(Some(id), _) => Some(*id),
                 _ => self.primitive_type_id(&for_ty_ref),
             };
 

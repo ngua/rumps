@@ -547,7 +547,7 @@ impl<'a> InferCtx<'a> {
         deferred.into_iter().for_each(|(expr_id, ty, kind)| {
             let resolved = self.uf.resolve(ty, &mut self.ty_arena);
             let type_id = match self.ty_arena.get(resolved) {
-                Ty::Named(id, _) => Some(*id),
+                Ty::Named(id, _) | Ty::Union(Some(id), _) => Some(*id),
                 Ty::Bool => Some(TypeId::BOOL),
                 Ty::Int => Some(TypeId::INT),
                 Ty::Word => Some(TypeId::WORD),

@@ -753,7 +753,9 @@ impl InferCtx<'_> {
                     // constraint solving when type variables are resolved.
                     if let Some(&ty) = arg_tys.first() {
                         let type_id = match self.ty_arena.get(ty) {
-                            Ty::Named(tid, _) => Some(*tid),
+                            Ty::Named(tid, _) | Ty::Union(Some(tid), _) => {
+                                Some(*tid)
+                            }
                             other => self.primitive_type_id(other),
                         };
                         match type_id {
@@ -1055,7 +1057,7 @@ impl InferCtx<'_> {
 
         if let Some(kind) = class_tag {
             let type_id = match self.ty_arena.get(lhs_ty) {
-                Ty::Named(tid, _) => Some(*tid),
+                Ty::Named(tid, _) | Ty::Union(Some(tid), _) => Some(*tid),
                 other => self.primitive_type_id(other),
             };
 
@@ -1790,8 +1792,7 @@ impl InferCtx<'_> {
                 match kind {
                     JsonAccessKind::Json => TyArena::JSON,
                     JsonAccessKind::Scalar => {
-                        let scalar =
-                            self.ty_arena.named(TypeId::SCALAR, smallvec![]);
+                        let scalar = self.ty_arena.scalar();
                         self.ty_arena.option(scalar)
                     }
                 }
@@ -2218,7 +2219,7 @@ impl InferCtx<'_> {
                     }
                     acc
                 });
-            self.ty_arena.alloc(Ty::Union(members))
+            self.ty_arena.alloc(Ty::Union(None, members))
         } else {
             // Unify normally; mismatches will error
             tys.iter().skip(1).for_each(|&ty| {
@@ -2528,7 +2529,7 @@ impl InferCtx<'_> {
                 .is_some_and(|(pattern_id, _)| pattern_id == *scrutinee_id),
 
             // Union: at least one member must be compatible
-            Ty::Union(members) => {
+            Ty::Union(_, members) => {
                 let members = members.clone();
                 members
                     .iter()
@@ -2811,7 +2812,7 @@ impl InferCtx<'_> {
         // For Set, also typecheck the value expression
         if let Some(v) = val {
             let v_ty = self.expr(v);
-            let storable = self.ty_arena.named(TypeId::STORABLE, smallvec![]);
+            let storable = self.ty_arena.storable();
             self.constrain(Constraint::Class {
                 ty: v_ty,
                 class: BuiltinClass::Parameterized(
@@ -2889,8 +2890,7 @@ impl InferCtx<'_> {
                 let is_var_or_err =
                     matches!(self.ty_arena.get(ty), Ty::Var(_) | Ty::Error);
                 if !is_ref && !is_var_or_err {
-                    let expected =
-                        self.ty_arena.named(TypeId::REF, smallvec![]);
+                    let expected = self.ty_arena.ref_ty();
                     self.error(TypeError::Mismatch {
                         // Display hint: use Ref union (Local | Global)
                         expected,
@@ -2915,8 +2915,7 @@ impl InferCtx<'_> {
         subs.iter().for_each(|elem| match elem {
             SubscriptElem::Elem(id) => {
                 let ty = self.expr(*id);
-                let subscript =
-                    self.ty_arena.named(TypeId::SUBSCRIPT, smallvec![]);
+                let subscript = self.ty_arena.subscript();
                 self.constrain(Constraint::Class {
                     ty,
                     class: BuiltinClass::Parameterized(
@@ -2929,8 +2928,7 @@ impl InferCtx<'_> {
             SubscriptElem::Spread(id) => {
                 let ty = self.expr(*id);
                 // Spread must be Array[Subscript]
-                let subscript =
-                    self.ty_arena.named(TypeId::SUBSCRIPT, smallvec![]);
+                let subscript = self.ty_arena.subscript();
                 let expected = self.ty_arena.array(subscript);
                 self.unify(ty, expected, span);
             }

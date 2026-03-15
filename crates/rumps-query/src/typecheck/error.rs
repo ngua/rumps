@@ -123,12 +123,19 @@ impl<'a> TyPrinter<'a> {
                     .collect();
                 format!("{{ {} }}", parts.join(", "))
             }
-            Ty::Union(members) => {
-                let parts: Vec<_> = members
-                    .iter()
-                    .map(|&t| self.format_inner(t, namer))
-                    .collect();
-                parts.join(" | ")
+            Ty::Union(prov, members) => {
+                if let Some(id) = prov {
+                    self.registry
+                        .type_name(*id, self.val_arena)
+                        .unwrap_or("<unknown type>")
+                        .to_owned()
+                } else {
+                    let parts: Vec<_> = members
+                        .iter()
+                        .map(|&t| self.format_inner(t, namer))
+                        .collect();
+                    parts.join(" | ")
+                }
             }
             Ty::Named(id, args) => {
                 let name = self
@@ -1058,13 +1065,17 @@ impl fmt::Display for Ty {
                 })?;
                 write!(f, "}}")
             }
-            Self::Union(members) => {
-                members.iter().enumerate().try_for_each(|(i, t)| {
-                    if i > 0 {
-                        write!(f, " | ")?;
-                    }
-                    write!(f, "{t}")
-                })
+            Self::Union(prov, members) => {
+                if let Some(id) = prov {
+                    write!(f, "{id:?}")
+                } else {
+                    members.iter().enumerate().try_for_each(|(i, t)| {
+                        if i > 0 {
+                            write!(f, " | ")?;
+                        }
+                        write!(f, "{t}")
+                    })
+                }
             }
             Self::Named(id, args) => {
                 write!(f, "{id:?}")?;

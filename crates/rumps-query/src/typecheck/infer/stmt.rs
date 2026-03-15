@@ -777,15 +777,7 @@ impl InferCtx<'_> {
     pub(super) fn set_validate(&mut self, rt: &RefTarget, span: Span) {
         let needs_txn = match rt {
             RefTarget::Inline(dbref) => matches!(dbref, DbRef::Global(..)),
-            RefTarget::Expr(e) => {
-                // Look up the type to determine scope. The expression should
-                // already be typechecked by `resolve_ref_target`; if not found,
-                // default to requiring transaction (safer; produces an error
-                // rather than silently allowing an unsafe global write).
-                self.get_type(*e).is_none_or(|id| {
-                    matches!(self.ty_arena.get(id), Ty::Global)
-                })
-            }
+            RefTarget::Expr(e) => self.ref_may_be_global(*e),
         };
         if needs_txn && self.in_transaction.is_none() {
             self.error(TypeError::Custom {
@@ -801,15 +793,7 @@ impl InferCtx<'_> {
     pub(super) fn kill_validate(&mut self, rt: &RefTarget, span: Span) {
         let needs_txn = match rt {
             RefTarget::Inline(dbref) => matches!(dbref, DbRef::Global(..)),
-            RefTarget::Expr(e) => {
-                // Look up the type to determine scope. The expression should
-                // already be typechecked by `resolve_ref_target`; if not found,
-                // default to requiring transaction (safer; produces an error
-                // rather than silently allowing an unsafe global write).
-                self.get_type(*e).is_none_or(|id| {
-                    matches!(self.ty_arena.get(id), Ty::Global)
-                })
-            }
+            RefTarget::Expr(e) => self.ref_may_be_global(*e),
         };
         if needs_txn && self.in_transaction.is_none() {
             self.error(TypeError::Custom {
@@ -817,6 +801,17 @@ impl InferCtx<'_> {
                 span,
             });
         }
+    }
+
+    /// Check if a ref expression could be a global; defaults to `true`
+    /// (conservative) when the type is unknown or is the `Ref` union.
+    fn ref_may_be_global(&self, e: ExprId) -> bool {
+        self.get_type(e).is_none_or(|id| {
+            matches!(
+                self.ty_arena.get(id),
+                Ty::Global | Ty::Union(Some(TypeId::REF), _)
+            )
+        })
     }
 
     /// Infer types for a `write` statement or expression.
@@ -860,10 +855,10 @@ impl InferCtx<'_> {
             OutputTarget::File(path_expr) => {
                 // Path must be FilePath or String
                 let path_ty = self.expr(path_expr);
-                let union_ty = self.ty_arena.alloc(Ty::Union(smallvec![
-                    TyArena::FILEPATH,
-                    TyArena::STRING,
-                ]));
+                let union_ty = self.ty_arena.alloc(Ty::Union(
+                    None,
+                    smallvec![TyArena::FILEPATH, TyArena::STRING,],
+                ));
                 self.unify(path_ty, union_ty, span);
             }
         }

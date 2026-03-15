@@ -426,7 +426,7 @@ impl InferCtx<'_> {
                     }
                 }
 
-                Ty::Union(members) => {
+                Ty::Union(_, members) => {
                     // Collect type IDs from Is patterns first (to avoid borrow)
                     let ty_ids: Vec<_> = unguarded
                         .iter()

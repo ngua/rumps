@@ -57,7 +57,7 @@ impl InferCtx<'_> {
             | Ty::Array(_)
             | Ty::Map(..)
             | Ty::Fn(..) => false,
-            Ty::Tuple(ts) | Ty::Union(ts) => {
+            Ty::Tuple(ts) | Ty::Union(_, ts) => {
                 let ts = ts.clone();
                 ts.iter().any(|&t| Self::has_unresolved_vars(t, arena))
             }
@@ -102,7 +102,11 @@ impl InferCtx<'_> {
         })
     }
 
-    /// Convert a `TypeId` to a primitive `TyId` or `Ty::Named`.
+    /// Convert a `TypeId` to a primitive `TyId`, `Ty::Union`, or `Ty::Named`.
+    ///
+    /// Builtin and user-defined unions are expanded to `Ty::Union(Some(id), members)`
+    /// at construction time, so all union-related logic goes through a single
+    /// code path. `Ty::Named` is reserved for sum types and aliases.
     pub(super) fn type_id_to_ty(&mut self, id: TypeId) -> TyId {
         match id {
             TypeId::BOOL => TyArena::BOOL,
@@ -123,9 +127,23 @@ impl InferCtx<'_> {
             TypeId::ERROR => TyArena::RUNTIME_ERROR,
             TypeId::LOCAL => TyArena::LOCAL,
             TypeId::GLOBAL => TyArena::GLOBAL,
-            // Ref is a union type (Local | Global); return Named
-            TypeId::REF => self.ty_arena.named(TypeId::REF, smallvec![]),
-            _ => self.ty_arena.named(id, smallvec![]),
+            // Builtin unions: expand to `Ty::Union` with provenance
+            TypeId::REF => self.ty_arena.ref_ty(),
+            TypeId::STORABLE => self.ty_arena.storable(),
+            TypeId::SCALAR => self.ty_arena.scalar(),
+            TypeId::SUBSCRIPT => self.ty_arena.subscript(),
+            // User-defined unions: expand to `Ty::Union` with provenance
+            _ => match self.registry.get_def(id) {
+                Some(TypeDef::Union { members, .. }) => {
+                    let members = members.clone();
+                    let member_tys = members
+                        .iter()
+                        .map(|m| self.type_expr_to_ty(*m))
+                        .collect();
+                    self.ty_arena.alloc(Ty::Union(Some(id), member_tys))
+                }
+                _ => self.ty_arena.named(id, smallvec![]),
+            },
         }
     }
 
@@ -172,55 +190,27 @@ impl InferCtx<'_> {
                 self.ty_arena.alloc(Ty::Tuple(args))
             }
             Ty::Named(id, _) => self.ty_arena.named(id, args),
+            // Unions are already expanded by `type_id_to_ty`; pass through.
+            // Generic unions (e.g., `union F[T] = Int | Option[T]`) are not
+            // yet supported; they require `resolve_type_expr` and
+            // `type_id_to_ty` changes to handle type params in members.
+            Ty::Union(_, _) => base,
             _ => base,
         }
     }
 
     /// Expand a union type to its member types.
     ///
-    /// Returns `Some(members)` for union types, `None` for non-unions.
-    ///
-    /// # Union Representations
-    ///
-    /// - **Anonymous unions** (`Ty::Union`): Members returned directly.
-    /// - **Named unions** (`Ty::Named` with `TypeDef::Union`): Members looked up
-    ///   from registry. Builtin unions (`Storable`, `Scalar`) are hardcoded;
-    ///   user-defined unions are resolved via `type_expr_to_ty`.
-    ///
-    /// Named unions use `Ty::Named` (not `Ty::Union`) to preserve nominal
-    /// identity. This matters for `Storable`'s special `AS` semantics: casting
-    /// `x AS Storable` is infallible at compile time but may fail at runtime
-    /// with `Error::RuntimeType`. See `Ty::Union` docs for full rationale.
+    /// Returns `Some(members)` for union types (`Ty::Union`), `None` for
+    /// non-unions. All unions (builtin and user-defined) are expanded to
+    /// `Ty::Union` at construction time in `type_id_to_ty`, so this is a
+    /// simple pattern match.
     pub(crate) fn expand_union_members(
         &mut self,
         ty: TyId,
     ) -> Option<SmallVec<[TyId; 4]>> {
-        let resolved = self.ty_arena.get(ty).clone();
-        match resolved {
-            Ty::Union(members) => Some(members),
-            Ty::Named(id, _params) => {
-                // Handle builtin unions by their known members
-                if id == TypeId::STORABLE {
-                    Some(TyArena::STORABLE_MEMBERS.iter().copied().collect())
-                } else if id == TypeId::SCALAR {
-                    Some(TyArena::SCALAR_MEMBERS.iter().copied().collect())
-                } else {
-                    // Check if it's a user-defined union
-                    let members_opt =
-                        self.registry.get_def(id).and_then(|def| match def {
-                            TypeDef::Union { members, .. } => {
-                                Some(members.clone())
-                            }
-                            _ => None,
-                        });
-                    members_opt.map(|members| {
-                        members
-                            .iter()
-                            .map(|m| self.type_expr_to_ty(*m))
-                            .collect()
-                    })
-                }
-            }
+        match self.ty_arena.get(ty).clone() {
+            Ty::Union(_, members) => Some(members),
             _ => None,
         }
     }
@@ -534,7 +524,7 @@ impl InferCtx<'_> {
                             .iter()
                             .map(|m| self.ast_type_to_ty(*m, subst))
                             .collect();
-                        self.ty_arena.alloc(Ty::Union(member_tys))
+                        self.ty_arena.alloc(Ty::Union(None, member_tys))
                     }
                 }
                 AstTypeExpr::Object(fields) => {

@@ -1378,9 +1378,6 @@ impl Into {
                     }))
             }
 
-            // Storable identity: if value is already the right type, return as-is
-            (_, Ty::Named(TypeId::STORABLE, _)) => Ok(val.clone()),
-
             // Storable narrowing: `Storable AS T` where T is a Storable member.
             // This is the ONLY case that requires runtime type checking; all other
             // casts are validated by the type checker. If the value doesn't match
@@ -1549,7 +1546,7 @@ impl Into {
             Ty::RuntimeError => "RuntimeError",
             Ty::Local => "Local",
             Ty::Global => "Global",
-            Ty::Union(_) => "Union",
+            Ty::Union(_, _) => "Union",
             Ty::Var(_) => "Var",
             Ty::Apply(_, _) => "Apply",
             Ty::AssocType(_, _, _) => "AssocType",

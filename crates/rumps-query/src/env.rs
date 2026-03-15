@@ -229,10 +229,10 @@ pub(crate) struct IntrinsicDef {
 impl Intrinsic {
     /// Get the definition for this intrinsic.
     pub(crate) fn def(self, a: &mut TyArena) -> IntrinsicDef {
-        let ref_ty = a.named(TypeId::REF, smallvec![]);
+        let ref_ty = a.ref_ty();
         match self {
             Self::Get => {
-                let storable = a.named(TypeId::STORABLE, smallvec![]);
+                let storable = a.storable();
                 let opt = a.option(storable);
                 let ty = a.func(smallvec![ref_ty], opt);
                 IntrinsicDef {
@@ -242,7 +242,7 @@ impl Intrinsic {
                 }
             }
             Self::Set => {
-                let storable = a.named(TypeId::STORABLE, smallvec![]);
+                let storable = a.storable();
                 let ret = a.result(TyArena::UNIT, TyArena::STRING);
                 let ty = a.func(smallvec![ref_ty, storable], ret);
                 IntrinsicDef {
@@ -269,7 +269,7 @@ impl Intrinsic {
                 }
             }
             Self::Order => {
-                let subscript = a.named(TypeId::SUBSCRIPT, smallvec![]);
+                let subscript = a.subscript();
                 let opt = a.option(subscript);
                 let ty = a.func(smallvec![ref_ty], opt);
                 IntrinsicDef {
@@ -279,7 +279,7 @@ impl Intrinsic {
                 }
             }
             Self::Query => {
-                let subscript = a.named(TypeId::SUBSCRIPT, smallvec![]);
+                let subscript = a.subscript();
                 let arr = a.array(subscript);
                 let opt = a.option(arr);
                 let ty = a.func(smallvec![ref_ty], opt);

@@ -252,13 +252,13 @@ impl UnionFind {
                     arena.alloc(Ty::Object(nf))
                 }
             }
-            Ty::Union(ref members) => {
+            Ty::Union(prov, ref members) => {
                 let nm: SmallVec<[TyId; 4]> =
                     members.iter().map(|&t| self.resolve(t, arena)).collect();
                 if nm == *members {
                     id
                 } else {
-                    arena.alloc(Ty::Union(nm))
+                    arena.alloc(Ty::Union(prov, nm))
                 }
             }
             Ty::Named(type_id, ref args) => {
@@ -423,7 +423,7 @@ impl UnionFind {
                     .values()
                     .for_each(|&t| self.collect_free_vars(t, arena, acc));
             }
-            Ty::Union(members) => {
+            Ty::Union(_, members) => {
                 members
                     .iter()
                     .for_each(|&t| self.collect_free_vars(t, arena, acc));

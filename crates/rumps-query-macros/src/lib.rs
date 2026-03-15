@@ -408,7 +408,7 @@ impl TyExpr {
                 let member_tokens: Vec<_> =
                     members.iter().map(|m| m.to_tokens(vars, ctx)).collect();
                 quote! {
-                    crate::typecheck::Ty::Union(vec![#(#member_tokens),*])
+                    crate::typecheck::Ty::Union(None, vec![#(#member_tokens),*])
                 }
             }
             Self::Object(fields) => {

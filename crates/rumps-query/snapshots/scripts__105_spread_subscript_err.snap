@@ -1,6 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: Spread subscript type errors\n; Spreading non-Array[Subscript] should produce type errors\n\n; Error: spreading a non-array\nLET num = 42\nLET v1 = @GET data{...num}\n\n; Error: spreading an array of wrong element type\nLET units: Array[Unit] = [Unit, Unit]\nLET v2 = @GET data{...units}\n"
+description: "; Test: Spread subscript type errors\n; Spreading non-Array[Subscript] should produce type errors\n\nfun main() {\n  ; Error: spreading a non-array\n  let num = 42\n  let v1 = @get data{...num}\n\n  ; Error: spreading an array of wrong element type\n  let units: Array[Unit] = [Unit, Unit]\n  let v2 = @get data{...units}\n}\n"
 ---
-ERROR: type mismatch: expected `Unit`, got `Subscript`
+ERROR: type mismatch: expected `Subscript`, got `Unit`
 type `Array[Subscript]` does not satisfy `Numeric` class
