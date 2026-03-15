@@ -360,67 +360,15 @@ impl<'a> InferCtx<'a> {
                     })
             }
 
-            // Named union with concrete type: expand union and check membership
-            (_, Ty::Named(..)) => self.expand_union_members(t2).map_or_else(
-                || {
-                    Err(TypeError::Mismatch {
-                        expected: t1,
-                        got: t2,
-                        span,
-                    })
-                },
-                |members| {
-                    members
-                        .iter()
-                        .find_map(|&m| {
-                            let snap = self.uf.snapshot();
-                            match self.unify_inner(t1, m, span) {
-                                ok @ Ok(()) => Some(ok),
-                                _ => {
-                                    self.uf.rollback(snap);
-                                    None
-                                }
-                            }
-                        })
-                        .unwrap_or({
-                            Err(TypeError::Mismatch {
-                                expected: t1,
-                                got: t2,
-                                span,
-                            })
-                        })
-                },
-            ),
-            (Ty::Named(..), _) => self.expand_union_members(t1).map_or_else(
-                || {
-                    Err(TypeError::Mismatch {
-                        expected: t1,
-                        got: t2,
-                        span,
-                    })
-                },
-                |members| {
-                    members
-                        .iter()
-                        .find_map(|&m| {
-                            let snap = self.uf.snapshot();
-                            match self.unify_inner(m, t2, span) {
-                                ok @ Ok(()) => Some(ok),
-                                _ => {
-                                    self.uf.rollback(snap);
-                                    None
-                                }
-                            }
-                        })
-                        .unwrap_or({
-                            Err(TypeError::Mismatch {
-                                expected: t1,
-                                got: t2,
-                                span,
-                            })
-                        })
-                },
-            ),
+            // Named (sum/alias) vs anything else: mismatch.
+            // (Unions are `Ty::Union` and handled above.)
+            (_, Ty::Named(..)) | (Ty::Named(..), _) => {
+                Err(TypeError::Mismatch {
+                    expected: t2,
+                    got: t1,
+                    span,
+                })
+            }
 
             // HKT type application: `F[T]` where `F` is a type variable.
             //
@@ -1048,38 +996,19 @@ impl<'a> InferCtx<'a> {
                             let args: SmallVec<[TyId; 4]> = type_args.clone();
                             self.check_instance_constraints(&inst, &args, span);
                         }
-                        None => match self.expand_union_members(ty) {
-                            Some(members) => {
-                                let any_numeric = members.iter().any(|&m| {
-                                    matches!(
-                                        self.ty_arena.get(m),
-                                        Ty::Int | Ty::Word | Ty::Float
-                                    )
-                                });
-                                if !any_numeric {
-                                    self.error(TypeError::UnsatisfiedClass(
-                                        BuiltinClass::Simple(
-                                            BuiltinClassTag::Numeric,
-                                        ),
-                                        ty,
-                                        span,
-                                    ));
-                                }
+                        None => match self.expand_alias_fully(ty) {
+                            Some(expanded) => {
+                                self.satisfies_class(class, expanded, span)
                             }
-                            None => match self.expand_alias_fully(ty) {
-                                Some(expanded) => {
-                                    self.satisfies_class(class, expanded, span)
-                                }
-                                None => {
-                                    self.error(TypeError::UnsatisfiedClass(
-                                        BuiltinClass::Simple(
-                                            BuiltinClassTag::Numeric,
-                                        ),
-                                        ty,
-                                        span,
-                                    ));
-                                }
-                            },
+                            None => {
+                                self.error(TypeError::UnsatisfiedClass(
+                                    BuiltinClass::Simple(
+                                        BuiltinClassTag::Numeric,
+                                    ),
+                                    ty,
+                                    span,
+                                ));
+                            }
                         },
                     }
                 }
@@ -1128,25 +1057,19 @@ impl<'a> InferCtx<'a> {
                                     &inst, &type_args, span,
                                 );
                             }
-                            None => match self.expand_union_members(ty) {
-                                Some(members) => members.iter().for_each(|m| {
-                                    self.satisfies_class(class, *m, span)
-                                }),
-                                None => match self.expand_alias_fully(ty) {
-                                    Some(expanded) => self
-                                        .satisfies_class(class, expanded, span),
-                                    None => {
-                                        self.error(
-                                            TypeError::UnsatisfiedClass(
-                                                BuiltinClass::Simple(
-                                                    BuiltinClassTag::BitLike,
-                                                ),
-                                                ty,
-                                                span,
-                                            ),
-                                        );
-                                    }
-                                },
+                            None => match self.expand_alias_fully(ty) {
+                                Some(expanded) => {
+                                    self.satisfies_class(class, expanded, span)
+                                }
+                                None => {
+                                    self.error(TypeError::UnsatisfiedClass(
+                                        BuiltinClass::Simple(
+                                            BuiltinClassTag::BitLike,
+                                        ),
+                                        ty,
+                                        span,
+                                    ));
+                                }
                             },
                         }
                     }

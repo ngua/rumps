@@ -194,7 +194,6 @@ impl InferCtx<'_> {
             // Generic unions (e.g., `union F[T] = Int | Option[T]`) are not
             // yet supported; they require `resolve_type_expr` and
             // `type_id_to_ty` changes to handle type params in members.
-            Ty::Union(_, _) => base,
             _ => base,
         }
     }
