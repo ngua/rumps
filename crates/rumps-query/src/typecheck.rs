@@ -53,7 +53,7 @@ pub(crate) struct TypecheckOutput {
     pub(crate) numeric_types: HashMap<ExprId, TyId>,
     /// Target types for `Into::into` and `TryInto::try_into` conversions.
     pub(crate) convert_targets: HashMap<ExprId, TyId>,
-    /// Target types for `?` (wrap) operators on `Fallible` types.
+    /// Target types for `?` (wrap) operators on `Wrappable` types.
     pub(crate) wrap_types: HashMap<ExprId, TyId>,
     /// Type IDs for class method calls on user-defined types.
     ///

@@ -1,6 +1,6 @@
 ; Convert method references require type parameters
 
 fun main() {
-  ; This should error: Fallible:wrap without type parameter
-  let _ = Fallible:wrap
+  ; This should error: Wrappable:wrap without type parameter
+  let _ = Wrappable:wrap
 }

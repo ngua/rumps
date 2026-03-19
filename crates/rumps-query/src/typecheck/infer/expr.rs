@@ -394,7 +394,7 @@ impl InferCtx<'_> {
     /// Type check a class method reference (used as a first-class value).
     ///
     /// Returns the polymorphic function type of the method. Convert methods
-    /// (`Fallible:wrap`, `Into:into`, `TryInto:try-into`) require type arguments.
+    /// (`Wrappable:wrap`, `Into:into`, `TryInto:try-into`) require type arguments.
     fn class_method_ref(
         &mut self,
         id: ExprId,
@@ -519,11 +519,14 @@ impl InferCtx<'_> {
                                         self.ty_arena.alloc(Ty::Var(input_var));
 
                                     match (k, method) {
-                                        (BuiltinClassTag::Fallible, "wrap") => {
+                                        (
+                                            BuiltinClassTag::Wrappable,
+                                            "wrap",
+                                        ) => {
                                             self.constrain(Constraint::Class {
                                                 ty: target_ty,
                                                 class: BuiltinClass::Hkt(
-                                                    BuiltinClassTag::Fallible,
+                                                    BuiltinClassTag::Wrappable,
                                                     Some(input_ty),
                                                 ),
                                                 span,

@@ -517,7 +517,7 @@ impl UnOp {
                         ty,
                         constraints: smallvec![(
                             TyVar::new(1),
-                            BuiltinClass::Hkt(BuiltinClassTag::Fallible, None,)
+                            BuiltinClass::Hkt(BuiltinClassTag::Wrappable, None,)
                         )],
                     },
                 }

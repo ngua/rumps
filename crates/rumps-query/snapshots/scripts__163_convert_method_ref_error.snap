@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Convert method references require type parameters\n\n; This should error: Fallible:wrap without type parameter\nLET wrap-fn = Fallible:wrap\n"
+description: "; Convert method references require type parameters\n\nfun main() {\n  ; This should error: Wrappable:wrap without type parameter\n  let _ = Wrappable:wrap\n}\n"
 ---
-ERROR: convert method `Fallible:wrap` requires type parameter
+ERROR: convert method `Wrappable:wrap` requires type parameter

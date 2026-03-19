@@ -13,7 +13,8 @@
 //! - `Monoid`: `identity`, `concat`
 //! - `Ord`: `compare`
 //! - `Eq`: `eq`
-//! - `Fallible`: `unwrap`, `wrap`, `flat-map`
+//! - `Fallible`: `unwrap`, `flat-map`
+//! - `Wrappable`: `wrap`
 //! - `Indexable`: `index`, `get`
 //! - `Mappable`: `map`
 //! - `Filterable`: `filter`
@@ -310,9 +311,9 @@ impl ClassMethods {
             MethodFn::Unary(Fallible::unwrap),
         );
         self.register(
-            BuiltinClassTag::Fallible,
+            BuiltinClassTag::Wrappable,
             i.intern("wrap"),
-            MethodFn::Convert(Fallible::wrap),
+            MethodFn::Convert(Wrappable::wrap),
         );
 
         self.register(
@@ -1153,8 +1154,15 @@ impl Fallible {
                 .unwrap_or(val)
         }
     }
+}
 
-    /// Wrap a value in a `Fallible` container (`Option.Some` or `Result.Ok`).
+/// Wrap a value into a fallible container (`Option.Some` or `Result.Ok`).
+pub(crate) struct Wrappable;
+
+impl Class for Wrappable {}
+
+impl Wrappable {
+    /// Wrap a value in a `Wrappable` container (`Option.Some` or `Result.Ok`).
     ///
     /// The target type determines whether to produce:
     /// - `Option[T]` -> `Option.Some(v)`
@@ -1182,7 +1190,7 @@ impl Fallible {
                     .app(TypeId::RESULT, smallvec![ok_ty, err_ty]);
                 Ok(Value::ok(res_ty, v_id))
             }
-            _ => typechecked!("wrap", "Fallible (Option or Result)"),
+            _ => typechecked!("wrap", "Wrappable (Option or Result)"),
         }
     }
 }
@@ -2697,7 +2705,7 @@ impl Iterable {
     }
 }
 
-/// `Fallible` class: `flat-map` method (already has `unwrap`, `wrap`).
+/// `Fallible` class: `flat-map` method (already has `unwrap`).
 impl Fallible {
     /// Start `Fallible:flat-map`; single invocation for Some/Ok, or done for None/Err.
     ///

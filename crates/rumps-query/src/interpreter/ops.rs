@@ -335,7 +335,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let ty = self.ty_arena.get(ty_id).clone();
                 let mid = self.arena.intern("wrap");
                 self.dispatch_convert(
-                    BuiltinClassTag::Fallible,
+                    BuiltinClassTag::Wrappable,
                     mid,
                     &v,
                     &ty,

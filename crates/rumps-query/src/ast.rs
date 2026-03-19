@@ -420,11 +420,11 @@ impl BinOp {
 pub(crate) enum UnOp {
     Neg, // `-`
     Not, // `NOT` or `!`
-    /// Prefix `?` wraps a value in a `Fallible` type (`Option` or `Result`).
+    /// Prefix `?` wraps a value in a `Wrappable` type (`Option` or `Result`).
     ///
     /// By default, `?x` produces `Option.Some(x)`. When context expects
     /// `Result[T, E]`, it produces `Result.Ok(x)` instead. Equivalent to
-    /// calling `Fallible:wrap(x)`.
+    /// calling `Wrappable:wrap(x)`.
     ///
     /// For nested wrapping, use parens: `?(?x)` produces nested `Some`.
     /// Note that `??x` is parsed as the coalesce operator, not nested wrap.
@@ -876,7 +876,7 @@ pub(crate) enum Expr {
     /// Example: `let f = Filterable:filter`
     ///
     /// The type arguments (`SmallVec`) are required for convert methods
-    /// (`Fallible:wrap`, `Into:into`, `TryInto:try-into`) when used as
+    /// (`Wrappable:wrap`, `Into:into`, `TryInto:try-into`) when used as
     /// first-class values, to specify the target type.
     ClassMethodRef(StringId, SmallVec<[AstTypeExprId; 2]>, StringId),
 

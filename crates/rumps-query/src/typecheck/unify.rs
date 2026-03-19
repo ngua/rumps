@@ -1962,98 +1962,16 @@ impl<'a> InferCtx<'a> {
                 }
             }
 
-            // `Fallible(opt_inner)`: `Option[T]`, `Result[T, E]`
-            // `None` = polymorphic (just check the type is fallible)
+            // `Fallible`/`Wrappable`/`Chainable`: `Option[T]`, `Result[T, E]`
+            // `None` = polymorphic (just check the type satisfies the class)
             // `Some(inner)` = check and unify element type
-            BuiltinClass::Hkt(BuiltinClassTag::Fallible, opt_inner) => {
-                let opt_inner = *opt_inner;
-                let ty = self.expand_alias_fully(ty).unwrap_or(ty);
-
-                match self.ty_arena.get(ty).clone() {
-                    Ty::Option(opt_elem) => {
-                        if let Some(inner) = opt_inner {
-                            if let Err(e) =
-                                self.unify_types(inner, opt_elem, span)
-                            {
-                                self.error(e);
-                            }
-                        }
-                    }
-                    Ty::Result(ok, _) => {
-                        if let Some(inner) = opt_inner {
-                            if let Err(e) = self.unify_types(inner, ok, span) {
-                                self.error(e);
-                            }
-                        }
-                    }
-                    Ty::Union(_, members) => {
-                        members.iter().for_each(|m| {
-                            self.satisfies_class(class, *m, span)
-                        });
-                    }
-                    Ty::Var(v) => {
-                        // Default unresolved to `Option`
-                        let elem = opt_inner.unwrap_or_else(|| {
-                            let fv = self.fresh_var();
-                            self.ty_arena.alloc(Ty::Var(fv))
-                        });
-                        let opt_id = self.ty_arena.option(elem);
-                        let root = self.uf.find(v);
-                        self.uf.bind(root, opt_id);
-                    }
-                    Ty::Apply(_, _) => {
-                        // HKT variable application; defer
-                    }
-                    Ty::Error | Ty::Unknown => {}
-                    Ty::Named(id, type_args) => {
-                        match self
-                            .instance_registry
-                            .lookup(BuiltinClassTag::Fallible, id)
-                            .cloned()
-                        {
-                            Some(inst) => {
-                                if let Some(inner) = opt_inner {
-                                    if let Some(&inst_inner) =
-                                        inst.class_args.first()
-                                    {
-                                        let param_subst = Rename(
-                                            inst.type_params
-                                                .iter()
-                                                .zip(type_args.iter())
-                                                .map(|(p, &a)| (*p, a))
-                                                .collect(),
-                                        );
-                                        let resolved = self
-                                            .ty_arena
-                                            .apply(inst_inner, &param_subst);
-                                        if let Err(e) = self
-                                            .unify_types(inner, resolved, span)
-                                        {
-                                            self.error(e);
-                                        }
-                                    }
-                                }
-                                self.check_instance_constraints(
-                                    &inst, &type_args, span,
-                                );
-                            }
-                            None => {
-                                self.error(TypeError::UnsatisfiedClass(
-                                    class.clone(),
-                                    ty,
-                                    span,
-                                ));
-                            }
-                        }
-                    }
-                    _ => {
-                        self.error(TypeError::UnsatisfiedClass(
-                            class.clone(),
-                            ty,
-                            span,
-                        ));
-                    }
-                }
+            BuiltinClass::Hkt(
+                tag @ (BuiltinClassTag::Fallible
+                | BuiltinClassTag::Wrappable
+                | BuiltinClassTag::Chainable),
+                opt_inner,
+            ) => {
+                self.satisfies_hkt_class(*tag, *opt_inner, class, ty, span);
             }
 
             // `Iterable(opt_elem)`: `Array[T]`, `Range`
@@ -2466,6 +2384,100 @@ impl<'a> InferCtx<'a> {
 
             // Unreachable: tag/shape invariant maintained by construction
             _ => {}
+        }
+    }
+
+    /// Shared HKT class satisfaction logic for `Fallible`, `Wrappable`, and `Chainable`.
+    ///
+    /// All three handle the same set of types (`Option`, `Result`, `Union`, `Var`
+    /// defaulting to `Option`, `Apply`, `Named` via instance registry) and differ
+    /// only in which tag is used for registry lookups and error messages.
+    fn satisfies_hkt_class(
+        &mut self,
+        tag: BuiltinClassTag,
+        opt_inner: Option<TyId>,
+        class: &BuiltinClass<TyId>,
+        ty: TyId,
+        span: Span,
+    ) {
+        let ty = self.expand_alias_fully(ty).unwrap_or(ty);
+
+        match self.ty_arena.get(ty).clone() {
+            Ty::Option(opt_elem) => {
+                if let Some(inner) = opt_inner {
+                    if let Err(e) = self.unify_types(inner, opt_elem, span) {
+                        self.error(e);
+                    }
+                }
+            }
+            Ty::Result(ok, _) => {
+                if let Some(inner) = opt_inner {
+                    if let Err(e) = self.unify_types(inner, ok, span) {
+                        self.error(e);
+                    }
+                }
+            }
+            Ty::Union(_, members) => {
+                members
+                    .iter()
+                    .for_each(|m| self.satisfies_class(class, *m, span));
+            }
+            Ty::Var(v) => {
+                // Default unresolved to `Option`
+                let elem = opt_inner.unwrap_or_else(|| {
+                    let fv = self.fresh_var();
+                    self.ty_arena.alloc(Ty::Var(fv))
+                });
+                let opt_id = self.ty_arena.option(elem);
+                let root = self.uf.find(v);
+                self.uf.bind(root, opt_id);
+            }
+            Ty::Apply(_, _) => {
+                // HKT variable application; defer
+            }
+            Ty::Error | Ty::Unknown => {}
+            Ty::Named(id, type_args) => {
+                match self.instance_registry.lookup(tag, id).cloned() {
+                    Some(inst) => {
+                        if let Some(inner) = opt_inner {
+                            if let Some(&inst_inner) = inst.class_args.first() {
+                                let param_subst = Rename(
+                                    inst.type_params
+                                        .iter()
+                                        .zip(type_args.iter())
+                                        .map(|(p, &a)| (*p, a))
+                                        .collect(),
+                                );
+                                let resolved = self
+                                    .ty_arena
+                                    .apply(inst_inner, &param_subst);
+                                if let Err(e) =
+                                    self.unify_types(inner, resolved, span)
+                                {
+                                    self.error(e);
+                                }
+                            }
+                        }
+                        self.check_instance_constraints(
+                            &inst, &type_args, span,
+                        );
+                    }
+                    None => {
+                        self.error(TypeError::UnsatisfiedClass(
+                            class.clone(),
+                            ty,
+                            span,
+                        ));
+                    }
+                }
+            }
+            _ => {
+                self.error(TypeError::UnsatisfiedClass(
+                    class.clone(),
+                    ty,
+                    span,
+                ));
+            }
         }
     }
 

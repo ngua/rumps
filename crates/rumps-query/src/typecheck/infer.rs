@@ -227,7 +227,7 @@ pub(crate) struct InferCtx<'a> {
     /// Populated when `Into::into` or `TryInto::try_into` methods are called.
     /// The interpreter uses this to dispatch the correct conversion.
     convert_targets: HashMap<ExprId, TyId>,
-    /// Mapping from wrap expression IDs to their target `Fallible` types.
+    /// Mapping from wrap expression IDs to their target `Wrappable` types.
     ///
     /// Populated during inference for `?` (wrap) operators; resolved after
     /// substitution to concrete `Option[T]` or `Result[T, E]` types.

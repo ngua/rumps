@@ -407,7 +407,7 @@ pub(crate) enum TypeError {
 
     /// Convert method used as first-class value without type parameters.
     ///
-    /// Convert methods (`Fallible:wrap`, `Into:into`, `TryInto:try-into`) require
+    /// Convert methods (`Wrappable:wrap`, `Into:into`, `TryInto:try-into`) require
     /// explicit type parameters when used as values because the target type
     /// cannot be inferred from the reference site alone.
     #[error("convert method `{class}:{method}` requires type parameter")]

@@ -58,7 +58,7 @@ pub(crate) enum ClassShape {
 pub(crate) enum TrackKind {
     /// Track return type in `mempty_types` (`Monoid:identity`).
     Mempty,
-    /// Track return type in `convert_targets` (`Into:into`, `Fallible:wrap`).
+    /// Track return type in `convert_targets` (`Into:into`, `Wrappable:wrap`).
     Convert,
     /// Track inner type of `Result` return in `convert_targets` (`TryInto:try-into`).
     ConvertResultInner,
@@ -518,16 +518,6 @@ impl BuiltinClassDef {
                         )),
                     ),
                     (
-                        "wrap",
-                        MethodSpec::Tracked {
-                            scheme: hkt2(
-                                arena.func(smallvec![v0], tv1_of_v0),
-                                BuiltinClassTag::Fallible,
-                            ),
-                            track: TrackKind::Convert,
-                        },
-                    ),
-                    (
                         "flat-map",
                         MethodSpec::Standard({
                             let cb = arena.func(smallvec![v0], tv2_of_v1);
@@ -714,12 +704,21 @@ impl BuiltinClassDef {
                     )),
                 )],
             },
-            // Wrappable (methods added in a later step)
+            // Wrappable: `wrap` (convert value into fallible container)
             Self {
                 tag: BuiltinClassTag::Wrappable,
                 name: "Wrappable",
                 assoc_types: &[],
-                methods: vec![],
+                methods: vec![(
+                    "wrap",
+                    MethodSpec::Tracked {
+                        scheme: hkt2(
+                            arena.func(smallvec![v0], tv1_of_v0),
+                            BuiltinClassTag::Wrappable,
+                        ),
+                        track: TrackKind::Convert,
+                    },
+                )],
             },
             // Chainable (methods added in a later step)
             Self {

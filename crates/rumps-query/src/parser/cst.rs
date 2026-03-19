@@ -351,7 +351,7 @@ pub(crate) enum ExprKind {
     /// later. Example: `let f = Filterable:filter`.
     ///
     /// The optional type arguments (`Vec<TypeExpr>`) are required for convert
-    /// methods (`Fallible:wrap`, `Into:into`, `TryInto:try-into`) when used as
+    /// methods (`Wrappable:wrap`, `Into:into`, `TryInto:try-into`) when used as
     /// first-class values, to specify the target type.
     ClassMethodRef(StringId, Vec<TypeExpr>, StringId),
 }

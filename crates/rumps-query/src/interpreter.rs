@@ -201,7 +201,7 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
     /// `TryInto::try_into` methods with the correct target type.
     convert_targets: HashMap<ExprId, crate::typecheck::TyId>,
 
-    /// Mapping from wrap expression IDs to their target `Fallible` types.
+    /// Mapping from wrap expression IDs to their target `Wrappable` types.
     ///
     /// Populated during typechecking; used by the `?` prefix operator to
     /// produce `Option.Some` or `Result.Ok` depending on context.
