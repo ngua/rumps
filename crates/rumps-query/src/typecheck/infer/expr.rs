@@ -1893,7 +1893,24 @@ impl InferCtx<'_> {
                 scheme_constraints.push((tv, class.clone()));
 
                 // Emit constraint for body inference
-                self.constrain(Constraint::Class { ty, class, span });
+                self.constrain(Constraint::Class {
+                    ty,
+                    class: class.clone(),
+                    span,
+                });
+
+                // Emit transitive superclass constraints (skip if the
+                // class is not HKT; only HKT classes have superclasses)
+                class.tag().transitive_supers().into_iter().for_each(|sup| {
+                    if let Some(sc) = class.with_tag(sup) {
+                        scheme_constraints.push((tv, sc.clone()));
+                        self.constrain(Constraint::Class {
+                            ty,
+                            class: sc,
+                            span,
+                        });
+                    }
+                });
             });
         });
 

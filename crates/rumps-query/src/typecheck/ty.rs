@@ -36,6 +36,8 @@ pub(crate) enum BuiltinClassTag {
     Filterable = 12,
     Display = 13,
     Eq = 14,
+    Wrappable = 15,
+    Chainable = 16,
 }
 
 /// The "shape" of a builtin class constraint.
@@ -81,7 +83,7 @@ impl MethodSpec {
 
 impl BuiltinClassTag {
     /// Number of builtin class tags (for array sizing).
-    pub(crate) const COUNT: usize = 15;
+    pub(crate) const COUNT: usize = 17;
 
     /// Parse a class name string into a `BuiltinClassTag`.
     pub(crate) fn from_str(s: &str) -> Option<Self> {
@@ -101,6 +103,8 @@ impl BuiltinClassTag {
             "Filterable" => Some(Self::Filterable),
             "Display" => Some(Self::Display),
             "Eq" => Some(Self::Eq),
+            "Wrappable" => Some(Self::Wrappable),
+            "Chainable" => Some(Self::Chainable),
             _ => None,
         }
     }
@@ -123,6 +127,8 @@ impl BuiltinClassTag {
             Self::Foldable => "Foldable",
             Self::Filterable => "Filterable",
             Self::Display => "Display",
+            Self::Wrappable => "Wrappable",
+            Self::Chainable => "Chainable",
         }
     }
 
@@ -163,6 +169,12 @@ impl BuiltinClassTag {
             Self::Filterable => {
                 Some("filterable types are `Option`, `Result`, and `Array`")
             }
+            Self::Wrappable => {
+                Some("wrappable types are `Option` and `Result`; provides `?` (wrap)")
+            }
+            Self::Chainable => {
+                Some("chainable types are `Option` and `Result`; provides `chain`")
+            }
             Self::Into | Self::TryInto | Self::Display => None,
         }
     }
@@ -180,6 +192,8 @@ impl BuiltinClassTag {
 
             Self::Iterable
             | Self::Fallible
+            | Self::Wrappable
+            | Self::Chainable
             | Self::Mappable
             | Self::Foldable
             | Self::Filterable => ClassShape::Hkt { kind: 1 },
@@ -187,6 +201,32 @@ impl BuiltinClassTag {
             Self::Into | Self::TryInto | Self::Indexable => {
                 ClassShape::Parameterized { params: 1 }
             }
+        }
+    }
+
+    /// Direct superclasses only.
+    pub(crate) const fn supers(self) -> &'static [Self] {
+        match self {
+            Self::Wrappable => &[Self::Fallible],
+            Self::Chainable => &[Self::Wrappable],
+            _ => &[],
+        }
+    }
+
+    /// All transitive superclasses (handles both linear chains and multi-parent DAGs).
+    /// Returns in dependency order (parents before children).
+    pub(crate) fn transitive_supers(self) -> Vec<Self> {
+        let mut acc = Vec::new();
+        self.supers()
+            .iter()
+            .for_each(|&sup| sup.collect_into(&mut acc));
+        acc
+    }
+
+    fn collect_into(self, acc: &mut Vec<Self>) {
+        if !acc.contains(&self) {
+            self.supers().iter().for_each(|&sup| sup.collect_into(acc));
+            acc.push(self);
         }
     }
 }
@@ -674,6 +714,20 @@ impl BuiltinClassDef {
                     )),
                 )],
             },
+            // Wrappable (methods added in a later step)
+            Self {
+                tag: BuiltinClassTag::Wrappable,
+                name: "Wrappable",
+                assoc_types: &[],
+                methods: vec![],
+            },
+            // Chainable (methods added in a later step)
+            Self {
+                tag: BuiltinClassTag::Chainable,
+                name: "Chainable",
+                assoc_types: &[],
+                methods: vec![],
+            },
         ]
     }
 }
@@ -694,6 +748,17 @@ pub(crate) enum BuiltinClass<T> {
     Hkt(BuiltinClassTag, Option<T>),
     /// Parameterized class; always carries explicit type arg(s).
     Parameterized(BuiltinClassTag, T),
+}
+
+impl<T: Copy> BuiltinClass<T> {
+    /// Preserves the HKT inner type while swapping the class tag.
+    /// Returns `None` if `self` is not an HKT class.
+    pub(crate) fn with_tag(&self, tag: BuiltinClassTag) -> Option<Self> {
+        match self {
+            Self::Hkt(_, inner) => Some(Self::Hkt(tag, *inner)),
+            _ => None,
+        }
+    }
 }
 
 impl<T> BuiltinClass<T> {

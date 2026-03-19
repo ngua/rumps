@@ -534,6 +534,18 @@ pub(crate) enum TypeError {
         span: Span,
     },
 
+    /// Missing required superclass instance.
+    ///
+    /// When implementing a subclass (e.g., `Chainable`), all transitive
+    /// superclasses (e.g., `Wrappable`, `Fallible`) must already have instances.
+    #[error("cannot implement `{class}` for `{type_id:?}`; missing required superclass instance `{superclass}`")]
+    MissingSuperclassInstance {
+        class: BuiltinClassTag,
+        superclass: BuiltinClassTag,
+        type_id: TypeId,
+        span: Span,
+    },
+
     /// Simple or HKT class given type arguments it does not accept.
     #[error("class `{class}` does not accept type arguments")]
     ClassRejectsArg { class: &'static str, span: Span },
@@ -613,6 +625,7 @@ impl TypeError {
             | Self::AssocTypeOutsideClass { span, .. }
             | Self::NoSuchAssocType { span, .. }
             | Self::InstanceNotImported { span, .. }
+            | Self::MissingSuperclassInstance { span, .. }
             | Self::ClassRejectsArg { span, .. }
             | Self::ClassRequiresArg { span, .. }
             | Self::TopLevelExpr(span)
@@ -946,6 +959,20 @@ impl TypeError {
                 Some(format!(
                     "an instance is defined in module `{module}`; try adding `IMPORT {module}.{{ }}`"
                 )),
+            ),
+            Self::MissingSuperclassInstance {
+                class,
+                superclass,
+                type_id,
+                ..
+            } => (
+                format!(
+                    "cannot implement `{}` for `{}`; missing required superclass instance `{}`",
+                    class.name(),
+                    p.type_name(*type_id),
+                    superclass.name()
+                ),
+                None,
             ),
             Self::ClassRejectsArg { class, .. } => (
                 format!("class `{class}` does not accept type arguments"),

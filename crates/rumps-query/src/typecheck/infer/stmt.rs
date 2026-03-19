@@ -523,7 +523,24 @@ impl InferCtx<'_> {
                 scheme_constraints.push((tv, class.clone()));
 
                 // Emit constraint for checking the function body
-                self.constrain(Constraint::Class { ty, class, span });
+                self.constrain(Constraint::Class {
+                    ty,
+                    class: class.clone(),
+                    span,
+                });
+
+                // Emit transitive superclass constraints (skip if the
+                // class is not HKT; only HKT classes have superclasses)
+                class.tag().transitive_supers().into_iter().for_each(|sup| {
+                    if let Some(sc) = class.with_tag(sup) {
+                        scheme_constraints.push((tv, sc.clone()));
+                        self.constrain(Constraint::Class {
+                            ty,
+                            class: sc,
+                            span,
+                        });
+                    }
+                });
             });
         });
 
@@ -953,6 +970,20 @@ impl InferCtx<'_> {
                     });
                 }
             }
+        }
+
+        // 5.5. Validate superclass instances exist
+        if let Some(tid) = type_id {
+            class.transitive_supers().into_iter().for_each(|sup| {
+                if self.instance_registry.lookup(sup, tid).is_none() {
+                    self.error(TypeError::MissingSuperclassInstance {
+                        class,
+                        superclass: sup,
+                        type_id: tid,
+                        span,
+                    });
+                }
+            });
         }
 
         // 6. Process WHERE constraints
