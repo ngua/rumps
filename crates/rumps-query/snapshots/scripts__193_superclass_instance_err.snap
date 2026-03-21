@@ -1,0 +1,10 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test that implementing Chainable without Wrappable is an error\n\ntype Box[T] = Box(T)\n\nclass Chainable for Box[T] {\n  fun chain(self, f: (T) -> Box[U]) -> Box[U] {\n    f(self.0)\n  }\n}\n\n; ERROR: missing required superclass instance Wrappable for Box\n\nfun main() {\n  write 0\n}\n"
+---
+ERROR: cannot implement `Chainable` for `Box`; missing required superclass instance `Fallible`
+cannot implement `Chainable` for `Box`; missing required superclass instance `Wrappable`
+unknown type `U`
+unknown type `U`
+infinite type: `T` occurs in `Box[T]`
+type mismatch: expected `T[U]`, got `Box[<error>]`

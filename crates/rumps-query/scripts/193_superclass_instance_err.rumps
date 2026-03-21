@@ -1,0 +1,15 @@
+; Test that implementing Chainable without Wrappable is an error
+
+type Box[T] = Box(T)
+
+class Chainable for Box[T] {
+  fun chain(self, f: (T) -> Box[U]) -> Box[U] {
+    f(self.0)
+  }
+}
+
+; ERROR: missing required superclass instance Wrappable for Box
+
+fun main() {
+  write 0
+}

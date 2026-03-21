@@ -1,0 +1,12 @@
+; Test that [F: Chainable] implies Wrappable and Fallible
+
+fun test[F: Chainable](x: F[Int]) -> Int {
+  ; Uses ! (Fallible) and ? (Wrappable) inside a Chainable-constrained context
+  let v = x!
+  let wrapped = ?v
+  Chainable:chain(wrapped, n => ?n)!
+}
+
+fun main() {
+  write test(Option.Some(42))
+}

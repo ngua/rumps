@@ -509,25 +509,13 @@ impl BuiltinClassDef {
                 tag: BuiltinClassTag::Fallible,
                 name: "Fallible",
                 assoc_types: &[],
-                methods: vec![
-                    (
-                        "unwrap",
-                        MethodSpec::Standard(hkt2(
-                            arena.func(smallvec![tv1_of_v0], v0),
-                            BuiltinClassTag::Fallible,
-                        )),
-                    ),
-                    (
-                        "flat-map",
-                        MethodSpec::Standard({
-                            let cb = arena.func(smallvec![v0], tv2_of_v1);
-                            hkt3(
-                                arena.func(smallvec![tv2_of_v0, cb], tv2_of_v1),
-                                BuiltinClassTag::Fallible,
-                            )
-                        }),
-                    ),
-                ],
+                methods: vec![(
+                    "unwrap",
+                    MethodSpec::Standard(hkt2(
+                        arena.func(smallvec![tv1_of_v0], v0),
+                        BuiltinClassTag::Fallible,
+                    )),
+                )],
             },
             // Into: `forall T: Into[U], U. (T) -> U`
             Self {
@@ -720,12 +708,21 @@ impl BuiltinClassDef {
                     },
                 )],
             },
-            // Chainable (methods added in a later step)
+            // Chainable: `chain` (monadic bind)
             Self {
                 tag: BuiltinClassTag::Chainable,
                 name: "Chainable",
                 assoc_types: &[],
-                methods: vec![],
+                methods: vec![(
+                    "chain",
+                    MethodSpec::Standard({
+                        let cb = arena.func(smallvec![v0], tv2_of_v1);
+                        hkt3(
+                            arena.func(smallvec![tv2_of_v0, cb], tv2_of_v1),
+                            BuiltinClassTag::Chainable,
+                        )
+                    }),
+                )],
             },
         ]
     }

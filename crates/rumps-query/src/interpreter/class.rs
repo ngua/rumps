@@ -13,8 +13,9 @@
 //! - `Monoid`: `identity`, `concat`
 //! - `Ord`: `compare`
 //! - `Eq`: `eq`
-//! - `Fallible`: `unwrap`, `flat-map`
+//! - `Fallible`: `unwrap`
 //! - `Wrappable`: `wrap`
+//! - `Chainable`: `chain`
 //! - `Indexable`: `index`, `get`
 //! - `Mappable`: `map`
 //! - `Filterable`: `filter`
@@ -33,7 +34,7 @@ use ordered_float::OrderedFloat;
 use smallvec::{smallvec, SmallVec};
 
 use super::hof::{
-    Continuation, FlatMapWrapper, HofMethodFn, HofState, IterKind, MethodResult,
+    ChainWrapper, Continuation, HofMethodFn, HofState, IterKind, MethodResult,
 };
 use crate::intern::{StringId, StringInterner};
 use crate::typecheck::{BuiltinClassTag, Ty, TyArena};
@@ -387,9 +388,9 @@ impl ClassMethods {
             MethodFn::Unary(Iterable::collect),
         );
         self.register(
-            BuiltinClassTag::Fallible,
-            i.intern("flat-map"),
-            MethodFn::Hof(Fallible::flat_map),
+            BuiltinClassTag::Chainable,
+            i.intern("chain"),
+            MethodFn::Hof(Chainable::chain),
         );
     }
 }
@@ -1194,6 +1195,11 @@ impl Wrappable {
         }
     }
 }
+
+/// Monadic chaining for `Option` and `Result`.
+pub(crate) struct Chainable;
+
+impl Class for Chainable {}
 
 /// Indexing for `Array`, `Map`, `String`.
 pub(crate) struct Indexable;
@@ -2705,22 +2711,19 @@ impl Iterable {
     }
 }
 
-/// `Fallible` class: `flat-map` method (already has `unwrap`).
-impl Fallible {
-    /// Start `Fallible:flat-map`; single invocation for Some/Ok, or done for None/Err.
-    ///
-    /// Note: argument order is `(fallible, fn)`, not `(fn, fallible)` like other HoFs.
-    pub(crate) fn flat_map(
+/// `Chainable` class: `chain` method.
+impl Chainable {
+    /// Start `Chainable:chain`; single invocation for Some/Ok, or done for None/Err.
+    pub(crate) fn chain(
         ctx: &mut ClassCtx<'_>,
         args: &[ValueId],
     ) -> Result<MethodResult> {
-        // Note: argument order differs from other HoFs for historical reasons.
         let src = *args
             .first()
-            .unwrap_or_else(|| typechecked!("Fallible:flat-map", "2 args"));
+            .unwrap_or_else(|| typechecked!("Chainable:chain", "2 args"));
         let fn_id = *args
             .get(1)
-            .unwrap_or_else(|| typechecked!("Fallible:flat-map", "2 args"));
+            .unwrap_or_else(|| typechecked!("Chainable:chain", "2 args"));
 
         match ctx.arena.get(src) {
             // Option.None -> None
@@ -2746,8 +2749,8 @@ impl Fallible {
                 Ok(MethodResult::Invoke(Continuation {
                     callee: fn_id,
                     args: smallvec![inner],
-                    state: HofState::FlatMap {
-                        wrapper: FlatMapWrapper::OptionSome,
+                    state: HofState::Chain {
+                        wrapper: ChainWrapper::OptionSome,
                     },
                 }))
             }
@@ -2765,12 +2768,12 @@ impl Fallible {
                 Ok(MethodResult::Invoke(Continuation {
                     callee: fn_id,
                     args: smallvec![inner],
-                    state: HofState::FlatMap {
-                        wrapper: FlatMapWrapper::ResultOk,
+                    state: HofState::Chain {
+                        wrapper: ChainWrapper::ResultOk,
                     },
                 }))
             }
-            // Result.Err(e) -> Err(e); just propagate error unchanged
+            // Result.Err(e) -> propagate error unchanged
             Some(Value::Tagged(ty, 1, payloads))
                 if ctx
                     .type_exprs
@@ -2783,7 +2786,7 @@ impl Fallible {
                     .unwrap_or_else(|| invariant!("Err has payload"));
                 Ok(MethodResult::Done(Value::Tagged(*ty, 1, smallvec![err])))
             }
-            _ => typechecked!("Fallible:flat-map", "Option or Result"),
+            _ => typechecked!("Chainable:chain", "Option or Result"),
         }
     }
 }

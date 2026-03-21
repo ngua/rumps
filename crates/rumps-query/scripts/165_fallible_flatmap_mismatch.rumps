@@ -1,7 +1,7 @@
-; Test Fallible:flat-map rejects Result/Option mismatch
+; Test Chainable:chain rejects Result/Option mismatch
 
 fun main() {
   let res = Result.Ok(42) : Result[Int, String]
-  let bad = Fallible:flat-map((x: Int) => Option.Some(x + 1), res) : Option[Int]
+  let bad = Chainable:chain((x: Int) => Option.Some(x + 1), res) : Option[Int]
   write bad
 }

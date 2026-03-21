@@ -121,29 +121,29 @@ fun main() {
   write res-ok-check is Result.Ok(_)  ; true
   write res-err-check is Result.Err(_)  ; true
 
-  ; ============ Fallible:flat-map (Option) ============
+  ; ============ Chainable:chain (Option) ============
 
   ; Returns the inner Option when Some
-  write Fallible:flat-map(Option.Some(10), x => safe-div(x, 2))  ; Some(5)
-  write Fallible:flat-map(Option.Some(10), x => safe-div(x, 0))  ; None
-  write Fallible:flat-map(Option.None, x => safe-div(x, 2))  ; None
+  write Chainable:chain(Option.Some(10), x => safe-div(x, 2))  ; Some(5)
+  write Chainable:chain(Option.Some(10), x => safe-div(x, 0))  ; None
+  write Chainable:chain(Option.None, x => safe-div(x, 2))  ; None
 
-  ; Chaining flat-map
-  write Fallible:flat-map(Fallible:flat-map(Option.Some(8), parse-positive), halve)  ; Some(4)
-  write Fallible:flat-map(Fallible:flat-map(Option.Some(-1), parse-positive), halve)  ; None
-  write Fallible:flat-map(Fallible:flat-map(Option.Some(7), parse-positive), halve)  ; None (7 is odd)
+  ; Chaining chain
+  write Chainable:chain(Chainable:chain(Option.Some(8), parse-positive), halve)  ; Some(4)
+  write Chainable:chain(Chainable:chain(Option.Some(-1), parse-positive), halve)  ; None
+  write Chainable:chain(Chainable:chain(Option.Some(7), parse-positive), halve)  ; None (7 is odd)
 
-  ; ============ Fallible:flat-map (Result) ============
+  ; ============ Chainable:chain (Result) ============
 
   ; Returns the inner Result when Ok
-  write Fallible:flat-map(Result.Ok(10), x => safe-div-res(x, 2))  ; Ok(5)
-  write Fallible:flat-map(Result.Ok(10), x => safe-div-res(x, 0))  ; Err("div by zero")
-  write Fallible:flat-map(Result.Err("bad input"), x => safe-div-res(x, 2))  ; Err("bad input")
+  write Chainable:chain(Result.Ok(10), x => safe-div-res(x, 2))  ; Ok(5)
+  write Chainable:chain(Result.Ok(10), x => safe-div-res(x, 0))  ; Err("div by zero")
+  write Chainable:chain(Result.Err("bad input"), x => safe-div-res(x, 2))  ; Err("bad input")
 
-  ; Chaining flat-map
-  write Fallible:flat-map(Fallible:flat-map(Result.Ok(8), validate), halve-res)  ; Ok(4)
-  write Fallible:flat-map(Fallible:flat-map(Result.Ok(-1), validate), halve-res)  ; Err("negative")
-  write Fallible:flat-map(Fallible:flat-map(Result.Ok(7), validate), halve-res)  ; Err("odd")
+  ; Chaining chain
+  write Chainable:chain(Chainable:chain(Result.Ok(8), validate), halve-res)  ; Ok(4)
+  write Chainable:chain(Chainable:chain(Result.Ok(-1), validate), halve-res)  ; Err("negative")
+  write Chainable:chain(Chainable:chain(Result.Ok(7), validate), halve-res)  ; Err("odd")
 
   ; ============ Option.flatten ============
 

@@ -105,8 +105,8 @@ pub(crate) enum HofState {
     ForeachArray { source: ValueId, idx: usize },
     /// `Iterable:foreach` over range.
     ForeachRange { current: i64, end: i64 },
-    /// `Fallible:flat-map`; single invocation, wraps result.
-    FlatMap { wrapper: FlatMapWrapper },
+    /// `Chainable:chain`; single invocation, wraps result.
+    Chain { wrapper: ChainWrapper },
     /// `Array.zip-with`.
     ZipWith {
         arr_a: ValueId,
@@ -125,8 +125,8 @@ pub(crate) enum HofState {
     ResultMapErr { ok_ty: TypeExprId },
 }
 
-/// Wrapper kind for `Fallible:flat-map` result.
-pub(crate) enum FlatMapWrapper {
+/// Wrapper kind for `Chainable:chain` result.
+pub(crate) enum ChainWrapper {
     OptionSome,
     ResultOk,
     ResultErr(ValueId),
@@ -387,7 +387,7 @@ pub(crate) fn resume(
                 }))
             }
         }
-        HofState::FlatMap { wrapper } => {
+        HofState::Chain { wrapper } => {
             let inner = ctx
                 .arena
                 .get(result)
@@ -395,15 +395,15 @@ pub(crate) fn resume(
                 .unwrap_or_else(|| invariant!("result in arena"));
             let v = match (wrapper, &inner) {
                 // If result is already None/Err, propagate it
-                (FlatMapWrapper::OptionSome, Value::Tagged(ty, 0, _)) => {
+                (ChainWrapper::OptionSome, Value::Tagged(ty, 0, _)) => {
                     Value::none(*ty)
                 }
-                (FlatMapWrapper::OptionSome, _) => inner,
-                (FlatMapWrapper::ResultOk, Value::Tagged(_ty, 1, _)) => {
+                (ChainWrapper::OptionSome, _) => inner,
+                (ChainWrapper::ResultOk, Value::Tagged(_ty, 1, _)) => {
                     inner // Already Err, propagate
                 }
-                (FlatMapWrapper::ResultOk, _) => inner,
-                (FlatMapWrapper::ResultErr(e), _) => {
+                (ChainWrapper::ResultOk, _) => inner,
+                (ChainWrapper::ResultErr(e), _) => {
                     // Original was Err; result doesn't matter, return Err
                     ctx.arena
                         .get(e)

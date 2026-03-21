@@ -1,6 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test Fallible:flat-map rejects Result/Option mismatch\n\nFUN main() {\n  LET res = Result.Ok(42) : Result[Int, String]\n  LET bad = Fallible:flat-map((x: Int) => Option.Some(x + 1), res) : Option[Int]\n  WRITE bad\n}\n"
+description: "; Test Chainable:chain rejects Result/Option mismatch\n\nfun main() {\n  let res = Result.Ok(42) : Result[Int, String]\n  let bad = Chainable:chain((x: Int) => Option.Some(x + 1), res) : Option[Int]\n  write bad\n}\n"
 ---
 ERROR: type mismatch: expected `(Int) -> Option[Int]`, got `T[U]`
 type mismatch: expected `(T) -> U[V]`, got `Result[Int, String]`

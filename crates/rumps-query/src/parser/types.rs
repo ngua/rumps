@@ -368,9 +368,9 @@ impl Parser {
         let class_tags = {
             use BuiltinClassTag::*;
             [
-                Numeric, Iterable, Monoid, BitLike, Negatable, Fallible, Into,
-                TryInto, Indexable, Ord, Mappable, Foldable, Filterable,
-                Display, Eq,
+                Numeric, Iterable, Monoid, BitLike, Negatable, Fallible,
+                Wrappable, Chainable, Into, TryInto, Indexable, Ord, Mappable,
+                Foldable, Filterable, Display, Eq,
             ]
             .map(|t| (interner.intern(t.name()), t))
         };
@@ -394,8 +394,9 @@ impl Parser {
                         span,
                         "unknown class; valid classes are: \
                          Numeric, Negatable, Iterable, Monoid, BitLike, \
-                         Fallible, Into[T], TryInto[T], Indexable[E], \
-                         Ord, Eq, Mappable, Foldable, Filterable, Display",
+                         Fallible, Wrappable, Chainable, Into[T], TryInto[T], \
+                         Indexable[E], Ord, Eq, Mappable, Foldable, Filterable, \
+                         Display",
                     ))?;
 
                 let has_args = args.is_some();
