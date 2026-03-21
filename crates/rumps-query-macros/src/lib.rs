@@ -38,6 +38,8 @@ use syn::{Ident, Result, Token};
 ///
 /// HKT classes (kind `* -> *`, no type argument in constraint; element at usage):
 /// - `F: Fallible` ; `F` is a fallible type constructor; use `F[T]` in type position
+/// - `W: Wrappable` ; `W` supports wrapping a value (`wrap`); use `W[T]` in type position
+/// - `C: Chainable` ; `C` supports monadic chaining (`chain`); use `C[T]` in type position
 /// - `I: Iterable` ; `I` is an iterable type constructor; use `I[T]` in type position
 /// - `M: Mappable` ; `M` is a functor; use `M[T]` in type position
 /// - `F: Foldable` ; `F` supports fold/reduce; use `F[T]` in type position
@@ -103,8 +105,15 @@ const SIMPLE_CLASSES: &[&str] = &[
 ///
 /// These are higher-kinded; the element type is specified at usage sites
 /// (`F[T]` in type position), not in the constraint (`F: Fallible`).
-const HKT_CLASSES: &[&str] =
-    &["Fallible", "Iterable", "Mappable", "Foldable", "Filterable"];
+const HKT_CLASSES: &[&str] = &[
+    "Fallible",
+    "Wrappable",
+    "Chainable",
+    "Iterable",
+    "Mappable",
+    "Foldable",
+    "Filterable",
+];
 
 /// Multi-param classes: constraint REQUIRES `[T]` arguments.
 const MULTI_PARAM_CLASSES: &[&str] = &["Into", "TryInto", "Indexable"];
