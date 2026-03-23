@@ -964,7 +964,12 @@ impl<'a> InferCtx<'a> {
                             .cloned()
                     }) {
                         Some(inst) => {
-                            self.check_instance_constraints(&inst, &[], span);
+                            self.check_instance_constraints(
+                                &inst,
+                                &[],
+                                span,
+                                None,
+                            );
                         }
                         None => {
                             // At least one member must be numeric (for literal coercion)
@@ -994,7 +999,9 @@ impl<'a> InferCtx<'a> {
                     {
                         Some(inst) => {
                             let args: SmallVec<[TyId; 4]> = type_args.clone();
-                            self.check_instance_constraints(&inst, &args, span);
+                            self.check_instance_constraints(
+                                &inst, &args, span, None,
+                            );
                         }
                         None => match self.expand_alias_fully(ty) {
                             Some(expanded) => {
@@ -1037,6 +1044,7 @@ impl<'a> InferCtx<'a> {
                                     &inst,
                                     &[],
                                     span,
+                                    None,
                                 );
                             }
                             None => {
@@ -1054,7 +1062,7 @@ impl<'a> InferCtx<'a> {
                         {
                             Some(inst) => {
                                 self.check_instance_constraints(
-                                    &inst, &type_args, span,
+                                    &inst, &type_args, span, None,
                                 );
                             }
                             None => match self.expand_alias_fully(ty) {
@@ -1099,6 +1107,7 @@ impl<'a> InferCtx<'a> {
                                     &inst,
                                     &[],
                                     span,
+                                    None,
                                 );
                             }
                             None => {
@@ -1116,7 +1125,7 @@ impl<'a> InferCtx<'a> {
                         {
                             Some(inst) => {
                                 self.check_instance_constraints(
-                                    &inst, &type_args, span,
+                                    &inst, &type_args, span, None,
                                 );
                             }
                             None => {
@@ -1187,6 +1196,7 @@ impl<'a> InferCtx<'a> {
                                     &inst,
                                     &[],
                                     span,
+                                    None,
                                 );
                             }
                             None => {
@@ -1204,7 +1214,7 @@ impl<'a> InferCtx<'a> {
                         {
                             Some(inst) => {
                                 self.check_instance_constraints(
-                                    &inst, &args, span,
+                                    &inst, &args, span, None,
                                 );
                             }
                             None => {
@@ -1282,6 +1292,7 @@ impl<'a> InferCtx<'a> {
                                     &inst,
                                     &[],
                                     span,
+                                    None,
                                 );
                             }
                             None => {
@@ -1299,7 +1310,7 @@ impl<'a> InferCtx<'a> {
                         {
                             Some(inst) => {
                                 self.check_instance_constraints(
-                                    &inst, &args, span,
+                                    &inst, &args, span, None,
                                 );
                             }
                             None => {
@@ -1367,6 +1378,7 @@ impl<'a> InferCtx<'a> {
                                     &inst,
                                     &[],
                                     span,
+                                    None,
                                 );
                             }
                             None => {
@@ -1384,7 +1396,7 @@ impl<'a> InferCtx<'a> {
                         {
                             Some(inst) => {
                                 self.check_instance_constraints(
-                                    &inst, &args, span,
+                                    &inst, &args, span, None,
                                 );
                             }
                             None => {
@@ -1417,7 +1429,12 @@ impl<'a> InferCtx<'a> {
                             .cloned()
                     }) {
                         Some(inst) => {
-                            self.check_instance_constraints(&inst, &[], span);
+                            self.check_instance_constraints(
+                                &inst,
+                                &[],
+                                span,
+                                None,
+                            );
                         }
                         None => {
                             members.iter().for_each(|m| {
@@ -1434,7 +1451,7 @@ impl<'a> InferCtx<'a> {
                     {
                         Some(inst) => {
                             self.check_instance_constraints(
-                                &inst, &type_args, span,
+                                &inst, &type_args, span, None,
                             );
                         }
                         None => {
@@ -1673,6 +1690,7 @@ impl<'a> InferCtx<'a> {
                                         &inst,
                                         &[],
                                         span,
+                                        None,
                                     );
                                 } else {
                                     self.error(TypeError::InvalidCast {
@@ -1711,7 +1729,7 @@ impl<'a> InferCtx<'a> {
                                     inst.class_args.first().copied();
                                 if inst_target == Some(to) {
                                     self.check_instance_constraints(
-                                        &inst, &type_args, span,
+                                        &inst, &type_args, span, None,
                                     );
                                 } else {
                                     self.error(TypeError::InvalidCast {
@@ -1916,6 +1934,7 @@ impl<'a> InferCtx<'a> {
                                         &inst,
                                         &[],
                                         span,
+                                        None,
                                     );
                                 } else {
                                     self.error(TypeError::InvalidCast {
@@ -1951,7 +1970,7 @@ impl<'a> InferCtx<'a> {
                         {
                             if inst.class_args.first().copied() == Some(to) {
                                 self.check_instance_constraints(
-                                    &inst, &type_args, span,
+                                    &inst, &type_args, span, None,
                                 );
                             }
                         }
@@ -2010,17 +2029,13 @@ impl<'a> InferCtx<'a> {
                             .cloned()
                         {
                             Some(inst) => {
+                                let param_subst = self.build_instance_subst(
+                                    &inst, &type_args, span,
+                                );
                                 if let Some(elem) = opt_elem {
                                     if let Some(&inst_elem) =
                                         inst.class_args.first()
                                     {
-                                        let param_subst = Rename(
-                                            inst.type_params
-                                                .iter()
-                                                .zip(type_args.iter())
-                                                .map(|(p, &a)| (*p, a))
-                                                .collect(),
-                                        );
                                         let resolved = self
                                             .ty_arena
                                             .apply(inst_elem, &param_subst);
@@ -2032,7 +2047,10 @@ impl<'a> InferCtx<'a> {
                                     }
                                 }
                                 self.check_instance_constraints(
-                                    &inst, &type_args, span,
+                                    &inst,
+                                    &type_args,
+                                    span,
+                                    Some(&param_subst),
                                 );
                             }
                             None => {
@@ -2099,12 +2117,8 @@ impl<'a> InferCtx<'a> {
                             .cloned()
                         {
                             Some(inst) => {
-                                let param_subst = Rename(
-                                    inst.type_params
-                                        .iter()
-                                        .zip(type_args.iter())
-                                        .map(|(p, &a)| (*p, a))
-                                        .collect(),
+                                let param_subst = self.build_instance_subst(
+                                    &inst, &type_args, span,
                                 );
                                 // class_args[0] is the element type
                                 if let Some(&inst_elem) =
@@ -2120,7 +2134,10 @@ impl<'a> InferCtx<'a> {
                                     }
                                 }
                                 self.check_instance_constraints(
-                                    &inst, &type_args, span,
+                                    &inst,
+                                    &type_args,
+                                    span,
+                                    Some(&param_subst),
                                 );
                             }
                             None => {
@@ -2182,17 +2199,13 @@ impl<'a> InferCtx<'a> {
                             .cloned()
                         {
                             Some(inst) => {
+                                let param_subst = self.build_instance_subst(
+                                    &inst, &type_args, span,
+                                );
                                 if let Some(elem) = opt_elem {
                                     if let Some(&inst_elem) =
                                         inst.class_args.first()
                                     {
-                                        let param_subst = Rename(
-                                            inst.type_params
-                                                .iter()
-                                                .zip(type_args.iter())
-                                                .map(|(p, &a)| (*p, a))
-                                                .collect(),
-                                        );
                                         let resolved = self
                                             .ty_arena
                                             .apply(inst_elem, &param_subst);
@@ -2204,7 +2217,10 @@ impl<'a> InferCtx<'a> {
                                     }
                                 }
                                 self.check_instance_constraints(
-                                    &inst, &type_args, span,
+                                    &inst,
+                                    &type_args,
+                                    span,
+                                    Some(&param_subst),
                                 );
                             }
                             None => {
@@ -2260,17 +2276,13 @@ impl<'a> InferCtx<'a> {
                             .cloned()
                         {
                             Some(inst) => {
+                                let param_subst = self.build_instance_subst(
+                                    &inst, &type_args, span,
+                                );
                                 if let Some(elem) = opt_elem {
                                     if let Some(&inst_elem) =
                                         inst.class_args.first()
                                     {
-                                        let param_subst = Rename(
-                                            inst.type_params
-                                                .iter()
-                                                .zip(type_args.iter())
-                                                .map(|(p, &a)| (*p, a))
-                                                .collect(),
-                                        );
                                         let resolved = self
                                             .ty_arena
                                             .apply(inst_elem, &param_subst);
@@ -2282,7 +2294,10 @@ impl<'a> InferCtx<'a> {
                                     }
                                 }
                                 self.check_instance_constraints(
-                                    &inst, &type_args, span,
+                                    &inst,
+                                    &type_args,
+                                    span,
+                                    Some(&param_subst),
                                 );
                             }
                             None => {
@@ -2338,17 +2353,13 @@ impl<'a> InferCtx<'a> {
                             .cloned()
                         {
                             Some(inst) => {
+                                let param_subst = self.build_instance_subst(
+                                    &inst, &type_args, span,
+                                );
                                 if let Some(elem) = opt_elem {
                                     if let Some(&inst_elem) =
                                         inst.class_args.first()
                                     {
-                                        let param_subst = Rename(
-                                            inst.type_params
-                                                .iter()
-                                                .zip(type_args.iter())
-                                                .map(|(p, &a)| (*p, a))
-                                                .collect(),
-                                        );
                                         let resolved = self
                                             .ty_arena
                                             .apply(inst_elem, &param_subst);
@@ -2360,7 +2371,10 @@ impl<'a> InferCtx<'a> {
                                     }
                                 }
                                 self.check_instance_constraints(
-                                    &inst, &type_args, span,
+                                    &inst,
+                                    &type_args,
+                                    span,
+                                    Some(&param_subst),
                                 );
                             }
                             None => {
@@ -2439,15 +2453,10 @@ impl<'a> InferCtx<'a> {
             Ty::Named(id, type_args) => {
                 match self.instance_registry.lookup(tag, id).cloned() {
                     Some(inst) => {
+                        let param_subst =
+                            self.build_instance_subst(&inst, &type_args, span);
                         if let Some(inner) = opt_inner {
                             if let Some(&inst_inner) = inst.class_args.first() {
-                                let param_subst = Rename(
-                                    inst.type_params
-                                        .iter()
-                                        .zip(type_args.iter())
-                                        .map(|(p, &a)| (*p, a))
-                                        .collect(),
-                                );
                                 let resolved = self
                                     .ty_arena
                                     .apply(inst_inner, &param_subst);
@@ -2459,7 +2468,10 @@ impl<'a> InferCtx<'a> {
                             }
                         }
                         self.check_instance_constraints(
-                            &inst, &type_args, span,
+                            &inst,
+                            &type_args,
+                            span,
+                            Some(&param_subst),
                         );
                     }
                     None => {
@@ -2481,20 +2493,57 @@ impl<'a> InferCtx<'a> {
         }
     }
 
+    /// Build a `Rename` from an instance's `type_params` and the actual
+    /// `type_args` at a use site. For `Ty::Var` entries, adds the mapping
+    /// to the rename. For concrete entries, unifies with the corresponding
+    /// `type_arg` to verify they match.
+    pub(super) fn build_instance_subst(
+        &mut self,
+        inst: &super::instance::Instance,
+        type_args: &[TyId],
+        span: Span,
+    ) -> Rename {
+        // Partition into var mappings and concrete pairs first to
+        // avoid borrow-checker issues with `ty_arena` vs `unify_types`.
+        let (vars, concretes): (
+            SmallVec<[(TyVar, TyId); 2]>,
+            SmallVec<[(TyId, TyId); 2]>,
+        ) = inst.type_params.iter().zip(type_args.iter()).fold(
+            (SmallVec::new(), SmallVec::new()),
+            |(mut vs, mut cs), (&p, &a)| {
+                match self.ty_arena.get(p) {
+                    Ty::Var(tv) => vs.push((*tv, a)),
+                    _ => cs.push((p, a)),
+                }
+                (vs, cs)
+            },
+        );
+        concretes.into_iter().for_each(|(p, a)| {
+            if let Err(e) = self.unify_types(p, a, span) {
+                self.error(e);
+            }
+        });
+        Rename(vars.into_iter().collect())
+    }
+
     /// Check that a user instance's WHERE constraints are satisfied.
+    /// Accepts an optional pre-built `Rename` to avoid redundant
+    /// `build_instance_subst` calls at sites that already have one.
     fn check_instance_constraints(
         &mut self,
         inst: &super::instance::Instance,
         type_args: &[TyId],
         span: Span,
+        subst: Option<&Rename>,
     ) {
-        let inst_subst = Rename(
-            inst.type_params
-                .iter()
-                .zip(type_args.iter())
-                .map(|(p, &a)| (*p, a))
-                .collect(),
-        );
+        let fallback;
+        let inst_subst = match subst {
+            Some(r) => r,
+            None => {
+                fallback = self.build_instance_subst(inst, type_args, span);
+                &fallback
+            }
+        };
         // Collect constraints to avoid borrow conflict
         let constraints: SmallVec<[(TyVar, BuiltinClass<TyId>); 2]> =
             inst.constraints.clone();
@@ -2734,20 +2783,15 @@ impl<'a> InferCtx<'a> {
                 // User type: look up instance in registry
                 Ty::Named(type_id, ref type_args) => {
                     let type_args: SmallVec<[TyId; 4]> = type_args.clone();
-                    match self.instance_registry.lookup(class, type_id) {
+                    match self.instance_registry.lookup(class, type_id).cloned()
+                    {
                         Some(inst) => {
+                            let param_rename = self
+                                .build_instance_subst(&inst, &type_args, span);
                             // Find the associated type definition
                             match inst.get_assoc_type(assoc_name) {
                                 Some(assoc_def) => {
-                                    // Rename type parameters
                                     let assoc_ty = assoc_def.ty;
-                                    let param_rename = Rename(
-                                        inst.type_params
-                                            .iter()
-                                            .zip(type_args.iter())
-                                            .map(|(p, &a)| (*p, a))
-                                            .collect(),
-                                    );
                                     Ok(self
                                         .ty_arena
                                         .apply(assoc_ty, &param_rename))
@@ -2917,13 +2961,15 @@ mod tests {
     /// Test that Instance with WHERE constraints stores them correctly.
     #[test]
     fn instance_with_constraints() {
+        let mut a = TyArena::new();
         let t = TyVar::new(0);
+        let t_id = a.var(0);
         let constraint = (t, BuiltinClass::Simple(BuiltinClassTag::Display));
 
         let inst = Instance {
             class: BuiltinClassTag::Ord,
             class_args: SmallVec::new(),
-            type_params: smallvec::smallvec![t],
+            type_params: smallvec::smallvec![t_id],
             constraints: smallvec::smallvec![constraint],
             methods: std::collections::HashMap::new(),
             assoc_types: SmallVec::new(),

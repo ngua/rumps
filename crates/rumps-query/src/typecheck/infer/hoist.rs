@@ -510,23 +510,16 @@ impl InferCtx<'_> {
                         })
                         .collect();
 
-                    // Extract type params as `TyVar`s
-                    let type_var_params: SmallVec<[TyVar; 2]> =
-                        type_param_subst
-                            .values()
-                            .filter_map(|&ty_id| {
-                                match self.ty_arena.get(ty_id) {
-                                    Ty::Var(v) => Some(*v),
-                                    _ => None,
-                                }
-                            })
-                            .collect();
+                    // Collect all type params (both `Ty::Var` and concrete)
+                    // in positional order for 1:1 zip with `type_args`
+                    let type_all_params: SmallVec<[TyId; 2]> =
+                        type_param_subst.values().copied().collect();
 
                     // Register instance (ignore duplicate errors; caught in Pass 2)
                     let inst = Instance {
                         class,
                         class_args: class_arg_tys,
-                        type_params: type_var_params,
+                        type_params: type_all_params,
                         constraints: scheme_constraints,
                         methods: method_map,
                         assoc_types: SmallVec::new(),

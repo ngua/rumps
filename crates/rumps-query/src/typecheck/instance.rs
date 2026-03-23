@@ -43,8 +43,12 @@ pub(crate) struct Instance {
     pub(crate) class: BuiltinClassTag,
     /// Type arguments to the class (e.g., `[TyArena::STRING]` for `Into[String]`).
     pub(crate) class_args: SmallVec<[TyId; 2]>,
-    /// Type parameters on the implementing type (e.g., `[L, R]` for `Either[L, R]`).
-    pub(crate) type_params: SmallVec<[TyVar; 2]>,
+    /// All type arguments on the implementing type in positional order.
+    ///
+    /// Contains both `Ty::Var` entries (polymorphic params) and concrete
+    /// types (fixed params like `Int` in `class Fallible for Pair[Int]`).
+    /// Zipped 1:1 with the actual `type_args` at use sites.
+    pub(crate) type_params: SmallVec<[TyId; 2]>,
     /// WHERE clause constraints (e.g., `[(L, Display), (R, Display)]`).
     pub(crate) constraints: SmallVec<[(TyVar, BuiltinClass<TyId>); 2]>,
     /// Method implementations: method name -> generated function name.

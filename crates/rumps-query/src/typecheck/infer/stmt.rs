@@ -1091,13 +1091,8 @@ impl InferCtx<'_> {
                 })
                 .collect();
 
-            let type_var_params: SmallVec<[TyVar; 2]> = type_param_subst
-                .values()
-                .filter_map(|&id| match self.ty_arena.get(id) {
-                    Ty::Var(v) => Some(*v),
-                    _ => None,
-                })
-                .collect();
+            let type_var_params: SmallVec<[TyId; 2]> =
+                type_param_subst.values().copied().collect();
 
             // Skip registration if already hoisted (avoid duplicate error)
             if self.instance_registry.lookup(class, tid).is_none() {

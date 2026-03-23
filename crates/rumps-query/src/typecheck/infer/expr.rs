@@ -1577,14 +1577,8 @@ impl InferCtx<'_> {
                     span,
                 ) {
                     Some(inst) => {
-                        // Build substitution from instance type params to actual type args
-                        let param_subst = Rename(
-                            inst.type_params
-                                .iter()
-                                .zip(type_args.iter())
-                                .map(|(p, &a)| (*p, a))
-                                .collect(),
-                        );
+                        let param_subst =
+                            self.build_instance_subst(&inst, &type_args, span);
 
                         // Resolve index type from associated type
                         let inst_idx_ty = inst
@@ -1702,14 +1696,8 @@ impl InferCtx<'_> {
                     span,
                 ) {
                     Some(inst) => {
-                        // Build substitution from instance type params to actual type args
-                        let param_subst = Rename(
-                            inst.type_params
-                                .iter()
-                                .zip(type_args.iter())
-                                .map(|(p, &a)| (*p, a))
-                                .collect(),
-                        );
+                        let param_subst =
+                            self.build_instance_subst(&inst, &type_args, span);
 
                         // Resolve index type from associated type
                         let inst_idx_ty = inst
