@@ -207,7 +207,7 @@ impl BuiltinClassTag {
     /// Direct superclasses only.
     pub(crate) const fn supers(self) -> &'static [Self] {
         match self {
-            Self::Wrappable => &[Self::Fallible],
+            Self::Fallible => &[Self::Wrappable],
             Self::Chainable => &[Self::Wrappable],
             _ => &[],
         }
