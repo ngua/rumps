@@ -10,13 +10,16 @@ use indexmap::IndexMap;
 use smallvec::{smallvec, SmallVec};
 
 use super::{ClassInstanceInput, InferCtx};
-use crate::ast::{AstTypeExprId, BindingPattern, Stmt, StmtId, TypeParam};
+use crate::ast::{
+    AstTypeExpr, AstTypeExprId, BindingPattern, Stmt, StmtId, TypeParam,
+};
 use crate::intern::{QualifiedName, StringId};
 use crate::typecheck::error::TypeError;
 use crate::typecheck::instance::Instance;
 use crate::typecheck::ty::{
-    BuiltinClass, BuiltinClassTag, Scheme, Ty, TyArena, TyId, TyVar,
+    BuiltinClass, BuiltinClassTag, ClassShape, Scheme, Ty, TyArena, TyId, TyVar,
 };
+use crate::value::{TypeDef, TypeId};
 use crate::Span;
 
 impl InferCtx<'_> {
@@ -405,45 +408,62 @@ impl InferCtx<'_> {
             // Merge type vars from `for_type` (e.g. `T` in `X[T]`)
             self.merge_for_type_vars(for_type, &mut type_param_subst);
 
-            // Resolve for_type
-            let for_ty = self.ast_type_to_ty(for_type, &type_param_subst);
+            // Resolve for_type and class args; HKT classes use partial
+            // application (fewer type args than the type expects)
+            let resolved = match class.shape() {
+                ClassShape::Hkt { .. } => self.resolve_hkt_for_type(
+                    class,
+                    for_type,
+                    class_args,
+                    &mut type_param_subst,
+                    &module,
+                    span,
+                ),
+                _ => {
+                    let for_ty =
+                        self.ast_type_to_ty(for_type, &type_param_subst);
 
-            // Fallback for module-scoped unqualified type names: if `for_ty` is
-            // `Unknown` and we're inside a module, try the qualified name.
-            let for_ty = if for_ty == TyArena::UNKNOWN {
-                if let Some(ref mod_qn) = module {
-                    let raw_name = self.extract_type_name_from_ast(for_type);
-                    if raw_name.contains('.') {
-                        for_ty // Already qualified
+                    // Fallback for module-scoped unqualified type names
+                    let for_ty = if for_ty == TyArena::UNKNOWN {
+                        if let Some(ref mod_qn) = module {
+                            let raw = self.extract_type_name_from_ast(for_type);
+                            if raw.contains('.') {
+                                for_ty
+                            } else {
+                                self.env
+                                    .lookup_str(&raw)
+                                    .map(|id| mod_qn.child(id))
+                                    .and_then(|qn| self.registry.lookup(&qn))
+                                    .map(|tid| {
+                                        self.ty_arena.named(tid, smallvec![])
+                                    })
+                                    .unwrap_or(for_ty)
+                            }
+                        } else {
+                            for_ty
+                        }
                     } else {
-                        self.env
-                            .lookup_str(&raw_name)
-                            .map(|name_id| mod_qn.child(name_id))
-                            .and_then(|qn| self.registry.lookup(&qn))
-                            .map(|tid| self.ty_arena.named(tid, smallvec![]))
-                            .unwrap_or(for_ty)
+                        for_ty
+                    };
+
+                    let class_arg_tys: SmallVec<[TyId; 2]> = class_args
+                        .iter()
+                        .map(|id| self.ast_type_to_ty(*id, &type_param_subst))
+                        .collect();
+
+                    let for_ty_ref = self.ty_arena.get(for_ty).clone();
+                    match &for_ty_ref {
+                        Ty::Named(id, _) | Ty::Union(Some(id), _) => {
+                            Some((*id, for_ty, class_arg_tys))
+                        }
+                        _ => self
+                            .primitive_type_id(&for_ty_ref)
+                            .map(|id| (id, for_ty, class_arg_tys)),
                     }
-                } else {
-                    for_ty
                 }
-            } else {
-                for_ty
             };
 
-            // Convert class args (needed for builtin check)
-            let class_arg_tys: SmallVec<[TyId; 2]> = class_args
-                .iter()
-                .map(|id| self.ast_type_to_ty(*id, &type_param_subst))
-                .collect();
-
-            // Extract TypeId; for primitives, use `primitive_type_id`
-            let for_ty_ref = self.ty_arena.get(for_ty).clone();
-            let type_id_opt = match &for_ty_ref {
-                Ty::Named(id, _) | Ty::Union(Some(id), _) => Some(*id),
-                _ => self.primitive_type_id(&for_ty_ref),
-            };
-
-            if let Some(type_id) = type_id_opt {
+            if let Some((type_id, for_ty, class_arg_tys)) = resolved {
                 // Check if this is a forbidden builtin instance (same logic as stmt.rs)
                 // Allow if any class arg is a user-defined type
                 let is_forbidden_builtin = self.is_builtin_type(type_id)
@@ -534,5 +554,158 @@ impl InferCtx<'_> {
                 }
             }
         }
+    }
+
+    /// Resolve `for_type` for an HKT class instance with partial application.
+    ///
+    /// Allows fewer type arguments than the type definition expects; the
+    /// remaining positions become element type variables for the HKT class.
+    /// Returns `(type_id, for_ty, class_arg_tys)` on success.
+    pub(super) fn resolve_hkt_for_type(
+        &mut self,
+        class: BuiltinClassTag,
+        for_type: AstTypeExprId,
+        class_args: &[AstTypeExprId],
+        subst: &mut IndexMap<StringId, TyId>,
+        module: &Option<QualifiedName>,
+        span: Span,
+    ) -> Option<(TypeId, TyId, SmallVec<[TyId; 2]>)> {
+        let kind = match class.shape() {
+            ClassShape::Hkt { kind } => kind,
+            _ => 0,
+        };
+        // HKT element types are inferred; explicit class args not allowed
+        if !class_args.is_empty() {
+            self.error(TypeError::Custom {
+                msg: format!(
+                    "class `{}` is higher-kinded; element types are \
+                     inferred from the type's remaining parameters",
+                    class.name(),
+                ),
+                span,
+            });
+        }
+
+        // Extract base type name and explicit args from AST
+        let (type_name, ast_args) = self
+            .ast
+            .get_type_expr(for_type)
+            .cloned()
+            .and_then(|te| match te {
+                AstTypeExpr::Named(name) => {
+                    Some((name, SmallVec::<[AstTypeExprId; 2]>::new()))
+                }
+                AstTypeExpr::App(name, args) => Some((name, args)),
+                _ => None,
+            })
+            .or_else(|| {
+                self.error(TypeError::Custom {
+                    msg: "expected a named type for HKT class instance".into(),
+                    span,
+                });
+                None
+            })?;
+
+        // Resolve type name (with module fallback)
+        let (type_id, qn) = self
+            .resolve_type_name(&type_name)
+            .or_else(|| {
+                module.as_ref().and_then(|mod_qn| {
+                    let raw = type_name.display(&self.env.strings);
+                    if raw.contains('.') {
+                        None
+                    } else {
+                        self.env
+                            .lookup_str(&raw)
+                            .map(|id| mod_qn.child(id))
+                            .and_then(|qn| {
+                                self.registry.lookup(&qn).map(|tid| (tid, qn))
+                            })
+                    }
+                })
+            })
+            .or_else(|| {
+                self.error(TypeError::UnknownType(
+                    type_name.display(&self.env.strings),
+                    span,
+                ));
+                None
+            })?;
+
+        // Validate partial application
+        let total = self.registry.type_param_count(type_id).unwrap_or(0);
+        let supplied = ast_args.len();
+        let k = kind as usize;
+        let type_name_s = qn.display(&self.env.strings);
+
+        if total < supplied {
+            self.error(TypeError::TypeArityMismatch {
+                name: type_name_s.clone(),
+                expected: total,
+                got: supplied,
+                span,
+            });
+            None?
+        }
+
+        let remaining = total - supplied;
+        if remaining != k {
+            self.error(TypeError::Custom {
+                msg: format!(
+                    "type `{}` has {} type parameter(s); class `{}` \
+                     requires exactly {} unfilled, but {} are unfilled",
+                    type_name_s,
+                    total,
+                    class.name(),
+                    k,
+                    remaining,
+                ),
+                span,
+            });
+            None?
+        }
+
+        // Convert supplied type args
+        let supplied_args: SmallVec<[TyId; 4]> = ast_args
+            .iter()
+            .map(|a| self.ast_type_to_ty(*a, subst))
+            .collect();
+
+        // Get param names from `TypeDef` for naming element vars
+        let param_names: SmallVec<[StringId; 2]> = self
+            .registry
+            .get_def(type_id)
+            .and_then(|d| match d {
+                TypeDef::Sum { type_params, .. }
+                | TypeDef::Alias { type_params, .. }
+                | TypeDef::Union { type_params, .. } => {
+                    Some(type_params.clone())
+                }
+                TypeDef::Builtin(_) => None,
+            })
+            .unwrap_or_default();
+
+        // Create fresh vars for element positions (the unfilled params)
+        let elem_tys: SmallVec<[TyId; 2]> = (0..remaining)
+            .map(|i| {
+                let tv = self.fresh_var();
+                let ty = self.ty_arena.alloc(Ty::Var(tv));
+                // Register under the `TypeDef`'s param name so method
+                // signatures that reference it resolve correctly
+                if let Some(&name) = param_names.get(supplied + i) {
+                    subst.insert(name, ty);
+                }
+                ty
+            })
+            .collect();
+
+        // Build `for_ty` with all args: `[...supplied, ...element_vars]`
+        let full_args: SmallVec<[TyId; 4]> = supplied_args
+            .iter()
+            .chain(elem_tys.iter())
+            .copied()
+            .collect();
+
+        Some((type_id, self.ty_arena.named(type_id, full_args), elem_tys))
     }
 }
