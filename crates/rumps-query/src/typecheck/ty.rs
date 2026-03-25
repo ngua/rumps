@@ -1698,9 +1698,11 @@ impl TyArena {
                                 })
                             }
                             Ty::Named(tid, orig) => {
-                                let new_args: SmallVec<[TyId; 4]> = na
+                                let keep = orig.len().saturating_sub(na.len());
+                                let new_args: SmallVec<[TyId; 4]> = orig
                                     .iter()
-                                    .chain(orig.iter().skip(na.len()))
+                                    .take(keep)
+                                    .chain(na.iter())
                                     .copied()
                                     .collect();
                                 self.alloc(Ty::Named(tid, new_args))
