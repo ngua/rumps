@@ -497,13 +497,20 @@ impl<'a> InferCtx<'a> {
                 )
             }
 
-            // User-defined named types: decompose into constructor + type args
+            // User-defined named types: decompose into constructor + element
+            // Element type is the LAST type arg (Haskell curried convention).
+            // Non-element (fixed) args are preserved in the constructor placeholder.
             Ty::Named(id, ref type_args) => {
-                if let Some(&first_arg) = type_args.first() {
-                    let placeholder: SmallVec<[TyId; 4]> =
-                        type_args.iter().map(|_| TyArena::ERROR).collect();
+                if let Some(&last_arg) = type_args.last() {
+                    let mut placeholder: SmallVec<[TyId; 4]> =
+                        type_args.clone();
+                    let start = placeholder.len().saturating_sub(args.len());
+                    placeholder
+                        .iter_mut()
+                        .skip(start)
+                        .for_each(|p| *p = TyArena::ERROR);
                     let ctor = self.ty_arena.named(id, placeholder);
-                    self.unify_apply_inner(tv, args, ctor, first_arg, span)
+                    self.unify_apply_inner(tv, args, ctor, last_arg, span)
                 } else {
                     // Named type with no params; just bind tv
                     self.unify_var(tv, other, span)
