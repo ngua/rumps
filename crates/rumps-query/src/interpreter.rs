@@ -125,6 +125,7 @@ use crate::env::Environment;
 use crate::intern::{QualifiedName, StringId, StringInterner};
 use crate::io::IoContext;
 use crate::resolve::ResolveCtx;
+use crate::typecheck::BuiltinClassTag;
 use crate::value::{
     CapturedEnv, FunctionDef, TypeExprArena, TypeExprId, TypeId, TypeRegistry,
     Value, ValueArena, ValueId,
@@ -525,7 +526,20 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             }
             Expr::Postfix(op, inner) => {
                 let val = self.eval(inner).await?;
-                self.postfix(op, val, span)
+                if self.instance_calls.contains_key(&id) {
+                    let val_id = self.arena.add(val, span);
+                    let mid = self.arena.intern("unwrap");
+                    self.dispatch_class_method(
+                        Some(id),
+                        BuiltinClassTag::Fallible,
+                        mid,
+                        &[val_id],
+                        span,
+                    )
+                    .await
+                } else {
+                    self.postfix(op, val, span)
+                }
             }
             Expr::Range(start_id, end_id, inclusive) => {
                 self.range(start_id, end_id, inclusive, span).await
@@ -1526,7 +1540,28 @@ impl<I: IoContext> Interpreter<'_, I> {
             // Coalesce: unwrap Option.Some/Result.Ok, or evaluate right for None/Err
             BinOp::Coalesce => {
                 let left = self.eval(lhs).await?;
-                self.coalesce(left, rhs).await
+                if self.instance_calls.contains_key(&id) {
+                    let val_id = self.arena.add(left, span);
+                    let mid = self.arena.intern("unwrap");
+                    match self
+                        .dispatch_class_method(
+                            Some(id),
+                            BuiltinClassTag::Fallible,
+                            mid,
+                            &[val_id],
+                            span,
+                        )
+                        .await
+                    {
+                        Ok(v) => Ok(v),
+                        Err(e) if e.runtime_variant().is_some() => {
+                            self.eval(rhs).await
+                        }
+                        Err(e) => Err(e),
+                    }
+                } else {
+                    self.coalesce(left, rhs).await
+                }
             }
             // Pipeline: both sides evaluated, but requires async function call
             BinOp::Pipe => {
@@ -1559,7 +1594,20 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<Value> {
         let val = self.eval(operand).await?;
-        self.apply_unop(id, op, val, span)
+        if matches!(op, UnOp::Wrap) && self.instance_calls.contains_key(&id) {
+            let val_id = self.arena.add(val, span);
+            let mid = self.arena.intern("wrap");
+            self.dispatch_class_method(
+                Some(id),
+                BuiltinClassTag::Wrappable,
+                mid,
+                &[val_id],
+                span,
+            )
+            .await
+        } else {
+            self.apply_unop(id, op, val, span)
+        }
     }
 
     /// Evaluate a type check: `expr is Pattern`.
