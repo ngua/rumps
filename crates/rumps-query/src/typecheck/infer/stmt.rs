@@ -1319,6 +1319,15 @@ impl InferCtx<'_> {
         }
     }
 
+    /// Resolve a `TyId` to its nominal `TypeId`; handles `Named`, `Union`,
+    /// and primitive types.
+    pub(super) fn nominal_type_id(&self, ty: TyId) -> Option<TypeId> {
+        match self.ty_arena.get(ty) {
+            Ty::Named(tid, _) | Ty::Union(Some(tid), _) => Some(*tid),
+            other => self.primitive_type_id(other),
+        }
+    }
+
     /// Get the `TypeId` for a primitive `Ty`.
     pub(crate) fn primitive_type_id(&self, ty: &Ty) -> Option<TypeId> {
         match ty {

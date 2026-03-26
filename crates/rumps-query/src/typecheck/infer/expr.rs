@@ -156,7 +156,7 @@ impl InferCtx<'_> {
             }
 
             // Postfix operators: `!`
-            Expr::Postfix(op, inner) => self.postfix(*op, *inner, span),
+            Expr::Postfix(op, inner) => self.postfix(id, *op, *inner, span),
 
             // Type check: `expr IS Pattern`
             Expr::Is(scrutinee, pattern) => {
@@ -1059,10 +1059,7 @@ impl InferCtx<'_> {
         let class_tag = op.class_dispatch().map(|(tag, _)| tag);
 
         if let Some(kind) = class_tag {
-            let type_id = match self.ty_arena.get(lhs_ty) {
-                Ty::Named(tid, _) | Ty::Union(Some(tid), _) => Some(*tid),
-                other => self.primitive_type_id(other),
-            };
+            let type_id = self.nominal_type_id(lhs_ty);
 
             // Suppress if we're inside the class instance for this exact
             // (class, type) combination to prevent infinite recursion.
@@ -1071,6 +1068,31 @@ impl InferCtx<'_> {
                 .as_ref()
                 .is_some_and(|ctx| ctx.class == kind && ctx.type_id == type_id);
 
+            if !inside_same {
+                match type_id {
+                    Some(tid)
+                        if self
+                            .check_instance_available(kind, tid, span)
+                            .is_some() =>
+                    {
+                        self.instance_calls.insert(id, tid);
+                    }
+                    _ => {
+                        self.deferred_instance_calls.push((id, lhs_ty, kind));
+                    }
+                }
+            }
+        }
+
+        // Track Fallible instance for `??` (coalesce) dispatch on user types.
+        // Coalesce is not in `class_dispatch()` so needs separate handling.
+        if matches!(op, BinOp::Coalesce) {
+            let kind = BuiltinClassTag::Fallible;
+            let type_id = self.nominal_type_id(lhs_ty);
+            let inside_same = self
+                .class_context
+                .as_ref()
+                .is_some_and(|ctx| ctx.class == kind && ctx.type_id == type_id);
             if !inside_same {
                 match type_id {
                     Some(tid)
@@ -1109,6 +1131,29 @@ impl InferCtx<'_> {
         // Track wrap types for interpreter dispatch
         if matches!(op, UnOp::Wrap) {
             self.wrap_types.insert(id, result);
+
+            // Track Wrappable instance for `?` dispatch on user types.
+            // Check the result type (e.g. `Box[T]`) for a Wrappable instance.
+            let kind = BuiltinClassTag::Wrappable;
+            let type_id = self.nominal_type_id(result);
+            let inside_same = self
+                .class_context
+                .as_ref()
+                .is_some_and(|ctx| ctx.class == kind && ctx.type_id == type_id);
+            if !inside_same {
+                match type_id {
+                    Some(tid)
+                        if self
+                            .check_instance_available(kind, tid, span)
+                            .is_some() =>
+                    {
+                        self.instance_calls.insert(id, tid);
+                    }
+                    _ => {
+                        self.deferred_instance_calls.push((id, result, kind));
+                    }
+                }
+            }
         }
 
         result
@@ -2503,10 +2548,44 @@ impl InferCtx<'_> {
     ///
     /// Uses the operator's type scheme to generate constraints and determine
     /// the result type.
-    fn postfix(&mut self, op: PostfixOp, inner_id: ExprId, span: Span) -> TyId {
+    fn postfix(
+        &mut self,
+        id: ExprId,
+        op: PostfixOp,
+        inner_id: ExprId,
+        span: Span,
+    ) -> TyId {
         let inner_ty = self.expr(inner_id);
         let scheme = op.def(&mut self.ty_arena).ty;
-        self.apply_op_scheme(&scheme, &[inner_ty], span)
+        let ret = self.apply_op_scheme(&scheme, &[inner_ty], span);
+
+        // Track Fallible instance for `!` dispatch on user types.
+        // Same pattern as binary class dispatch: try immediate resolution,
+        // fall back to deferred for unresolved type variables.
+        if matches!(op, PostfixOp::Unwrap) {
+            let kind = BuiltinClassTag::Fallible;
+            let type_id = self.nominal_type_id(inner_ty);
+            let inside_same = self
+                .class_context
+                .as_ref()
+                .is_some_and(|ctx| ctx.class == kind && ctx.type_id == type_id);
+            if !inside_same {
+                match type_id {
+                    Some(tid)
+                        if self
+                            .check_instance_available(kind, tid, span)
+                            .is_some() =>
+                    {
+                        self.instance_calls.insert(id, tid);
+                    }
+                    _ => {
+                        self.deferred_instance_calls.push((id, inner_ty, kind));
+                    }
+                }
+            }
+        }
+
+        ret
     }
 
     /// Check if scrutinee type is compatible with a variant pattern.
