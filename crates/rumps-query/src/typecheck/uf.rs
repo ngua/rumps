@@ -111,6 +111,17 @@ impl UnionFind {
         }
     }
 
+    /// Resolve a type variable to its bound type (if any), fully resolving
+    /// through chains. If unbound, returns `None`.
+    pub(crate) fn resolve_var(
+        &mut self,
+        v: TyVar,
+        arena: &mut TyArena,
+    ) -> Option<TyId> {
+        let root = self.find(v);
+        self.probe(root).map(|bound| self.resolve(bound, arena))
+    }
+
     /// Merge two unbound roots by rank.
     ///
     /// Both `a` and `b` must already be canonical roots (call `find` first).
@@ -667,6 +678,37 @@ mod tests {
         uf.rollback(snap1);
         assert_eq!(uf.probe(a), None);
         assert_eq!(uf.probe(b), None);
+    }
+
+    #[test]
+    fn resolve_var_method_bound() {
+        let mut arena = TyArena::new();
+        let mut uf = UnionFind::new();
+        let v = uf.fresh();
+        uf.bind(v, TyArena::INT);
+        assert_eq!(uf.resolve_var(v, &mut arena), Some(TyArena::INT));
+    }
+
+    #[test]
+    fn resolve_var_method_unbound() {
+        let mut arena = TyArena::new();
+        let mut uf = UnionFind::new();
+        let v = uf.fresh();
+        assert_eq!(uf.resolve_var(v, &mut arena), None);
+    }
+
+    #[test]
+    fn resolve_var_method_through_chain() {
+        let mut arena = TyArena::new();
+        let mut uf = UnionFind::new();
+        let a = uf.fresh();
+        let b = uf.fresh();
+        uf.union(a, b);
+        let root = uf.find(a);
+        uf.bind(root, TyArena::STRING);
+        // Resolving the non-root var should chase through to the binding
+        let non_root = if root == a { b } else { a };
+        assert_eq!(uf.resolve_var(non_root, &mut arena), Some(TyArena::STRING));
     }
 
     #[test]
