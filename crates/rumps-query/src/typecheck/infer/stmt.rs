@@ -1266,6 +1266,26 @@ impl InferCtx<'_> {
             });
         }
 
+        // For HKT classes, extend subst with method-level type vars
+        // so user-chosen element names (e.g. `V` vs TypeDef's `Val`)
+        // resolve correctly.
+        let mut method_subst;
+        let type_param_subst =
+            if matches!(class.shape(), ClassShape::Hkt { .. }) {
+                method_subst = type_param_subst.clone();
+                method.params.iter().for_each(|(_, ann)| {
+                    if let Some(id) = ann {
+                        self.merge_for_type_vars(*id, &mut method_subst);
+                    }
+                });
+                if let Some(ret) = method.ret {
+                    self.merge_for_type_vars(ret, &mut method_subst);
+                }
+                &method_subst
+            } else {
+                type_param_subst
+            };
+
         // Typecheck method body
         self.env.push_scope();
 
