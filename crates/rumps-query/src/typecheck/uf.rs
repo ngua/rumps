@@ -3,7 +3,7 @@
 //! Replaces the naive substitution (`HashMap<TyVar, TyId>`) with a near-linear
 //! amortized data structure using path compression and union-by-rank.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use indexmap::IndexMap;
 use smallvec::SmallVec;
@@ -36,6 +36,9 @@ pub(crate) struct UnionFind {
     undo: Vec<(usize, Entry)>,
     /// Number of active snapshots. When `> 0`, mutations are recorded.
     snap_depth: u32,
+    /// Memoization cache for `resolve`; only valid when bindings are frozen
+    /// (post-solve). Cleared by `enable_zonk_cache` / `disable_zonk_cache`.
+    zonk_cache: Option<HashMap<TyId, TyId>>,
 }
 
 /// Opaque snapshot handle for backtracking.
@@ -50,6 +53,7 @@ impl UnionFind {
             entries: Vec::new(),
             undo: Vec::new(),
             snap_depth: 0,
+            zonk_cache: None,
         }
     }
 
@@ -158,8 +162,21 @@ impl UnionFind {
     ///
     /// This is the replacement for `TyArena::apply(ty, &subst)`.
     pub(crate) fn resolve(&mut self, id: TyId, arena: &mut TyArena) -> TyId {
-        let ty = arena.get(id).clone();
-        self.resolve_inner(id, ty, arena)
+        if let Some(ref cache) = self.zonk_cache {
+            if let Some(&cached) = cache.get(&id) {
+                cached
+            } else {
+                let ty = arena.get(id).clone();
+                let resolved = self.resolve_inner(id, ty, arena);
+                if let Some(ref mut cache) = self.zonk_cache {
+                    cache.insert(id, resolved);
+                }
+                resolved
+            }
+        } else {
+            let ty = arena.get(id).clone();
+            self.resolve_inner(id, ty, arena)
+        }
     }
 
     fn resolve_inner(&mut self, id: TyId, ty: Ty, arena: &mut TyArena) -> TyId {
@@ -466,10 +483,22 @@ impl UnionFind {
         }
     }
 
+    /// Enable the zonking cache. Call after constraint solving is complete
+    /// and no more bindings will be added.
+    pub(crate) fn enable_zonk_cache(&mut self) {
+        self.zonk_cache = Some(HashMap::new());
+    }
+
+    /// Disable and clear the zonking cache.
+    pub(crate) fn disable_zonk_cache(&mut self) {
+        self.zonk_cache = None;
+    }
+
     /// Take a snapshot for backtracking. All subsequent mutations (via
     /// `find`, `union`, `bind`) are automatically recorded until
     /// `rollback` is called.
     pub(crate) fn snapshot(&mut self) -> Snapshot {
+        self.zonk_cache = None;
         self.snap_depth += 1;
         Snapshot {
             entries_len: self.entries.len(),
@@ -479,6 +508,7 @@ impl UnionFind {
 
     /// Rollback to a previous snapshot, undoing all mutations since it.
     pub(crate) fn rollback(&mut self, snap: Snapshot) {
+        self.zonk_cache = None;
         // Restore mutated entries in reverse order
         self.undo
             .drain(snap.undo_len..)

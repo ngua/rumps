@@ -828,6 +828,12 @@ impl<'a> InferCtx<'a> {
         // other constraints (Numeric, Into[String], etc.) depend on.
         constraints.iter().for_each(|c| match c {
             Constraint::Unify(t1, t2, span) => {
+                // Pre-resolve before unifying. While `unify_inner` handles
+                // `Ty::Var` via `unify_var` (which does `find`/`probe`
+                // internally), pre-resolving is still necessary: without it,
+                // error messages on mismatch show unresolved type variables
+                // (e.g. `Option[T]`) instead of concrete types (e.g.
+                // `Option[Int]`).
                 let t1 = self.uf.resolve(*t1, &mut self.ty_arena);
                 let t2 = self.uf.resolve(*t2, &mut self.ty_arena);
                 if let Err(e) = self.unify_types(t1, t2, *span) {
