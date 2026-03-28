@@ -1198,28 +1198,36 @@ impl InferCtx<'_> {
                             //    applied `Named(type_id, supplied_args)` so
                             //    `Apply(container_var, elems)` resolves to
                             //    `Named(type_id, [supplied... elems...])`
-                            let (&container_var, elem_vars) =
-                                scheme.vars.split_last().expect(
-                                    "HKT scheme must have at least one var",
-                                );
-                            // Use `for_ty` directly; it has all
-                            // positions filled (fixed params + elem
-                            // vars). `apply_inner` will replace the
-                            // last `na.len()` positions, which are
-                            // exactly the element slots.
-                            let ctor_ty = for_ty;
-                            let mut rename = HashMap::new();
-                            rename.insert(container_var, ctor_ty);
-                            elem_vars.iter().for_each(|&ev| {
-                                rename.insert(ev, self.fresh());
-                            });
-                            let rename = Rename(rename);
-                            let ps: Vec<_> = params
-                                .iter()
-                                .map(|&p| self.ty_arena.apply(p, &rename))
-                                .collect();
-                            let r = self.ty_arena.apply(ret, &rename);
-                            (ps, r)
+                            if let Some((&container_var, elem_vars)) =
+                                scheme.vars.split_last()
+                            {
+                                // Use `for_ty` directly; it has all
+                                // positions filled (fixed params + elem
+                                // vars). `apply_inner` will replace the
+                                // last `na.len()` positions, which are
+                                // exactly the element slots.
+                                let ctor_ty = for_ty;
+                                let mut rename = HashMap::new();
+                                rename.insert(container_var, ctor_ty);
+                                elem_vars.iter().for_each(|&ev| {
+                                    rename.insert(ev, self.fresh());
+                                });
+                                let rename = Rename(rename);
+                                let ps: Vec<_> = params
+                                    .iter()
+                                    .map(|&p| self.ty_arena.apply(p, &rename))
+                                    .collect();
+                                let r = self.ty_arena.apply(ret, &rename);
+                                (ps, r)
+                            } else {
+                                self.error(TypeError::Custom {
+                                    msg:
+                                        "HKT class scheme has no type variables"
+                                            .into(),
+                                    span: m_span,
+                                });
+                                (vec![], TyArena::UNKNOWN)
+                            }
                         }
                         _ => {
                             // Simple/Parameterized: first var is `Self`,

@@ -2560,8 +2560,8 @@ impl<'a> InferCtx<'a> {
             inst.constraints.clone();
         constraints.iter().for_each(|(var, class)| {
             let var_id = self.ty_arena.alloc(Ty::Var(*var));
-            let ty = self.ty_arena.apply(var_id, &inst_subst);
-            let class = class.apply(&inst_subst, &mut self.ty_arena);
+            let ty = self.ty_arena.apply(var_id, inst_subst);
+            let class = class.apply(inst_subst, &mut self.ty_arena);
             self.satisfies_class(&class, ty, span);
         });
     }
