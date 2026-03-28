@@ -1,0 +1,38 @@
+; Error: HKT class for types with wrong number of unfilled params
+;
+; Tests three error cases:
+; 1. Type with 0 type params (`Point`)
+; 2. Fully applied type (`Pair[Int, String]`)
+; 3. Too many unfilled params (`Triple` with 3 params)
+
+fun main() { }
+
+type Point = Point(Int, Int)
+
+class Fallible for Point {
+  fun unwrap(p: Point) -> Int {
+    match p {
+      Point.Point(x, _) => { x }
+    }
+  }
+}
+
+type Pair[A, B] = Pair(A, B)
+
+class Fallible for Pair[Int, String] {
+  fun unwrap(p: Pair[Int, String]) -> String {
+    match p {
+      Pair.Pair(_, s) => { s }
+    }
+  }
+}
+
+type Triple[A, B, C] = Triple(A, B, C)
+
+class Fallible for Triple {
+  fun unwrap(t: Triple[A, B, C]) -> C {
+    match t {
+      Triple.Triple(_, _, c) => { c }
+    }
+  }
+}

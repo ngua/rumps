@@ -1,0 +1,24 @@
+; Multi-param with concrete fixed param
+;
+; Only `Tagged[String, V]` is Wrappable/Fallible (Tag fixed to `String`).
+
+type Tagged[Tag, Val] = Tagged(Tag, Val)
+
+class Wrappable for Tagged[String] {
+  fun wrap(v: V) -> Tagged[String, V] {
+    Tagged.Tagged("default", v)
+  }
+}
+
+class Fallible for Tagged[String] {
+  fun unwrap(t: Tagged[String, V]) -> V {
+    match t {
+      Tagged.Tagged(_, v) => { v }
+    }
+  }
+}
+
+fun main() {
+  let t = Tagged.Tagged("ok", 42)
+  write t!
+}

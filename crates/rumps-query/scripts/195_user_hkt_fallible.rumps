@@ -1,0 +1,29 @@
+; Single-param user Fallible
+;
+; Tests `!`, `??`, and explicit `Fallible:unwrap` dispatch
+; on a user-defined `Box[T]` type.
+
+type Box[T] = Full(T) | Empty
+
+class Wrappable for Box {
+  fun wrap(x: T) -> Box[T] {
+    Box.Full(x)
+  }
+}
+
+class Fallible for Box {
+  fun unwrap(b: Box[T]) -> T {
+    match b {
+      Box.Full(x) => { x }
+      Box.Empty => { raise "empty box" }
+    }
+  }
+}
+
+fun main() {
+  let b = Box.Full(42)
+  write b!
+  write b ?? 0
+  write Box.Empty ?? 99
+  write Fallible:unwrap(b)
+}
