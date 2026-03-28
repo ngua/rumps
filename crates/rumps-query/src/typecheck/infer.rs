@@ -673,11 +673,17 @@ impl<'a> InferCtx<'a> {
         // Solve collected constraints (updates union-find in-place)
         self.solve_constraints();
 
+        // Enable zonk cache for resolution passes (bindings are frozen
+        // post-solve, so memoization is safe and avoids redundant tree walks)
+        self.uf.enable_zonk_cache();
+
         // Resolve all type variables through the union-find
         self.resolve_all_types();
 
         // Resolve deferred instance calls (now that types are resolved)
         self.resolve_deferred_instance_calls();
+
+        self.uf.disable_zonk_cache();
 
         // Check for remaining unresolved type variables
         self.check_remaining_unknowns();
