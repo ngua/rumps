@@ -938,14 +938,15 @@ impl<'a> InferCtx<'a> {
         let shape = self.ty_arena.get(ty).clone();
         if let Ty::AssocType(tv, assoc_class, name) = shape {
             // Resolve the base type variable through union-find
-            let base_id = self.ty_arena.alloc(Ty::Var(tv));
-            let base = self.uf.resolve(base_id, &mut self.ty_arena);
-            match self.resolve_assoc_type(base, assoc_class, name, span) {
-                Ok(resolved) => {
-                    // Resolved; check the concrete type against the class
-                    self.satisfies_class(class, resolved, span);
+            match self.uf.resolve_var(tv, &mut self.ty_arena) {
+                Some(base) => {
+                    if let Ok(resolved) =
+                        self.resolve_assoc_type(base, assoc_class, name, span)
+                    {
+                        self.satisfies_class(class, resolved, span);
+                    }
                 }
-                Err(_) => {
+                None => {
                     // Base type still unresolved; defer constraint
                 }
             }
