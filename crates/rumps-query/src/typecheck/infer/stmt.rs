@@ -1187,7 +1187,7 @@ impl InferCtx<'_> {
                 let shape = self.ty_arena.get(scheme.ty).clone();
                 match shape {
                     Ty::Fn(params, ret) => match class.shape() {
-                        ClassShape::Hkt { kind } => {
+                        ClassShape::Hkt { .. } => {
                             // For HKT classes the LAST scheme var is the
                             // container constructor; all preceding vars are
                             // independent element type variables.
@@ -1198,25 +1198,16 @@ impl InferCtx<'_> {
                             //    applied `Named(type_id, supplied_args)` so
                             //    `Apply(container_var, elems)` resolves to
                             //    `Named(type_id, [supplied... elems...])`
-                            let k = kind as usize;
                             let (&container_var, elem_vars) =
                                 scheme.vars.split_last().expect(
                                     "HKT scheme must have at least one var",
                                 );
-                            let ctor_ty =
-                                match self.ty_arena.get(for_ty).clone() {
-                                    Ty::Named(tid, args) => {
-                                        let keep = args.len().saturating_sub(k);
-                                        self.ty_arena.named(
-                                            tid,
-                                            args.iter()
-                                                .take(keep)
-                                                .copied()
-                                                .collect(),
-                                        )
-                                    }
-                                    _ => for_ty,
-                                };
+                            // Use `for_ty` directly; it has all
+                            // positions filled (fixed params + elem
+                            // vars). `apply_inner` will replace the
+                            // last `na.len()` positions, which are
+                            // exactly the element slots.
+                            let ctor_ty = for_ty;
                             let mut rename = HashMap::new();
                             rename.insert(container_var, ctor_ty);
                             elem_vars.iter().for_each(|&ev| {
