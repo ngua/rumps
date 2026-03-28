@@ -260,7 +260,9 @@ impl<'a> LowerCtx<'a> {
         match &ty.kind {
             cst::TypeExprKind::Named(segs) => {
                 if let [id] = segs.as_slice() {
-                    out.push(*id);
+                    if !known.contains(id) {
+                        out.push(*id);
+                    }
                 }
             }
             cst::TypeExprKind::App(segs, args) => {

@@ -20,7 +20,8 @@ use crate::intern::{QualifiedName, StringId};
 use crate::typecheck::error::TypeError;
 use crate::typecheck::instance::{self, Instance};
 use crate::typecheck::ty::{
-    BuiltinClass, BuiltinClassTag, Rename, Scheme, Ty, TyArena, TyId, TyVar,
+    BuiltinClass, BuiltinClassTag, ClassShape, Rename, Scheme, Ty, TyArena,
+    TyId, TyVar,
 };
 use crate::value::{TypeDef, TypeId};
 use crate::Span;
@@ -939,14 +940,30 @@ impl InferCtx<'_> {
         self.merge_for_type_vars(for_type, &mut type_param_subst);
 
         // 3. Resolve for_type and get its TypeId
-        let for_ty = self.ast_type_to_ty(for_type, &type_param_subst);
-        let type_id = self.extract_type_id(for_ty);
-
-        // 4. Convert class args to `TyId` (needed for builtin check)
-        let class_arg_tys: SmallVec<[TyId; 2]> = class_args
-            .iter()
-            .map(|id| self.ast_type_to_ty(*id, &type_param_subst))
-            .collect();
+        //    HKT classes need partial application logic (bare name or fewer
+        //    type args than the type definition expects).
+        let (for_ty, type_id, class_arg_tys) = match class.shape() {
+            ClassShape::Hkt { .. } => match self.resolve_hkt_for_type(
+                class,
+                for_type,
+                class_args,
+                &mut type_param_subst,
+                &module,
+                span,
+            ) {
+                Some((tid, fty, catys)) => (fty, Some(tid), catys),
+                None => (TyArena::UNKNOWN, None, SmallVec::new()),
+            },
+            _ => {
+                let for_ty = self.ast_type_to_ty(for_type, &type_param_subst);
+                let type_id = self.extract_type_id(for_ty);
+                let class_arg_tys: SmallVec<[TyId; 2]> = class_args
+                    .iter()
+                    .map(|id| self.ast_type_to_ty(*id, &type_param_subst))
+                    .collect();
+                (for_ty, type_id, class_arg_tys)
+            }
+        };
 
         // 5. Check for forbidden builtin instance
         //
@@ -1167,32 +1184,77 @@ impl InferCtx<'_> {
         let (expected_param_tys, expected_ret_ty) = match expected {
             Ok(spec) => {
                 let scheme = spec.scheme();
-                // The first quantified var represents `Self` in class methods.
-                // Subsequent vars represent class type parameters (e.g., `U` in
-                // `Into[U]`). We substitute both `Self` and class arg types.
-                let self_var = scheme.vars.first().copied();
-                let class_arg_vars: Vec<_> =
-                    scheme.vars.iter().skip(1).copied().collect();
-                // Extract param and return types, substituting vars
                 let shape = self.ty_arena.get(scheme.ty).clone();
                 match shape {
-                    Ty::Fn(params, ret) => {
-                        let subst_id = |ctx: &mut Self, ty: TyId| -> TyId {
-                            let mut r =
-                                ctx.subst_self_type(ty, self_var, for_ty);
-                            class_arg_vars
+                    Ty::Fn(params, ret) => match class.shape() {
+                        ClassShape::Hkt { kind } => {
+                            // For HKT classes the LAST scheme var is the
+                            // container constructor; all preceding vars are
+                            // independent element type variables.
+                            //
+                            // Build a `Rename` that:
+                            //  - maps each element var to a fresh type var
+                            //  - maps the container var to the partially
+                            //    applied `Named(type_id, supplied_args)` so
+                            //    `Apply(container_var, elems)` resolves to
+                            //    `Named(type_id, [supplied... elems...])`
+                            let k = kind as usize;
+                            let (&container_var, elem_vars) =
+                                scheme.vars.split_last().expect(
+                                    "HKT scheme must have at least one var",
+                                );
+                            let ctor_ty =
+                                match self.ty_arena.get(for_ty).clone() {
+                                    Ty::Named(tid, args) => {
+                                        let keep = args.len().saturating_sub(k);
+                                        self.ty_arena.named(
+                                            tid,
+                                            args.iter()
+                                                .take(keep)
+                                                .copied()
+                                                .collect(),
+                                        )
+                                    }
+                                    _ => for_ty,
+                                };
+                            let mut rename = HashMap::new();
+                            rename.insert(container_var, ctor_ty);
+                            elem_vars.iter().for_each(|&ev| {
+                                rename.insert(ev, self.fresh());
+                            });
+                            let rename = Rename(rename);
+                            let ps: Vec<_> = params
                                 .iter()
-                                .zip(class_arg_tys.iter())
-                                .for_each(|(&var, &arg_ty)| {
-                                    r = ctx.subst_tyvar(r, var, arg_ty);
-                                });
-                            r
-                        };
-                        let ps: Vec<_> =
-                            params.iter().map(|&p| subst_id(self, p)).collect();
-                        let r = subst_id(self, ret);
-                        (ps, r)
-                    }
+                                .map(|&p| self.ty_arena.apply(p, &rename))
+                                .collect();
+                            let r = self.ty_arena.apply(ret, &rename);
+                            (ps, r)
+                        }
+                        _ => {
+                            // Simple/Parameterized: first var is `Self`,
+                            // subsequent vars are class type params.
+                            let self_var = scheme.vars.first().copied();
+                            let class_arg_vars: Vec<_> =
+                                scheme.vars.iter().skip(1).copied().collect();
+                            let subst_id = |ctx: &mut Self, ty: TyId| -> TyId {
+                                let mut r =
+                                    ctx.subst_self_type(ty, self_var, for_ty);
+                                class_arg_vars
+                                    .iter()
+                                    .zip(class_arg_tys.iter())
+                                    .for_each(|(&var, &arg_ty)| {
+                                        r = ctx.subst_tyvar(r, var, arg_ty);
+                                    });
+                                r
+                            };
+                            let ps: Vec<_> = params
+                                .iter()
+                                .map(|&p| subst_id(self, p))
+                                .collect();
+                            let r = subst_id(self, ret);
+                            (ps, r)
+                        }
+                    },
                     _ => (vec![], TyArena::UNKNOWN),
                 }
             }

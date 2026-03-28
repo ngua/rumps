@@ -20,8 +20,8 @@ use crate::env::TxnReq;
 use crate::intern::{QualifiedName, StringId};
 use crate::typecheck::error::TypeError;
 use crate::typecheck::ty::{
-    BuiltinClass, BuiltinClassTag, MethodSpec, Rename, Scheme, TrackKind, Ty,
-    TyArena, TyId, TyVar,
+    BuiltinClass, BuiltinClassTag, ClassShape, MethodSpec, Rename, Scheme,
+    TrackKind, Ty, TyArena, TyId, TyVar,
 };
 use crate::value::{TypeDef, TypeId};
 use crate::Span;
@@ -743,38 +743,35 @@ impl InferCtx<'_> {
                         self.emit_class_constraint(ty, class, span);
                     });
 
-                    // Track user instance calls for newtype/union dispatch.
-                    // For these types, the runtime value doesn't carry TypeId,
-                    // so we record the mapping here for the interpreter.
-                    // (TYPE/sum types use Value::Tagged which carries the TypeId.)
+                    // Track user instance calls for dispatch.
                     //
-                    // Also track for builtin types with user instances (e.g.,
-                    // `class Into[UserId] FOR Int`).
-                    //
-                    // If the type is immediately resolvable (Named or primitive),
-                    // check and insert now. Otherwise, defer to be resolved after
-                    // constraint solving when type variables are resolved.
-                    if let Some(&ty) = arg_tys.first() {
-                        let type_id = match self.ty_arena.get(ty) {
-                            Ty::Named(tid, _) | Ty::Union(Some(tid), _) => {
-                                Some(*tid)
-                            }
-                            other => self.primitive_type_id(other),
-                        };
-                        match type_id {
-                            Some(tid)
-                                if self
-                                    .check_instance_available(kind, tid, span)
-                                    .is_some() =>
-                            {
-                                self.instance_calls.insert(id, tid);
-                            }
-                            _ => {
-                                // Defer resolution until after constraint solving.
-                                // At that point, type variables will be resolved
-                                // and we can check for user instances.
-                                self.deferred_instance_calls
-                                    .push((id, ty, kind));
+                    // For HKT classes (e.g. `Wrappable`), the instance is
+                    // keyed by the return type (the container), not the
+                    // first argument. For non-HKT classes, the first arg
+                    // determines the instance.
+                    {
+                        let lookup_ty =
+                            if matches!(kind.shape(), ClassShape::Hkt { .. }) {
+                                Some(ret)
+                            } else {
+                                arg_tys.first().copied()
+                            };
+                        if let Some(ty) = lookup_ty {
+                            let type_id = self.nominal_type_id(ty);
+                            match type_id {
+                                Some(tid)
+                                    if self
+                                        .check_instance_available(
+                                            kind, tid, span,
+                                        )
+                                        .is_some() =>
+                                {
+                                    self.instance_calls.insert(id, tid);
+                                }
+                                _ => {
+                                    self.deferred_instance_calls
+                                        .push((id, ty, kind));
+                                }
                             }
                         }
                     }

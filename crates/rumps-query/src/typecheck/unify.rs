@@ -360,21 +360,14 @@ impl<'a> InferCtx<'a> {
                     })
             }
 
-            // Named (sum/alias) vs anything else: mismatch.
-            // (Unions are `Ty::Union` and handled above.)
-            (_, Ty::Named(..)) | (Ty::Named(..), _) => {
-                Err(TypeError::Mismatch {
-                    expected: t2,
-                    got: t1,
-                    span,
-                })
-            }
-
             // HKT type application: `F[T]` where `F` is a type variable.
             //
             // Decompose the other type into constructor + element,
             // bind the type variable to the constructor shape, and
             // unify args with the element types.
+            //
+            // Must appear before the `Named` catch-all so that
+            // `(Apply, Named)` is decomposed rather than rejected.
             (Ty::Apply(tv, args), _) => {
                 let tv = *tv;
                 let args: SmallVec<[TyId; 4]> = args.clone();
@@ -384,6 +377,16 @@ impl<'a> InferCtx<'a> {
                 let tv = *tv;
                 let args: SmallVec<[TyId; 4]> = args.clone();
                 self.unify_apply(tv, &args, t1, span)
+            }
+
+            // Named (sum/alias) vs anything else: mismatch.
+            // (Unions are `Ty::Union` and handled above.)
+            (_, Ty::Named(..)) | (Ty::Named(..), _) => {
+                Err(TypeError::Mismatch {
+                    expected: t2,
+                    got: t1,
+                    span,
+                })
             }
 
             // Associated type projection: resolve and unify
