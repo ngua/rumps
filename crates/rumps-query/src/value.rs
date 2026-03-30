@@ -13,6 +13,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fmt;
 
 use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
@@ -251,6 +252,89 @@ impl TypeId {
 
     const fn idx(self) -> usize {
         self.0 as usize
+    }
+}
+
+/// Index into the class registry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub(crate) struct ClassId(u32);
+
+impl ClassId {
+    pub(crate) const fn new(v: u32) -> Self {
+        Self(v)
+    }
+
+    pub(crate) const NUMERIC: Self = Self(0);
+    pub(crate) const ITERABLE: Self = Self(1);
+    pub(crate) const MONOID: Self = Self(2);
+    pub(crate) const BIT_LIKE: Self = Self(3);
+    pub(crate) const NEGATABLE: Self = Self(4);
+    pub(crate) const FALLIBLE: Self = Self(5);
+    pub(crate) const INTO: Self = Self(6);
+    pub(crate) const TRY_INTO: Self = Self(7);
+    pub(crate) const INDEXABLE: Self = Self(8);
+    pub(crate) const ORD: Self = Self(9);
+    pub(crate) const MAPPABLE: Self = Self(10);
+    pub(crate) const FOLDABLE: Self = Self(11);
+    pub(crate) const FILTERABLE: Self = Self(12);
+    pub(crate) const DISPLAY: Self = Self(13);
+    pub(crate) const EQ: Self = Self(14);
+    pub(crate) const WRAPPABLE: Self = Self(15);
+    pub(crate) const CHAINABLE: Self = Self(16);
+
+    pub(crate) const BUILTIN_COUNT: usize = 17;
+
+    pub(crate) const fn idx(self) -> usize {
+        self.0 as usize
+    }
+
+    pub(crate) fn from_name(s: &str) -> Option<Self> {
+        match s {
+            "Numeric" => Some(Self::NUMERIC),
+            "Iterable" => Some(Self::ITERABLE),
+            "Monoid" => Some(Self::MONOID),
+            "BitLike" => Some(Self::BIT_LIKE),
+            "Negatable" => Some(Self::NEGATABLE),
+            "Fallible" => Some(Self::FALLIBLE),
+            "Into" => Some(Self::INTO),
+            "TryInto" => Some(Self::TRY_INTO),
+            "Indexable" => Some(Self::INDEXABLE),
+            "Ord" => Some(Self::ORD),
+            "Mappable" => Some(Self::MAPPABLE),
+            "Foldable" => Some(Self::FOLDABLE),
+            "Filterable" => Some(Self::FILTERABLE),
+            "Display" => Some(Self::DISPLAY),
+            "Eq" => Some(Self::EQ),
+            "Wrappable" => Some(Self::WRAPPABLE),
+            "Chainable" => Some(Self::CHAINABLE),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for ClassId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            0 => f.write_str("Numeric"),
+            1 => f.write_str("Iterable"),
+            2 => f.write_str("Monoid"),
+            3 => f.write_str("BitLike"),
+            4 => f.write_str("Negatable"),
+            5 => f.write_str("Fallible"),
+            6 => f.write_str("Into"),
+            7 => f.write_str("TryInto"),
+            8 => f.write_str("Indexable"),
+            9 => f.write_str("Ord"),
+            10 => f.write_str("Mappable"),
+            11 => f.write_str("Foldable"),
+            12 => f.write_str("Filterable"),
+            13 => f.write_str("Display"),
+            14 => f.write_str("Eq"),
+            15 => f.write_str("Wrappable"),
+            16 => f.write_str("Chainable"),
+            n => write!(f, "ClassId({n})"),
+        }
     }
 }
 

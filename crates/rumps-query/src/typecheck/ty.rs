@@ -12,7 +12,7 @@ use smallvec::{smallvec, SmallVec};
 use super::error::TypeError;
 use super::uf::UnionFind;
 use crate::intern::StringId;
-use crate::{Span, TypeId};
+use crate::{ClassId, Span, TypeId};
 
 /// Flat discriminant for builtin type classes.
 ///
@@ -725,6 +725,554 @@ impl BuiltinClassDef {
                 )],
             },
         ]
+    }
+}
+
+/// Full definition of a type class, keyed by `ClassId`.
+pub(crate) struct ClassDef {
+    pub(crate) name: &'static str,
+    pub(crate) shape: ClassShape,
+    pub(crate) assoc_types: &'static [&'static str],
+    pub(crate) methods: Vec<(&'static str, MethodSpec)>,
+    pub(crate) supers: &'static [ClassId],
+}
+
+impl ClassDef {
+    /// Look up a method by name.
+    pub(crate) fn method(
+        &self,
+        name: &str,
+        span: Span,
+    ) -> Result<&MethodSpec, TypeError> {
+        self.methods
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, spec)| spec)
+            .ok_or_else(|| TypeError::UnknownMethod {
+                class: self.name.to_string(),
+                method: name.to_string(),
+                span,
+            })
+    }
+
+    /// All method names (all methods are required).
+    pub(crate) fn method_names(
+        &self,
+    ) -> impl Iterator<Item = &'static str> + '_ {
+        self.methods.iter().map(|(n, _)| *n)
+    }
+}
+
+/// Registry of all known type classes, indexed by `ClassId`.
+pub(crate) struct ClassRegistry {
+    defs: Vec<ClassDef>,
+    by_name: HashMap<&'static str, ClassId>,
+}
+
+impl ClassRegistry {
+    /// Build the registry with all `ClassId::BUILTIN_COUNT` builtin classes.
+    pub(crate) fn builtins(
+        intern: &mut impl FnMut(&str) -> StringId,
+        arena: &mut TyArena,
+    ) -> Self {
+        // Pre-allocate common type variable ids
+        let v0 = arena.var(0);
+        let v1 = arena.var(1);
+        let tv1_of_v0 = arena.hkt(TyVar::new(1), smallvec![v0]);
+        let tv2_of_v0 = arena.hkt(TyVar::new(2), smallvec![v0]);
+        let tv2_of_v1 = arena.hkt(TyVar::new(2), smallvec![v1]);
+
+        let array_v0 = arena.array(v0);
+        let binary_v0 = arena.func(smallvec![v0, v0], v0);
+        let unary_v0 = arena.func(smallvec![v0], v0);
+
+        let simple1 = |ty: TyId, tag: BuiltinClassTag| Scheme {
+            vars: vec![TyVar::new(0)],
+            ty,
+            constraints: smallvec![(TyVar::new(0), BuiltinClass::Simple(tag))],
+        };
+        let hkt2 = |ty: TyId, tag: BuiltinClassTag| Scheme {
+            vars: vec![TyVar::new(0), TyVar::new(1)],
+            ty,
+            constraints: smallvec![(
+                TyVar::new(1),
+                BuiltinClass::Hkt(tag, None)
+            )],
+        };
+        let hkt3 = |ty: TyId, tag: BuiltinClassTag| Scheme {
+            vars: vec![TyVar::new(0), TyVar::new(1), TyVar::new(2)],
+            ty,
+            constraints: smallvec![(
+                TyVar::new(2),
+                BuiltinClass::Hkt(tag, None)
+            )],
+        };
+
+        let idx_name = intern("Index");
+        let assoc_idx = arena.alloc(Ty::AssocType(
+            TyVar::new(0),
+            BuiltinClassTag::Indexable,
+            idx_name,
+        ));
+
+        let defs = vec![
+            // 0: Numeric
+            ClassDef {
+                name: "Numeric",
+                shape: ClassShape::Simple,
+                assoc_types: &[],
+                supers: &[],
+                methods: vec![
+                    (
+                        "add",
+                        MethodSpec::Standard(simple1(
+                            binary_v0,
+                            BuiltinClassTag::Numeric,
+                        )),
+                    ),
+                    (
+                        "sub",
+                        MethodSpec::Standard(simple1(
+                            binary_v0,
+                            BuiltinClassTag::Numeric,
+                        )),
+                    ),
+                    (
+                        "mul",
+                        MethodSpec::Standard(simple1(
+                            binary_v0,
+                            BuiltinClassTag::Numeric,
+                        )),
+                    ),
+                    (
+                        "floor-div",
+                        MethodSpec::Standard(simple1(
+                            binary_v0,
+                            BuiltinClassTag::Numeric,
+                        )),
+                    ),
+                    (
+                        "mod",
+                        MethodSpec::Standard(simple1(
+                            binary_v0,
+                            BuiltinClassTag::Numeric,
+                        )),
+                    ),
+                    (
+                        "pow",
+                        MethodSpec::Standard(simple1(
+                            binary_v0,
+                            BuiltinClassTag::Numeric,
+                        )),
+                    ),
+                ],
+            },
+            // 1: Iterable
+            ClassDef {
+                name: "Iterable",
+                shape: ClassShape::Hkt { kind: 1 },
+                assoc_types: &[],
+                supers: &[],
+                methods: vec![
+                    (
+                        "length",
+                        MethodSpec::Standard(hkt2(
+                            arena.func(smallvec![tv1_of_v0], TyArena::INT),
+                            BuiltinClassTag::Iterable,
+                        )),
+                    ),
+                    (
+                        "contains",
+                        MethodSpec::Standard(hkt2(
+                            arena.func(smallvec![tv1_of_v0, v0], TyArena::BOOL),
+                            BuiltinClassTag::Iterable,
+                        )),
+                    ),
+                    (
+                        "reverse",
+                        MethodSpec::Standard(hkt2(
+                            arena.func(smallvec![tv1_of_v0], array_v0),
+                            BuiltinClassTag::Iterable,
+                        )),
+                    ),
+                    (
+                        "foreach",
+                        MethodSpec::Standard({
+                            let cb = arena.func(smallvec![v0], TyArena::UNIT);
+                            hkt2(
+                                arena.func(
+                                    smallvec![cb, tv1_of_v0],
+                                    TyArena::UNIT,
+                                ),
+                                BuiltinClassTag::Iterable,
+                            )
+                        }),
+                    ),
+                    (
+                        "collect",
+                        MethodSpec::Standard(hkt2(
+                            arena.func(smallvec![tv1_of_v0], array_v0),
+                            BuiltinClassTag::Iterable,
+                        )),
+                    ),
+                ],
+            },
+            // 2: Monoid
+            ClassDef {
+                name: "Monoid",
+                shape: ClassShape::Simple,
+                assoc_types: &[],
+                supers: &[],
+                methods: vec![
+                    (
+                        "identity",
+                        MethodSpec::Tracked {
+                            scheme: simple1(
+                                arena.func(smallvec![], v0),
+                                BuiltinClassTag::Monoid,
+                            ),
+                            track: TrackKind::Mempty,
+                        },
+                    ),
+                    (
+                        "concat",
+                        MethodSpec::Standard(simple1(
+                            binary_v0,
+                            BuiltinClassTag::Monoid,
+                        )),
+                    ),
+                ],
+            },
+            // 3: BitLike
+            ClassDef {
+                name: "BitLike",
+                shape: ClassShape::Simple,
+                assoc_types: &[],
+                supers: &[],
+                methods: vec![
+                    (
+                        "bit-and",
+                        MethodSpec::Standard(simple1(
+                            binary_v0,
+                            BuiltinClassTag::BitLike,
+                        )),
+                    ),
+                    (
+                        "bit-or",
+                        MethodSpec::Standard(simple1(
+                            binary_v0,
+                            BuiltinClassTag::BitLike,
+                        )),
+                    ),
+                    (
+                        "shl",
+                        MethodSpec::Standard(simple1(
+                            binary_v0,
+                            BuiltinClassTag::BitLike,
+                        )),
+                    ),
+                    (
+                        "shr",
+                        MethodSpec::Standard(simple1(
+                            binary_v0,
+                            BuiltinClassTag::BitLike,
+                        )),
+                    ),
+                ],
+            },
+            // 4: Negatable
+            ClassDef {
+                name: "Negatable",
+                shape: ClassShape::Simple,
+                assoc_types: &[],
+                supers: &[],
+                methods: vec![(
+                    "neg",
+                    MethodSpec::Standard(simple1(
+                        unary_v0,
+                        BuiltinClassTag::Negatable,
+                    )),
+                )],
+            },
+            // 5: Fallible
+            ClassDef {
+                name: "Fallible",
+                shape: ClassShape::Hkt { kind: 1 },
+                assoc_types: &[],
+                supers: &[ClassId::WRAPPABLE],
+                methods: vec![(
+                    "unwrap",
+                    MethodSpec::Standard(hkt2(
+                        arena.func(smallvec![tv1_of_v0], v0),
+                        BuiltinClassTag::Fallible,
+                    )),
+                )],
+            },
+            // 6: Into
+            ClassDef {
+                name: "Into",
+                shape: ClassShape::Parameterized { params: 1 },
+                assoc_types: &[],
+                supers: &[],
+                methods: vec![(
+                    "into",
+                    MethodSpec::Tracked {
+                        scheme: Scheme {
+                            vars: vec![TyVar::new(0), TyVar::new(1)],
+                            ty: arena.func(smallvec![v0], v1),
+                            constraints: smallvec![(
+                                TyVar::new(0),
+                                BuiltinClass::Parameterized(
+                                    BuiltinClassTag::Into,
+                                    v1
+                                )
+                            )],
+                        },
+                        track: TrackKind::Convert,
+                    },
+                )],
+            },
+            // 7: TryInto
+            ClassDef {
+                name: "TryInto",
+                shape: ClassShape::Parameterized { params: 1 },
+                assoc_types: &[],
+                supers: &[],
+                methods: vec![(
+                    "try-into",
+                    MethodSpec::Tracked {
+                        scheme: Scheme {
+                            vars: vec![TyVar::new(0), TyVar::new(1)],
+                            ty: {
+                                let ret = arena.result(v1, TyArena::STRING);
+                                arena.func(smallvec![v0], ret)
+                            },
+                            constraints: smallvec![(
+                                TyVar::new(0),
+                                BuiltinClass::Parameterized(
+                                    BuiltinClassTag::TryInto,
+                                    v1
+                                )
+                            )],
+                        },
+                        track: TrackKind::ConvertResultInner,
+                    },
+                )],
+            },
+            // 8: Indexable
+            ClassDef {
+                name: "Indexable",
+                shape: ClassShape::Parameterized { params: 1 },
+                assoc_types: &["Index"],
+                supers: &[],
+                methods: vec![
+                    (
+                        "index",
+                        MethodSpec::Standard(Scheme {
+                            vars: vec![TyVar::new(0), TyVar::new(1)],
+                            ty: arena.func(smallvec![v0, assoc_idx], v1),
+                            constraints: smallvec![(
+                                TyVar::new(0),
+                                BuiltinClass::Parameterized(
+                                    BuiltinClassTag::Indexable,
+                                    v1
+                                )
+                            )],
+                        }),
+                    ),
+                    (
+                        "get",
+                        MethodSpec::Standard(Scheme {
+                            vars: vec![TyVar::new(0), TyVar::new(1)],
+                            ty: {
+                                let ret = arena.option(v1);
+                                arena.func(smallvec![v0, assoc_idx], ret)
+                            },
+                            constraints: smallvec![(
+                                TyVar::new(0),
+                                BuiltinClass::Parameterized(
+                                    BuiltinClassTag::Indexable,
+                                    v1
+                                )
+                            )],
+                        }),
+                    ),
+                ],
+            },
+            // 9: Ord
+            ClassDef {
+                name: "Ord",
+                shape: ClassShape::Simple,
+                assoc_types: &[],
+                supers: &[],
+                methods: vec![(
+                    "compare",
+                    MethodSpec::Standard(simple1(
+                        arena.func(smallvec![v0, v0], TyArena::ORDERING),
+                        BuiltinClassTag::Ord,
+                    )),
+                )],
+            },
+            // 10: Mappable
+            ClassDef {
+                name: "Mappable",
+                shape: ClassShape::Hkt { kind: 1 },
+                assoc_types: &[],
+                supers: &[],
+                methods: vec![(
+                    "map",
+                    MethodSpec::Standard({
+                        let cb = arena.func(smallvec![v0], v1);
+                        hkt3(
+                            arena.func(smallvec![cb, tv2_of_v0], tv2_of_v1),
+                            BuiltinClassTag::Mappable,
+                        )
+                    }),
+                )],
+            },
+            // 11: Foldable
+            ClassDef {
+                name: "Foldable",
+                shape: ClassShape::Hkt { kind: 1 },
+                assoc_types: &[],
+                supers: &[],
+                methods: vec![(
+                    "reduce",
+                    MethodSpec::Standard({
+                        let cb = arena.func(smallvec![v1, v0], v1);
+                        hkt3(
+                            arena.func(smallvec![cb, v1, tv2_of_v0], v1),
+                            BuiltinClassTag::Foldable,
+                        )
+                    }),
+                )],
+            },
+            // 12: Filterable
+            ClassDef {
+                name: "Filterable",
+                shape: ClassShape::Hkt { kind: 1 },
+                assoc_types: &[],
+                supers: &[],
+                methods: vec![(
+                    "filter",
+                    MethodSpec::Standard({
+                        let pred = arena.func(smallvec![v0], TyArena::BOOL);
+                        hkt2(
+                            arena.func(smallvec![pred, tv1_of_v0], array_v0),
+                            BuiltinClassTag::Filterable,
+                        )
+                    }),
+                )],
+            },
+            // 13: Display
+            ClassDef {
+                name: "Display",
+                shape: ClassShape::Simple,
+                assoc_types: &[],
+                supers: &[],
+                methods: vec![(
+                    "display",
+                    MethodSpec::Standard(simple1(
+                        arena.func(smallvec![v0], TyArena::STRING),
+                        BuiltinClassTag::Display,
+                    )),
+                )],
+            },
+            // 14: Eq
+            ClassDef {
+                name: "Eq",
+                shape: ClassShape::Simple,
+                assoc_types: &[],
+                supers: &[],
+                methods: vec![(
+                    "eq",
+                    MethodSpec::Standard(simple1(
+                        arena.func(smallvec![v0, v0], TyArena::BOOL),
+                        BuiltinClassTag::Eq,
+                    )),
+                )],
+            },
+            // 15: Wrappable
+            ClassDef {
+                name: "Wrappable",
+                shape: ClassShape::Hkt { kind: 1 },
+                assoc_types: &[],
+                supers: &[],
+                methods: vec![(
+                    "wrap",
+                    MethodSpec::Tracked {
+                        scheme: hkt2(
+                            arena.func(smallvec![v0], tv1_of_v0),
+                            BuiltinClassTag::Wrappable,
+                        ),
+                        track: TrackKind::Convert,
+                    },
+                )],
+            },
+            // 16: Chainable
+            ClassDef {
+                name: "Chainable",
+                shape: ClassShape::Hkt { kind: 1 },
+                assoc_types: &[],
+                supers: &[ClassId::WRAPPABLE],
+                methods: vec![(
+                    "chain",
+                    MethodSpec::Standard({
+                        let cb = arena.func(smallvec![v0], tv2_of_v1);
+                        hkt3(
+                            arena.func(smallvec![tv2_of_v0, cb], tv2_of_v1),
+                            BuiltinClassTag::Chainable,
+                        )
+                    }),
+                )],
+            },
+        ];
+
+        let by_name = defs
+            .iter()
+            .enumerate()
+            .map(|(i, d)| (d.name, ClassId::new(i as u32)))
+            .collect();
+
+        Self { defs, by_name }
+    }
+
+    pub(crate) fn get(&self, id: ClassId) -> &ClassDef {
+        &self.defs[id.idx()]
+    }
+
+    pub(crate) fn lookup_by_name(&self, s: &str) -> Option<ClassId> {
+        self.by_name.get(s).copied()
+    }
+
+    pub(crate) fn name(&self, id: ClassId) -> &str {
+        self.get(id).name
+    }
+
+    pub(crate) fn shape(&self, id: ClassId) -> ClassShape {
+        self.get(id).shape
+    }
+
+    pub(crate) fn supers(&self, id: ClassId) -> &[ClassId] {
+        self.get(id).supers
+    }
+
+    /// All transitive superclasses in dependency order (parents before children).
+    pub(crate) fn transitive_supers(&self, id: ClassId) -> Vec<ClassId> {
+        let mut acc = Vec::new();
+        self.supers(id)
+            .iter()
+            .for_each(|&sup| self.collect_supers(sup, &mut acc));
+        acc
+    }
+
+    fn collect_supers(&self, id: ClassId, acc: &mut Vec<ClassId>) {
+        if !acc.contains(&id) {
+            self.supers(id)
+                .iter()
+                .for_each(|&sup| self.collect_supers(sup, acc));
+            acc.push(id);
+        }
     }
 }
 
