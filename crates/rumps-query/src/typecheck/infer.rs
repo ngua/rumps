@@ -722,6 +722,7 @@ impl<'a> InferCtx<'a> {
                 convert_targets: self.convert_targets,
                 wrap_types: self.wrap_types,
                 instance_calls: self.instance_calls,
+                class_registry: self.env.class_registry,
             })
         }
     }

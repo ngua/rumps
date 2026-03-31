@@ -59,4 +59,6 @@ pub(crate) struct TypecheckOutput {
     ///
     /// Used to dispatch to user-defined class instances at runtime.
     pub(crate) instance_calls: HashMap<ExprId, TypeId>,
+    /// Class registry; carries class definitions indexed by `ClassId`.
+    pub(crate) class_registry: ClassRegistry,
 }

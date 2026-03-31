@@ -5,8 +5,8 @@
 use std::collections::{HashMap, HashSet};
 
 use super::ty::{
-    BuiltinClassDef, BuiltinClassDefs, BuiltinClassTag, Scheme, TyArena, TyId,
-    TyVar,
+    BuiltinClassDef, BuiltinClassDefs, BuiltinClassTag, ClassRegistry, Scheme,
+    TyArena, TyId, TyVar,
 };
 use super::uf::UnionFind;
 use crate::ast::Visibility;
@@ -41,6 +41,8 @@ pub(crate) struct TypeEnv {
     pub(super) strings: StringInterner,
     /// Builtin class definitions, indexed by `BuiltinClassTag as usize`.
     class_defs: BuiltinClassDefs,
+    /// Class registry (indexed by `ClassId`).
+    pub(super) class_registry: ClassRegistry,
     /// User-defined module names registered during typechecking.
     user_modules: HashSet<QualifiedName>,
     /// User module member types and visibility: `module_path -> member_name -> ModuleMember`.
@@ -69,10 +71,13 @@ impl TypeEnv {
     ) -> Self {
         let class_defs =
             BuiltinClassDef::build_all(&mut |s| strings.intern(s), arena);
+        let class_registry =
+            ClassRegistry::builtins(&mut |s| strings.intern(s), arena);
         Self {
             scopes: vec![Scope::default()],
             strings,
             class_defs,
+            class_registry,
             user_modules: HashSet::new(),
             user_module_members: HashMap::new(),
             user_module_type_vis: HashMap::new(),
@@ -83,6 +88,11 @@ impl TypeEnv {
     /// Look up a builtin class definition by tag.
     pub(crate) fn class_def(&self, tag: BuiltinClassTag) -> &BuiltinClassDef {
         &self.class_defs[tag as usize]
+    }
+
+    /// Access the class registry.
+    pub(crate) fn class_registry(&self) -> &ClassRegistry {
+        &self.class_registry
     }
 
     /// Register a user-defined module name.

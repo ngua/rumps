@@ -231,6 +231,9 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
     /// user instance for dispatch.
     instance_calls: HashMap<ExprId, crate::value::TypeId>,
 
+    /// Class registry; carries class definitions indexed by `ClassId`.
+    class_registry: crate::typecheck::ClassRegistry,
+
     /// Resolved class instance information from the resolution pass.
     ///
     /// Used during hoisting to register instance methods as functions and
@@ -310,6 +313,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             module_hofs,
             user_instances: instance::RuntimeInstanceRegistry::new(),
             instance_calls: tc.instance_calls,
+            class_registry: tc.class_registry,
             resolved_instances,
         })
     }
