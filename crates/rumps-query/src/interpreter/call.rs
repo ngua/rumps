@@ -9,7 +9,7 @@ use crate::env::{PrimCtx, PrimFn};
 use crate::intern::{QualifiedName, StringId};
 use crate::io::IoContext;
 use crate::value::{CapturedEnv, FunctionDef, TypeExprId, Value, ValueId};
-use crate::{Result, Span};
+use crate::{ClassId, Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
     /// Pipeline operator implementation.
@@ -361,10 +361,8 @@ impl<I: IoContext> Interpreter<'_, I> {
         args: &SmallVec<[ExprId; 4]>,
         span: Span,
     ) -> Result<Value> {
-        use crate::typecheck::BuiltinClassTag;
-
         let cs = self.arena.strings.get(class).unwrap_or_default();
-        let kind = BuiltinClassTag::from_str(cs).unwrap_or_else(|| {
+        let kind = ClassId::from_name(cs).unwrap_or_else(|| {
             typechecked!("class method class", "known class")
         });
 
@@ -390,14 +388,12 @@ impl<I: IoContext> Interpreter<'_, I> {
         args: &[ValueId],
         span: Span,
     ) -> Result<Value> {
-        use crate::typecheck::BuiltinClassTag;
-
         let class_str = self
             .arena
             .get_str(class)
             .unwrap_or_else(|| invariant!("class StringId in arena"));
 
-        let kind = BuiltinClassTag::from_str(class_str).unwrap_or_else(|| {
+        let kind = ClassId::from_name(class_str).unwrap_or_else(|| {
             typechecked!("invoke_class_method_fn", "known class")
         });
 
@@ -423,7 +419,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     pub(super) async fn dispatch_class_method(
         &mut self,
         expr_id: Option<ExprId>,
-        class: crate::typecheck::BuiltinClassTag,
+        class: ClassId,
         method: StringId,
         args: &[ValueId],
         span: Span,
@@ -503,7 +499,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     async fn dispatch_with_auto_derive(
         &mut self,
         expr_id: Option<ExprId>,
-        class: crate::typecheck::BuiltinClassTag,
+        class: ClassId,
         method: StringId,
         args: &[ValueId],
         span: Span,
@@ -540,7 +536,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     async fn dispatch_builtin_or_hof(
         &mut self,
         expr_id: Option<ExprId>,
-        class: crate::typecheck::BuiltinClassTag,
+        class: ClassId,
         method: StringId,
         args: &[ValueId],
         span: Span,
@@ -564,7 +560,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     fn dispatch_builtin_class_method(
         &mut self,
         expr_id: Option<ExprId>,
-        class: crate::typecheck::BuiltinClassTag,
+        class: ClassId,
         method: StringId,
         args: &[ValueId],
         span: Span,

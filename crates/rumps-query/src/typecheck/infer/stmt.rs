@@ -20,11 +20,10 @@ use crate::intern::{QualifiedName, StringId};
 use crate::typecheck::error::TypeError;
 use crate::typecheck::instance::{self, Instance};
 use crate::typecheck::ty::{
-    BuiltinClass, BuiltinClassTag, ClassShape, Rename, Scheme, Ty, TyArena,
-    TyId, TyVar,
+    ClassShape, Rename, Scheme, Ty, TyArena, TyId, TyVar, TypeClass,
 };
 use crate::value::{TypeDef, TypeId};
-use crate::Span;
+use crate::{ClassId, Span};
 
 impl InferCtx<'_> {
     /// Infer types for a statement.
@@ -511,8 +510,8 @@ impl InferCtx<'_> {
             .collect();
 
         // Second pass: process constraints now that all type params are known
-        // Convert `BuiltinClass<AstTypeExprId>` to `BuiltinClass<TyId>` for `Scheme`
-        let mut scheme_constraints: SmallVec<[(TyVar, BuiltinClass<TyId>); 2]> =
+        // Convert `TypeClass<AstTypeExprId>` to `TypeClass<TyId>` for `Scheme`
+        let mut scheme_constraints: SmallVec<[(TyVar, TypeClass<TyId>); 2]> =
             SmallVec::new();
 
         type_params.iter().for_each(|tp| {
@@ -532,16 +531,20 @@ impl InferCtx<'_> {
 
                 // Emit transitive superclass constraints (skip if the
                 // class is not HKT; only HKT classes have superclasses)
-                class.tag().transitive_supers().into_iter().for_each(|sup| {
-                    if let Some(sc) = class.with_tag(sup) {
-                        scheme_constraints.push((tv, sc.clone()));
-                        self.constrain(Constraint::Class {
-                            ty,
-                            class: sc,
-                            span,
-                        });
-                    }
-                });
+                self.env
+                    .class_registry()
+                    .transitive_supers(class.tag())
+                    .into_iter()
+                    .for_each(|sup| {
+                        if let Some(sc) = class.with_tag(sup) {
+                            scheme_constraints.push((tv, sc.clone()));
+                            self.constrain(Constraint::Class {
+                                ty,
+                                class: sc,
+                                span,
+                            });
+                        }
+                    });
             });
         });
 
@@ -847,8 +850,8 @@ impl InferCtx<'_> {
                 // Must be convertible to String
                 self.constrain(Constraint::Class {
                     ty: expr_ty,
-                    class: BuiltinClass::Parameterized(
-                        BuiltinClassTag::Into,
+                    class: TypeClass::Parameterized(
+                        ClassId::INTO,
                         TyArena::STRING,
                     ),
                     span,
@@ -858,8 +861,8 @@ impl InferCtx<'_> {
                 // Must be convertible to Json
                 self.constrain(Constraint::Class {
                     ty: expr_ty,
-                    class: BuiltinClass::Parameterized(
-                        BuiltinClassTag::Into,
+                    class: TypeClass::Parameterized(
+                        ClassId::INTO,
                         TyArena::JSON,
                     ),
                     span,
@@ -885,7 +888,7 @@ impl InferCtx<'_> {
     /// Infer types for a `class ... FOR ...` instance declaration.
     ///
     /// Validates:
-    /// 1. The class name is a valid `BuiltinClassTag`
+    /// 1. The class name is a valid `ClassId`
     /// 2. The `for_type` is NOT a builtin type
     /// 3. All required methods are present
     /// 4. Method signatures match the class definition (arity)
@@ -908,11 +911,11 @@ impl InferCtx<'_> {
             span,
         } = input;
 
-        // 1. Resolve class name to BuiltinClassTag
+        // 1. Resolve class name to `ClassId`
         let cn = self.env.resolve_str(class_name).to_owned();
-        let class = BuiltinClassTag::from_str(&cn).unwrap_or_else(|| {
+        let class = ClassId::from_name(&cn).unwrap_or_else(|| {
             self.error(TypeError::UnknownClass(cn.clone(), span));
-            BuiltinClassTag::Display // Default to `Display` to avoid cascading errors
+            ClassId::DISPLAY // Default to `Display` to avoid cascading errors
         });
 
         // 2. Build type parameter substitution map (BEFORE resolving for_type)
@@ -942,28 +945,30 @@ impl InferCtx<'_> {
         // 3. Resolve for_type and get its TypeId
         //    HKT classes need partial application logic (bare name or fewer
         //    type args than the type definition expects).
-        let (for_ty, type_id, class_arg_tys) = match class.shape() {
-            ClassShape::Hkt { .. } => match self.resolve_hkt_for_type(
-                class,
-                for_type,
-                class_args,
-                &mut type_param_subst,
-                &module,
-                span,
-            ) {
-                Some((tid, fty, catys)) => (fty, Some(tid), catys),
-                None => (TyArena::UNKNOWN, None, SmallVec::new()),
-            },
-            _ => {
-                let for_ty = self.ast_type_to_ty(for_type, &type_param_subst);
-                let type_id = self.extract_type_id(for_ty);
-                let class_arg_tys: SmallVec<[TyId; 2]> = class_args
-                    .iter()
-                    .map(|id| self.ast_type_to_ty(*id, &type_param_subst))
-                    .collect();
-                (for_ty, type_id, class_arg_tys)
-            }
-        };
+        let (for_ty, type_id, class_arg_tys) =
+            match self.env.class_registry().shape(class) {
+                ClassShape::Hkt { .. } => match self.resolve_hkt_for_type(
+                    class,
+                    for_type,
+                    class_args,
+                    &mut type_param_subst,
+                    &module,
+                    span,
+                ) {
+                    Some((tid, fty, catys)) => (fty, Some(tid), catys),
+                    None => (TyArena::UNKNOWN, None, SmallVec::new()),
+                },
+                _ => {
+                    let for_ty =
+                        self.ast_type_to_ty(for_type, &type_param_subst);
+                    let type_id = self.extract_type_id(for_ty);
+                    let class_arg_tys: SmallVec<[TyId; 2]> = class_args
+                        .iter()
+                        .map(|id| self.ast_type_to_ty(*id, &type_param_subst))
+                        .collect();
+                    (for_ty, type_id, class_arg_tys)
+                }
+            };
 
         // 5. Check for forbidden builtin instance
         //
@@ -991,20 +996,24 @@ impl InferCtx<'_> {
 
         // 5.5. Validate superclass instances exist
         if let Some(tid) = type_id {
-            class.transitive_supers().into_iter().for_each(|sup| {
-                if self.instance_registry.lookup(sup, tid).is_none() {
-                    self.error(TypeError::MissingSuperclassInstance {
-                        class,
-                        superclass: sup,
-                        type_id: tid,
-                        span,
-                    });
-                }
-            });
+            self.env
+                .class_registry()
+                .transitive_supers(class)
+                .into_iter()
+                .for_each(|sup| {
+                    if self.instance_registry.lookup(sup, tid).is_none() {
+                        self.error(TypeError::MissingSuperclassInstance {
+                            class,
+                            superclass: sup,
+                            type_id: tid,
+                            span,
+                        });
+                    }
+                });
         }
 
         // 6. Process WHERE constraints
-        let mut scheme_constraints: SmallVec<[(TyVar, BuiltinClass<TyId>); 2]> =
+        let mut scheme_constraints: SmallVec<[(TyVar, TypeClass<TyId>); 2]> =
             SmallVec::new();
         constraints
             .iter()
@@ -1101,7 +1110,9 @@ impl InferCtx<'_> {
                     let mn = self.env.resolve_str(m.name);
                     let fn_name =
                         crate::interpreter::instance::instance_fn_name(
-                            class, &type_name, mn,
+                            class.name(),
+                            &type_name,
+                            mn,
                         );
                     let fn_name_id = self.env.intern(&fn_name);
                     (m.name, fn_name_id)
@@ -1186,7 +1197,11 @@ impl InferCtx<'_> {
                 let scheme = spec.scheme();
                 let shape = self.ty_arena.get(scheme.ty).clone();
                 match shape {
-                    Ty::Fn(params, ret) => match class.shape() {
+                    Ty::Fn(params, ret) => match self
+                        .env
+                        .class_registry()
+                        .shape(class)
+                    {
                         ClassShape::Hkt { .. } => {
                             // For HKT classes the LAST scheme var is the
                             // container constructor; all preceding vars are
@@ -1278,21 +1293,23 @@ impl InferCtx<'_> {
         // so user-chosen element names (e.g. `V` vs TypeDef's `Val`)
         // resolve correctly.
         let mut method_subst;
-        let type_param_subst =
-            if matches!(class.shape(), ClassShape::Hkt { .. }) {
-                method_subst = type_param_subst.clone();
-                method.params.iter().for_each(|(_, ann)| {
-                    if let Some(id) = ann {
-                        self.merge_for_type_vars(*id, &mut method_subst);
-                    }
-                });
-                if let Some(ret) = method.ret {
-                    self.merge_for_type_vars(ret, &mut method_subst);
+        let type_param_subst = if matches!(
+            self.env.class_registry().shape(class),
+            ClassShape::Hkt { .. }
+        ) {
+            method_subst = type_param_subst.clone();
+            method.params.iter().for_each(|(_, ann)| {
+                if let Some(id) = ann {
+                    self.merge_for_type_vars(*id, &mut method_subst);
                 }
-                &method_subst
-            } else {
-                type_param_subst
-            };
+            });
+            if let Some(ret) = method.ret {
+                self.merge_for_type_vars(ret, &mut method_subst);
+            }
+            &method_subst
+        } else {
+            type_param_subst
+        };
 
         // Typecheck method body
         self.env.push_scope();

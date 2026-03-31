@@ -8,9 +8,8 @@ use super::Interpreter;
 use crate::ast::ExprId;
 use crate::intern::{QualifiedName, StringId};
 use crate::io::IoContext;
-use crate::typecheck::BuiltinClassTag;
 use crate::value::{TypeExprId, TypeId, Value, ValueId};
-use crate::{Result, Span};
+use crate::{ClassId, Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
     /// Create an `Option.None` value with unknown type parameter.
@@ -211,11 +210,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             regex_cache: &self.regex_cache,
             span,
         };
-        self.class_methods.dispatch_nullary(
-            BuiltinClassTag::Monoid,
-            mid,
-            &mut ctx,
-            &ty,
-        )
+        self.class_methods
+            .dispatch_nullary(ClassId::MONOID, mid, &mut ctx, &ty)
     }
 }

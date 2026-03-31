@@ -125,12 +125,11 @@ use crate::env::Environment;
 use crate::intern::{QualifiedName, StringId, StringInterner};
 use crate::io::IoContext;
 use crate::resolve::ResolveCtx;
-use crate::typecheck::BuiltinClassTag;
 use crate::value::{
     CapturedEnv, FunctionDef, TypeExprArena, TypeExprId, TypeId, TypeRegistry,
     Value, ValueArena, ValueId,
 };
-use crate::{Result, Span};
+use crate::{ClassId, Result, Span};
 
 /// The RUMPS interpreter.
 ///
@@ -440,6 +439,11 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             cm.register_all(&mut arena.strings);
             cm
         };
+        let mut ty_arena = crate::typecheck::TyArena::new();
+        let class_registry = crate::typecheck::ClassRegistry::builtins(
+            &mut |s| arena.strings.intern(s),
+            &mut ty_arena,
+        );
         Self {
             ast,
             env: Environment::with_interner(arena.interner()),
@@ -449,7 +453,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             registry,
             regex_cache: Vec::new(),
             regex_indices: HashMap::new(),
-            ty_arena: crate::typecheck::TyArena::new(),
+            ty_arena,
             mempty_types: HashMap::new(),
             numeric_types: HashMap::new(),
             convert_targets: HashMap::new(),
@@ -462,6 +466,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             user_instances: instance::RuntimeInstanceRegistry::new(),
             instance_calls: HashMap::new(),
             resolved_instances: HashMap::new(),
+            class_registry,
         }
     }
 
@@ -535,7 +540,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                     let mid = self.arena.intern("unwrap");
                     self.dispatch_class_method(
                         Some(id),
-                        BuiltinClassTag::Fallible,
+                        ClassId::FALLIBLE,
                         mid,
                         &[val_id],
                         span,
@@ -1550,7 +1555,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     match self
                         .dispatch_class_method(
                             Some(id),
-                            BuiltinClassTag::Fallible,
+                            ClassId::FALLIBLE,
                             mid,
                             &[val_id],
                             span,
@@ -1603,7 +1608,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             let mid = self.arena.intern("wrap");
             self.dispatch_class_method(
                 Some(id),
-                BuiltinClassTag::Wrappable,
+                ClassId::WRAPPABLE,
                 mid,
                 &[val_id],
                 span,

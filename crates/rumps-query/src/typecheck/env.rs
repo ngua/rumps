@@ -4,13 +4,11 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::ty::{
-    BuiltinClassDef, BuiltinClassDefs, BuiltinClassTag, ClassRegistry, Scheme,
-    TyArena, TyId, TyVar,
-};
+use super::ty::{ClassDef, ClassRegistry, Scheme, TyArena, TyId, TyVar};
 use super::uf::UnionFind;
 use crate::ast::Visibility;
 use crate::intern::{QualifiedName, StringId, StringInterner};
+use crate::ClassId;
 
 /// A module member entry with type scheme and visibility.
 #[derive(Clone, Debug)]
@@ -39,8 +37,6 @@ struct Scope {
 pub(crate) struct TypeEnv {
     scopes: Vec<Scope>,
     pub(super) strings: StringInterner,
-    /// Builtin class definitions, indexed by `BuiltinClassTag as usize`.
-    class_defs: BuiltinClassDefs,
     /// Class registry (indexed by `ClassId`).
     pub(super) class_registry: ClassRegistry,
     /// User-defined module names registered during typechecking.
@@ -69,14 +65,11 @@ impl TypeEnv {
         mut strings: StringInterner,
         arena: &mut TyArena,
     ) -> Self {
-        let class_defs =
-            BuiltinClassDef::build_all(&mut |s| strings.intern(s), arena);
         let class_registry =
             ClassRegistry::builtins(&mut |s| strings.intern(s), arena);
         Self {
             scopes: vec![Scope::default()],
             strings,
-            class_defs,
             class_registry,
             user_modules: HashSet::new(),
             user_module_members: HashMap::new(),
@@ -85,9 +78,9 @@ impl TypeEnv {
         }
     }
 
-    /// Look up a builtin class definition by tag.
-    pub(crate) fn class_def(&self, tag: BuiltinClassTag) -> &BuiltinClassDef {
-        &self.class_defs[tag as usize]
+    /// Look up a class definition by id.
+    pub(crate) fn class_def(&self, id: ClassId) -> &ClassDef {
+        self.class_registry.get(id)
     }
 
     /// Access the class registry.

@@ -7,10 +7,10 @@ use std::fmt;
 
 use thiserror::Error;
 
-use super::ty::{BuiltinClass, BuiltinClassTag, Ty, TyArena, TyId, TyVar};
+use super::ty::{Ty, TyArena, TyId, TyVar, TypeClass};
 use crate::intern::StringInterner;
 use crate::value::{TypeRegistry, ValueArena};
-use crate::{Span, StringId, TypeId};
+use crate::{ClassId, Span, StringId, TypeId};
 
 /// Context for pretty-printing types in error messages.
 ///
@@ -246,7 +246,7 @@ pub(crate) enum TypeError {
 
     /// Type does not satisfy a class (Numeric, Into[Json], etc.).
     #[error("type `{1}` does not satisfy `{0}` class")]
-    UnsatisfiedClass(BuiltinClass<TyId>, TyId, Span),
+    UnsatisfiedClass(TypeClass<TyId>, TyId, Span),
 
     /// Struct literal missing a required field.
     #[error("missing required field `{field}` for type `{ty:?}`")]
@@ -422,7 +422,7 @@ pub(crate) enum TypeError {
     /// A type can only have one instance of each class.
     #[error("duplicate `{class}` instance for type `{type_id:?}`")]
     DuplicateInstance {
-        class: BuiltinClassTag,
+        class: ClassId,
         type_id: TypeId,
         span: Span,
     },
@@ -432,7 +432,7 @@ pub(crate) enum TypeError {
     /// Users can only implement classes for their own types (TYPE, newtype, union).
     #[error("cannot implement `{class}` for builtin type `{type_id:?}`")]
     BuiltinInstanceForbidden {
-        class: BuiltinClassTag,
+        class: ClassId,
         type_id: TypeId,
         span: Span,
     },
@@ -442,7 +442,7 @@ pub(crate) enum TypeError {
     /// All methods defined by a class must be implemented.
     #[error("missing required method `{method}` for class `{class}`")]
     MissingInstanceMethod {
-        class: BuiltinClassTag,
+        class: ClassId,
         method: String,
         required_hint: String,
         span: Span,
@@ -453,7 +453,7 @@ pub(crate) enum TypeError {
     /// The user-provided method signature does not match the class definition.
     #[error("method `{method}` of class `{class}` has wrong arity: expected {expected} parameter(s), got {got}")]
     MethodSignatureMismatch {
-        class: BuiltinClassTag,
+        class: ClassId,
         method: String,
         expected: usize,
         got: usize,
@@ -465,7 +465,7 @@ pub(crate) enum TypeError {
     /// Classes like `Indexable` require associated type definitions (e.g., `newtype Index = Int`).
     #[error("missing required associated type for class `{class}`")]
     MissingAssocType {
-        class: BuiltinClassTag,
+        class: ClassId,
         assoc: StringId,
         span: Span,
     },
@@ -475,7 +475,7 @@ pub(crate) enum TypeError {
     /// The instance defines an associated type that doesn't exist in the class.
     #[error("class `{class}` has no associated type `{assoc}`")]
     UnknownAssocTypeForClass {
-        class: BuiltinClassTag,
+        class: ClassId,
         assoc: String,
         span: Span,
     },
@@ -498,7 +498,7 @@ pub(crate) enum TypeError {
     )]
     AssocTypeConstraint {
         assoc: String,
-        constraint: BuiltinClass<TyId>,
+        constraint: TypeClass<TyId>,
         actual: TyId,
         span: Span,
     },
@@ -517,7 +517,7 @@ pub(crate) enum TypeError {
     /// The referenced associated type doesn't exist in the class.
     #[error("class `{class}` has no associated type `#{}`", name.idx())]
     NoSuchAssocType {
-        class: BuiltinClassTag,
+        class: ClassId,
         name: StringId,
         span: Span,
     },
@@ -528,7 +528,7 @@ pub(crate) enum TypeError {
     /// defined in a module, but that module has not been imported.
     #[error("no `{class}` instance for `{type_id:?}` in scope")]
     InstanceNotImported {
-        class: BuiltinClassTag,
+        class: ClassId,
         type_id: TypeId,
         module: String,
         span: Span,
@@ -540,8 +540,8 @@ pub(crate) enum TypeError {
     /// superclasses (e.g., `Wrappable`, `Fallible`) must already have instances.
     #[error("cannot implement `{class}` for `{type_id:?}`; missing required superclass instance `{superclass}`")]
     MissingSuperclassInstance {
-        class: BuiltinClassTag,
-        superclass: BuiltinClassTag,
+        class: ClassId,
+        superclass: ClassId,
         type_id: TypeId,
         span: Span,
     },
@@ -659,9 +659,9 @@ impl TypeError {
                 format!(
                     "type `{}` does not satisfy `{}` class",
                     p.format(*ty),
-                    class.name()
+                    class.tag().name()
                 ),
-                class.tag().help().map(str::to_owned),
+                None,
             ),
             Self::MissingField { ty, field, .. } => (
                 format!(

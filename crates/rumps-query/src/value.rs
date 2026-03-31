@@ -289,6 +289,30 @@ impl ClassId {
         self.0 as usize
     }
 
+    /// Returns the name of builtin classes as a `&'static str`.
+    pub(crate) const fn name(self) -> &'static str {
+        match self.0 {
+            0 => "Numeric",
+            1 => "Iterable",
+            2 => "Monoid",
+            3 => "BitLike",
+            4 => "Negatable",
+            5 => "Fallible",
+            6 => "Into",
+            7 => "TryInto",
+            8 => "Indexable",
+            9 => "Ord",
+            10 => "Mappable",
+            11 => "Foldable",
+            12 => "Filterable",
+            13 => "Display",
+            14 => "Eq",
+            15 => "Wrappable",
+            16 => "Chainable",
+            _ => "<unknown class>",
+        }
+    }
+
     pub(crate) fn from_name(s: &str) -> Option<Self> {
         match s {
             "Numeric" => Some(Self::NUMERIC),
@@ -315,26 +339,7 @@ impl ClassId {
 
 impl fmt::Display for ClassId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.0 {
-            0 => f.write_str("Numeric"),
-            1 => f.write_str("Iterable"),
-            2 => f.write_str("Monoid"),
-            3 => f.write_str("BitLike"),
-            4 => f.write_str("Negatable"),
-            5 => f.write_str("Fallible"),
-            6 => f.write_str("Into"),
-            7 => f.write_str("TryInto"),
-            8 => f.write_str("Indexable"),
-            9 => f.write_str("Ord"),
-            10 => f.write_str("Mappable"),
-            11 => f.write_str("Foldable"),
-            12 => f.write_str("Filterable"),
-            13 => f.write_str("Display"),
-            14 => f.write_str("Eq"),
-            15 => f.write_str("Wrappable"),
-            16 => f.write_str("Chainable"),
-            n => write!(f, "ClassId({n})"),
-        }
+        f.write_str(self.name())
     }
 }
 

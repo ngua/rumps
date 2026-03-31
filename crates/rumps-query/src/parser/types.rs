@@ -7,8 +7,8 @@ use smallvec::SmallVec;
 use super::{ParseErr, Parser};
 use crate::intern::{StringId, StringInterner};
 use crate::parser::cst;
-use crate::typecheck::{BuiltinClass, BuiltinClassTag, ClassShape};
-use crate::{Span, Token};
+use crate::typecheck::{ClassShape, TypeClass};
+use crate::{ClassId, Span, Token};
 
 impl Parser {
     /// Parse a type expression.
@@ -362,18 +362,29 @@ impl Parser {
     /// Parameterized classes (`Into[T]`, `TryInto[T]`, `Indexable[E]`) require them.
     pub(super) fn constraint(
         interner: &mut StringInterner,
-    ) -> impl chumsky::Parser<Token, BuiltinClass<cst::TypeExpr>, Error = ParseErr>
+    ) -> impl chumsky::Parser<Token, TypeClass<cst::TypeExpr>, Error = ParseErr>
            + Clone {
         // Intern class names locally for `StringId` comparison at parse time.
-        let class_tags = {
-            use BuiltinClassTag::*;
-            [
-                Numeric, Iterable, Monoid, BitLike, Negatable, Fallible,
-                Wrappable, Chainable, Into, TryInto, Indexable, Ord, Mappable,
-                Foldable, Filterable, Display, Eq,
-            ]
-            .map(|t| (interner.intern(t.name()), t))
-        };
+        let class_tags = [
+            ClassId::NUMERIC,
+            ClassId::ITERABLE,
+            ClassId::MONOID,
+            ClassId::BIT_LIKE,
+            ClassId::NEGATABLE,
+            ClassId::FALLIBLE,
+            ClassId::WRAPPABLE,
+            ClassId::CHAINABLE,
+            ClassId::INTO,
+            ClassId::TRY_INTO,
+            ClassId::INDEXABLE,
+            ClassId::ORD,
+            ClassId::MAPPABLE,
+            ClassId::FOLDABLE,
+            ClassId::FILTERABLE,
+            ClassId::DISPLAY,
+            ClassId::EQ,
+        ]
+        .map(|t| (interner.intern(t.name()), t));
 
         let type_args = just(Token::LBracket)
             .ignore_then(
@@ -402,7 +413,20 @@ impl Parser {
                 let has_args = args.is_some();
                 let mut args = args.into_iter().flatten();
 
-                match tag.shape() {
+                // Determine shape from the class id. The parser does not
+                // have access to `ClassRegistry`, so we match on the
+                // builtin class ids directly.
+                let shape = match tag {
+                    ClassId::NUMERIC | ClassId::MONOID | ClassId::BIT_LIKE
+                    | ClassId::NEGATABLE | ClassId::ORD | ClassId::EQ
+                    | ClassId::DISPLAY => ClassShape::Simple,
+                    ClassId::ITERABLE | ClassId::FALLIBLE | ClassId::WRAPPABLE
+                    | ClassId::CHAINABLE | ClassId::MAPPABLE | ClassId::FOLDABLE
+                    | ClassId::FILTERABLE => ClassShape::Hkt { kind: 1 },
+                    _ => ClassShape::Parameterized { params: 1 },
+                };
+
+                match shape {
                     ClassShape::Simple => {
                         if has_args {
                             Err(chumsky::error::Simple::custom(
@@ -413,7 +437,7 @@ impl Parser {
                                 ),
                             ))
                         } else {
-                            Ok(BuiltinClass::Simple(tag))
+                            Ok(TypeClass::Simple(tag))
                         }
                     }
                     ClassShape::Hkt { .. } => {
@@ -427,7 +451,7 @@ impl Parser {
                                 ),
                             ))
                         } else {
-                            Ok(BuiltinClass::Hkt(tag, None))
+                            Ok(TypeClass::Hkt(tag, None))
                         }
                     }
                     ClassShape::Parameterized { params } => {
@@ -450,7 +474,7 @@ impl Parser {
                                 ),
                             ))
                         } else {
-                            Ok(BuiltinClass::Parameterized(tag, ty))
+                            Ok(TypeClass::Parameterized(tag, ty))
                         }
                     }
                 }

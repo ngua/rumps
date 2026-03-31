@@ -14,32 +14,6 @@ use super::uf::UnionFind;
 use crate::intern::StringId;
 use crate::{ClassId, Span, TypeId};
 
-/// Flat discriminant for builtin type classes.
-///
-/// Exists only for dispatch table indexing and efficient keying.
-/// Class metadata (methods, assoc types, help) lives in `BuiltinClassDef`.
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum BuiltinClassTag {
-    Numeric = 0,
-    Iterable = 1,
-    Monoid = 2,
-    BitLike = 3,
-    Negatable = 4,
-    Fallible = 5,
-    Into = 6,
-    TryInto = 7,
-    Indexable = 8,
-    Ord = 9,
-    Mappable = 10,
-    Foldable = 11,
-    Filterable = 12,
-    Display = 13,
-    Eq = 14,
-    Wrappable = 15,
-    Chainable = 16,
-}
-
 /// The "shape" of a builtin class constraint.
 ///
 /// Determines how many and what kind of type parameters the class carries.
@@ -64,7 +38,7 @@ pub(crate) enum TrackKind {
     ConvertResultInner,
 }
 
-/// Method specification returned by `BuiltinClassTag::method`.
+/// Method specification returned by `ClassDef::method`.
 #[derive(Clone, Debug)]
 pub(crate) enum MethodSpec {
     /// Standard method; just instantiate scheme and unify.
@@ -78,653 +52,6 @@ impl MethodSpec {
         match self {
             Self::Standard(s) | Self::Tracked { scheme: s, .. } => s,
         }
-    }
-}
-
-impl BuiltinClassTag {
-    /// Number of builtin class tags (for array sizing).
-    pub(crate) const COUNT: usize = 17;
-
-    /// Parse a class name string into a `BuiltinClassTag`.
-    pub(crate) fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "Numeric" => Some(Self::Numeric),
-            "Iterable" => Some(Self::Iterable),
-            "Monoid" => Some(Self::Monoid),
-            "BitLike" => Some(Self::BitLike),
-            "Negatable" => Some(Self::Negatable),
-            "Fallible" => Some(Self::Fallible),
-            "Into" => Some(Self::Into),
-            "TryInto" => Some(Self::TryInto),
-            "Indexable" => Some(Self::Indexable),
-            "Ord" => Some(Self::Ord),
-            "Mappable" => Some(Self::Mappable),
-            "Foldable" => Some(Self::Foldable),
-            "Filterable" => Some(Self::Filterable),
-            "Display" => Some(Self::Display),
-            "Eq" => Some(Self::Eq),
-            "Wrappable" => Some(Self::Wrappable),
-            "Chainable" => Some(Self::Chainable),
-            _ => None,
-        }
-    }
-
-    /// Returns the name of this class tag.
-    pub(crate) const fn name(self) -> &'static str {
-        match self {
-            Self::Numeric => "Numeric",
-            Self::Iterable => "Iterable",
-            Self::Monoid => "Monoid",
-            Self::BitLike => "BitLike",
-            Self::Negatable => "Negatable",
-            Self::Fallible => "Fallible",
-            Self::Into => "Into",
-            Self::TryInto => "TryInto",
-            Self::Indexable => "Indexable",
-            Self::Ord => "Ord",
-            Self::Eq => "Eq",
-            Self::Mappable => "Mappable",
-            Self::Foldable => "Foldable",
-            Self::Filterable => "Filterable",
-            Self::Display => "Display",
-            Self::Wrappable => "Wrappable",
-            Self::Chainable => "Chainable",
-        }
-    }
-
-    /// Returns static help text for this class, if any.
-    pub(crate) const fn help(self) -> Option<&'static str> {
-        match self {
-            Self::Numeric => {
-                Some("numeric types are `Int`, `Word`, and `Float`")
-            }
-            Self::Monoid => {
-                Some("`++` works on `String`, `Array`, `Map`, and `Option`")
-            }
-            Self::BitLike => {
-                Some("bitwise types are `Bool`, `Int`, and `Word`")
-            }
-            Self::Negatable => Some("negatable types are `Int` and `Float`"),
-            Self::Iterable => {
-                Some("iterable types are `Array` and `Range`")
-            }
-            Self::Fallible => {
-                Some("fallible types are `Option` and `Result`")
-            }
-            Self::Indexable => {
-                Some("indexable types are `Array`, `Map`, and `String`")
-            }
-            Self::Ord => {
-                Some("orderable types are `Bool`, `Int`, `Word`, `Float`, `Char`, and `String`")
-            }
-            Self::Eq => {
-                Some("equality types are primitives, containers (if elements are `Eq`), and user types with `CLASS Eq`")
-            }
-            Self::Mappable => {
-                Some("mappable types are `Option`, `Result`, `Array`, and `Range`")
-            }
-            Self::Foldable => {
-                Some("foldable types are `Option`, `Result`, `Array`, and `Range`")
-            }
-            Self::Filterable => {
-                Some("filterable types are `Option`, `Result`, and `Array`")
-            }
-            Self::Wrappable => {
-                Some("wrappable types are `Option` and `Result`; provides `?` (wrap)")
-            }
-            Self::Chainable => {
-                Some("chainable types are `Option` and `Result`; provides `chain`")
-            }
-            Self::Into | Self::TryInto | Self::Display => None,
-        }
-    }
-
-    /// Returns the shape of this class constraint.
-    pub(crate) const fn shape(self) -> ClassShape {
-        match self {
-            Self::Numeric
-            | Self::Monoid
-            | Self::BitLike
-            | Self::Negatable
-            | Self::Ord
-            | Self::Eq
-            | Self::Display => ClassShape::Simple,
-
-            Self::Iterable
-            | Self::Fallible
-            | Self::Wrappable
-            | Self::Chainable
-            | Self::Mappable
-            | Self::Foldable
-            | Self::Filterable => ClassShape::Hkt { kind: 1 },
-
-            Self::Into | Self::TryInto | Self::Indexable => {
-                ClassShape::Parameterized { params: 1 }
-            }
-        }
-    }
-
-    /// Direct superclasses only.
-    pub(crate) const fn supers(self) -> &'static [Self] {
-        match self {
-            Self::Fallible => &[Self::Wrappable],
-            Self::Chainable => &[Self::Wrappable],
-            _ => &[],
-        }
-    }
-
-    /// All transitive superclasses (handles both linear chains and multi-parent DAGs).
-    /// Returns in dependency order (parents before children).
-    pub(crate) fn transitive_supers(self) -> Vec<Self> {
-        let mut acc = Vec::new();
-        self.supers()
-            .iter()
-            .for_each(|&sup| sup.collect_into(&mut acc));
-        acc
-    }
-
-    fn collect_into(self, acc: &mut Vec<Self>) {
-        if !acc.contains(&self) {
-            self.supers().iter().for_each(|&sup| sup.collect_into(acc));
-            acc.push(self);
-        }
-    }
-}
-
-impl fmt::Display for BuiltinClassTag {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.name())
-    }
-}
-
-/// Full definition of a builtin class. Shape information is derived from
-/// `self.tag.shape()` when needed; there is no need to duplicate the shape
-/// as an enum variant.
-pub(crate) struct BuiltinClassDef {
-    pub(crate) tag: BuiltinClassTag,
-    pub(crate) name: &'static str,
-    pub(crate) assoc_types: &'static [&'static str],
-    /// Method specs; all methods are required.
-    pub(crate) methods: Vec<(&'static str, MethodSpec)>,
-}
-
-/// Array of all builtin class definitions, indexed by `BuiltinClassTag as usize`.
-pub(crate) type BuiltinClassDefs = [BuiltinClassDef; BuiltinClassTag::COUNT];
-
-impl BuiltinClassDef {
-    /// Look up a method by name.
-    pub(crate) fn method(
-        &self,
-        name: &str,
-        span: Span,
-    ) -> Result<&MethodSpec, TypeError> {
-        self.methods
-            .iter()
-            .find(|(n, _)| *n == name)
-            .map(|(_, spec)| spec)
-            .ok_or_else(|| TypeError::UnknownMethod {
-                class: self.name.to_string(),
-                method: name.to_string(),
-                span,
-            })
-    }
-
-    /// All method names (all methods are required).
-    pub(crate) fn method_names(
-        &self,
-    ) -> impl Iterator<Item = &'static str> + '_ {
-        self.methods.iter().map(|(n, _)| *n)
-    }
-
-    /// Build all `BuiltinClassTag::COUNT` builtin class definitions.
-    ///
-    /// The `intern` closure is used for associated type names in method
-    /// schemes (currently only `Indexable`'s `"Index"`).
-    pub(crate) fn build_all(
-        intern: &mut impl FnMut(&str) -> StringId,
-        arena: &mut TyArena,
-    ) -> BuiltinClassDefs {
-        // Pre-allocate common type variable ids
-        let v0 = arena.var(0);
-        let v1 = arena.var(1);
-        // HKT applications: `F[T]` for different type-variable positions
-        let tv1_of_v0 = arena.hkt(TyVar::new(1), smallvec![v0]); // F1[T0]
-        let tv2_of_v0 = arena.hkt(TyVar::new(2), smallvec![v0]); // F2[T0]
-        let tv2_of_v1 = arena.hkt(TyVar::new(2), smallvec![v1]); // F2[T1]
-
-        // Common compound types
-        let array_v0 = arena.array(v0);
-
-        // Common function shapes
-        let binary_v0 = arena.func(smallvec![v0, v0], v0); // (T, T) -> T
-        let unary_v0 = arena.func(smallvec![v0], v0); // (T) -> T
-
-        // Scheme constructor helpers (captured vars are all Copy)
-        let simple1 = |ty: TyId, tag: BuiltinClassTag| Scheme {
-            vars: vec![TyVar::new(0)],
-            ty,
-            constraints: smallvec![(TyVar::new(0), BuiltinClass::Simple(tag))],
-        };
-        let hkt2 = |ty: TyId, tag: BuiltinClassTag| Scheme {
-            vars: vec![TyVar::new(0), TyVar::new(1)],
-            ty,
-            constraints: smallvec![(
-                TyVar::new(1),
-                BuiltinClass::Hkt(tag, None)
-            )],
-        };
-        let hkt3 = |ty: TyId, tag: BuiltinClassTag| Scheme {
-            vars: vec![TyVar::new(0), TyVar::new(1), TyVar::new(2)],
-            ty,
-            constraints: smallvec![(
-                TyVar::new(2),
-                BuiltinClass::Hkt(tag, None)
-            )],
-        };
-
-        // Indexable needs a shared `AssocType` id for its two methods.
-        let idx_name = intern("Index");
-        let assoc_idx = arena.alloc(Ty::AssocType(
-            TyVar::new(0),
-            BuiltinClassTag::Indexable,
-            idx_name,
-        ));
-
-        [
-            // Numeric: `forall T: Numeric. (T, T) -> T`
-            Self {
-                tag: BuiltinClassTag::Numeric,
-                name: "Numeric",
-                assoc_types: &[],
-                methods: vec![
-                    (
-                        "add",
-                        MethodSpec::Standard(simple1(
-                            binary_v0,
-                            BuiltinClassTag::Numeric,
-                        )),
-                    ),
-                    (
-                        "sub",
-                        MethodSpec::Standard(simple1(
-                            binary_v0,
-                            BuiltinClassTag::Numeric,
-                        )),
-                    ),
-                    (
-                        "mul",
-                        MethodSpec::Standard(simple1(
-                            binary_v0,
-                            BuiltinClassTag::Numeric,
-                        )),
-                    ),
-                    (
-                        "floor-div",
-                        MethodSpec::Standard(simple1(
-                            binary_v0,
-                            BuiltinClassTag::Numeric,
-                        )),
-                    ),
-                    (
-                        "mod",
-                        MethodSpec::Standard(simple1(
-                            binary_v0,
-                            BuiltinClassTag::Numeric,
-                        )),
-                    ),
-                    (
-                        "pow",
-                        MethodSpec::Standard(simple1(
-                            binary_v0,
-                            BuiltinClassTag::Numeric,
-                        )),
-                    ),
-                ],
-            },
-            // Iterable
-            Self {
-                tag: BuiltinClassTag::Iterable,
-                name: "Iterable",
-                assoc_types: &[],
-                methods: vec![
-                    (
-                        "length",
-                        MethodSpec::Standard(hkt2(
-                            arena.func(smallvec![tv1_of_v0], TyArena::INT),
-                            BuiltinClassTag::Iterable,
-                        )),
-                    ),
-                    (
-                        "contains",
-                        MethodSpec::Standard(hkt2(
-                            arena.func(smallvec![tv1_of_v0, v0], TyArena::BOOL),
-                            BuiltinClassTag::Iterable,
-                        )),
-                    ),
-                    (
-                        "reverse",
-                        MethodSpec::Standard(hkt2(
-                            arena.func(smallvec![tv1_of_v0], array_v0),
-                            BuiltinClassTag::Iterable,
-                        )),
-                    ),
-                    (
-                        "foreach",
-                        MethodSpec::Standard({
-                            let cb = arena.func(smallvec![v0], TyArena::UNIT);
-                            hkt2(
-                                arena.func(
-                                    smallvec![cb, tv1_of_v0],
-                                    TyArena::UNIT,
-                                ),
-                                BuiltinClassTag::Iterable,
-                            )
-                        }),
-                    ),
-                    (
-                        "collect",
-                        MethodSpec::Standard(hkt2(
-                            arena.func(smallvec![tv1_of_v0], array_v0),
-                            BuiltinClassTag::Iterable,
-                        )),
-                    ),
-                ],
-            },
-            // Monoid
-            Self {
-                tag: BuiltinClassTag::Monoid,
-                name: "Monoid",
-                assoc_types: &[],
-                methods: vec![
-                    (
-                        "identity",
-                        MethodSpec::Tracked {
-                            scheme: simple1(
-                                arena.func(smallvec![], v0),
-                                BuiltinClassTag::Monoid,
-                            ),
-                            track: TrackKind::Mempty,
-                        },
-                    ),
-                    (
-                        "concat",
-                        MethodSpec::Standard(simple1(
-                            binary_v0,
-                            BuiltinClassTag::Monoid,
-                        )),
-                    ),
-                ],
-            },
-            // BitLike: `forall T: BitLike. (T, T) -> T`
-            Self {
-                tag: BuiltinClassTag::BitLike,
-                name: "BitLike",
-                assoc_types: &[],
-                methods: vec![
-                    (
-                        "bit-and",
-                        MethodSpec::Standard(simple1(
-                            binary_v0,
-                            BuiltinClassTag::BitLike,
-                        )),
-                    ),
-                    (
-                        "bit-or",
-                        MethodSpec::Standard(simple1(
-                            binary_v0,
-                            BuiltinClassTag::BitLike,
-                        )),
-                    ),
-                    (
-                        "shl",
-                        MethodSpec::Standard(simple1(
-                            binary_v0,
-                            BuiltinClassTag::BitLike,
-                        )),
-                    ),
-                    (
-                        "shr",
-                        MethodSpec::Standard(simple1(
-                            binary_v0,
-                            BuiltinClassTag::BitLike,
-                        )),
-                    ),
-                ],
-            },
-            // Negatable: `forall T: Negatable. (T) -> T`
-            Self {
-                tag: BuiltinClassTag::Negatable,
-                name: "Negatable",
-                assoc_types: &[],
-                methods: vec![(
-                    "neg",
-                    MethodSpec::Standard(simple1(
-                        unary_v0,
-                        BuiltinClassTag::Negatable,
-                    )),
-                )],
-            },
-            // Fallible
-            Self {
-                tag: BuiltinClassTag::Fallible,
-                name: "Fallible",
-                assoc_types: &[],
-                methods: vec![(
-                    "unwrap",
-                    MethodSpec::Standard(hkt2(
-                        arena.func(smallvec![tv1_of_v0], v0),
-                        BuiltinClassTag::Fallible,
-                    )),
-                )],
-            },
-            // Into: `forall T: Into[U], U. (T) -> U`
-            Self {
-                tag: BuiltinClassTag::Into,
-                name: "Into",
-                assoc_types: &[],
-                methods: vec![(
-                    "into",
-                    MethodSpec::Tracked {
-                        scheme: Scheme {
-                            vars: vec![TyVar::new(0), TyVar::new(1)],
-                            ty: arena.func(smallvec![v0], v1),
-                            constraints: smallvec![(
-                                TyVar::new(0),
-                                BuiltinClass::Parameterized(
-                                    BuiltinClassTag::Into,
-                                    v1,
-                                )
-                            )],
-                        },
-                        track: TrackKind::Convert,
-                    },
-                )],
-            },
-            // TryInto: `forall T: TryInto[U], U. (T) -> Result[U, String]`
-            Self {
-                tag: BuiltinClassTag::TryInto,
-                name: "TryInto",
-                assoc_types: &[],
-                methods: vec![(
-                    "try-into",
-                    MethodSpec::Tracked {
-                        scheme: Scheme {
-                            vars: vec![TyVar::new(0), TyVar::new(1)],
-                            ty: {
-                                let ret = arena.result(v1, TyArena::STRING);
-                                arena.func(smallvec![v0], ret)
-                            },
-                            constraints: smallvec![(
-                                TyVar::new(0),
-                                BuiltinClass::Parameterized(
-                                    BuiltinClassTag::TryInto,
-                                    v1,
-                                )
-                            )],
-                        },
-                        track: TrackKind::ConvertResultInner,
-                    },
-                )],
-            },
-            // Indexable
-            Self {
-                tag: BuiltinClassTag::Indexable,
-                name: "Indexable",
-                assoc_types: &["Index"],
-                methods: vec![
-                    (
-                        "index",
-                        MethodSpec::Standard(Scheme {
-                            vars: vec![TyVar::new(0), TyVar::new(1)],
-                            ty: arena.func(smallvec![v0, assoc_idx], v1),
-                            constraints: smallvec![(
-                                TyVar::new(0),
-                                BuiltinClass::Parameterized(
-                                    BuiltinClassTag::Indexable,
-                                    v1,
-                                )
-                            )],
-                        }),
-                    ),
-                    (
-                        "get",
-                        MethodSpec::Standard(Scheme {
-                            vars: vec![TyVar::new(0), TyVar::new(1)],
-                            ty: {
-                                let ret = arena.option(v1);
-                                arena.func(smallvec![v0, assoc_idx], ret)
-                            },
-                            constraints: smallvec![(
-                                TyVar::new(0),
-                                BuiltinClass::Parameterized(
-                                    BuiltinClassTag::Indexable,
-                                    v1,
-                                )
-                            )],
-                        }),
-                    ),
-                ],
-            },
-            // Ord: `forall T: Ord. (T, T) -> Ordering`
-            Self {
-                tag: BuiltinClassTag::Ord,
-                name: "Ord",
-                assoc_types: &[],
-                methods: vec![(
-                    "compare",
-                    MethodSpec::Standard(simple1(
-                        arena.func(smallvec![v0, v0], TyArena::ORDERING),
-                        BuiltinClassTag::Ord,
-                    )),
-                )],
-            },
-            // Mappable: `forall T, U, F: Mappable. ((T) -> U, F[T]) -> F[U]`
-            Self {
-                tag: BuiltinClassTag::Mappable,
-                name: "Mappable",
-                assoc_types: &[],
-                methods: vec![(
-                    "map",
-                    MethodSpec::Standard({
-                        let cb = arena.func(smallvec![v0], v1);
-                        hkt3(
-                            arena.func(smallvec![cb, tv2_of_v0], tv2_of_v1),
-                            BuiltinClassTag::Mappable,
-                        )
-                    }),
-                )],
-            },
-            // Foldable: `forall T, U, F: Foldable. ((U, T) -> U, U, F[T]) -> U`
-            Self {
-                tag: BuiltinClassTag::Foldable,
-                name: "Foldable",
-                assoc_types: &[],
-                methods: vec![(
-                    "reduce",
-                    MethodSpec::Standard({
-                        let cb = arena.func(smallvec![v1, v0], v1);
-                        hkt3(
-                            arena.func(smallvec![cb, v1, tv2_of_v0], v1),
-                            BuiltinClassTag::Foldable,
-                        )
-                    }),
-                )],
-            },
-            // Filterable: `forall T, F: Filterable. ((T) -> Bool, F[T]) -> Array[T]`
-            Self {
-                tag: BuiltinClassTag::Filterable,
-                name: "Filterable",
-                assoc_types: &[],
-                methods: vec![(
-                    "filter",
-                    MethodSpec::Standard({
-                        let pred = arena.func(smallvec![v0], TyArena::BOOL);
-                        hkt2(
-                            arena.func(smallvec![pred, tv1_of_v0], array_v0),
-                            BuiltinClassTag::Filterable,
-                        )
-                    }),
-                )],
-            },
-            // Display: `forall T: Display. (T) -> String`
-            Self {
-                tag: BuiltinClassTag::Display,
-                name: "Display",
-                assoc_types: &[],
-                methods: vec![(
-                    "display",
-                    MethodSpec::Standard(simple1(
-                        arena.func(smallvec![v0], TyArena::STRING),
-                        BuiltinClassTag::Display,
-                    )),
-                )],
-            },
-            // Eq: `forall T: Eq. (T, T) -> Bool`
-            Self {
-                tag: BuiltinClassTag::Eq,
-                name: "Eq",
-                assoc_types: &[],
-                methods: vec![(
-                    "eq",
-                    MethodSpec::Standard(simple1(
-                        arena.func(smallvec![v0, v0], TyArena::BOOL),
-                        BuiltinClassTag::Eq,
-                    )),
-                )],
-            },
-            // Wrappable: `wrap` (convert value into fallible container)
-            Self {
-                tag: BuiltinClassTag::Wrappable,
-                name: "Wrappable",
-                assoc_types: &[],
-                methods: vec![(
-                    "wrap",
-                    MethodSpec::Tracked {
-                        scheme: hkt2(
-                            arena.func(smallvec![v0], tv1_of_v0),
-                            BuiltinClassTag::Wrappable,
-                        ),
-                        track: TrackKind::Convert,
-                    },
-                )],
-            },
-            // Chainable: `chain` (monadic bind)
-            Self {
-                tag: BuiltinClassTag::Chainable,
-                name: "Chainable",
-                assoc_types: &[],
-                methods: vec![(
-                    "chain",
-                    MethodSpec::Standard({
-                        let cb = arena.func(smallvec![v0], tv2_of_v1);
-                        hkt3(
-                            arena.func(smallvec![tv2_of_v0, cb], tv2_of_v1),
-                            BuiltinClassTag::Chainable,
-                        )
-                    }),
-                )],
-            },
-        ]
     }
 }
 
@@ -786,32 +113,26 @@ impl ClassRegistry {
         let binary_v0 = arena.func(smallvec![v0, v0], v0);
         let unary_v0 = arena.func(smallvec![v0], v0);
 
-        let simple1 = |ty: TyId, tag: BuiltinClassTag| Scheme {
+        let simple1 = |ty: TyId, tag: ClassId| Scheme {
             vars: vec![TyVar::new(0)],
             ty,
-            constraints: smallvec![(TyVar::new(0), BuiltinClass::Simple(tag))],
+            constraints: smallvec![(TyVar::new(0), TypeClass::Simple(tag))],
         };
-        let hkt2 = |ty: TyId, tag: BuiltinClassTag| Scheme {
+        let hkt2 = |ty: TyId, tag: ClassId| Scheme {
             vars: vec![TyVar::new(0), TyVar::new(1)],
             ty,
-            constraints: smallvec![(
-                TyVar::new(1),
-                BuiltinClass::Hkt(tag, None)
-            )],
+            constraints: smallvec![(TyVar::new(1), TypeClass::Hkt(tag, None))],
         };
-        let hkt3 = |ty: TyId, tag: BuiltinClassTag| Scheme {
+        let hkt3 = |ty: TyId, tag: ClassId| Scheme {
             vars: vec![TyVar::new(0), TyVar::new(1), TyVar::new(2)],
             ty,
-            constraints: smallvec![(
-                TyVar::new(2),
-                BuiltinClass::Hkt(tag, None)
-            )],
+            constraints: smallvec![(TyVar::new(2), TypeClass::Hkt(tag, None))],
         };
 
         let idx_name = intern("Index");
         let assoc_idx = arena.alloc(Ty::AssocType(
             TyVar::new(0),
-            BuiltinClassTag::Indexable,
+            ClassId::INDEXABLE,
             idx_name,
         ));
 
@@ -827,42 +148,42 @@ impl ClassRegistry {
                         "add",
                         MethodSpec::Standard(simple1(
                             binary_v0,
-                            BuiltinClassTag::Numeric,
+                            ClassId::NUMERIC,
                         )),
                     ),
                     (
                         "sub",
                         MethodSpec::Standard(simple1(
                             binary_v0,
-                            BuiltinClassTag::Numeric,
+                            ClassId::NUMERIC,
                         )),
                     ),
                     (
                         "mul",
                         MethodSpec::Standard(simple1(
                             binary_v0,
-                            BuiltinClassTag::Numeric,
+                            ClassId::NUMERIC,
                         )),
                     ),
                     (
                         "floor-div",
                         MethodSpec::Standard(simple1(
                             binary_v0,
-                            BuiltinClassTag::Numeric,
+                            ClassId::NUMERIC,
                         )),
                     ),
                     (
                         "mod",
                         MethodSpec::Standard(simple1(
                             binary_v0,
-                            BuiltinClassTag::Numeric,
+                            ClassId::NUMERIC,
                         )),
                     ),
                     (
                         "pow",
                         MethodSpec::Standard(simple1(
                             binary_v0,
-                            BuiltinClassTag::Numeric,
+                            ClassId::NUMERIC,
                         )),
                     ),
                 ],
@@ -878,21 +199,21 @@ impl ClassRegistry {
                         "length",
                         MethodSpec::Standard(hkt2(
                             arena.func(smallvec![tv1_of_v0], TyArena::INT),
-                            BuiltinClassTag::Iterable,
+                            ClassId::ITERABLE,
                         )),
                     ),
                     (
                         "contains",
                         MethodSpec::Standard(hkt2(
                             arena.func(smallvec![tv1_of_v0, v0], TyArena::BOOL),
-                            BuiltinClassTag::Iterable,
+                            ClassId::ITERABLE,
                         )),
                     ),
                     (
                         "reverse",
                         MethodSpec::Standard(hkt2(
                             arena.func(smallvec![tv1_of_v0], array_v0),
-                            BuiltinClassTag::Iterable,
+                            ClassId::ITERABLE,
                         )),
                     ),
                     (
@@ -904,7 +225,7 @@ impl ClassRegistry {
                                     smallvec![cb, tv1_of_v0],
                                     TyArena::UNIT,
                                 ),
-                                BuiltinClassTag::Iterable,
+                                ClassId::ITERABLE,
                             )
                         }),
                     ),
@@ -912,7 +233,7 @@ impl ClassRegistry {
                         "collect",
                         MethodSpec::Standard(hkt2(
                             arena.func(smallvec![tv1_of_v0], array_v0),
-                            BuiltinClassTag::Iterable,
+                            ClassId::ITERABLE,
                         )),
                     ),
                 ],
@@ -929,7 +250,7 @@ impl ClassRegistry {
                         MethodSpec::Tracked {
                             scheme: simple1(
                                 arena.func(smallvec![], v0),
-                                BuiltinClassTag::Monoid,
+                                ClassId::MONOID,
                             ),
                             track: TrackKind::Mempty,
                         },
@@ -938,7 +259,7 @@ impl ClassRegistry {
                         "concat",
                         MethodSpec::Standard(simple1(
                             binary_v0,
-                            BuiltinClassTag::Monoid,
+                            ClassId::MONOID,
                         )),
                     ),
                 ],
@@ -954,28 +275,28 @@ impl ClassRegistry {
                         "bit-and",
                         MethodSpec::Standard(simple1(
                             binary_v0,
-                            BuiltinClassTag::BitLike,
+                            ClassId::BIT_LIKE,
                         )),
                     ),
                     (
                         "bit-or",
                         MethodSpec::Standard(simple1(
                             binary_v0,
-                            BuiltinClassTag::BitLike,
+                            ClassId::BIT_LIKE,
                         )),
                     ),
                     (
                         "shl",
                         MethodSpec::Standard(simple1(
                             binary_v0,
-                            BuiltinClassTag::BitLike,
+                            ClassId::BIT_LIKE,
                         )),
                     ),
                     (
                         "shr",
                         MethodSpec::Standard(simple1(
                             binary_v0,
-                            BuiltinClassTag::BitLike,
+                            ClassId::BIT_LIKE,
                         )),
                     ),
                 ],
@@ -988,10 +309,7 @@ impl ClassRegistry {
                 supers: &[],
                 methods: vec![(
                     "neg",
-                    MethodSpec::Standard(simple1(
-                        unary_v0,
-                        BuiltinClassTag::Negatable,
-                    )),
+                    MethodSpec::Standard(simple1(unary_v0, ClassId::NEGATABLE)),
                 )],
             },
             // 5: Fallible
@@ -1004,7 +322,7 @@ impl ClassRegistry {
                     "unwrap",
                     MethodSpec::Standard(hkt2(
                         arena.func(smallvec![tv1_of_v0], v0),
-                        BuiltinClassTag::Fallible,
+                        ClassId::FALLIBLE,
                     )),
                 )],
             },
@@ -1022,10 +340,7 @@ impl ClassRegistry {
                             ty: arena.func(smallvec![v0], v1),
                             constraints: smallvec![(
                                 TyVar::new(0),
-                                BuiltinClass::Parameterized(
-                                    BuiltinClassTag::Into,
-                                    v1
-                                )
+                                TypeClass::Parameterized(ClassId::INTO, v1)
                             )],
                         },
                         track: TrackKind::Convert,
@@ -1049,10 +364,7 @@ impl ClassRegistry {
                             },
                             constraints: smallvec![(
                                 TyVar::new(0),
-                                BuiltinClass::Parameterized(
-                                    BuiltinClassTag::TryInto,
-                                    v1
-                                )
+                                TypeClass::Parameterized(ClassId::TRY_INTO, v1)
                             )],
                         },
                         track: TrackKind::ConvertResultInner,
@@ -1073,8 +385,8 @@ impl ClassRegistry {
                             ty: arena.func(smallvec![v0, assoc_idx], v1),
                             constraints: smallvec![(
                                 TyVar::new(0),
-                                BuiltinClass::Parameterized(
-                                    BuiltinClassTag::Indexable,
+                                TypeClass::Parameterized(
+                                    ClassId::INDEXABLE,
                                     v1
                                 )
                             )],
@@ -1090,8 +402,8 @@ impl ClassRegistry {
                             },
                             constraints: smallvec![(
                                 TyVar::new(0),
-                                BuiltinClass::Parameterized(
-                                    BuiltinClassTag::Indexable,
+                                TypeClass::Parameterized(
+                                    ClassId::INDEXABLE,
                                     v1
                                 )
                             )],
@@ -1109,7 +421,7 @@ impl ClassRegistry {
                     "compare",
                     MethodSpec::Standard(simple1(
                         arena.func(smallvec![v0, v0], TyArena::ORDERING),
-                        BuiltinClassTag::Ord,
+                        ClassId::ORD,
                     )),
                 )],
             },
@@ -1125,7 +437,7 @@ impl ClassRegistry {
                         let cb = arena.func(smallvec![v0], v1);
                         hkt3(
                             arena.func(smallvec![cb, tv2_of_v0], tv2_of_v1),
-                            BuiltinClassTag::Mappable,
+                            ClassId::MAPPABLE,
                         )
                     }),
                 )],
@@ -1142,7 +454,7 @@ impl ClassRegistry {
                         let cb = arena.func(smallvec![v1, v0], v1);
                         hkt3(
                             arena.func(smallvec![cb, v1, tv2_of_v0], v1),
-                            BuiltinClassTag::Foldable,
+                            ClassId::FOLDABLE,
                         )
                     }),
                 )],
@@ -1159,7 +471,7 @@ impl ClassRegistry {
                         let pred = arena.func(smallvec![v0], TyArena::BOOL);
                         hkt2(
                             arena.func(smallvec![pred, tv1_of_v0], array_v0),
-                            BuiltinClassTag::Filterable,
+                            ClassId::FILTERABLE,
                         )
                     }),
                 )],
@@ -1174,7 +486,7 @@ impl ClassRegistry {
                     "display",
                     MethodSpec::Standard(simple1(
                         arena.func(smallvec![v0], TyArena::STRING),
-                        BuiltinClassTag::Display,
+                        ClassId::DISPLAY,
                     )),
                 )],
             },
@@ -1188,7 +500,7 @@ impl ClassRegistry {
                     "eq",
                     MethodSpec::Standard(simple1(
                         arena.func(smallvec![v0, v0], TyArena::BOOL),
-                        BuiltinClassTag::Eq,
+                        ClassId::EQ,
                     )),
                 )],
             },
@@ -1203,7 +515,7 @@ impl ClassRegistry {
                     MethodSpec::Tracked {
                         scheme: hkt2(
                             arena.func(smallvec![v0], tv1_of_v0),
-                            BuiltinClassTag::Wrappable,
+                            ClassId::WRAPPABLE,
                         ),
                         track: TrackKind::Convert,
                     },
@@ -1221,7 +533,7 @@ impl ClassRegistry {
                         let cb = arena.func(smallvec![v0], tv2_of_v1);
                         hkt3(
                             arena.func(smallvec![tv2_of_v0, cb], tv2_of_v1),
-                            BuiltinClassTag::Chainable,
+                            ClassId::CHAINABLE,
                         )
                     }),
                 )],
@@ -1277,27 +589,26 @@ impl ClassRegistry {
 }
 
 /// Lightweight, cloneable class constraint reference, generic over the type
-/// representation. Replaces per-layer `Class` enums (`cst::Class`,
-/// `ty::Class`) with a single shape-based enum.
+/// representation.
 ///
 /// Layer instantiations:
-/// - CST: `BuiltinClass<TypeExpr>`
-/// - AST: `BuiltinClass<AstTypeExprId>`
-/// - Ty:  `BuiltinClass<Ty>`
+/// - CST: `TypeClass<TypeExpr>`
+/// - AST: `TypeClass<AstTypeExprId>`
+/// - Ty:  `TypeClass<TyId>`
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum BuiltinClass<T> {
+pub(crate) enum TypeClass<T> {
     /// Kind `*` class; no type parameters.
-    Simple(BuiltinClassTag),
+    Simple(ClassId),
     /// Kind `* -> *` class; `None` = polymorphic, `Some` = resolved element type.
-    Hkt(BuiltinClassTag, Option<T>),
+    Hkt(ClassId, Option<T>),
     /// Parameterized class; always carries explicit type arg(s).
-    Parameterized(BuiltinClassTag, T),
+    Parameterized(ClassId, T),
 }
 
-impl<T: Copy> BuiltinClass<T> {
+impl<T: Copy> TypeClass<T> {
     /// Preserves the HKT inner type while swapping the class tag.
     /// Returns `None` if `self` is not an HKT class.
-    pub(crate) fn with_tag(&self, tag: BuiltinClassTag) -> Option<Self> {
+    pub(crate) fn with_tag(&self, tag: ClassId) -> Option<Self> {
         match self {
             Self::Hkt(_, inner) => Some(Self::Hkt(tag, *inner)),
             _ => None,
@@ -1305,22 +616,20 @@ impl<T: Copy> BuiltinClass<T> {
     }
 }
 
-impl<T> BuiltinClass<T> {
-    /// Extract the tag for dispatch/lookup.
-    pub(crate) fn tag(&self) -> BuiltinClassTag {
+impl<T> TypeClass<T> {
+    /// Extract the class id for dispatch/lookup.
+    pub(crate) fn tag(&self) -> ClassId {
         match self {
             Self::Simple(t) | Self::Hkt(t, _) | Self::Parameterized(t, _) => *t,
         }
     }
 
     /// Map over inner types (for layer conversion).
-    pub(crate) fn map<U>(self, mut f: impl FnMut(T) -> U) -> BuiltinClass<U> {
+    pub(crate) fn map<U>(self, mut f: impl FnMut(T) -> U) -> TypeClass<U> {
         match self {
-            Self::Simple(t) => BuiltinClass::Simple(t),
-            Self::Hkt(t, opt) => BuiltinClass::Hkt(t, opt.map(&mut f)),
-            Self::Parameterized(t, arg) => {
-                BuiltinClass::Parameterized(t, f(arg))
-            }
+            Self::Simple(t) => TypeClass::Simple(t),
+            Self::Hkt(t, opt) => TypeClass::Hkt(t, opt.map(&mut f)),
+            Self::Parameterized(t, arg) => TypeClass::Parameterized(t, f(arg)),
         }
     }
 
@@ -1328,49 +637,38 @@ impl<T> BuiltinClass<T> {
     pub(crate) fn try_map<U, E>(
         self,
         mut f: impl FnMut(T) -> std::result::Result<U, E>,
-    ) -> std::result::Result<BuiltinClass<U>, E> {
+    ) -> std::result::Result<TypeClass<U>, E> {
         match self {
-            Self::Simple(t) => Ok(BuiltinClass::Simple(t)),
+            Self::Simple(t) => Ok(TypeClass::Simple(t)),
             Self::Hkt(t, opt) => {
-                Ok(BuiltinClass::Hkt(t, opt.map(&mut f).transpose()?))
+                Ok(TypeClass::Hkt(t, opt.map(&mut f).transpose()?))
             }
             Self::Parameterized(t, arg) => {
-                Ok(BuiltinClass::Parameterized(t, f(arg)?))
+                Ok(TypeClass::Parameterized(t, f(arg)?))
             }
         }
-    }
-
-    /// Returns the name of this class for error messages.
-    pub(crate) fn name(&self) -> &'static str {
-        self.tag().name()
     }
 
     /// Map over inner types by reference (no `Clone` bound needed).
     pub(crate) fn map_ref<U>(
         &self,
         mut f: impl FnMut(&T) -> U,
-    ) -> BuiltinClass<U> {
+    ) -> TypeClass<U> {
         match self {
-            Self::Simple(t) => BuiltinClass::Simple(*t),
-            Self::Hkt(t, opt) => {
-                BuiltinClass::Hkt(*t, opt.as_ref().map(&mut f))
-            }
-            Self::Parameterized(t, arg) => {
-                BuiltinClass::Parameterized(*t, f(arg))
-            }
+            Self::Simple(t) => TypeClass::Simple(*t),
+            Self::Hkt(t, opt) => TypeClass::Hkt(*t, opt.as_ref().map(&mut f)),
+            Self::Parameterized(t, arg) => TypeClass::Parameterized(*t, f(arg)),
         }
     }
 
-    /// Construct from tag + optional arg; validates shape.
-    ///
-    /// Convenience constructor for the typecheck layer. The parser uses
-    /// shape-matching directly with its own error type.
+    /// Construct from tag + shape + optional arg; validates shape.
     pub(crate) fn from_tag(
-        tag: BuiltinClassTag,
+        tag: ClassId,
+        shape: ClassShape,
         arg: Option<T>,
         span: Span,
     ) -> Result<Self, TypeError> {
-        match tag.shape() {
+        match shape {
             ClassShape::Simple => {
                 if arg.is_some() {
                     Err(TypeError::ClassRejectsArg {
@@ -1395,7 +693,7 @@ impl<T> BuiltinClass<T> {
     }
 }
 
-impl BuiltinClass<TyId> {
+impl TypeClass<TyId> {
     /// Apply a local rename to any inner types.
     pub(crate) fn apply(&self, rename: &Rename, arena: &mut TyArena) -> Self {
         match *self {
@@ -1442,8 +740,8 @@ impl BuiltinClass<TyId> {
     }
 
     /// Create a placeholder constraint for error messages.
-    pub(crate) fn placeholder(tag: BuiltinClassTag) -> Self {
-        match tag.shape() {
+    pub(crate) fn placeholder(tag: ClassId, shape: ClassShape) -> Self {
+        match shape {
             ClassShape::Simple => Self::Simple(tag),
             ClassShape::Hkt { .. } => Self::Hkt(tag, None),
             ClassShape::Parameterized { .. } => {
@@ -1453,7 +751,7 @@ impl BuiltinClass<TyId> {
     }
 }
 
-impl<T: fmt::Display> fmt::Display for BuiltinClass<T> {
+impl<T: fmt::Display> fmt::Display for TypeClass<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Simple(tag) => write!(f, "{tag}"),
@@ -1595,9 +893,9 @@ pub(crate) enum Ty {
     ///
     /// Fields:
     /// - `TyVar`: the type variable with the class constraint
-    /// - `BuiltinClassTag`: which class defines the associated type
+    /// - `ClassId`: which class defines the associated type
     /// - `StringId`: the associated type name (e.g., `"Index"`)
-    AssocType(TyVar, BuiltinClassTag, StringId),
+    AssocType(TyVar, ClassId, StringId),
 
     /// Unresolved; database reads before inference narrows.
     Unknown,
@@ -2289,7 +1587,7 @@ pub(crate) struct Scheme {
     /// These are re-emitted when the scheme is instantiated at call sites.
     /// Each tuple is `(type_var, class)` where parameterized classes like
     /// `Iterable` carry the element type directly.
-    pub(crate) constraints: SmallVec<[(TyVar, BuiltinClass<TyId>); 2]>,
+    pub(crate) constraints: SmallVec<[(TyVar, TypeClass<TyId>); 2]>,
 }
 
 impl Scheme {
@@ -2377,7 +1675,7 @@ impl Scheme {
         &self,
         uf: &mut UnionFind,
         arena: &mut TyArena,
-    ) -> (TyId, SmallVec<[(TyId, BuiltinClass<TyId>); 2]>) {
+    ) -> (TyId, SmallVec<[(TyId, TypeClass<TyId>); 2]>) {
         if self.vars.is_empty() {
             (self.ty, SmallVec::new())
         } else {

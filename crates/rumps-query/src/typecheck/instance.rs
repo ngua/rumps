@@ -9,10 +9,10 @@ use std::collections::HashMap;
 
 use smallvec::SmallVec;
 
-use super::ty::{BuiltinClass, BuiltinClassTag, TyId, TyVar};
+use super::ty::{TyId, TyVar, TypeClass};
 use super::TypeError;
 use crate::intern::{QualifiedName, StringId};
-use crate::{Span, TypeId};
+use crate::{ClassId, Span, TypeId};
 
 /// An associated type definition within a class instance.
 ///
@@ -25,7 +25,7 @@ pub(crate) struct AssocTypeDef {
     /// The concrete type this instance defines for the associated type.
     pub(crate) ty: TyId,
     /// Optional constraints on the associated type (e.g., `: Ord`).
-    pub(crate) constraints: SmallVec<[BuiltinClass<TyId>; 1]>,
+    pub(crate) constraints: SmallVec<[TypeClass<TyId>; 1]>,
     /// Source span for error messages.
     pub(crate) span: Span,
 }
@@ -39,8 +39,8 @@ pub(crate) struct AssocTypeDef {
 /// `type_params` holds `[L, R]` and `constraints` holds `[(L, Display)]`.
 #[derive(Clone, Debug)]
 pub(crate) struct Instance {
-    /// The class being implemented (e.g., `BuiltinClassTag::Display`).
-    pub(crate) class: BuiltinClassTag,
+    /// The class being implemented (e.g., `ClassId::Display`).
+    pub(crate) class: ClassId,
     /// Type arguments to the class (e.g., `[TyArena::STRING]` for `Into[String]`).
     pub(crate) class_args: SmallVec<[TyId; 2]>,
     /// All type arguments on the implementing type in positional order.
@@ -50,7 +50,7 @@ pub(crate) struct Instance {
     /// Zipped 1:1 with the actual `type_args` at use sites.
     pub(crate) type_params: SmallVec<[TyId; 2]>,
     /// WHERE clause constraints (e.g., `[(L, Display), (R, Display)]`).
-    pub(crate) constraints: SmallVec<[(TyVar, BuiltinClass<TyId>); 2]>,
+    pub(crate) constraints: SmallVec<[(TyVar, TypeClass<TyId>); 2]>,
     /// Method implementations: method name -> generated function name.
     ///
     /// Populated in Phase 5 (Resolution) when `class` statements are lowered.
@@ -80,11 +80,11 @@ impl Instance {
 
 /// Registry of user-defined class instances.
 ///
-/// Keyed by `(BuiltinClassTag, TypeId)` for O(1) lookup during constraint solving.
+/// Keyed by `(ClassId, TypeId)` for O(1) lookup during constraint solving.
 /// A type can have at most one instance per class.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct InstanceRegistry {
-    instances: HashMap<(BuiltinClassTag, TypeId), Instance>,
+    instances: HashMap<(ClassId, TypeId), Instance>,
 }
 
 impl InstanceRegistry {
@@ -96,7 +96,7 @@ impl InstanceRegistry {
     /// Look up an instance for a class and type.
     pub(crate) fn lookup(
         &self,
-        class: BuiltinClassTag,
+        class: ClassId,
         type_id: TypeId,
     ) -> Option<&Instance> {
         self.instances.get(&(class, type_id))

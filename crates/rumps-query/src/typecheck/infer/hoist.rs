@@ -17,10 +17,10 @@ use crate::intern::{QualifiedName, StringId};
 use crate::typecheck::error::TypeError;
 use crate::typecheck::instance::Instance;
 use crate::typecheck::ty::{
-    BuiltinClass, BuiltinClassTag, ClassShape, Scheme, Ty, TyArena, TyId, TyVar,
+    ClassShape, Scheme, Ty, TyArena, TyId, TyVar, TypeClass,
 };
 use crate::value::{TypeDef, TypeId};
-use crate::Span;
+use crate::{ClassId, Span};
 
 impl InferCtx<'_> {
     /// Pass 1: Register all function/module declarations with provisional types.
@@ -135,7 +135,7 @@ impl InferCtx<'_> {
             .collect();
 
         // Process type parameter constraints
-        let mut scheme_constraints: SmallVec<[(TyVar, BuiltinClass<TyId>); 2]> =
+        let mut scheme_constraints: SmallVec<[(TyVar, TypeClass<TyId>); 2]> =
             SmallVec::new();
         type_param_vars.iter().for_each(|(tp, tv)| {
             tp.constraints.iter().for_each(|c| {
@@ -382,7 +382,7 @@ impl InferCtx<'_> {
 
         // Parse class name; silently skip if invalid (error in Pass 2)
         let cn = self.env.resolve_str(class_name).to_owned();
-        if let Some(class) = BuiltinClassTag::from_str(&cn) {
+        if let Some(class) = ClassId::from_name(&cn) {
             // Build type parameter substitution from WHERE constraints
             let mut type_param_subst: IndexMap<_, _> = if type_params.is_empty()
             {
@@ -410,7 +410,7 @@ impl InferCtx<'_> {
 
             // Resolve for_type and class args; HKT classes use partial
             // application (fewer type args than the type expects)
-            let resolved = match class.shape() {
+            let resolved = match self.env.class_registry().shape(class) {
                 ClassShape::Hkt { .. } => self.resolve_hkt_for_type(
                     class,
                     for_type,
@@ -475,7 +475,7 @@ impl InferCtx<'_> {
                 if !is_forbidden_builtin {
                     // Process constraints
                     let mut scheme_constraints: SmallVec<
-                        [(TyVar, BuiltinClass<TyId>); 2],
+                        [(TyVar, TypeClass<TyId>); 2],
                     > = SmallVec::new();
                     constraints.iter().for_each(
                         |(param_name, param_constraints)| {
@@ -521,7 +521,7 @@ impl InferCtx<'_> {
                             let mn = self.env.resolve_str(m.name);
                             let fn_name =
                                 crate::interpreter::instance::instance_fn_name(
-                                    class,
+                                    class.name(),
                                     &type_name_for_fn,
                                     mn,
                                 );
@@ -563,14 +563,14 @@ impl InferCtx<'_> {
     /// Returns `(type_id, for_ty, class_arg_tys)` on success.
     pub(super) fn resolve_hkt_for_type(
         &mut self,
-        class: BuiltinClassTag,
+        class: ClassId,
         for_type: AstTypeExprId,
         class_args: &[AstTypeExprId],
         subst: &mut IndexMap<StringId, TyId>,
         module: &Option<QualifiedName>,
         span: Span,
     ) -> Option<(TypeId, TyId, SmallVec<[TyId; 2]>)> {
-        let kind = match class.shape() {
+        let kind = match self.env.class_registry().shape(class) {
             ClassShape::Hkt { kind } => kind,
             _ => 0,
         };

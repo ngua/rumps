@@ -2,7 +2,7 @@
 //!
 //! Provides a registry for class methods (like `Numeric:add`, `Fallible:unwrap`)
 //! and dispatch functions to invoke them. The dispatch table is indexed by
-//! `BuiltinClassTag` for O(1) lookup.
+//! `ClassId` for O(1) lookup.
 //!
 //! # Organization
 //!
@@ -37,11 +37,11 @@ use super::hof::{
     ChainWrapper, Continuation, HofMethodFn, HofState, IterKind, MethodResult,
 };
 use crate::intern::{StringId, StringInterner};
-use crate::typecheck::{BuiltinClassTag, Ty, TyArena};
+use crate::typecheck::{Ty, TyArena};
 use crate::value::{
     TypeExprArena, TypeExprId, TypeId, TypeRegistry, Value, ValueArena, ValueId,
 };
-use crate::{Error, Result, Span};
+use crate::{ClassId, Error, Result, Span};
 
 /// Context for class method dispatch.
 pub(crate) struct ClassCtx<'a> {
@@ -108,38 +108,40 @@ impl Default for MethodTable {
     }
 }
 
-/// Registry of all class methods, indexed by `BuiltinClassTag`.
+/// Registry of all class methods, indexed by `ClassId`.
 pub(crate) struct ClassMethods {
-    tables: [MethodTable; BuiltinClassTag::COUNT],
+    tables: Vec<MethodTable>,
 }
 
 impl ClassMethods {
     pub(crate) fn new() -> Self {
         Self {
-            tables: std::array::from_fn(|_| MethodTable::default()),
+            tables: (0..ClassId::BUILTIN_COUNT)
+                .map(|_| MethodTable::new())
+                .collect(),
         }
     }
 
     pub(crate) fn register(
         &mut self,
-        kind: BuiltinClassTag,
+        kind: ClassId,
         name: StringId,
         f: MethodFn,
     ) {
-        self.tables[kind as usize].register(name, f);
+        self.tables[kind.idx()].register(name, f);
     }
 
     pub(crate) fn lookup(
         &self,
-        kind: BuiltinClassTag,
+        kind: ClassId,
         name: StringId,
     ) -> Option<MethodFn> {
-        self.tables[kind as usize].lookup(name)
+        self.tables[kind.idx()].lookup(name)
     }
 
     pub(crate) fn dispatch_binary(
         &self,
-        kind: BuiltinClassTag,
+        kind: ClassId,
         method: StringId,
         ctx: &mut ClassCtx<'_>,
         recv: &Value,
@@ -161,7 +163,7 @@ impl ClassMethods {
 
     pub(crate) fn dispatch_unary(
         &self,
-        kind: BuiltinClassTag,
+        kind: ClassId,
         method: StringId,
         ctx: &mut ClassCtx<'_>,
         recv: &Value,
@@ -182,7 +184,7 @@ impl ClassMethods {
 
     pub(crate) fn dispatch_nullary(
         &self,
-        kind: BuiltinClassTag,
+        kind: ClassId,
         method: StringId,
         ctx: &mut ClassCtx<'_>,
         ty: &Ty,
@@ -203,7 +205,7 @@ impl ClassMethods {
 
     pub(crate) fn dispatch_convert(
         &self,
-        kind: BuiltinClassTag,
+        kind: ClassId,
         method: StringId,
         ctx: &mut ClassCtx<'_>,
         val: &Value,
@@ -226,169 +228,165 @@ impl ClassMethods {
     /// Register all class methods.
     pub(crate) fn register_all(&mut self, i: &mut StringInterner) {
         self.register(
-            BuiltinClassTag::Numeric,
+            ClassId::NUMERIC,
             i.intern("add"),
             MethodFn::Binary(Numeric::add),
         );
         self.register(
-            BuiltinClassTag::Numeric,
+            ClassId::NUMERIC,
             i.intern("sub"),
             MethodFn::Binary(Numeric::sub),
         );
         self.register(
-            BuiltinClassTag::Numeric,
+            ClassId::NUMERIC,
             i.intern("mul"),
             MethodFn::Binary(Numeric::mul),
         );
         self.register(
-            BuiltinClassTag::Numeric,
+            ClassId::NUMERIC,
             i.intern("floor-div"),
             MethodFn::Binary(Numeric::floor_div),
         );
         self.register(
-            BuiltinClassTag::Numeric,
+            ClassId::NUMERIC,
             i.intern("mod"),
             MethodFn::Binary(Numeric::modulo),
         );
         self.register(
-            BuiltinClassTag::Numeric,
+            ClassId::NUMERIC,
             i.intern("pow"),
             MethodFn::Binary(Numeric::pow),
         );
 
         self.register(
-            BuiltinClassTag::Negatable,
+            ClassId::NEGATABLE,
             i.intern("neg"),
             MethodFn::Unary(Negatable::neg),
         );
 
         self.register(
-            BuiltinClassTag::BitLike,
+            ClassId::BIT_LIKE,
             i.intern("bit-and"),
             MethodFn::Binary(BitLike::and),
         );
         self.register(
-            BuiltinClassTag::BitLike,
+            ClassId::BIT_LIKE,
             i.intern("bit-or"),
             MethodFn::Binary(BitLike::or),
         );
         self.register(
-            BuiltinClassTag::BitLike,
+            ClassId::BIT_LIKE,
             i.intern("shl"),
             MethodFn::Binary(BitLike::shl),
         );
         self.register(
-            BuiltinClassTag::BitLike,
+            ClassId::BIT_LIKE,
             i.intern("shr"),
             MethodFn::Binary(BitLike::shr),
         );
 
         self.register(
-            BuiltinClassTag::Ord,
+            ClassId::ORD,
             i.intern("compare"),
             MethodFn::Binary(Ord::compare),
         );
 
-        self.register(
-            BuiltinClassTag::Eq,
-            i.intern("eq"),
-            MethodFn::Binary(Eq::eq),
-        );
+        self.register(ClassId::EQ, i.intern("eq"), MethodFn::Binary(Eq::eq));
 
         self.register(
-            BuiltinClassTag::Monoid,
+            ClassId::MONOID,
             i.intern("concat"),
             MethodFn::Binary(Monoid::concat),
         );
         self.register(
-            BuiltinClassTag::Monoid,
+            ClassId::MONOID,
             i.intern("identity"),
             MethodFn::Nullary(Monoid::identity),
         );
 
         self.register(
-            BuiltinClassTag::Fallible,
+            ClassId::FALLIBLE,
             i.intern("unwrap"),
             MethodFn::Unary(Fallible::unwrap),
         );
         self.register(
-            BuiltinClassTag::Wrappable,
+            ClassId::WRAPPABLE,
             i.intern("wrap"),
             MethodFn::Convert(Wrappable::wrap),
         );
 
         self.register(
-            BuiltinClassTag::Indexable,
+            ClassId::INDEXABLE,
             i.intern("index"),
             MethodFn::Binary(Indexable::index),
         );
         self.register(
-            BuiltinClassTag::Indexable,
+            ClassId::INDEXABLE,
             i.intern("get"),
             MethodFn::Binary(Indexable::get),
         );
 
         self.register(
-            BuiltinClassTag::Into,
+            ClassId::INTO,
             i.intern("into"),
             MethodFn::Convert(Into::into),
         );
 
         self.register(
-            BuiltinClassTag::TryInto,
+            ClassId::TRY_INTO,
             i.intern("try-into"),
             MethodFn::Convert(TryInto::try_into),
         );
 
         self.register(
-            BuiltinClassTag::Display,
+            ClassId::DISPLAY,
             i.intern("display"),
             MethodFn::Unary(Display::display),
         );
 
         // HoF methods (handled via trampoline in `call.rs`).
         self.register(
-            BuiltinClassTag::Mappable,
+            ClassId::MAPPABLE,
             i.intern("map"),
             MethodFn::Hof(Mappable::map),
         );
         self.register(
-            BuiltinClassTag::Filterable,
+            ClassId::FILTERABLE,
             i.intern("filter"),
             MethodFn::Hof(Filterable::filter),
         );
         self.register(
-            BuiltinClassTag::Foldable,
+            ClassId::FOLDABLE,
             i.intern("reduce"),
             MethodFn::Hof(Foldable::reduce),
         );
         self.register(
-            BuiltinClassTag::Iterable,
+            ClassId::ITERABLE,
             i.intern("foreach"),
             MethodFn::Hof(Iterable::foreach),
         );
         self.register(
-            BuiltinClassTag::Iterable,
+            ClassId::ITERABLE,
             i.intern("length"),
             MethodFn::Unary(Iterable::length),
         );
         self.register(
-            BuiltinClassTag::Iterable,
+            ClassId::ITERABLE,
             i.intern("contains"),
             MethodFn::Binary(Iterable::contains),
         );
         self.register(
-            BuiltinClassTag::Iterable,
+            ClassId::ITERABLE,
             i.intern("reverse"),
             MethodFn::Unary(Iterable::reverse),
         );
         self.register(
-            BuiltinClassTag::Iterable,
+            ClassId::ITERABLE,
             i.intern("collect"),
             MethodFn::Unary(Iterable::collect),
         );
         self.register(
-            BuiltinClassTag::Chainable,
+            ClassId::CHAINABLE,
             i.intern("chain"),
             MethodFn::Hof(Chainable::chain),
         );

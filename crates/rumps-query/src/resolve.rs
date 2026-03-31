@@ -34,8 +34,8 @@ use smallvec::{smallvec, SmallVec};
 use crate::ast::{Ast, AstTypeExpr, Expr, ExprId, Stmt, StmtId};
 use crate::env::BUILTIN_MODULE_NAMES;
 use crate::intern::{QualifiedName, StringId};
-use crate::typecheck::BuiltinClassTag;
 use crate::value::{TypeRegistry, ValueArena};
+use crate::ClassId;
 
 /// Resolved class instance info.
 ///
@@ -44,7 +44,7 @@ use crate::value::{TypeRegistry, ValueArena};
 #[derive(Clone, Debug)]
 pub(crate) struct ResolvedInstance {
     /// The class being implemented.
-    pub(crate) class: BuiltinClassTag,
+    pub(crate) class: ClassId,
     /// The qualified name of the implementing type (e.g., `Point`, `MyModule.Point`).
     pub(crate) type_name: QualifiedName,
     /// Method mappings: `(method_name, generated_fn_name)`.
@@ -353,7 +353,7 @@ impl<'a> ResolveCtx<'a> {
             } => {
                 let cn =
                     self.arena.strings.get(*class_name).unwrap_or_default();
-                let class = BuiltinClassTag::from_str(cn)?;
+                let class = ClassId::from_name(cn)?;
                 let raw_qn = Self::extract_type_qn(self.ast, *for_type)?;
 
                 let type_qn = match module {
@@ -371,7 +371,9 @@ impl<'a> ResolveCtx<'a> {
                             self.arena.strings.get(m.name).unwrap_or_default();
                         let fn_name =
                             crate::interpreter::instance::instance_fn_name(
-                                class, &type_disp, mn,
+                                class.name(),
+                                &type_disp,
+                                mn,
                             );
                         let fn_id = self.arena.strings.intern(&fn_name);
                         (m.name, fn_id)

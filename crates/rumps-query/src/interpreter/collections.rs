@@ -557,7 +557,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let mid = self.arena.intern("index");
                 self.dispatch_class_method(
                     Some(base),
-                    crate::typecheck::BuiltinClassTag::Indexable,
+                    crate::ClassId::INDEXABLE,
                     mid,
                     &[base_id, idx_id],
                     span,
@@ -642,7 +642,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let mid = self.arena.intern("get");
                 self.dispatch_class_method(
                     Some(base),
-                    crate::typecheck::BuiltinClassTag::Indexable,
+                    crate::ClassId::INDEXABLE,
                     mid,
                     &[base_id, idx_id],
                     span,

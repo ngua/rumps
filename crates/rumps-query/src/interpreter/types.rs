@@ -7,9 +7,9 @@ use super::Interpreter;
 use crate::ast::{AstTypeExpr, AstTypeExprId};
 use crate::intern::StringId;
 use crate::io::IoContext;
-use crate::typecheck::{BuiltinClassTag, Ty, TyArena, TyId};
+use crate::typecheck::{Ty, TyArena, TyId};
 use crate::value::{TypeExprId, TypeId, Value, ValueId};
-use crate::{Error, Result, Span};
+use crate::{ClassId, Error, Result, Span};
 
 /// Helper enum for `coerce()` to avoid borrow checker issues.
 #[derive(Copy, Clone)]
@@ -251,13 +251,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let ty_id = Self::type_id_to_ty_id(target, &mut self.ty_arena);
                 let ty = self.ty_arena.get(ty_id).clone();
                 let mid = self.arena.intern("into");
-                self.dispatch_convert(
-                    BuiltinClassTag::Into,
-                    mid,
-                    val,
-                    &ty,
-                    span,
-                )
+                self.dispatch_convert(ClassId::INTO, mid, val, &ty, span)
             }
         }
     }
@@ -299,7 +293,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         let ty_id = Self::type_id_to_ty_id(target, &mut self.ty_arena);
         let ty = self.ty_arena.get(ty_id).clone();
         let mid = self.arena.intern("try-into");
-        self.dispatch_convert(BuiltinClassTag::TryInto, mid, val, &ty, span)
+        self.dispatch_convert(ClassId::TRY_INTO, mid, val, &ty, span)
     }
 
     /// Perform typed conversion for `read` with full type expression support.

@@ -36,9 +36,7 @@ use smallvec::SmallVec;
 use super::env::TypeEnv;
 use super::error::{TyPrinter, TypeError};
 use super::instance::InstanceRegistry;
-use super::ty::{
-    BuiltinClass, BuiltinClassTag, Scheme, Ty, TyArena, TyId, TyVar,
-};
+use super::ty::{Scheme, Ty, TyArena, TyId, TyVar, TypeClass};
 use super::uf::UnionFind;
 use super::TypecheckOutput;
 use crate::ast::{
@@ -49,7 +47,7 @@ use crate::env::Environment;
 use crate::error::Result;
 use crate::intern::{QualifiedName, StringId, StringInterner};
 use crate::value::{TypeExprArena, TypeId, TypeRegistry};
-use crate::Span;
+use crate::{ClassId, Span};
 
 /// Input for `hoist_class_instance` and `class_instance`.
 ///
@@ -69,7 +67,7 @@ pub(super) struct ClassInstanceInput<'a, A = ()> {
 
 /// Input for `instance_method`.
 pub(super) struct InstanceMethodInput<'a> {
-    pub(super) class: BuiltinClassTag,
+    pub(super) class: ClassId,
     pub(super) for_ty: TyId,
     pub(super) class_arg_tys: &'a SmallVec<[TyId; 2]>,
     pub(super) type_param_subst: &'a IndexMap<StringId, TyId>,
@@ -91,7 +89,7 @@ pub(crate) enum Constraint {
     ///
     /// Example: `let x: Int = e` generates `Unify(typeof(e), Int)`.
     ///
-    /// Named `Unify` (not `Eq`) to disambiguate from `BuiltinClassTag::Eq`.
+    /// Named `Unify` (not `Eq`) to disambiguate from `ClassId::EQ`.
     Unify(TyId, TyId, Span),
 
     /// Type must be callable with given argument types.
@@ -134,7 +132,7 @@ pub(crate) enum Constraint {
     /// - `arr[i]` generates `Class { ty: typeof(arr), class: Parameterized(Indexable, ?elem), span }`
     Class {
         ty: TyId,
-        class: BuiltinClass<TyId>,
+        class: TypeClass<TyId>,
         span: Span,
     },
 }
@@ -159,7 +157,7 @@ impl Constraint {
 #[derive(Clone, Debug)]
 pub(crate) struct ClassContext {
     /// The class being implemented (e.g., `Indexable`).
-    pub(crate) class: BuiltinClassTag,
+    pub(crate) class: ClassId,
     /// The `TypeId` of the type this instance is for (e.g., `MyInt`).
     pub(crate) type_id: Option<TypeId>,
     /// Associated type definitions for this instance.
@@ -245,7 +243,7 @@ pub(crate) struct InferCtx<'a> {
     /// During inference, class method calls on types that are still type
     /// variables are recorded here. After `resolve_all_types`, we resolve the types
     /// and populate `instance_calls` for any user instances found.
-    deferred_instance_calls: Vec<(ExprId, TyId, BuiltinClassTag)>,
+    deferred_instance_calls: Vec<(ExprId, TyId, ClassId)>,
     /// Type variables created for integer literals, for defaulting to `Int`.
     ///
     /// Integer literals are polymorphic (no constraint) so they can unify with
@@ -423,7 +421,7 @@ impl<'a> InferCtx<'a> {
     /// call sites, not just at function definition.
     pub(crate) fn emit_class_constraints(
         &mut self,
-        constraints: smallvec::SmallVec<[(TyId, BuiltinClass<TyId>); 2]>,
+        constraints: smallvec::SmallVec<[(TyId, TypeClass<TyId>); 2]>,
         span: Span,
     ) {
         constraints.into_iter().for_each(|(ty, class)| {

@@ -7,9 +7,8 @@
 
 use std::collections::HashMap;
 
-use crate::typecheck::{
-    BuiltinClass, BuiltinClassTag, Scheme, Ty, TyArena, TyId, TyVar,
-};
+use crate::typecheck::{Scheme, Ty, TyArena, TyId, TyVar, TypeClass};
+use crate::ClassId;
 
 /// Names of built-in modules.
 ///
@@ -310,10 +309,7 @@ impl BinOp {
             Scheme {
                 vars: vec![TyVar::new(0)],
                 ty,
-                constraints: smallvec![(
-                    TyVar::new(0),
-                    BuiltinClass::Simple(tag)
-                )],
+                constraints: smallvec![(TyVar::new(0), TypeClass::Simple(tag))],
             }
         };
 
@@ -323,10 +319,7 @@ impl BinOp {
             Scheme {
                 vars: vec![TyVar::new(0)],
                 ty,
-                constraints: smallvec![(
-                    TyVar::new(0),
-                    BuiltinClass::Simple(tag)
-                )],
+                constraints: smallvec![(TyVar::new(0), TypeClass::Simple(tag))],
             }
         };
 
@@ -334,15 +327,15 @@ impl BinOp {
             // Arithmetic: `forall T: Numeric. (T, T) -> T`
             Self::Add => BinOpDef {
                 name: "+",
-                ty: binary_constrained(a, v0, BuiltinClassTag::Numeric),
+                ty: binary_constrained(a, v0, ClassId::NUMERIC),
             },
             Self::Sub => BinOpDef {
                 name: "-",
-                ty: binary_constrained(a, v0, BuiltinClassTag::Numeric),
+                ty: binary_constrained(a, v0, ClassId::NUMERIC),
             },
             Self::Mul => BinOpDef {
                 name: "*",
-                ty: binary_constrained(a, v0, BuiltinClassTag::Numeric),
+                ty: binary_constrained(a, v0, ClassId::NUMERIC),
             },
             Self::Div => {
                 let ty = a.func(
@@ -356,41 +349,41 @@ impl BinOp {
             }
             Self::FloorDiv => BinOpDef {
                 name: "//",
-                ty: binary_constrained(a, v0, BuiltinClassTag::Numeric),
+                ty: binary_constrained(a, v0, ClassId::NUMERIC),
             },
             Self::Mod => BinOpDef {
                 name: "%",
-                ty: binary_constrained(a, v0, BuiltinClassTag::Numeric),
+                ty: binary_constrained(a, v0, ClassId::NUMERIC),
             },
             Self::Pow => BinOpDef {
                 name: "**",
-                ty: binary_constrained(a, v0, BuiltinClassTag::Numeric),
+                ty: binary_constrained(a, v0, ClassId::NUMERIC),
             },
 
             // Comparison: `forall T: Eq. (T, T) -> Bool`
             Self::Eq => BinOpDef {
                 name: "==",
-                ty: cmp_constrained(a, v0, BuiltinClassTag::Eq),
+                ty: cmp_constrained(a, v0, ClassId::EQ),
             },
             Self::Ne => BinOpDef {
                 name: "!=",
-                ty: cmp_constrained(a, v0, BuiltinClassTag::Eq),
+                ty: cmp_constrained(a, v0, ClassId::EQ),
             },
             Self::Lt => BinOpDef {
                 name: "<",
-                ty: cmp_constrained(a, v0, BuiltinClassTag::Ord),
+                ty: cmp_constrained(a, v0, ClassId::ORD),
             },
             Self::Gt => BinOpDef {
                 name: ">",
-                ty: cmp_constrained(a, v0, BuiltinClassTag::Ord),
+                ty: cmp_constrained(a, v0, ClassId::ORD),
             },
             Self::Le => BinOpDef {
                 name: "<=",
-                ty: cmp_constrained(a, v0, BuiltinClassTag::Ord),
+                ty: cmp_constrained(a, v0, ClassId::ORD),
             },
             Self::Ge => BinOpDef {
                 name: ">=",
-                ty: cmp_constrained(a, v0, BuiltinClassTag::Ord),
+                ty: cmp_constrained(a, v0, ClassId::ORD),
             },
 
             // Logical: `(Bool, Bool) -> Bool`
@@ -418,25 +411,25 @@ impl BinOp {
             // Bitwise: `forall T: BitLike. (T, T) -> T`
             Self::BitAnd => BinOpDef {
                 name: "&",
-                ty: binary_constrained(a, v0, BuiltinClassTag::BitLike),
+                ty: binary_constrained(a, v0, ClassId::BIT_LIKE),
             },
             Self::BitOr => BinOpDef {
                 name: "|",
-                ty: binary_constrained(a, v0, BuiltinClassTag::BitLike),
+                ty: binary_constrained(a, v0, ClassId::BIT_LIKE),
             },
             Self::Shl => BinOpDef {
                 name: "<<",
-                ty: binary_constrained(a, v0, BuiltinClassTag::BitLike),
+                ty: binary_constrained(a, v0, ClassId::BIT_LIKE),
             },
             Self::Shr => BinOpDef {
                 name: ">>",
-                ty: binary_constrained(a, v0, BuiltinClassTag::BitLike),
+                ty: binary_constrained(a, v0, ClassId::BIT_LIKE),
             },
 
             // Concat: `forall T: Monoid. (T, T) -> T`
             Self::Concat => BinOpDef {
                 name: "++",
-                ty: binary_constrained(a, v0, BuiltinClassTag::Monoid),
+                ty: binary_constrained(a, v0, ClassId::MONOID),
             },
 
             // Coalesce: `forall T, F: Fallible. (F[T], T) -> T`
@@ -450,7 +443,7 @@ impl BinOp {
                         ty,
                         constraints: smallvec![(
                             TyVar::new(1),
-                            BuiltinClass::Hkt(BuiltinClassTag::Fallible, None,)
+                            TypeClass::Hkt(ClassId::FALLIBLE, None,)
                         )],
                     },
                 }
@@ -494,7 +487,7 @@ impl UnOp {
                         ty,
                         constraints: smallvec![(
                             TyVar::new(0),
-                            BuiltinClass::Simple(BuiltinClassTag::Negatable)
+                            TypeClass::Simple(ClassId::NEGATABLE)
                         )],
                     },
                 }
@@ -517,7 +510,7 @@ impl UnOp {
                         ty,
                         constraints: smallvec![(
                             TyVar::new(1),
-                            BuiltinClass::Hkt(BuiltinClassTag::Wrappable, None,)
+                            TypeClass::Hkt(ClassId::WRAPPABLE, None,)
                         )],
                     },
                 }
@@ -547,7 +540,7 @@ impl PostfixOp {
                         ty,
                         constraints: smallvec![(
                             TyVar::new(1),
-                            BuiltinClass::Hkt(BuiltinClassTag::Fallible, None,)
+                            TypeClass::Hkt(ClassId::FALLIBLE, None,)
                         )],
                     },
                 }
@@ -1217,7 +1210,7 @@ impl Environment {
             ty,
             constraints: smallvec![(
                 TyVar::new(0),
-                BuiltinClass::Simple(BuiltinClassTag::Numeric)
+                TypeClass::Simple(ClassId::NUMERIC)
             )],
         };
         // `forall T: Numeric. (T, T) -> T`
@@ -1226,7 +1219,7 @@ impl Environment {
             ty,
             constraints: smallvec![(
                 TyVar::new(0),
-                BuiltinClass::Simple(BuiltinClassTag::Numeric)
+                TypeClass::Simple(ClassId::NUMERIC)
             )],
         };
 

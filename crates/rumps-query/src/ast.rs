@@ -10,8 +10,8 @@ use rumps_types::Name;
 use smallvec::SmallVec;
 
 use crate::intern::{QualifiedName, StringId, StringInterner};
-use crate::typecheck::{BuiltinClass, BuiltinClassTag};
-use crate::{Error, Result, Span};
+use crate::typecheck::TypeClass;
+use crate::{ClassId, Error, Result, Span};
 
 /// Unique identifier for a `transaction` block.
 ///
@@ -132,8 +132,7 @@ impl MatchPatternId {
 }
 
 /// Class constraints on AST type parameters (e.g., `T: Numeric + Ord`).
-pub(crate) type AstClassConstraints =
-    SmallVec<[BuiltinClass<AstTypeExprId>; 2]>;
+pub(crate) type AstClassConstraints = SmallVec<[TypeClass<AstTypeExprId>; 2]>;
 
 /// A type parameter with optional class constraints.
 ///
@@ -391,25 +390,23 @@ impl BinOp {
     /// For derived operators (`!=`, `<`, `>`, `<=`, `>=`), returns the
     /// *base* class method (`"eq"` or `"compare"`); the caller is
     /// responsible for post-processing the result.
-    pub(crate) fn class_dispatch(
-        self,
-    ) -> Option<(BuiltinClassTag, &'static str)> {
+    pub(crate) fn class_dispatch(self) -> Option<(ClassId, &'static str)> {
         match self {
-            Self::Add => Some((BuiltinClassTag::Numeric, "add")),
-            Self::Sub => Some((BuiltinClassTag::Numeric, "sub")),
-            Self::Mul => Some((BuiltinClassTag::Numeric, "mul")),
-            Self::FloorDiv => Some((BuiltinClassTag::Numeric, "floor-div")),
-            Self::Mod => Some((BuiltinClassTag::Numeric, "mod")),
-            Self::Pow => Some((BuiltinClassTag::Numeric, "pow")),
-            Self::Eq | Self::Ne => Some((BuiltinClassTag::Eq, "eq")),
+            Self::Add => Some((ClassId::NUMERIC, "add")),
+            Self::Sub => Some((ClassId::NUMERIC, "sub")),
+            Self::Mul => Some((ClassId::NUMERIC, "mul")),
+            Self::FloorDiv => Some((ClassId::NUMERIC, "floor-div")),
+            Self::Mod => Some((ClassId::NUMERIC, "mod")),
+            Self::Pow => Some((ClassId::NUMERIC, "pow")),
+            Self::Eq | Self::Ne => Some((ClassId::EQ, "eq")),
             Self::Lt | Self::Gt | Self::Le | Self::Ge => {
-                Some((BuiltinClassTag::Ord, "compare"))
+                Some((ClassId::ORD, "compare"))
             }
-            Self::Concat => Some((BuiltinClassTag::Monoid, "concat")),
-            Self::BitAnd => Some((BuiltinClassTag::BitLike, "bit-and")),
-            Self::BitOr => Some((BuiltinClassTag::BitLike, "bit-or")),
-            Self::Shl => Some((BuiltinClassTag::BitLike, "shl")),
-            Self::Shr => Some((BuiltinClassTag::BitLike, "shr")),
+            Self::Concat => Some((ClassId::MONOID, "concat")),
+            Self::BitAnd => Some((ClassId::BIT_LIKE, "bit-and")),
+            Self::BitOr => Some((ClassId::BIT_LIKE, "bit-or")),
+            Self::Shl => Some((ClassId::BIT_LIKE, "shl")),
+            Self::Shr => Some((ClassId::BIT_LIKE, "shr")),
             _ => None,
         }
     }
@@ -864,7 +861,7 @@ pub(crate) enum Expr {
 
     /// Class method call: `Class:method(args)`.
     ///
-    /// Dispatches to a typeclass method. Class name is resolved to `BuiltinClassTag`
+    /// Dispatches to a typeclass method. Class name is resolved to `ClassId`
     /// during typechecking.
     ///
     /// Examples: `Numeric:add(a, b)`, `Fallible:unwrap(opt)`, `Mappable:map(fn, arr)`
@@ -1178,7 +1175,7 @@ pub(crate) struct AssocTypeDef {
     /// Associated type name (e.g., `"Index"`).
     pub(crate) name: StringId,
     /// Optional constraint on the associated type.
-    pub(crate) constraint: Option<BuiltinClass<AstTypeExprId>>,
+    pub(crate) constraint: Option<TypeClass<AstTypeExprId>>,
     /// The concrete type this associated type maps to.
     pub(crate) target: AstTypeExprId,
     pub(crate) span: Span,

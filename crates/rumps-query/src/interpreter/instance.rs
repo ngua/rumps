@@ -14,8 +14,8 @@
 use std::collections::HashMap;
 
 use crate::intern::StringId;
-use crate::typecheck::BuiltinClassTag;
 use crate::value::TypeId;
+use crate::ClassId;
 
 /// Generate the internal function name for a class instance method.
 ///
@@ -28,13 +28,13 @@ use crate::value::TypeId;
 /// The `type_name` may contain `.` for module-qualified types (e.g., `"Shapes.Circle"`),
 /// which is sanitized to `_` to avoid path-like function names.
 pub(crate) fn instance_fn_name(
-    class: BuiltinClassTag,
+    class_name: &str,
     type_name: &str,
     method: &str,
 ) -> String {
     // Sanitize `.` to `_` for module-qualified type names
     let safe_name = type_name.replace('.', "_");
-    format!("__inst_{}_{}__{}", class.name(), safe_name, method)
+    format!("__inst_{class_name}_{safe_name}__{method}")
 }
 
 /// Runtime representation of a user-defined class instance.
@@ -60,10 +60,10 @@ impl RuntimeInstance {
 
 /// Registry of user-defined class instances for runtime dispatch.
 ///
-/// Keyed by `(BuiltinClassTag, TypeId)` for O(1) lookup during method dispatch.
+/// Keyed by `(ClassId, TypeId)` for O(1) lookup during method dispatch.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct RuntimeInstanceRegistry {
-    instances: HashMap<(BuiltinClassTag, TypeId), RuntimeInstance>,
+    instances: HashMap<(ClassId, TypeId), RuntimeInstance>,
 }
 
 impl RuntimeInstanceRegistry {
@@ -75,7 +75,7 @@ impl RuntimeInstanceRegistry {
     /// Look up an instance for a class and type.
     pub(crate) fn lookup(
         &self,
-        class: BuiltinClassTag,
+        class: ClassId,
         type_id: TypeId,
     ) -> Option<&RuntimeInstance> {
         self.instances.get(&(class, type_id))
@@ -86,7 +86,7 @@ impl RuntimeInstanceRegistry {
     /// Returns the generated function name if found.
     pub(crate) fn lookup_method(
         &self,
-        class: BuiltinClassTag,
+        class: ClassId,
         type_id: TypeId,
         method: StringId,
     ) -> Option<StringId> {
@@ -100,7 +100,7 @@ impl RuntimeInstanceRegistry {
     /// The typechecker prevents duplicates, so this is safe.
     pub(crate) fn register(
         &mut self,
-        class: BuiltinClassTag,
+        class: ClassId,
         type_id: TypeId,
         inst: RuntimeInstance,
     ) {
@@ -144,22 +144,22 @@ mod tests {
         // Register Numeric instance for X
         let mut inst_x = RuntimeInstance::default();
         inst_x.methods.insert(add, fn_x);
-        registry.register(BuiltinClassTag::Numeric, type_x, inst_x);
+        registry.register(ClassId::NUMERIC, type_x, inst_x);
 
         // Register Numeric instance for Y
         let mut inst_y = RuntimeInstance::default();
         inst_y.methods.insert(add, fn_y);
-        registry.register(BuiltinClassTag::Numeric, type_y, inst_y);
+        registry.register(ClassId::NUMERIC, type_y, inst_y);
 
         // X dispatches to fn_x
         assert_eq!(
-            registry.lookup_method(BuiltinClassTag::Numeric, type_x, add),
+            registry.lookup_method(ClassId::NUMERIC, type_x, add),
             Some(fn_x)
         );
 
         // Y dispatches to fn_y
         assert_eq!(
-            registry.lookup_method(BuiltinClassTag::Numeric, type_y, add),
+            registry.lookup_method(ClassId::NUMERIC, type_y, add),
             Some(fn_y)
         );
 
@@ -186,36 +186,32 @@ mod tests {
         // Register Display for Point
         let mut inst_display = RuntimeInstance::default();
         inst_display.methods.insert(display, fn_display);
-        registry.register(BuiltinClassTag::Display, type_point, inst_display);
+        registry.register(ClassId::DISPLAY, type_point, inst_display);
 
         // Register Into for Point
         let mut inst_into = RuntimeInstance::default();
         inst_into.methods.insert(into, fn_into);
-        registry.register(BuiltinClassTag::Into, type_point, inst_into);
+        registry.register(ClassId::INTO, type_point, inst_into);
 
         // Display:display dispatches correctly
         assert_eq!(
-            registry.lookup_method(
-                BuiltinClassTag::Display,
-                type_point,
-                display
-            ),
+            registry.lookup_method(ClassId::DISPLAY, type_point, display),
             Some(fn_display)
         );
 
         // Into:into dispatches correctly
         assert_eq!(
-            registry.lookup_method(BuiltinClassTag::Into, type_point, into),
+            registry.lookup_method(ClassId::INTO, type_point, into),
             Some(fn_into)
         );
 
         // Cross-lookup returns None
         assert_eq!(
-            registry.lookup_method(BuiltinClassTag::Display, type_point, into),
+            registry.lookup_method(ClassId::DISPLAY, type_point, into),
             None
         );
         assert_eq!(
-            registry.lookup_method(BuiltinClassTag::Into, type_point, display),
+            registry.lookup_method(ClassId::INTO, type_point, display),
             None
         );
     }

@@ -8,9 +8,8 @@ use super::Interpreter;
 use crate::ast::{BinOp, ExprId, UnOp};
 use crate::intern::StringId;
 use crate::io::IoContext;
-use crate::typecheck::BuiltinClassTag;
 use crate::value::Value;
-use crate::{Error, Result, Span};
+use crate::{ClassId, Error, Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
     /// Apply a binary operation to two values.
@@ -39,7 +38,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 _ => {
                     let id = self.arena.intern("add");
                     self.dispatch_binary(
-                        BuiltinClassTag::Numeric,
+                        ClassId::NUMERIC,
                         id,
                         left,
                         right,
@@ -54,7 +53,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 _ => {
                     let id = self.arena.intern("sub");
                     self.dispatch_binary(
-                        BuiltinClassTag::Numeric,
+                        ClassId::NUMERIC,
                         id,
                         left,
                         right,
@@ -69,7 +68,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 _ => {
                     let id = self.arena.intern("mul");
                     self.dispatch_binary(
-                        BuiltinClassTag::Numeric,
+                        ClassId::NUMERIC,
                         id,
                         left,
                         right,
@@ -80,49 +79,26 @@ impl<I: IoContext> Interpreter<'_, I> {
             BinOp::Div => self.binop_div(left, right, span),
             BinOp::FloorDiv => {
                 let id = self.arena.intern("floor-div");
-                self.dispatch_binary(
-                    BuiltinClassTag::Numeric,
-                    id,
-                    left,
-                    right,
-                    span,
-                )
+                self.dispatch_binary(ClassId::NUMERIC, id, left, right, span)
             }
             BinOp::Mod => {
                 let id = self.arena.intern("mod");
-                self.dispatch_binary(
-                    BuiltinClassTag::Numeric,
-                    id,
-                    left,
-                    right,
-                    span,
-                )
+                self.dispatch_binary(ClassId::NUMERIC, id, left, right, span)
             }
             BinOp::Pow => {
                 let id = self.arena.intern("pow");
-                self.dispatch_binary(
-                    BuiltinClassTag::Numeric,
-                    id,
-                    left,
-                    right,
-                    span,
-                )
+                self.dispatch_binary(ClassId::NUMERIC, id, left, right, span)
             }
 
             // Equality via Eq class
             BinOp::Eq => {
                 let id = self.arena.intern("eq");
-                self.dispatch_binary(BuiltinClassTag::Eq, id, left, right, span)
+                self.dispatch_binary(ClassId::EQ, id, left, right, span)
             }
             BinOp::Ne => {
                 let id = self.arena.intern("eq");
-                let eq = self.dispatch_binary(
-                    BuiltinClassTag::Eq,
-                    id,
-                    left,
-                    right,
-                    span,
-                )?;
+                let eq =
+                    self.dispatch_binary(ClassId::EQ, id, left, right, span)?;
                 match eq {
                     Value::Bool(b) => Ok(Value::Bool(!b)),
                     _ => typechecked!("==", "Bool"),
@@ -155,55 +131,25 @@ impl<I: IoContext> Interpreter<'_, I> {
             // Monoid class method
             BinOp::Concat => {
                 let id = self.arena.intern("concat");
-                self.dispatch_binary(
-                    BuiltinClassTag::Monoid,
-                    id,
-                    left,
-                    right,
-                    span,
-                )
+                self.dispatch_binary(ClassId::MONOID, id, left, right, span)
             }
 
             // BitLike class methods
             BinOp::BitAnd => {
                 let id = self.arena.intern("bit-and");
-                self.dispatch_binary(
-                    BuiltinClassTag::BitLike,
-                    id,
-                    left,
-                    right,
-                    span,
-                )
+                self.dispatch_binary(ClassId::BIT_LIKE, id, left, right, span)
             }
             BinOp::BitOr => {
                 let id = self.arena.intern("bit-or");
-                self.dispatch_binary(
-                    BuiltinClassTag::BitLike,
-                    id,
-                    left,
-                    right,
-                    span,
-                )
+                self.dispatch_binary(ClassId::BIT_LIKE, id, left, right, span)
             }
             BinOp::Shl => {
                 let id = self.arena.intern("shl");
-                self.dispatch_binary(
-                    BuiltinClassTag::BitLike,
-                    id,
-                    left,
-                    right,
-                    span,
-                )
+                self.dispatch_binary(ClassId::BIT_LIKE, id, left, right, span)
             }
             BinOp::Shr => {
                 let id = self.arena.intern("shr");
-                self.dispatch_binary(
-                    BuiltinClassTag::BitLike,
-                    id,
-                    left,
-                    right,
-                    span,
-                )
+                self.dispatch_binary(ClassId::BIT_LIKE, id, left, right, span)
             }
         }
     }
@@ -214,7 +160,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// of class methods for user-defined types.
     fn dispatch_binary(
         &mut self,
-        kind: BuiltinClassTag,
+        kind: ClassId,
         mid: StringId,
         left: &Value,
         right: &Value,
@@ -314,12 +260,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 Value::Int(n) => Ok(Value::Int(-n)),
                 _ => {
                     let id = self.arena.intern("neg");
-                    self.dispatch_unary(
-                        BuiltinClassTag::Negatable,
-                        id,
-                        &v,
-                        span,
-                    )
+                    self.dispatch_unary(ClassId::NEGATABLE, id, &v, span)
                 }
             },
             UnOp::Not => Ok(match &v {
@@ -334,13 +275,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     });
                 let ty = self.ty_arena.get(ty_id).clone();
                 let mid = self.arena.intern("wrap");
-                self.dispatch_convert(
-                    BuiltinClassTag::Wrappable,
-                    mid,
-                    &v,
-                    &ty,
-                    span,
-                )
+                self.dispatch_convert(ClassId::WRAPPABLE, mid, &v, &ty, span)
             }
         }
     }
@@ -350,7 +285,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Unwraps Union/Newtype values before dispatching.
     pub(super) fn dispatch_unary(
         &mut self,
-        kind: BuiltinClassTag,
+        kind: ClassId,
         mid: StringId,
         v: &Value,
         span: Span,
@@ -375,7 +310,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Unwraps Union/Newtype values before dispatching.
     pub(super) fn dispatch_convert(
         &mut self,
-        kind: BuiltinClassTag,
+        kind: ClassId,
         mid: StringId,
         v: &Value,
         target: &crate::typecheck::Ty,
@@ -412,8 +347,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         F: FnOnce(i64) -> bool,
     {
         let cmp = self.arena.intern("compare");
-        let ord =
-            self.dispatch_binary(BuiltinClassTag::Ord, cmp, left, right, span)?;
+        let ord = self.dispatch_binary(ClassId::ORD, cmp, left, right, span)?;
         match ord {
             Value::Int(n) => Ok(Value::Bool(pred(n))),
             _ => typechecked!("compare result", "Int"),

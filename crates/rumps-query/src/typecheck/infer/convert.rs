@@ -10,9 +10,9 @@ use super::{Constraint, InferCtx};
 use crate::ast::{AstTypeExpr, AstTypeExprId, Visibility};
 use crate::intern::{QualifiedName, StringId};
 use crate::typecheck::error::TypeError;
-use crate::typecheck::ty::{BuiltinClass, BuiltinClassTag, Ty, TyArena, TyId};
+use crate::typecheck::ty::{Ty, TyArena, TyId, TypeClass};
 use crate::value::{TypeDef, TypeId};
-use crate::Span;
+use crate::{ClassId, Span};
 
 impl InferCtx<'_> {
     /// Check if a type contains unresolved type variables that require
@@ -580,7 +580,7 @@ impl InferCtx<'_> {
                         // Validation happens during resolution in unify.rs
                         Some(class_name) => {
                             let cls_s = self.env.resolve_string(*class_name);
-                            BuiltinClassTag::from_str(&cls_s)
+                            ClassId::from_name(&cls_s)
                                 .map(|kind| {
                                     let tv = self.fresh_var();
                                     self.ty_arena
@@ -654,13 +654,13 @@ impl InferCtx<'_> {
         self.ty_arena.named(type_id, args)
     }
 
-    /// Convert a `BuiltinClass<AstTypeExprId>` to a `BuiltinClass<TyId>`,
+    /// Convert a `TypeClass<AstTypeExprId>` to a `TypeClass<TyId>`,
     /// resolving type parameter references via `subst`.
     pub(super) fn ast_class_to_ty_class(
         &mut self,
-        c: &BuiltinClass<AstTypeExprId>,
+        c: &TypeClass<AstTypeExprId>,
         subst: &IndexMap<StringId, TyId>,
-    ) -> BuiltinClass<TyId> {
+    ) -> TypeClass<TyId> {
         c.map_ref(|id| self.ast_type_to_ty(*id, subst))
     }
 

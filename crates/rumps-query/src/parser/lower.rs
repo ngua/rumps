@@ -20,7 +20,7 @@ use crate::ast::{
     VariantAst, Visibility, WriteExpr,
 };
 use crate::intern::{QualifiedName, StringId, StringInterner};
-use crate::typecheck::BuiltinClass;
+use crate::typecheck::TypeClass;
 use crate::value::TypeId;
 use crate::{Error, Result};
 
@@ -106,11 +106,11 @@ impl<'a> LowerCtx<'a> {
         }
     }
 
-    /// Convert a CST class constraint to a `BuiltinClass<AstTypeExprId>`.
+    /// Convert a CST class constraint to a `TypeClass<AstTypeExprId>`.
     fn class(
         &mut self,
-        c: BuiltinClass<cst::TypeExpr>,
-    ) -> Result<BuiltinClass<AstTypeExprId>> {
+        c: TypeClass<cst::TypeExpr>,
+    ) -> Result<TypeClass<AstTypeExprId>> {
         c.try_map(|te| self.type_expr(te))
     }
 

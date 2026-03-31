@@ -20,11 +20,11 @@ use crate::env::TxnReq;
 use crate::intern::{QualifiedName, StringId};
 use crate::typecheck::error::TypeError;
 use crate::typecheck::ty::{
-    BuiltinClass, BuiltinClassTag, ClassShape, MethodSpec, Rename, Scheme,
-    TrackKind, Ty, TyArena, TyId, TyVar,
+    ClassShape, MethodSpec, Rename, Scheme, TrackKind, Ty, TyArena, TyId,
+    TyVar, TypeClass,
 };
 use crate::value::{TypeDef, TypeId};
-use crate::Span;
+use crate::{ClassId, Span};
 
 impl InferCtx<'_> {
     /// Infer the type of an expression.
@@ -260,8 +260,8 @@ impl InferCtx<'_> {
                 // LHS must be convertible to String
                 self.constrain(Constraint::Class {
                     ty: lhs_ty,
-                    class: BuiltinClass::Parameterized(
-                        BuiltinClassTag::Into,
+                    class: TypeClass::Parameterized(
+                        ClassId::INTO,
                         TyArena::STRING,
                     ),
                     span,
@@ -301,8 +301,8 @@ impl InferCtx<'_> {
                 // Error message must be convertible to String
                 self.constrain(Constraint::Class {
                     ty,
-                    class: BuiltinClass::Parameterized(
-                        BuiltinClassTag::Into,
+                    class: TypeClass::Parameterized(
+                        ClassId::INTO,
                         TyArena::STRING,
                     ),
                     span,
@@ -330,7 +330,7 @@ impl InferCtx<'_> {
                 let tv = self.fresh();
                 self.constrain(Constraint::Class {
                     ty: tv,
-                    class: BuiltinClass::Simple(BuiltinClassTag::Monoid),
+                    class: TypeClass::Simple(ClassId::MONOID),
                     span,
                 });
                 self.mempty_types.insert(id, tv);
@@ -380,7 +380,7 @@ impl InferCtx<'_> {
         args: &SmallVec<[ExprId; 4]>,
         span: Span,
     ) -> TyId {
-        match BuiltinClassTag::from_str(class) {
+        match ClassId::from_name(class) {
             Some(k) => {
                 self.call_class_method_generic(id, k, method, args, span)
             }
@@ -405,7 +405,7 @@ impl InferCtx<'_> {
     ) -> TyId {
         let empty_subst = IndexMap::new();
 
-        match BuiltinClassTag::from_str(class) {
+        match ClassId::from_name(class) {
             Some(k) => {
                 match self.env.class_def(k).method(method, span).cloned() {
                     Err(e) => {
@@ -492,8 +492,8 @@ impl InferCtx<'_> {
                                     };
                                     self.constrain(Constraint::Class {
                                         ty: tv,
-                                        class: BuiltinClass::Simple(
-                                            BuiltinClassTag::Monoid,
+                                        class: TypeClass::Simple(
+                                            ClassId::MONOID,
                                         ),
                                         span,
                                     });
@@ -519,14 +519,11 @@ impl InferCtx<'_> {
                                         self.ty_arena.alloc(Ty::Var(input_var));
 
                                     match (k, method) {
-                                        (
-                                            BuiltinClassTag::Wrappable,
-                                            "wrap",
-                                        ) => {
+                                        (ClassId::WRAPPABLE, "wrap") => {
                                             self.constrain(Constraint::Class {
                                                 ty: target_ty,
-                                                class: BuiltinClass::Hkt(
-                                                    BuiltinClassTag::Wrappable,
+                                                class: TypeClass::Hkt(
+                                                    ClassId::WRAPPABLE,
                                                     Some(input_ty),
                                                 ),
                                                 span,
@@ -536,10 +533,10 @@ impl InferCtx<'_> {
                                                 target_ty,
                                             )
                                         }
-                                        (BuiltinClassTag::Into, "into") => {
+                                        (ClassId::INTO, "into") => {
                                             let class =
-                                                BuiltinClass::Parameterized(
-                                                    BuiltinClassTag::Into,
+                                                TypeClass::Parameterized(
+                                                    ClassId::INTO,
                                                     target_ty,
                                                 );
                                             self.constrain(Constraint::Class {
@@ -588,8 +585,8 @@ impl InferCtx<'_> {
                                     let input_var = self.fresh_var();
                                     let input_ty =
                                         self.ty_arena.alloc(Ty::Var(input_var));
-                                    let class = BuiltinClass::Parameterized(
-                                        BuiltinClassTag::TryInto,
+                                    let class = TypeClass::Parameterized(
+                                        ClassId::TRY_INTO,
                                         target_ty,
                                     );
                                     self.constrain(Constraint::Class {
@@ -629,7 +626,7 @@ impl InferCtx<'_> {
     fn emit_class_constraint(
         &mut self,
         ty: TyId,
-        class: BuiltinClass<TyId>,
+        class: TypeClass<TyId>,
         span: Span,
     ) {
         self.constrain(Constraint::Class { ty, class, span });
@@ -645,7 +642,7 @@ impl InferCtx<'_> {
     /// instance exists but its module is not imported, emits an error.
     fn check_instance_available(
         &mut self,
-        class: BuiltinClassTag,
+        class: ClassId,
         type_id: TypeId,
         span: Span,
     ) -> Option<super::super::instance::Instance> {
@@ -677,7 +674,7 @@ impl InferCtx<'_> {
 
     /// Generic class method call type checking.
     ///
-    /// Uses the centralized spec from `BuiltinClassTag::method` to:
+    /// Uses the centralized spec from `ClassId::method` to:
     /// 1. Check arity
     /// 2. Instantiate the scheme with fresh type variables
     /// 3. Unify argument types with parameter types
@@ -687,7 +684,7 @@ impl InferCtx<'_> {
     fn call_class_method_generic(
         &mut self,
         id: ExprId,
-        kind: BuiltinClassTag,
+        kind: ClassId,
         method: &str,
         args: &SmallVec<[ExprId; 4]>,
         span: Span,
@@ -750,12 +747,14 @@ impl InferCtx<'_> {
                     // first argument. For non-HKT classes, the first arg
                     // determines the instance.
                     {
-                        let lookup_ty =
-                            if matches!(kind.shape(), ClassShape::Hkt { .. }) {
-                                Some(ret)
-                            } else {
-                                arg_tys.first().copied()
-                            };
+                        let lookup_ty = if matches!(
+                            self.env.class_registry().shape(kind),
+                            ClassShape::Hkt { .. }
+                        ) {
+                            Some(ret)
+                        } else {
+                            arg_tys.first().copied()
+                        };
                         if let Some(ty) = lookup_ty {
                             let type_id = self.nominal_type_id(ty);
                             match type_id {
@@ -849,7 +848,7 @@ impl InferCtx<'_> {
                 let ty = self.fresh_numeric();
                 self.constrain(Constraint::Class {
                     ty,
-                    class: BuiltinClass::Simple(BuiltinClassTag::Numeric),
+                    class: TypeClass::Simple(ClassId::NUMERIC),
                     span,
                 });
                 // Record for interpreter to convert to correct runtime type
@@ -885,7 +884,7 @@ impl InferCtx<'_> {
                 let ty = self.fresh_numeric();
                 self.constrain(Constraint::Class {
                     ty,
-                    class: BuiltinClass::Simple(BuiltinClassTag::Numeric),
+                    class: TypeClass::Simple(ClassId::NUMERIC),
                     span,
                 });
                 ty
@@ -910,8 +909,8 @@ impl InferCtx<'_> {
             if i % 2 == 1 {
                 self.constrain(Constraint::Class {
                     ty: part_ty,
-                    class: BuiltinClass::Parameterized(
-                        BuiltinClassTag::Into,
+                    class: TypeClass::Parameterized(
+                        ClassId::INTO,
                         TyArena::STRING,
                     ),
                     span,
@@ -1011,12 +1010,12 @@ impl InferCtx<'_> {
                     // Just require both satisfy Eq and return Bool.
                     self.constrain(Constraint::Class {
                         ty: lhs_ty,
-                        class: BuiltinClass::Simple(BuiltinClassTag::Eq),
+                        class: TypeClass::Simple(ClassId::EQ),
                         span,
                     });
                     self.constrain(Constraint::Class {
                         ty: rhs_ty,
-                        class: BuiltinClass::Simple(BuiltinClassTag::Eq),
+                        class: TypeClass::Simple(ClassId::EQ),
                         span,
                     });
                     TyArena::BOOL
@@ -1084,7 +1083,7 @@ impl InferCtx<'_> {
         // Track Fallible instance for `??` (coalesce) dispatch on user types.
         // Coalesce is not in `class_dispatch()` so needs separate handling.
         if matches!(op, BinOp::Coalesce) {
-            let kind = BuiltinClassTag::Fallible;
+            let kind = ClassId::FALLIBLE;
             let type_id = self.nominal_type_id(lhs_ty);
             let inside_same = self
                 .class_context
@@ -1131,7 +1130,7 @@ impl InferCtx<'_> {
 
             // Track Wrappable instance for `?` dispatch on user types.
             // Check the result type (e.g. `Box[T]`) for a Wrappable instance.
-            let kind = BuiltinClassTag::Wrappable;
+            let kind = ClassId::WRAPPABLE;
             let type_id = self.nominal_type_id(result);
             let inside_same = self
                 .class_context
@@ -1587,16 +1586,13 @@ impl InferCtx<'_> {
                 let elem = self.fresh();
                 let expected_idx = self.ty_arena.alloc(Ty::AssocType(
                     v,
-                    BuiltinClassTag::Indexable,
+                    ClassId::INDEXABLE,
                     self.env.intern("Index"),
                 ));
                 self.unify(idx_ty, expected_idx, span);
                 self.constrain(Constraint::Class {
                     ty: base_ty,
-                    class: BuiltinClass::Parameterized(
-                        BuiltinClassTag::Indexable,
-                        elem,
-                    ),
+                    class: TypeClass::Parameterized(ClassId::INDEXABLE, elem),
                     span,
                 });
                 elem
@@ -1614,7 +1610,7 @@ impl InferCtx<'_> {
                 let (id, type_args) = (*id, type_args.clone());
                 // Check for user-defined Indexable instance
                 match self.check_instance_available(
-                    BuiltinClassTag::Indexable,
+                    ClassId::INDEXABLE,
                     id,
                     span,
                 ) {
@@ -1640,12 +1636,12 @@ impl InferCtx<'_> {
                         // (if it exists but isn't imported, error was already emitted)
                         if self
                             .instance_registry
-                            .lookup(BuiltinClassTag::Indexable, id)
+                            .lookup(ClassId::INDEXABLE, id)
                             .is_none()
                         {
                             self.error(TypeError::UnsatisfiedClass(
-                                BuiltinClass::Parameterized(
-                                    BuiltinClassTag::Indexable,
+                                TypeClass::Parameterized(
+                                    ClassId::INDEXABLE,
                                     TyArena::ERROR,
                                 ),
                                 base_ty,
@@ -1659,8 +1655,8 @@ impl InferCtx<'_> {
 
             _ => {
                 self.error(TypeError::UnsatisfiedClass(
-                    BuiltinClass::Parameterized(
-                        BuiltinClassTag::Indexable,
+                    TypeClass::Parameterized(
+                        ClassId::INDEXABLE,
                         TyArena::ERROR,
                     ),
                     base_ty,
@@ -1707,16 +1703,13 @@ impl InferCtx<'_> {
                 let inner = self.fresh();
                 let expected_idx = self.ty_arena.alloc(Ty::AssocType(
                     v,
-                    BuiltinClassTag::Indexable,
+                    ClassId::INDEXABLE,
                     self.env.intern("Index"),
                 ));
                 self.unify(idx_ty, expected_idx, span);
                 self.constrain(Constraint::Class {
                     ty: base_ty,
-                    class: BuiltinClass::Parameterized(
-                        BuiltinClassTag::Indexable,
-                        inner,
-                    ),
+                    class: TypeClass::Parameterized(ClassId::INDEXABLE, inner),
                     span,
                 });
                 self.ty_arena.option(inner)
@@ -1733,7 +1726,7 @@ impl InferCtx<'_> {
                 let (id, type_args) = (*id, type_args.clone());
                 // Check for user-defined Indexable instance
                 match self.check_instance_available(
-                    BuiltinClassTag::Indexable,
+                    ClassId::INDEXABLE,
                     id,
                     span,
                 ) {
@@ -1761,12 +1754,12 @@ impl InferCtx<'_> {
                         // (if it exists but isn't imported, error was already emitted)
                         if self
                             .instance_registry
-                            .lookup(BuiltinClassTag::Indexable, id)
+                            .lookup(ClassId::INDEXABLE, id)
                             .is_none()
                         {
                             self.error(TypeError::UnsatisfiedClass(
-                                BuiltinClass::Parameterized(
-                                    BuiltinClassTag::Indexable,
+                                TypeClass::Parameterized(
+                                    ClassId::INDEXABLE,
                                     TyArena::ERROR,
                                 ),
                                 base_ty,
@@ -1780,8 +1773,8 @@ impl InferCtx<'_> {
 
             _ => {
                 self.error(TypeError::UnsatisfiedClass(
-                    BuiltinClass::Parameterized(
-                        BuiltinClassTag::Indexable,
+                    TypeClass::Parameterized(
+                        ClassId::INDEXABLE,
                         TyArena::ERROR,
                     ),
                     base_ty,
@@ -1913,7 +1906,7 @@ impl InferCtx<'_> {
             .collect();
 
         // Build scheme constraints (for storing in closure_schemes)
-        let mut scheme_constraints: SmallVec<[(TyVar, BuiltinClass<TyId>); 2]> =
+        let mut scheme_constraints: SmallVec<[(TyVar, TypeClass<TyId>); 2]> =
             SmallVec::new();
 
         // Emit constraints for each user-specified bound
@@ -1934,16 +1927,20 @@ impl InferCtx<'_> {
 
                 // Emit transitive superclass constraints (skip if the
                 // class is not HKT; only HKT classes have superclasses)
-                class.tag().transitive_supers().into_iter().for_each(|sup| {
-                    if let Some(sc) = class.with_tag(sup) {
-                        scheme_constraints.push((tv, sc.clone()));
-                        self.constrain(Constraint::Class {
-                            ty,
-                            class: sc,
-                            span,
-                        });
-                    }
-                });
+                self.env
+                    .class_registry()
+                    .transitive_supers(class.tag())
+                    .into_iter()
+                    .for_each(|sup| {
+                        if let Some(sc) = class.with_tag(sup) {
+                            scheme_constraints.push((tv, sc.clone()));
+                            self.constrain(Constraint::Class {
+                                ty,
+                                class: sc,
+                                span,
+                            });
+                        }
+                    });
             });
         });
 
@@ -2560,7 +2557,7 @@ impl InferCtx<'_> {
         // Same pattern as binary class dispatch: try immediate resolution,
         // fall back to deferred for unresolved type variables.
         if matches!(op, PostfixOp::Unwrap) {
-            let kind = BuiltinClassTag::Fallible;
+            let kind = ClassId::FALLIBLE;
             let type_id = self.nominal_type_id(inner_ty);
             let inside_same = self
                 .class_context
@@ -2806,10 +2803,7 @@ impl InferCtx<'_> {
         // Emit Into constraint for validation
         self.constrain(Constraint::Class {
             ty: inner_ty,
-            class: BuiltinClass::Parameterized(
-                BuiltinClassTag::Into,
-                target_ty,
-            ),
+            class: TypeClass::Parameterized(ClassId::INTO, target_ty),
             span,
         });
 
@@ -2823,7 +2817,7 @@ impl InferCtx<'_> {
         if inner_is_var && target_is_numeric {
             self.constrain(Constraint::Class {
                 ty: inner_ty,
-                class: BuiltinClass::Simple(BuiltinClassTag::Numeric),
+                class: TypeClass::Simple(ClassId::NUMERIC),
                 span,
             });
         }
@@ -2855,10 +2849,7 @@ impl InferCtx<'_> {
         // Emit TryInto constraint for validation
         self.constrain(Constraint::Class {
             ty: inner_ty,
-            class: BuiltinClass::Parameterized(
-                BuiltinClassTag::TryInto,
-                target_ty,
-            ),
+            class: TypeClass::Parameterized(ClassId::TRY_INTO, target_ty),
             span,
         });
 
@@ -2899,10 +2890,7 @@ impl InferCtx<'_> {
             let storable = self.ty_arena.storable();
             self.constrain(Constraint::Class {
                 ty: v_ty,
-                class: BuiltinClass::Parameterized(
-                    BuiltinClassTag::Into,
-                    storable,
-                ),
+                class: TypeClass::Parameterized(ClassId::INTO, storable),
                 span,
             });
         }
@@ -3002,10 +2990,7 @@ impl InferCtx<'_> {
                 let subscript = self.ty_arena.subscript();
                 self.constrain(Constraint::Class {
                     ty,
-                    class: BuiltinClass::Parameterized(
-                        BuiltinClassTag::Into,
-                        subscript,
-                    ),
+                    class: TypeClass::Parameterized(ClassId::INTO, subscript),
                     span,
                 });
             }
