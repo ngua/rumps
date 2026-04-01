@@ -7,7 +7,6 @@ use smallvec::SmallVec;
 use super::{ParseErr, Parser};
 use crate::intern::{StringId, StringInterner};
 use crate::parser::cst;
-use crate::typecheck::{ClassShape, TypeClass};
 use crate::{ClassId, Span, Token};
 
 impl Parser {
@@ -355,15 +354,15 @@ impl Parser {
         variant_pattern.or(struct_pat).or(simple_type)
     }
 
-    /// Parse a user-facing constraint name.
+    /// Parse a class constraint name with optional type arguments.
     ///
-    /// HKT classes (`Iterable`, `Fallible`, etc.) reject type arguments;
-    /// the element type is specified at usage sites (`F[T]`).
-    /// Parameterized classes (`Into[T]`, `TryInto[T]`, `Indexable[E]`) require them.
+    /// Returns a shape-agnostic `CstClassConstraint`. Arity and shape
+    /// validation is deferred to the lowering pass, where the `ClassRegistry`
+    /// is available.
     pub(super) fn constraint(
         interner: &mut StringInterner,
-    ) -> impl chumsky::Parser<Token, TypeClass<cst::TypeExpr>, Error = ParseErr>
-           + Clone {
+    ) -> impl chumsky::Parser<Token, cst::CstClassConstraint, Error = ParseErr> + Clone
+    {
         // Intern class names locally for `StringId` comparison at parse time.
         let class_tags = [
             ClassId::NUMERIC,
@@ -410,74 +409,11 @@ impl Parser {
                          Display",
                     ))?;
 
-                let has_args = args.is_some();
-                let mut args = args.into_iter().flatten();
-
-                // Determine shape from the class id. The parser does not
-                // have access to `ClassRegistry`, so we match on the
-                // builtin class ids directly.
-                let shape = match tag {
-                    ClassId::NUMERIC | ClassId::MONOID | ClassId::BIT_LIKE
-                    | ClassId::NEGATABLE | ClassId::ORD | ClassId::EQ
-                    | ClassId::DISPLAY => ClassShape::Simple,
-                    ClassId::ITERABLE | ClassId::FALLIBLE | ClassId::WRAPPABLE
-                    | ClassId::CHAINABLE | ClassId::MAPPABLE | ClassId::FOLDABLE
-                    | ClassId::FILTERABLE => ClassShape::Hkt { kind: 1 },
-                    _ => ClassShape::Parameterized { params: 1 },
-                };
-
-                match shape {
-                    ClassShape::Simple => {
-                        if has_args {
-                            Err(chumsky::error::Simple::custom(
-                                span,
-                                format!(
-                                    "`{}` does not accept type arguments",
-                                    tag.name()
-                                ),
-                            ))
-                        } else {
-                            Ok(TypeClass::Simple(tag))
-                        }
-                    }
-                    ClassShape::Hkt { .. } => {
-                        if has_args {
-                            Err(chumsky::error::Simple::custom(
-                                span,
-                                format!(
-                                    "`{}` is higher-kinded; use `C: {}` \
-                                     and `C[T]` in type position, not `C: {}[T]`",
-                                    tag.name(), tag.name(), tag.name()
-                                ),
-                            ))
-                        } else {
-                            Ok(TypeClass::Hkt(tag, None))
-                        }
-                    }
-                    ClassShape::Parameterized { params } => {
-                        let ty = args.next().ok_or_else(|| {
-                            chumsky::error::Simple::custom(
-                                span,
-                                format!(
-                                    "`{}` requires a type argument: `{}[T]`",
-                                    tag.name(), tag.name()
-                                ),
-                            )
-                        })?;
-
-                        if args.next().is_some() {
-                            Err(chumsky::error::Simple::custom(
-                                span,
-                                format!(
-                                    "`{}` expects {} type argument(s), but received more",
-                                    tag.name(), params
-                                ),
-                            ))
-                        } else {
-                            Ok(TypeClass::Parameterized(tag, ty))
-                        }
-                    }
-                }
+                Ok(cst::CstClassConstraint {
+                    tag,
+                    args: args.into_iter().flatten().collect(),
+                    span,
+                })
             })
     }
 

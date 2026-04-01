@@ -20,7 +20,7 @@ use crate::ast::{
     VariantAst, Visibility, WriteExpr,
 };
 use crate::intern::{QualifiedName, StringId, StringInterner};
-use crate::typecheck::TypeClass;
+use crate::typecheck::{ClassRegistry, ClassShape, TyArena, TypeClass};
 use crate::value::TypeId;
 use crate::{Error, Result};
 
@@ -49,6 +49,8 @@ pub(crate) struct LowerCtx<'a> {
     /// Used by `collect_type_vars` to distinguish type variables from concrete
     /// type constructors in `App` head position.
     known_types: HashSet<StringId>,
+    /// Class registry for shape resolution during lowering.
+    registry: ClassRegistry,
     /// String interner for resolving `StringId` to `&str`.
     interner: &'a mut StringInterner,
 }
@@ -70,6 +72,10 @@ impl<'a> LowerCtx<'a> {
             type_params: HashSet::new(),
             tp_stack: Vec::new(),
             known_types,
+            registry: ClassRegistry::builtins(
+                &mut |s| interner.intern(s),
+                &mut TyArena::new(),
+            ),
             interner,
         }
     }
@@ -106,12 +112,61 @@ impl<'a> LowerCtx<'a> {
         }
     }
 
-    /// Convert a CST class constraint to a `TypeClass<AstTypeExprId>`.
+    /// Resolve a CST class constraint to a `TypeClass<AstTypeExprId>`.
+    ///
+    /// Looks up the class shape from the registry and validates arity.
     fn class(
         &mut self,
-        c: TypeClass<cst::TypeExpr>,
+        c: cst::CstClassConstraint,
     ) -> Result<TypeClass<AstTypeExprId>> {
-        c.try_map(|te| self.type_expr(te))
+        let shape = self.registry.shape(c.tag);
+        let name = c.tag.name();
+        match shape {
+            ClassShape::Simple => {
+                if !c.args.is_empty() {
+                    Err(Error::static_err(
+                        c.span,
+                        format!("`{name}` does not accept type arguments"),
+                    ))?
+                }
+                Ok(TypeClass::Simple(c.tag))
+            }
+            ClassShape::Hkt { .. } => {
+                if !c.args.is_empty() {
+                    Err(Error::static_err(
+                        c.span,
+                        format!(
+                            "`{name}` is higher-kinded; \
+                             use `C: {name}` and `C[T]` in type position, \
+                             not `C: {name}[T]`"
+                        ),
+                    ))?
+                }
+                Ok(TypeClass::Hkt(c.tag, None))
+            }
+            ClassShape::Parameterized { params } => {
+                let mut args = c.args.into_iter();
+                let ty = args.next().ok_or_else(|| {
+                    Error::static_err(
+                        c.span,
+                        format!(
+                            "`{name}` requires a type argument: `{name}[T]`"
+                        ),
+                    )
+                })?;
+                if args.next().is_some() {
+                    Err(Error::static_err(
+                        c.span,
+                        format!(
+                            "`{name}` expects {params} type argument(s), \
+                             but received more"
+                        ),
+                    ))?
+                }
+                let ty_id = self.type_expr(ty)?;
+                Ok(TypeClass::Parameterized(c.tag, ty_id))
+            }
+        }
     }
 
     /// Convert a CST type parameter to an AST type parameter.

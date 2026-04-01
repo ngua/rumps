@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Error: HKT class Iterable does not accept type args in constraint position\n\nFUN main() {\n  ; Closure case\n  LET bad-closure = [T: Iterable[Y]](coll: T) -> Int => 0\n}\n\n; Function case\nFUN bad[T: Iterable[X]](coll: T) -> Int {\n  0\n}\n"
+description: "; Error: HKT class Iterable does not accept type args in constraint position\n\nfun main() {\n  ; Closure case\n  let bad-closure = [T: Iterable[Y]](coll: T) -> Int => 0\n}\n\n; Function case\nfun bad[T: Iterable[X]](coll: T) -> Int {\n  0\n}\n"
 ---
-ERROR: parse error at 157..160: unexpected `Int` (expected: ()
+ERROR: 132..143: `Iterable` is higher-kinded; use `C: Iterable` and `C[T]` in type position, not `C: Iterable[T]`

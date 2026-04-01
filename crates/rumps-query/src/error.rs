@@ -29,6 +29,9 @@ pub enum Error {
         expected: Vec<String>,
     },
 
+    #[error("{span}: {msg}")]
+    Static { span: Span, msg: String },
+
     #[error("runtime error{}: {msg}", fmt_span(span))]
     Runtime { span: Option<Span>, msg: String },
 
@@ -94,6 +97,13 @@ impl Error {
             span,
             msg: msg.into(),
             expected,
+        }
+    }
+
+    pub(crate) fn static_err(span: Span, msg: impl Into<String>) -> Self {
+        Self::Static {
+            span,
+            msg: msg.into(),
         }
     }
 
@@ -168,6 +178,7 @@ impl Error {
         match self {
             Self::Lex { span, .. }
             | Self::Parse { span, .. }
+            | Self::Static { span, .. }
             | Self::Raise { span, .. }
             | Self::RuntimeType { span, .. } => Some(*span),
             Self::Runtime { span, .. } => *span,
@@ -221,6 +232,7 @@ impl Diagnostic for Error {
             Self::RuntimeType { .. } => "rumps::runtime_type",
             Self::Coercion { .. } => "rumps::coercion",
             Self::Multiple { .. } => "rumps::multiple",
+            Self::Static { .. } => "rumps::static",
             Self::Type(_) | Self::FormattedType(_) => "rumps::type",
         };
         Some(Box::new(code))
@@ -235,7 +247,7 @@ impl Diagnostic for Error {
             Self::Lex { span, .. } => {
                 Some(Box::new(std::iter::once(span_to_label(*span, "here"))))
             }
-            Self::Parse { span, .. } => {
+            Self::Parse { span, .. } | Self::Static { span, .. } => {
                 Some(Box::new(std::iter::once(span_to_label(*span, "here"))))
             }
             Self::RuntimeType { span, .. } => {
@@ -327,6 +339,9 @@ impl fmt::Display for ErrorDisplay<'_> {
                     write!(f, " (expected: {})", expected.join(", "))?;
                 }
                 Ok(())
+            }
+            Error::Static { span, msg } => {
+                write!(f, "{}: {msg}", loc(*span))
             }
             Error::Runtime { span: Some(s), msg } => {
                 write!(f, "runtime error at {}: {msg}", loc(*s))

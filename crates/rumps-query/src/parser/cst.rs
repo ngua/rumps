@@ -47,8 +47,19 @@ use smallvec::SmallVec;
 
 use crate::ast::{BinOp, Intrinsic, JsonAccessKind, Literal, UnOp};
 use crate::intern::StringId;
-use crate::typecheck::TypeClass;
-use crate::Span;
+use crate::{ClassId, Span};
+
+/// A shape-agnostic class constraint as parsed from source.
+///
+/// Stores the class id and whatever type arguments the user wrote, without
+/// classifying them as `Simple`/`Hkt`/`Parameterized`. Shape resolution
+/// happens during lowering, where the `ClassRegistry` is available.
+#[derive(Clone, Debug)]
+pub(crate) struct CstClassConstraint {
+    pub(crate) tag: ClassId,
+    pub(crate) args: SmallVec<[TypeExpr; 1]>,
+    pub(crate) span: Span,
+}
 
 /// A type parameter with optional class constraints.
 ///
@@ -56,7 +67,7 @@ use crate::Span;
 #[derive(Clone, Debug)]
 pub(crate) struct TypeParam {
     pub name: StringId,
-    pub constraints: SmallVec<[TypeClass<TypeExpr>; 2]>,
+    pub constraints: SmallVec<[CstClassConstraint; 2]>,
 }
 
 /// Type pattern for the `IS` operator (CST version).
@@ -439,7 +450,7 @@ pub(crate) struct AssocTypeCst {
     /// Associated type name (e.g., `"Index"`).
     pub(crate) name: StringId,
     /// Optional constraint on the associated type.
-    pub(crate) constraint: Option<TypeClass<TypeExpr>>,
+    pub(crate) constraint: Option<CstClassConstraint>,
     /// The concrete type this associated type maps to.
     pub(crate) target: TypeExpr,
     pub(crate) span: Span,
@@ -550,7 +561,7 @@ pub(crate) enum StmtKind {
         /// WHERE clause constraints (e.g., `A: Display, B: Display`).
         ///
         /// Each entry is `(type_param_name, constraints)`.
-        constraints: Vec<(StringId, Vec<TypeClass<TypeExpr>>)>,
+        constraints: Vec<(StringId, Vec<CstClassConstraint>)>,
         /// Associated type definitions (e.g., `newtype Index = Int`).
         assoc_types: Vec<AssocTypeCst>,
         /// Method implementations.
