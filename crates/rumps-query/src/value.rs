@@ -14,6 +14,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
@@ -426,41 +427,41 @@ impl ValueArena {
         self.strings.lookup(s)
     }
 
-    /// Get array elements by ID, cloning only the element vector.
+    /// Get array elements by ID (no cloning; returns a reference into the `Arc`).
     ///
     /// Returns `None` if the value doesn't exist or isn't an array.
     pub(crate) fn get_array(
         &self,
         id: ValueId,
-    ) -> Option<(TypeExprId, SmallVec<[ValueId; 4]>)> {
+    ) -> Option<(TypeExprId, &SmallVec<[ValueId; 4]>)> {
         match self.get(id)? {
-            Value::Array(ty, elems) => Some((*ty, elems.clone())),
+            Value::Array(ty, elems) => Some((*ty, elems)),
             _ => None,
         }
     }
 
-    /// Get object fields by ID, cloning only the field map.
+    /// Get object fields by ID (no cloning; returns a reference into the `Arc`).
     ///
     /// Returns `None` if the value doesn't exist or isn't an object.
     pub(crate) fn get_object(
         &self,
         id: ValueId,
-    ) -> Option<IndexMap<StringId, ValueId>> {
+    ) -> Option<&IndexMap<StringId, ValueId>> {
         match self.get(id)? {
-            Value::Object(map) => Some(map.clone()),
+            Value::Object(map) => Some(map),
             _ => None,
         }
     }
 
-    /// Get tuple elements by ID, cloning only the element vector.
+    /// Get tuple elements by ID (no cloning; returns a reference into the `Arc`).
     ///
     /// Returns `None` if the value doesn't exist or isn't a tuple.
     pub(crate) fn get_tuple(
         &self,
         id: ValueId,
-    ) -> Option<(TypeExprId, SmallVec<[ValueId; 4]>)> {
+    ) -> Option<(TypeExprId, &SmallVec<[ValueId; 4]>)> {
         match self.get(id)? {
-            Value::Tuple(ty, elems) => Some((*ty, elems.clone())),
+            Value::Tuple(ty, elems) => Some((*ty, elems)),
             _ => None,
         }
     }
@@ -479,32 +480,18 @@ impl ValueArena {
         }
     }
 
-    /// Get a reference to map contents by ID (no cloning).
+    /// Get map contents by ID (no cloning; returns a reference into the `Arc`).
     ///
-    /// Returns `None` if the value doesn't exist or isn't a map.
-    pub(crate) fn get_map_ref(
-        &self,
-        id: ValueId,
-    ) -> Option<(TypeExprId, TypeExprId, &IndexMap<MapKey, ValueId>)> {
-        match self.get(id)? {
-            Value::Map(k_ty, v_ty, entries) => Some((*k_ty, *v_ty, entries)),
-            _ => None,
-        }
-    }
-
-    /// Get map contents by ID, cloning the key-value map.
-    ///
-    /// Use `get_map_ref` for read-only access to avoid cloning.
+    /// Previously `get_map_ref`; the old cloning `get_map` was removed since
+    /// `Arc` makes the clone cheap and callers should borrow where possible.
     ///
     /// Returns `None` if the value doesn't exist or isn't a map.
     pub(crate) fn get_map(
         &self,
         id: ValueId,
-    ) -> Option<(TypeExprId, TypeExprId, IndexMap<MapKey, ValueId>)> {
+    ) -> Option<(TypeExprId, TypeExprId, &IndexMap<MapKey, ValueId>)> {
         match self.get(id)? {
-            Value::Map(k_ty, v_ty, entries) => {
-                Some((*k_ty, *v_ty, entries.clone()))
-            }
+            Value::Map(k_ty, v_ty, entries) => Some((*k_ty, *v_ty, entries)),
             _ => None,
         }
     }
@@ -572,6 +559,10 @@ impl CapturedEnv {
 ///
 /// Uses `StringId` for interned strings and `ValueId` for nested values,
 /// avoiding allocation and enabling O(1) string comparison.
+///
+/// Collection variants (`Array`, `Object`, `Tuple`, `Map`) and `Json`/`Closure`
+/// wrap their heap data in `Arc`, so cloning a `Value` is always O(1). Callers
+/// that need owned inner data should use `Arc::unwrap_or_clone()`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Value {
     /// The unit value; represents "no meaningful value".
@@ -601,16 +592,16 @@ pub(crate) enum Value {
 
     /// An array of values with element type. Note that in native RUMPS arrays
     /// elements must by homogeneous
-    Array(TypeExprId, SmallVec<[ValueId; 4]>),
+    Array(TypeExprId, Arc<SmallVec<[ValueId; 4]>>),
 
     /// An object/record with string keys (insertion order preserved).
-    Object(IndexMap<StringId, ValueId>),
+    Object(Arc<IndexMap<StringId, ValueId>>),
 
     /// A tuple value (heterogeneous, fixed-size sequence).
     ///
     /// Unlike arrays, tuples can hold different types and support positional
     /// access (`.0`, `.1`, etc.). The `TypeExprId` encodes the element types.
-    Tuple(TypeExprId, SmallVec<[ValueId; 4]>),
+    Tuple(TypeExprId, Arc<SmallVec<[ValueId; 4]>>),
 
     /// A homogeneous map with typed keys and values.
     ///
@@ -619,7 +610,7 @@ pub(crate) enum Value {
     /// - `IndexMap<MapKey, ValueId>`: key-value pairs (insertion order preserved)
     ///
     /// Keys are restricted to scalar types (Bool, Int, Float, Char, String).
-    Map(TypeExprId, TypeExprId, IndexMap<MapKey, ValueId>),
+    Map(TypeExprId, TypeExprId, Arc<IndexMap<MapKey, ValueId>>),
 
     /// A point in time (UTC).
     Time(DateTime<Utc>),
@@ -632,7 +623,7 @@ pub(crate) enum Value {
     /// - Explicit cast: `value AS Json`
     ///
     /// Access via `.` and `->` returns `Json`; `..` and `->>` extract scalars.
-    Json(serde_json::Value),
+    Json(Arc<serde_json::Value>),
 
     /// An opaque file path.
     ///
@@ -682,7 +673,7 @@ pub(crate) enum Value {
         params: SmallVec<[(StringId, Option<TypeExprId>); 4]>,
         ret: Option<TypeExprId>,
         body: ExprId,
-        env: CapturedEnv,
+        env: Arc<CapturedEnv>,
     },
 
     /// A named function reference.
