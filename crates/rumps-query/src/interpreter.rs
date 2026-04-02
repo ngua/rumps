@@ -109,6 +109,7 @@ mod types;
 mod variant;
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use async_recursion::async_recursion;
 use ordered_float::OrderedFloat;
@@ -1328,7 +1329,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             Literal::Char(c) => Value::Char(*c),
             Literal::String(s) => Value::String(self.arena.intern(s)),
-            Literal::Null => Value::Json(serde_json::Value::Null),
+            Literal::Null => Value::Json(Arc::new(serde_json::Value::Null)),
             Literal::Unit => Value::Unit,
         }
     }
@@ -1364,7 +1365,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             Literal::Char(c) => Value::Char(*c),
             Literal::String(s) => Value::String(self.arena.intern(s)),
-            Literal::Null => Value::Json(serde_json::Value::Null),
+            Literal::Null => Value::Json(Arc::new(serde_json::Value::Null)),
             Literal::Unit => Value::Unit,
         }
     }
@@ -1455,7 +1456,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             params: resolved_params?,
             ret: resolved_ret,
             body,
-            env,
+            env: Arc::new(env),
         })
     }
 
@@ -1939,7 +1940,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .collect();
 
             if changed {
-                Value::Object(refined)
+                Value::Object(Arc::new(refined))
             } else {
                 val
             }
@@ -2066,7 +2067,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             let json_val = self.jsonify(&val);
             obj.insert(self.arena.strings.resolve(*key).to_owned(), json_val);
         }
-        Ok(Value::Json(serde_json::Value::Object(obj)))
+        Ok(Value::Json(Arc::new(serde_json::Value::Object(obj))))
     }
 
     /// Evaluate JSON field access.
@@ -2106,9 +2107,9 @@ impl<I: IoContext> Interpreter<'_, I> {
 
         match kind {
             // `.` or `->`: return Json (null for missing)
-            JsonAccessKind::Json => {
-                Ok(Value::Json(json_val.unwrap_or(serde_json::Value::Null)))
-            }
+            JsonAccessKind::Json => Ok(Value::Json(Arc::new(
+                json_val.unwrap_or(serde_json::Value::Null),
+            ))),
             // `..` or `->>`: extract scalar, return Option[T]
             JsonAccessKind::Scalar => {
                 self.json_to_option_scalar(json_val, span)

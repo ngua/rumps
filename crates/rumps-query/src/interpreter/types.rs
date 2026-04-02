@@ -1,5 +1,7 @@
 //! Type checking, matching, and validation.
 
+use std::sync::Arc;
+
 use indexmap::IndexMap;
 use smallvec::SmallVec;
 
@@ -358,10 +360,13 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<Value> {
         // Extract object source; soft error if not an object
         let objs = match val {
-            Value::Json(serde_json::Value::Object(obj)) => {
-                Some((Some(obj.clone()), None))
-            }
-            Value::Object(obj) => Some((None, Some(obj.clone()))),
+            Value::Json(j) => match j.as_ref() {
+                serde_json::Value::Object(obj) => {
+                    Some((Some(obj.clone()), None))
+                }
+                _ => None,
+            },
+            Value::Object(obj) => Some((None, Some(Arc::clone(obj)))),
             _ => None,
         };
 
@@ -403,7 +408,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                         let field_val = json_obj
                             .as_ref()
                             .and_then(|obj| {
-                                obj.get(&fname).map(|v| Value::Json(v.clone()))
+                                obj.get(&fname)
+                                    .map(|v| Value::Json(Arc::new(v.clone())))
                             })
                             .or_else(|| {
                                 native_obj
@@ -460,9 +466,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                 );
 
                 match result {
-                    Ok(obj_fields) => {
-                        Ok(self.make_result_ok(Value::Object(obj_fields), span))
-                    }
+                    Ok(obj_fields) => Ok(self.make_result_ok(
+                        Value::Object(Arc::new(obj_fields)),
+                        span,
+                    )),
                     Err(FieldErr::Soft(msg)) => {
                         Ok(self.make_result_err(&msg, span))
                     }
@@ -479,62 +486,77 @@ impl<I: IoContext> Interpreter<'_, I> {
         elem_ty: TypeExprId,
         span: Span,
     ) -> Result<Value> {
-        if let Value::Json(serde_json::Value::Array(arr)) = val {
-            let arr = arr.clone();
+        let arr = match val {
+            Value::Json(j) => match j.as_ref() {
+                serde_json::Value::Array(arr) => Some(arr.clone()),
+                _ => None,
+            },
+            _ => None,
+        };
 
-            // Process each element, propagating errors with index context.
-            // We use a local enum to distinguish between:
-            // - Continue accumulating elements
-            // - Short-circuit with a soft error (Result.Err value)
-            // - Short-circuit with a hard error (crate::Error)
-            enum Acc {
-                Elems(SmallVec<[ValueId; 4]>),
-                SoftErr(Value),
-            }
-
-            let result = arr.into_iter().enumerate().try_fold(
-                Acc::Elems(SmallVec::new()),
-                |acc, (i, json_val)| match acc {
-                    Acc::SoftErr(_) => Ok::<_, crate::Error>(acc),
-                    Acc::Elems(mut elems) => {
-                        let elem_result = self.read_value_expr(
-                            &Value::Json(json_val),
-                            elem_ty,
-                            span,
-                        )?;
-
-                        // Check if the recursive read returned Result.Err
-                        let is_soft_err =
-                            matches!(&elem_result, Value::Tagged(ty, 1, _)
-                                if self.type_exprs.base_type(*ty) == Some(TypeId::RESULT));
-
-                        if is_soft_err {
-                            let err_msg =
-                                self.extract_result_err_msg(&elem_result);
-                            let msg = format!("at index {i}: {err_msg}");
-                            Ok(Acc::SoftErr(self.make_result_err(&msg, span)))
-                        } else {
-                            let inner =
-                                self.unwrap_result_ok(&elem_result, span)?;
-                            let inner_id = self.arena.add(inner, span);
-                            elems.push(inner_id);
-                            Ok(Acc::Elems(elems))
-                        }
-                    }
-                },
-            )?;
-
-            match result {
-                Acc::Elems(elems) => {
-                    Ok(self.make_result_ok(Value::Array(elem_ty, elems), span))
+        match arr {
+            Some(arr) => {
+                // Process each element, propagating errors with index context.
+                // We use a local enum to distinguish between:
+                // - Continue accumulating elements
+                // - Short-circuit with a soft error (`Result.Err` value)
+                // - Short-circuit with a hard error (`crate::Error`)
+                enum Acc {
+                    Elems(SmallVec<[ValueId; 4]>),
+                    SoftErr(Value),
                 }
-                Acc::SoftErr(v) => Ok(v),
+
+                let result = arr.into_iter().enumerate().try_fold(
+                    Acc::Elems(SmallVec::new()),
+                    |acc, (i, json_val)| match acc {
+                        Acc::SoftErr(_) => Ok::<_, crate::Error>(acc),
+                        Acc::Elems(mut elems) => {
+                            let elem_result = self.read_value_expr(
+                                &Value::Json(Arc::new(json_val)),
+                                elem_ty,
+                                span,
+                            )?;
+
+                            // Check if the recursive read returned `Result.Err`
+                            let is_soft_err =
+                                matches!(&elem_result, Value::Tagged(ty, 1, _)
+                                    if self.type_exprs.base_type(*ty) == Some(TypeId::RESULT));
+
+                            if is_soft_err {
+                                let err_msg =
+                                    self.extract_result_err_msg(&elem_result);
+                                let msg = format!("at index {i}: {err_msg}");
+                                Ok(Acc::SoftErr(
+                                    self.make_result_err(&msg, span),
+                                ))
+                            } else {
+                                let inner =
+                                    self.unwrap_result_ok(&elem_result, span)?;
+                                let inner_id = self.arena.add(inner, span);
+                                elems.push(inner_id);
+                                Ok(Acc::Elems(elems))
+                            }
+                        }
+                    },
+                )?;
+
+                match result {
+                    Acc::Elems(elems) => Ok(self.make_result_ok(
+                        Value::Array(elem_ty, Arc::new(elems)),
+                        span,
+                    )),
+                    Acc::SoftErr(v) => Ok(v),
+                }
             }
-        } else {
-            let src_name =
-                val.type_name(&self.registry, &self.type_exprs, &self.arena);
-            let msg = format!("expected JSON array, got {src_name}");
-            Ok(self.make_result_err(&msg, span))
+            None => {
+                let src_name = val.type_name(
+                    &self.registry,
+                    &self.type_exprs,
+                    &self.arena,
+                );
+                let msg = format!("expected JSON array, got {src_name}");
+                Ok(self.make_result_err(&msg, span))
+            }
         }
     }
 
@@ -547,7 +569,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<Value> {
         match val {
-            Value::Json(serde_json::Value::Null) => {
+            Value::Json(j) if matches!(j.as_ref(), serde_json::Value::Null) => {
                 // null -> Option.None
                 let none = self.make_none_like(opt_ty);
                 Ok(self.make_result_ok(none, span))
@@ -754,7 +776,10 @@ impl<I: IoContext> Interpreter<'_, I> {
         if let Some(nested_fields) = nested {
             match val {
                 Value::Object(nested_obj) => self
-                    .object_matches_resolved_fields(nested_obj, &nested_fields),
+                    .object_matches_resolved_fields(
+                        nested_obj.as_ref(),
+                        &nested_fields,
+                    ),
                 _ => false,
             }
         } else {
@@ -941,7 +966,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     // Structural object type: check field presence and types (extensible)
                     match val {
                         Value::Object(obj) => {
-                            let obj = obj.clone();
+                            let obj = Arc::clone(obj);
                             fields.iter().all(|(field_name, field_ty)| {
                                 obj.get(field_name).is_some_and(|&val_id| {
                                     self.arena.get(val_id).cloned().is_some_and(
@@ -963,7 +988,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     match val {
                         Value::Object(obj) => self
                             .object_matches_resolved_fields(
-                                obj,
+                                obj.as_ref(),
                                 &resolved_fields,
                             ),
                         _ => false,
@@ -1260,7 +1285,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             // Nested object: recursively validate
             match val {
                 Value::Object(nested_obj) => self.validate_object_fields(
-                    nested_obj,
+                    nested_obj.as_ref(),
                     &nested_fields,
                     span,
                     ctx,
@@ -1289,9 +1314,12 @@ impl<I: IoContext> Interpreter<'_, I> {
 
         if let Some(fields) = resolved_fields {
             match val {
-                Value::Object(obj) => {
-                    self.validate_object_fields(obj, &fields, span, None)
-                }
+                Value::Object(obj) => self.validate_object_fields(
+                    obj.as_ref(),
+                    &fields,
+                    span,
+                    None,
+                ),
                 _ => typechecked!("object value", "Object"),
             }
         } else if self.value_matches_type_expr(val, expected_ty) {

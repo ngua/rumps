@@ -1,5 +1,7 @@
 //! Collection operations: objects, arrays, tuples, indexing, field access.
 
+use std::sync::Arc;
+
 use async_recursion::async_recursion;
 use indexmap::IndexMap;
 use smallvec::{smallvec, SmallVec};
@@ -22,7 +24,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<Value> {
         let map = self.object_entries(entries, IndexMap::new(), span).await?;
-        Ok(Value::Object(map))
+        Ok(Value::Object(Arc::new(map)))
     }
 
     /// Recursively evaluate object entries (fields and spreads).
@@ -53,11 +55,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                         match v {
                             Value::Object(fields) => {
                                 // Merge fields from spread object
-                                fields.clone().into_iter().for_each(
-                                    |(k, v)| {
-                                        acc.insert(k, v);
-                                    },
-                                );
+                                fields.iter().for_each(|(k, v)| {
+                                    acc.insert(*k, *v);
+                                });
                             }
                             _ => typechecked!("...spread", "Object"),
                         }
@@ -83,7 +83,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             None => {
                 // Empty array has element type `UNKNOWN`
                 let elem_ty = self.type_exprs.named(TypeId::UNKNOWN);
-                Ok(Value::Array(elem_ty, SmallVec::new()))
+                Ok(Value::Array(elem_ty, Arc::new(SmallVec::new())))
             }
             Some((first, rest)) => {
                 // Get first value(s) from first element or spread
@@ -168,7 +168,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<Value> {
         match elems.split_first() {
-            None => Ok(Value::Array(elem_ty, acc)),
+            None => Ok(Value::Array(elem_ty, Arc::new(acc))),
             Some((elem, tail)) => {
                 let vals: SmallVec<[Value; 4]> = match elem {
                     ArrayElem::Elem(id) => {
@@ -246,7 +246,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<Value> {
         match elems.split_first() {
-            None => Ok(Value::Json(serde_json::Value::Array(acc))),
+            None => Ok(Value::Json(Arc::new(serde_json::Value::Array(acc)))),
             Some((elem, tail)) => {
                 match elem {
                     ArrayElem::Elem(id) => {
@@ -267,8 +267,18 @@ impl<I: IoContext> Interpreter<'_, I> {
                                     acc.push(self.jsonify(v));
                                 });
                             }
-                            Value::Json(serde_json::Value::Array(arr)) => {
-                                arr.iter().for_each(|v| acc.push(v.clone()));
+                            Value::Json(j)
+                                if matches!(
+                                    j.as_ref(),
+                                    serde_json::Value::Array(_)
+                                ) =>
+                            {
+                                if let serde_json::Value::Array(arr) =
+                                    j.as_ref()
+                                {
+                                    arr.iter()
+                                        .for_each(|v| acc.push(v.clone()));
+                                }
                             }
                             _ => typechecked!("...spread", "Array"),
                         }
@@ -306,7 +316,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<Value> {
         match elems.split_first() {
-            None => Ok(Value::Array(elem_ty, acc)),
+            None => Ok(Value::Array(elem_ty, Arc::new(acc))),
             Some((elem, tail)) => {
                 match elem {
                     ArrayElem::Elem(id) => {
@@ -355,7 +365,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         match elems.split_first() {
             None => {
                 let ty = self.type_exprs.tuple(tys);
-                Ok(Value::Tuple(ty, vals))
+                Ok(Value::Tuple(ty, Arc::new(vals)))
             }
             Some((expr_id, tail)) => {
                 let elem_span = self.ast.expr_span(*expr_id).unwrap_or(span);
@@ -384,7 +394,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 // Empty map has unknown key/value types
                 let k_ty = self.type_exprs.named(TypeId::UNKNOWN);
                 let v_ty = self.type_exprs.named(TypeId::UNKNOWN);
-                Ok(Value::Map(k_ty, v_ty, IndexMap::new()))
+                Ok(Value::Map(k_ty, v_ty, Arc::new(IndexMap::new())))
             }
             Some(((k_expr, v_expr), rest)) => {
                 let v_span = self.ast.expr_span(*v_expr).unwrap_or(span);
@@ -419,7 +429,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<Value> {
         match entries.split_first() {
-            None => Ok(Value::Map(k_ty, v_ty, acc)),
+            None => Ok(Value::Map(k_ty, v_ty, Arc::new(acc))),
             Some(((k_expr, v_expr), tail)) => {
                 let v_span = self.ast.expr_span(*v_expr).unwrap_or(span);
 
@@ -697,9 +707,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                 // JSON field access returns Json (null for missing)
                 Value::Json(j) => {
                     let fs = self.arena.strings.get(*field).unwrap_or_default();
-                    Ok(Value::Json(
+                    Ok(Value::Json(Arc::new(
                         j.get(fs).cloned().unwrap_or(serde_json::Value::Null),
-                    ))
+                    )))
                 }
                 // Type checker guarantees field access is on Object or Json
                 _ => typechecked!(".field", "Object | Json"),

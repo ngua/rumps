@@ -1,5 +1,7 @@
 //! Database primitives: `@get`, `@set`, `@kill`, `@data`, and key construction.
 
+use std::sync::Arc;
+
 use async_recursion::async_recursion;
 use rumps_types::{DataStatus, Key, Name, Subscript};
 use smallvec::SmallVec;
@@ -370,7 +372,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             })
             .collect();
         let type_expr_id = self.type_exprs.named(TypeId::SUBSCRIPT);
-        Value::Array(type_expr_id, elem_ids)
+        Value::Array(type_expr_id, Arc::new(elem_ids))
     }
 
     /// Evaluate subscript elements and build a `Key`.

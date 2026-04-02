@@ -28,6 +28,7 @@
 //! [`Interpreter`]: super::Interpreter
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use indexmap::IndexMap;
 use ordered_float::OrderedFloat;
@@ -668,12 +669,12 @@ impl Monoid {
             Ty::Array(elem) => {
                 let elem_ty =
                     ctx.type_exprs.intern_ty_lenient(*elem, ctx.ty_arena);
-                Value::Array(elem_ty, SmallVec::new())
+                Value::Array(elem_ty, Arc::new(SmallVec::new()))
             }
             Ty::Map(k, v) => {
                 let k_ty = ctx.type_exprs.intern_ty_lenient(*k, ctx.ty_arena);
                 let v_ty = ctx.type_exprs.intern_ty_lenient(*v, ctx.ty_arena);
-                Value::Map(k_ty, v_ty, IndexMap::new())
+                Value::Map(k_ty, v_ty, Arc::new(IndexMap::new()))
             }
             Ty::Option(inner) => {
                 let inner_ty =
@@ -698,14 +699,14 @@ impl Monoid {
                 Value::String(ctx.arena.intern(&format!("{l}{r}")))
             }
             (Value::Array(ty, l), Value::Array(_, r)) => {
-                let mut elems = l.clone();
+                let mut elems = Arc::unwrap_or_clone(l.clone());
                 elems.extend(r.iter().copied());
-                Value::Array(*ty, elems)
+                Value::Array(*ty, Arc::new(elems))
             }
             (Value::Map(k_ty, v_ty, l), Value::Map(_, _, r)) => {
-                let mut merged = l.clone();
+                let mut merged = Arc::unwrap_or_clone(l.clone());
                 merged.extend(r.iter().map(|(k, v)| (k.clone(), *v)));
-                Value::Map(*k_ty, *v_ty, merged)
+                Value::Map(*k_ty, *v_ty, Arc::new(merged))
             }
             (Value::Tagged(ty1, i1, p1), Value::Tagged(ty2, i2, p2))
                 if ctx
@@ -1358,7 +1359,7 @@ impl Into {
             }
 
             // T -> Json (jsonify)
-            (_, Ty::Json) => Ok(Value::Json(Self::jsonify(ctx, val))),
+            (_, Ty::Json) => Ok(Value::Json(Arc::new(Self::jsonify(ctx, val)))),
 
             // String -> FilePath
             (Value::String(sid), Ty::FilePath) => Ok(Value::FilePath(*sid)),
@@ -1721,7 +1722,7 @@ impl Into {
                 serde_json::Value::Object(map)
             }
             Value::Time(t) => serde_json::Value::String(t.to_rfc3339()),
-            Value::Json(j) => j.clone(),
+            Value::Json(j) => j.as_ref().clone(),
             Value::Regex(idx) => {
                 let pattern = ctx
                     .regex_cache
@@ -1866,7 +1867,7 @@ impl TryInto {
             }),
 
             // Json -> Bool
-            (Value::Json(j), Ty::Bool) => Ok(match j {
+            (Value::Json(j), Ty::Bool) => Ok(match &**j {
                 serde_json::Value::Bool(b) => {
                     Self::make_result_ok(ctx, Value::Bool(*b))
                 }
@@ -1880,7 +1881,7 @@ impl TryInto {
             }),
 
             // Json -> Int
-            (Value::Json(j), Ty::Int) => Ok(match j {
+            (Value::Json(j), Ty::Int) => Ok(match &**j {
                 serde_json::Value::Number(n) => n
                     .as_i64()
                     .map(|i| Self::make_result_ok(ctx, Value::Int(i)))
@@ -1902,7 +1903,7 @@ impl TryInto {
             }),
 
             // Json -> Float
-            (Value::Json(j), Ty::Float) => Ok(match j {
+            (Value::Json(j), Ty::Float) => Ok(match &**j {
                 serde_json::Value::Number(n) => n
                     .as_f64()
                     .map(|f| {
@@ -1924,7 +1925,7 @@ impl TryInto {
             }),
 
             // Json -> String
-            (Value::Json(j), Ty::String) => Ok(match j {
+            (Value::Json(j), Ty::String) => Ok(match &**j {
                 serde_json::Value::String(s) => {
                     let id = ctx.arena.intern(s);
                     Self::make_result_ok(ctx, Value::String(id))
@@ -1944,7 +1945,7 @@ impl TryInto {
             // T -> Json (jsonify)
             (_, Ty::Json) => Ok(Self::make_result_ok(
                 ctx,
-                Value::Json(Into::jsonify(ctx, val)),
+                Value::Json(Arc::new(Into::jsonify(ctx, val))),
             )),
 
             // Int -> DataStatus (MUMPS @data values: 0, 1, 10, 11 -> variants)
@@ -2315,7 +2316,10 @@ impl Mappable {
         match kind {
             Kind::EmptyArray => {
                 let ty = ctx.type_exprs.named(TypeId::UNKNOWN);
-                Ok(MethodResult::Done(Value::Array(ty, SmallVec::new())))
+                Ok(MethodResult::Done(Value::Array(
+                    ty,
+                    Arc::new(SmallVec::new()),
+                )))
             }
             Kind::Array(first) => Ok(MethodResult::Invoke(Continuation {
                 callee: fn_id,
@@ -2400,9 +2404,10 @@ impl Filterable {
         };
 
         match kind {
-            Kind::EmptyArray(ty) => {
-                Ok(MethodResult::Done(Value::Array(ty, SmallVec::new())))
-            }
+            Kind::EmptyArray(ty) => Ok(MethodResult::Done(Value::Array(
+                ty,
+                Arc::new(SmallVec::new()),
+            ))),
             Kind::Array(elem_ty, first) => {
                 Ok(MethodResult::Invoke(Continuation {
                     callee: pred_id,
@@ -2418,7 +2423,10 @@ impl Filterable {
             }
             Kind::EmptyRange => {
                 let int_ty = ctx.type_exprs.named(TypeId::INT);
-                Ok(MethodResult::Done(Value::Array(int_ty, SmallVec::new())))
+                Ok(MethodResult::Done(Value::Array(
+                    int_ty,
+                    Arc::new(SmallVec::new()),
+                )))
             }
             Kind::Range(start, end) => {
                 let int_ty = ctx.type_exprs.named(TypeId::INT);
@@ -2677,7 +2685,7 @@ impl Iterable {
                     .map(|i| ctx.arena.add(Value::Int(i), ctx.span))
                     .collect();
                 let ty = ctx.type_exprs.named(TypeId::INT);
-                Value::Array(ty, elems)
+                Value::Array(ty, Arc::new(elems))
             }
             _ => typechecked!("Iterable:collect", "Iterable"),
         })
@@ -2689,7 +2697,7 @@ impl Iterable {
             Value::Array(ty, elems) => {
                 let reversed: SmallVec<[ValueId; 4]> =
                     elems.iter().rev().copied().collect();
-                Value::Array(*ty, reversed)
+                Value::Array(*ty, Arc::new(reversed))
             }
             Value::Range {
                 start,
@@ -2702,7 +2710,7 @@ impl Iterable {
                     .map(|i| ctx.arena.add(Value::Int(i), ctx.span))
                     .collect();
                 let ty = ctx.type_exprs.named(TypeId::INT);
-                Value::Array(ty, elems)
+                Value::Array(ty, Arc::new(elems))
             }
             _ => typechecked!("Iterable:reverse", "Iterable"),
         })

@@ -1,5 +1,7 @@
 //! Pattern matching and destructuring.
 
+use std::sync::Arc;
+
 use smallvec::SmallVec;
 
 use super::Interpreter;
@@ -374,8 +376,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                                             .skip(pats.len())
                                             .copied()
                                             .collect();
-                                        let rest_arr =
-                                            Value::Array(*ty_id, rest_elems);
+                                        let rest_arr = Value::Array(
+                                            *ty_id,
+                                            Arc::new(rest_elems),
+                                        );
                                         let val_id =
                                             self.arena.add(rest_arr, span);
                                         bindings.push((*name, val_id));

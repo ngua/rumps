@@ -24,6 +24,7 @@
 //! ```
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use smallvec::{smallvec, SmallVec};
 
@@ -184,7 +185,7 @@ pub(crate) fn resume(
                         ty.map(|t| ctx.type_exprs.named(t)).unwrap_or_else(
                             || ctx.type_exprs.named(TypeId::UNKNOWN),
                         );
-                    Ok(MethodResult::Done(Value::Array(arr_ty, acc)))
+                    Ok(MethodResult::Done(Value::Array(arr_ty, Arc::new(acc))))
                 }
                 Some(Value::Array(_, elems)) => {
                     Ok(MethodResult::Invoke(Continuation {
@@ -240,7 +241,7 @@ pub(crate) fn resume(
             let next_idx = idx + 1;
             match ctx.arena.get(source) {
                 Some(Value::Array(_, elems)) if next_idx >= elems.len() => {
-                    Ok(MethodResult::Done(Value::Array(elem_ty, acc)))
+                    Ok(MethodResult::Done(Value::Array(elem_ty, Arc::new(acc))))
                 }
                 Some(Value::Array(_, elems)) => {
                     let next_elem = elems[next_idx];
@@ -273,7 +274,7 @@ pub(crate) fn resume(
             }
             // `current` is the next value to process.
             if current >= end {
-                Ok(MethodResult::Done(Value::Array(elem_ty, acc)))
+                Ok(MethodResult::Done(Value::Array(elem_ty, Arc::new(acc))))
             } else {
                 let int_id = ctx.arena.add(Value::Int(current), ctx.span);
                 Ok(MethodResult::Invoke(Continuation {
@@ -301,7 +302,7 @@ pub(crate) fn resume(
                 id: ValueId,
             ) -> Option<&SmallVec<[ValueId; 4]>> {
                 arena.get(id).and_then(|v| match v {
-                    Value::Array(_, elems) => Some(elems),
+                    Value::Array(_, elems) => Some(elems.as_ref()),
                     Value::Union(_, inner) | Value::Newtype(_, inner) => {
                         unwrap_array(arena, *inner)
                     }
@@ -435,7 +436,7 @@ pub(crate) fn resume(
                 let arr_ty = ty
                     .map(|t| ctx.type_exprs.named(t))
                     .unwrap_or_else(|| ctx.type_exprs.named(TypeId::UNKNOWN));
-                Ok(MethodResult::Done(Value::Array(arr_ty, acc)))
+                Ok(MethodResult::Done(Value::Array(arr_ty, Arc::new(acc))))
             } else {
                 Ok(MethodResult::Invoke(Continuation {
                     callee: cont.callee,
@@ -562,7 +563,8 @@ pub(crate) fn resume_sort_by(
                 None => {
                     // Done! Return sorted array
                     break Ok(MethodResult::Done(Value::Array(
-                        elem_ty, sorted,
+                        elem_ty,
+                        Arc::new(sorted),
                     )));
                 }
                 Some(SortFrame::MergeAfterRight { left, lo, hi }) => {
@@ -839,7 +841,10 @@ impl ArrayHof {
         match kind {
             Kind::Empty => {
                 let ty = ctx.type_exprs.named(TypeId::UNKNOWN);
-                Ok(MethodResult::Done(Value::Array(ty, SmallVec::new())))
+                Ok(MethodResult::Done(Value::Array(
+                    ty,
+                    Arc::new(SmallVec::new()),
+                )))
             }
             Kind::NonEmpty(first_a, first_b) => {
                 Ok(MethodResult::Invoke(Continuation {

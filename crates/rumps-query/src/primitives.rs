@@ -42,6 +42,8 @@
 //! [`Interpreter::invoke_callable`]: crate::interpreter::Interpreter::invoke_callable
 //! [`Interpreter::invoke_module_fn`]: crate::interpreter::Interpreter::invoke_module_fn
 
+use std::sync::Arc;
+
 use chrono::{DateTime, Datelike, TimeZone, Timelike, Utc};
 use indexmap::IndexMap;
 use itertools::Itertools;
@@ -149,13 +151,13 @@ impl Array {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let (ty, mut elems) = ctx
+            let (ty, mut e) = ctx
                 .arena
-                .get_array(args[0])
+                .take_array(args[0])
                 .unwrap_or_else(|| typechecked!("Array.push", "Array"));
 
-            elems.push(args[1]);
-            Ok(ctx.arena.add(Value::Array(ty, elems), ctx.span))
+            e.push(args[1]);
+            Ok(ctx.arena.add(Value::Array(ty, Arc::new(e)), ctx.span))
         })
     }
 
@@ -168,13 +170,13 @@ impl Array {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let (ty, mut elems) = ctx
+            let (ty, mut e) = ctx
                 .arena
-                .get_array(args[0])
+                .take_array(args[0])
                 .unwrap_or_else(|| typechecked!("Array.pop", "Array"));
 
-            elems.pop();
-            Ok(ctx.arena.add(Value::Array(ty, elems), ctx.span))
+            e.pop();
+            Ok(ctx.arena.add(Value::Array(ty, Arc::new(e)), ctx.span))
         })
     }
 
@@ -215,7 +217,7 @@ impl Array {
 
             let tail: SmallVec<[ValueId; 4]> =
                 elems.get(1..).map(SmallVec::from_slice).unwrap_or_default();
-            Ok(ctx.arena.add(Value::Array(ty, tail), ctx.span))
+            Ok(ctx.arena.add(Value::Array(ty, Arc::new(tail)), ctx.span))
         })
     }
 
@@ -402,7 +404,7 @@ impl Array {
 
             let sorted: SmallVec<[ValueId; 4]> =
                 pairs.into_iter().map(|(vid, _)| vid).collect();
-            Ok(ctx.arena.add(Value::Array(ty, sorted), ctx.span))
+            Ok(ctx.arena.add(Value::Array(ty, Arc::new(sorted)), ctx.span))
         })
     }
 
@@ -449,7 +451,7 @@ impl Array {
                 .map(SmallVec::from_slice)
                 .unwrap_or_default();
 
-            Ok(ctx.arena.add(Value::Array(ty, sliced), ctx.span))
+            Ok(ctx.arena.add(Value::Array(ty, Arc::new(sliced)), ctx.span))
         })
     }
 
@@ -462,9 +464,9 @@ impl Array {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let (ty_a, elems_a) = ctx
+            let (ty_a, mut combined) = ctx
                 .arena
-                .get_array(args[0])
+                .take_array(args[0])
                 .unwrap_or_else(|| typechecked!("Array.concat", "Array"));
 
             let (_, elems_b) = ctx
@@ -473,9 +475,10 @@ impl Array {
                 .unwrap_or_else(|| typechecked!("Array.concat", "Array"));
 
             // Type checker guarantees both arrays have matching element types
-            let mut combined = elems_a;
-            combined.extend(elems_b);
-            Ok(ctx.arena.add(Value::Array(ty_a, combined), ctx.span))
+            combined.extend(elems_b.iter().copied());
+            Ok(ctx
+                .arena
+                .add(Value::Array(ty_a, Arc::new(combined)), ctx.span))
         })
     }
 
@@ -497,18 +500,25 @@ impl Array {
                 .get_array(args[1])
                 .unwrap_or_else(|| typechecked!("Array.zip", "Array"));
 
-            let pairs: SmallVec<[ValueId; 4]> = elems_a
+            let zipped: SmallVec<[(ValueId, ValueId); 4]> = elems_a
                 .iter()
                 .zip(elems_b.iter())
+                .map(|(a, b)| (*a, *b))
+                .collect();
+
+            let pairs: SmallVec<[ValueId; 4]> = zipped
+                .iter()
                 .map(|(a, b)| {
                     let tup_ty = ctx.type_exprs.tuple(smallvec![ty_a, ty_b]);
-                    let tup = Value::Tuple(tup_ty, smallvec![*a, *b]);
+                    let tup = Value::Tuple(tup_ty, Arc::new(smallvec![*a, *b]));
                     ctx.arena.add(tup, ctx.span)
                 })
                 .collect();
 
             let elem_ty = ctx.type_exprs.tuple(smallvec![ty_a, ty_b]);
-            Ok(ctx.arena.add(Value::Array(elem_ty, pairs), ctx.span))
+            Ok(ctx
+                .arena
+                .add(Value::Array(elem_ty, Arc::new(pairs)), ctx.span))
         })
     }
 
@@ -559,15 +569,19 @@ impl Array {
                 })
                 .unzip();
 
-            let arr_a_id = ctx.arena.add(Value::Array(ty_a, firsts), ctx.span);
-            let arr_b_id = ctx.arena.add(Value::Array(ty_b, seconds), ctx.span);
+            let arr_a_id = ctx
+                .arena
+                .add(Value::Array(ty_a, Arc::new(firsts)), ctx.span);
+            let arr_b_id = ctx
+                .arena
+                .add(Value::Array(ty_b, Arc::new(seconds)), ctx.span);
 
             let arr_ty_a = ctx.type_exprs.app(TypeId::ARRAY, smallvec![ty_a]);
             let arr_ty_b = ctx.type_exprs.app(TypeId::ARRAY, smallvec![ty_b]);
             let tup_ty = ctx.type_exprs.tuple(smallvec![arr_ty_a, arr_ty_b]);
 
             Ok(ctx.arena.add(
-                Value::Tuple(tup_ty, smallvec![arr_a_id, arr_b_id]),
+                Value::Tuple(tup_ty, Arc::new(smallvec![arr_a_id, arr_b_id])),
                 ctx.span,
             ))
         })
@@ -599,7 +613,7 @@ impl Array {
                 })
                 .collect();
 
-            Ok(ctx.arena.add(Value::Array(ty, result), ctx.span))
+            Ok(ctx.arena.add(Value::Array(ty, Arc::new(result)), ctx.span))
         })
     }
 }
@@ -726,7 +740,9 @@ impl Str {
                 .collect();
 
             let str_ty = ctx.type_exprs.named(TypeId::STRING);
-            Ok(ctx.arena.add(Value::Array(str_ty, parts), ctx.span))
+            Ok(ctx
+                .arena
+                .add(Value::Array(str_ty, Arc::new(parts)), ctx.span))
         })
     }
 
@@ -740,9 +756,8 @@ impl Str {
         Box::pin(async move {
             let (_, elems) = ctx
                 .arena
-                .get_array(args[0])
+                .take_array(args[0])
                 .unwrap_or_else(|| typechecked!("String.join", "Array"));
-            let elems = elems.clone();
 
             let d_sid = ctx.arena.get_string_id(args[1]).unwrap_or_else(|| {
                 typechecked!("String.join", "delimiter must be String")
@@ -1262,13 +1277,13 @@ impl Random {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let (ty, mut elems) = ctx
+            let (ty, mut e) = ctx
                 .arena
-                .get_array(args[0])
+                .take_array(args[0])
                 .unwrap_or_else(|| typechecked!("Random.shuffle", "Array"));
 
-            elems.shuffle(&mut rand::thread_rng());
-            Ok(ctx.arena.add(Value::Array(ty, elems), ctx.span))
+            e.shuffle(&mut rand::thread_rng());
+            Ok(ctx.arena.add(Value::Array(ty, Arc::new(e)), ctx.span))
         })
     }
 
@@ -1301,7 +1316,9 @@ impl Random {
                     .choose_multiple(&mut rand::thread_rng(), n)
                     .copied()
                     .collect();
-                let arr = ctx.arena.add(Value::Array(ty, sampled), ctx.span);
+                let arr = ctx
+                    .arena
+                    .add(Value::Array(ty, Arc::new(sampled)), ctx.span);
                 Ok(ctx.result_ok(arr))
             }
         })
@@ -1338,7 +1355,7 @@ impl Map {
         Box::pin(async move {
             let k_ty = ctx.type_exprs.named(TypeId::UNKNOWN);
             let v_ty = ctx.type_exprs.named(TypeId::UNKNOWN);
-            let map = Value::Map(k_ty, v_ty, IndexMap::new());
+            let map = Value::Map(k_ty, v_ty, Arc::new(IndexMap::new()));
             Ok(ctx.arena.add(map, ctx.span))
         })
     }
@@ -1353,7 +1370,7 @@ impl Map {
         Box::pin(async move {
             let (_, _, entries) = ctx
                 .arena
-                .get_map_ref(args[0])
+                .get_map(args[0])
                 .unwrap_or_else(|| typechecked!("Map.length", "Map"));
 
             Ok(ctx.arena.add(Value::Int(entries.len() as i64), ctx.span))
@@ -1370,7 +1387,7 @@ impl Map {
         Box::pin(async move {
             let (k_ty, _, entries) = ctx
                 .arena
-                .get_map_ref(args[0])
+                .get_map(args[0])
                 .unwrap_or_else(|| typechecked!("Map.keys", "Map"));
 
             // Collect keys before mutating arena
@@ -1382,7 +1399,7 @@ impl Map {
                 .map(|k| ctx.arena.add(k.to_value(), ctx.span))
                 .collect();
 
-            Ok(ctx.arena.add(Value::Array(k_ty, keys), ctx.span))
+            Ok(ctx.arena.add(Value::Array(k_ty, Arc::new(keys)), ctx.span))
         })
     }
 
@@ -1396,12 +1413,12 @@ impl Map {
         Box::pin(async move {
             let (_, v_ty, entries) = ctx
                 .arena
-                .get_map_ref(args[0])
+                .get_map(args[0])
                 .unwrap_or_else(|| typechecked!("Map.values", "Map"));
 
             let vals: SmallVec<[ValueId; 4]> =
                 entries.values().copied().collect();
-            Ok(ctx.arena.add(Value::Array(v_ty, vals), ctx.span))
+            Ok(ctx.arena.add(Value::Array(v_ty, Arc::new(vals)), ctx.span))
         })
     }
 
@@ -1415,7 +1432,7 @@ impl Map {
         Box::pin(async move {
             let (k_ty, v_ty, entries) = ctx
                 .arena
-                .get_map_ref(args[0])
+                .get_map(args[0])
                 .unwrap_or_else(|| typechecked!("Map.entries", "Map"));
 
             // Collect entries before mutating arena
@@ -1427,13 +1444,18 @@ impl Map {
                 .iter()
                 .map(|(k, v_id)| {
                     let k_id = ctx.arena.add(k.to_value(), ctx.span);
-                    let tuple = Value::Tuple(tuple_ty, smallvec![k_id, *v_id]);
+                    let tuple = Value::Tuple(
+                        tuple_ty,
+                        Arc::new(smallvec![k_id, *v_id]),
+                    );
                     ctx.arena.add(tuple, ctx.span)
                 })
                 .collect();
 
             let arr_ty = ctx.type_exprs.app(TypeId::ARRAY, smallvec![tuple_ty]);
-            Ok(ctx.arena.add(Value::Array(arr_ty, tuples), ctx.span))
+            Ok(ctx
+                .arena
+                .add(Value::Array(arr_ty, Arc::new(tuples)), ctx.span))
         })
     }
 
@@ -1459,7 +1481,7 @@ impl Map {
 
             let (_, _, entries) = ctx
                 .arena
-                .get_map_ref(args[0])
+                .get_map(args[0])
                 .unwrap_or_else(|| typechecked!("Map.has", "Map"));
 
             let exists = entries.contains_key(&map_key);
@@ -1489,7 +1511,7 @@ impl Map {
 
             let (_, _, entries) = ctx
                 .arena
-                .get_map_ref(args[0])
+                .get_map(args[0])
                 .unwrap_or_else(|| typechecked!("Map.lookup", "Map"));
 
             match entries.get(&map_key) {
@@ -1522,14 +1544,14 @@ impl Map {
             });
 
             // Type checker guarantees key/value types match the map type
-            let (k_ty, v_ty, mut entries) = ctx
+            let (k_ty, v_ty, mut e) = ctx
                 .arena
-                .get_map(args[0])
+                .take_map(args[0])
                 .unwrap_or_else(|| typechecked!("Map.insert", "Map"));
 
-            entries.insert(map_key, args[2]);
+            e.insert(map_key, args[2]);
 
-            Ok(ctx.arena.add(Value::Map(k_ty, v_ty, entries), ctx.span))
+            Ok(ctx.arena.add(Value::Map(k_ty, v_ty, Arc::new(e)), ctx.span))
         })
     }
 
@@ -1553,14 +1575,14 @@ impl Map {
                 )
             });
 
-            let (k_ty, v_ty, mut entries) = ctx
+            let (k_ty, v_ty, mut e) = ctx
                 .arena
-                .get_map(args[0])
+                .take_map(args[0])
                 .unwrap_or_else(|| typechecked!("Map.remove", "Map"));
 
-            entries.shift_remove(&map_key);
+            e.shift_remove(&map_key);
 
-            Ok(ctx.arena.add(Value::Map(k_ty, v_ty, entries), ctx.span))
+            Ok(ctx.arena.add(Value::Map(k_ty, v_ty, Arc::new(e)), ctx.span))
         })
     }
 
@@ -1574,8 +1596,8 @@ impl Map {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let (k_ty, v_ty, mut entries_a) =
-                ctx.arena.get_map(args[0]).unwrap_or_else(|| {
+            let (k_ty, v_ty, mut merged) =
+                ctx.arena.take_map(args[0]).unwrap_or_else(|| {
                     typechecked!("Map.merge", "Map (first arg)")
                 });
 
@@ -1585,14 +1607,11 @@ impl Map {
                 });
 
             // Type checker guarantees compatible map types
-            entries_a.extend(entries_b);
-
-            let final_k_ty = k_ty;
-            let final_v_ty = v_ty;
+            merged.extend(entries_b.iter().map(|(k, v)| (k.clone(), *v)));
 
             Ok(ctx
                 .arena
-                .add(Value::Map(final_k_ty, final_v_ty, entries_a), ctx.span))
+                .add(Value::Map(k_ty, v_ty, Arc::new(merged)), ctx.span))
         })
     }
 
@@ -1667,7 +1686,9 @@ impl Map {
                 }
             });
 
-            Ok(ctx.arena.add(Value::Map(k_ty, v_ty, entries), ctx.span))
+            Ok(ctx
+                .arena
+                .add(Value::Map(k_ty, v_ty, Arc::new(entries)), ctx.span))
         })
     }
 }
@@ -2363,7 +2384,9 @@ impl Directory {
             }
 
             let path_ty = ctx.type_exprs.named(TypeId::PATH);
-            Ok(ctx.arena.add(Value::Array(path_ty, paths), ctx.span))
+            Ok(ctx
+                .arena
+                .add(Value::Array(path_ty, Arc::new(paths)), ctx.span))
         })
     }
 

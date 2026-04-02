@@ -6,6 +6,8 @@
 //! Conversion methods dispatch to `Into[T]` class methods internally; the
 //! helpers here provide a convenient API for the interpreter to use.
 
+use std::sync::Arc;
+
 use ordered_float::OrderedFloat;
 use rumps_types::Subscript;
 use smallvec::SmallVec;
@@ -35,7 +37,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .unwrap_or_else(|| invariant!("StringId in arena"));
                 rumps_types::Value::String(s.to_owned())
             }
-            Value::Json(j) => rumps_types::Value::Json(j.clone()),
+            Value::Json(j) => rumps_types::Value::Json(j.as_ref().clone()),
             Value::FilePath(id) => {
                 let s = self
                     .arena
@@ -84,7 +86,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             rumps_types::Value::String(s) => {
                 Value::String(self.arena.intern(&s))
             }
-            rumps_types::Value::Json(j) => Value::Json(j),
+            rumps_types::Value::Json(j) => Value::Json(Arc::new(j)),
         }
     }
 
@@ -327,10 +329,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                             self.arena.add(val, Span::default())
                         })
                         .collect();
-                    Value::Array(elem_ty, elems)
+                    Value::Array(elem_ty, Arc::new(elems))
                 } else {
                     // Heterogeneous arrays stay as opaque Json
-                    Value::Json(serde_json::Value::Array(arr))
+                    Value::Json(Arc::new(serde_json::Value::Array(arr)))
                 }
             }
             serde_json::Value::Object(obj) => {
@@ -343,7 +345,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                         (key, val_id)
                     })
                     .collect();
-                Value::Object(fields)
+                Value::Object(Arc::new(fields))
             }
         }
     }
@@ -365,7 +367,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .unwrap_or_else(|| invariant!("StringId in arena"));
                 Subscript::String(s.to_owned())
             }
-            Value::Json(j) => Subscript::Json(j.clone()),
+            Value::Json(j) => Subscript::Json(j.as_ref().clone()),
             Value::Unit
             | Value::Array(_, _)
             | Value::Object(_)
@@ -416,7 +418,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             Subscript::Char(c) => Value::Char(c),
             Subscript::String(s) => Value::String(self.arena.intern(&s)),
-            Subscript::Json(j) => Value::Json(j),
+            Subscript::Json(j) => Value::Json(Arc::new(j)),
         }
     }
 

@@ -5,7 +5,21 @@
 //! comparison. A type registry enables runtime type validation, `is` checks,
 //! and clear error messages.
 //!
-//! Note: Value conversion methods (to/from storage, JSON, display) live on
+//! # Clone cost
+//!
+//! Cloning a [`Value`] is always O(1). Scalar variants are `Copy`-sized, and
+//! all collection variants (`Array`, `Object`, `Tuple`, `Map`, `Json`) wrap
+//! their heap data in `Arc`, so a clone is just a refcount bump. This means
+//! patterns like `self.eval(expr).await?` (which returns `Result<Value>`) are
+//! cheap even for large collections.
+//!
+//! For mutation sites that need owned inner data (e.g. `Array.push`), use the
+//! `take_array` / `take_map` accessors on [`ValueArena`]; these use
+//! `Arc::unwrap_or_clone` to avoid a deep copy when the refcount is `1`.
+//!
+//! # Note
+//!
+//! Value conversion methods (to/from storage, JSON, display) live on
 //! `Interpreter` rather than `Value` because they require context (arena,
 //! registry) that the interpreter owns.
 
@@ -440,6 +454,23 @@ impl ValueArena {
         }
     }
 
+    /// Get owned array elements by ID, avoiding a clone when the `Arc`
+    /// refcount is `1`.
+    ///
+    /// Use this instead of `get_array` at mutation sites (push, pop, etc.)
+    /// where you need a mutable `SmallVec`.
+    pub(crate) fn take_array(
+        &self,
+        id: ValueId,
+    ) -> Option<(TypeExprId, SmallVec<[ValueId; 4]>)> {
+        match self.get(id)? {
+            Value::Array(ty, elems) => {
+                Some((*ty, Arc::unwrap_or_clone(elems.clone())))
+            }
+            _ => None,
+        }
+    }
+
     /// Get object fields by ID (no cloning; returns a reference into the `Arc`).
     ///
     /// Returns `None` if the value doesn't exist or isn't an object.
@@ -492,6 +523,23 @@ impl ValueArena {
     ) -> Option<(TypeExprId, TypeExprId, &IndexMap<MapKey, ValueId>)> {
         match self.get(id)? {
             Value::Map(k_ty, v_ty, entries) => Some((*k_ty, *v_ty, entries)),
+            _ => None,
+        }
+    }
+
+    /// Get owned map contents by ID, avoiding a clone when the `Arc`
+    /// refcount is `1`.
+    ///
+    /// Use this instead of `get_map` at mutation sites (insert, remove, etc.)
+    /// where you need a mutable `IndexMap`.
+    pub(crate) fn take_map(
+        &self,
+        id: ValueId,
+    ) -> Option<(TypeExprId, TypeExprId, IndexMap<MapKey, ValueId>)> {
+        match self.get(id)? {
+            Value::Map(k_ty, v_ty, entries) => {
+                Some((*k_ty, *v_ty, Arc::unwrap_or_clone(entries.clone())))
+            }
             _ => None,
         }
     }
