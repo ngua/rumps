@@ -11,7 +11,7 @@ use smallvec::{smallvec, SmallVec};
 
 use super::{ClassInstanceInput, InferCtx};
 use crate::ast::{
-    AstTypeExpr, AstTypeExprId, BindingPattern, Stmt, StmtId, TypeParam,
+    AstTypeExpr, AstTypeExprId, BindingPattern, Import, Stmt, StmtId, TypeParam,
 };
 use crate::intern::{QualifiedName, StringId};
 use crate::typecheck::error::TypeError;
@@ -45,7 +45,13 @@ impl InferCtx<'_> {
             }
         });
 
-        // Phase 2: Process imports (populates imported_types)
+        // Phase 2: Process imports (populates imported_types).
+        // Auto-import the `Prelude` module first so its members are always
+        // in scope, then process user imports (which may shadow them).
+        {
+            let pid = self.env.intern(crate::env::PRELUDE_MODULE);
+            self.import_stmt(&Import::wildcard(pid), Span::default());
+        }
         stmts.iter().for_each(|&id| {
             let stmt = self.ast.get_stmt(id).cloned();
             if let Some(Stmt::Import(ref import)) = stmt {

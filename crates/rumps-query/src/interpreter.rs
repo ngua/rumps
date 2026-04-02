@@ -262,6 +262,13 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         interner: StringInterner,
     ) -> Result<Self> {
         let mut arena = ValueArena::with_interner(interner);
+
+        // Pre-intern builtin module names so all interner clones (Environment,
+        // TypeEnv) share the same `StringId`s.
+        crate::env::BUILTIN_MODULE_NAMES.iter().for_each(|n| {
+            arena.strings.intern(n);
+        });
+
         let mut type_exprs = TypeExprArena::new();
         let mut registry = TypeRegistry::new(&mut arena, &mut type_exprs);
 
@@ -330,6 +337,13 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
     ) -> Result<Self> {
         // Pass 1: Hoist function and module declarations for forward references
         self.hoist_declarations(stmts).await?;
+
+        // Auto-import the `Prelude` module so its members are in scope
+        {
+            let pid = self.arena.strings.intern(crate::env::PRELUDE_MODULE);
+            self.import(&Import::wildcard(pid), Span::default())?;
+        }
+
         // Pass 2: Execute statements (mode-dependent)
         if interactive {
             self.stmts(stmts).await?

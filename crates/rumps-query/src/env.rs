@@ -16,8 +16,11 @@ use crate::ClassId;
 /// during resolution and registered at interpreter startup.
 pub(crate) const BUILTIN_MODULE_NAMES: &[&str] = &[
     "Array", "String", "Math", "Random", "Map", "Time", "Option", "Result",
-    "Io",
+    "Io", "Prelude",
 ];
+
+/// Name of the module that is automatically imported into every scope.
+pub(crate) const PRELUDE_MODULE: &str = "Prelude";
 
 use futures::future::BoxFuture;
 use smallvec::{smallvec, SmallVec};
@@ -1013,7 +1016,7 @@ impl Environment {
             constraints: smallvec![],
         };
 
-        // --- Array module ---
+        // Array module
         // `push: (Array[T], T) -> Array[T]`
         let push_ty = a.func(smallvec![arr_v0, v0], arr_v0);
         // `pop: (Array[T]) -> Array[T]`
@@ -1117,7 +1120,7 @@ impl Environment {
             ),
         );
 
-        // --- String module ---
+        // String module
         let a = &mut self.ty_arena;
         let str_to_int = a.func(smallvec![TyArena::STRING], TyArena::INT);
         let str_to_str = a.func(smallvec![TyArena::STRING], TyArena::STRING);
@@ -1200,7 +1203,7 @@ impl Environment {
             ),
         );
 
-        // --- Math module ---
+        // Math module
         let a = &mut self.ty_arena;
         let v0 = a.var(0);
 
@@ -1343,7 +1346,7 @@ impl Environment {
         self.modules
             .insert(math_id, math_module.with_submodule(trig_id, trig_mod));
 
-        // --- Random module ---
+        // Random module
         let a = &mut self.ty_arena;
         let v0 = a.var(0);
         let arr_v0 = a.array(v0);
@@ -1425,7 +1428,7 @@ impl Environment {
             ),
         );
 
-        // --- Map module ---
+        // Map module
         let a = &mut self.ty_arena;
         let v0 = a.var(0);
         let v1 = a.var(1);
@@ -1513,7 +1516,7 @@ impl Environment {
             ),
         );
 
-        // --- Time module ---
+        // Time module
         let a = &mut self.ty_arena;
         let thunk_time = a.func(smallvec![], TyArena::TIME);
         let time_parse_ret = a.result(TyArena::TIME, TyArena::STRING);
@@ -1603,7 +1606,7 @@ impl Environment {
             ),
         );
 
-        // --- Option module ---
+        // Option module
         let a = &mut self.ty_arena;
         let v0 = a.var(0);
         let v1 = a.var(1);
@@ -1663,7 +1666,7 @@ impl Environment {
             ),
         );
 
-        // --- Result module ---
+        // Result module
         let a = &mut self.ty_arena;
         let v0 = a.var(0);
         let v1 = a.var(1);
@@ -1738,7 +1741,7 @@ impl Environment {
         // Build Directory submodule first to avoid double mutable borrow
         let directory_module = self.build_directory_module();
 
-        // --- Io module ---
+        // Io module
         let a = &mut self.ty_arena;
         let thunk_str = a.func(smallvec![], TyArena::STRING);
         let str_to_unit = a.func(smallvec![TyArena::STRING], TyArena::UNIT);
@@ -1777,6 +1780,14 @@ impl Environment {
         )
         .with_submodule(dir_id, directory_module);
         self.modules.insert(io_id, io_mod);
+
+        // Prelude module
+        // Auto-imported into every scope; currently exports nothing.
+        let prelude_id = self.consts.strings.intern("Prelude");
+        self.modules.insert(
+            prelude_id,
+            Module::from_prims(&[], &mut self.consts.strings),
+        );
     }
 
     /// Build the `Io.Directory` submodule.

@@ -7,7 +7,7 @@
 #![allow(dead_code)]
 
 use rumps_types::Name;
-use smallvec::SmallVec;
+use smallvec::{smallvec, SmallVec};
 
 use crate::intern::{QualifiedName, StringId, StringInterner};
 use crate::typecheck::TypeClass;
@@ -1152,6 +1152,16 @@ pub(crate) struct Import {
     pub(crate) path: SmallVec<[StringId; 2]>,
     /// Import items.
     pub(crate) items: Vec<ImportItem>,
+}
+
+impl Import {
+    /// Construct a wildcard import for the given module name.
+    pub(crate) fn wildcard(module: StringId) -> Self {
+        Self {
+            path: smallvec![module],
+            items: vec![ImportItem::Wildcard],
+        }
+    }
 }
 
 /// A method definition in a class instance.
