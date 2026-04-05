@@ -1,5 +1,5 @@
 ; Array module functions
-; Tests Mappable:map, Filterable:filter, Foldable:reduce, Iterable:foreach
+; Tests Mappable:map, Filterable:filter, Foldable:reduce, foreach
 
 fun square(n: Int) -> Int { n * n }
 
@@ -122,20 +122,20 @@ fun main() {
   let doubled-nested = Mappable:map(arr => Mappable:map(x => x * 2, arr), nested)
   write doubled-nested  ; [[2, 4], [6, 8]]
 
-  ; === Iterable:foreach ===
+  ; === foreach ===
 
-  ; Iterable:foreach for side effects (outputs each element)
+  ; foreach for side effects (outputs each element)
   write "foreach:"
-  let fe-result = Iterable:foreach(x => { write x }, [10, 20, 30])
+  let fe-result = foreach(x => { write x }, [10, 20, 30])
   write fe-result  ; Unit
 
-  ; Iterable:foreach on empty array (no side effects)
-  let fe-empty = Iterable:foreach(x => { write x }, [])
+  ; foreach on empty array (no side effects)
+  let fe-empty = foreach(x => { write x }, [])
   write fe-empty  ; Unit
 
-  ; Iterable:foreach with range
+  ; foreach with range (collect first; Range is Iterable but not Mappable)
   write "range foreach:"
-  let fe-range = Iterable:foreach(n => { write n }, 1 .. 4)
+  let fe-range = foreach(n => { write n }, Iterable:collect(1 .. 4))
   write fe-range  ; Unit
 
   ; === Array.zip ===

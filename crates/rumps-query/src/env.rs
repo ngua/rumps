@@ -977,12 +977,13 @@ impl Environment {
     /// - `Random`: `random`, `range`, `int`, `bool`, `choice`, `shuffle`,
     ///   `sample`, `uuid`
     ///
-    /// Note: Iterable higher-order functions (`map`, `filter`, `reduce`, `foreach`)
+    /// Note: higher-order functions (`map`, `filter`, `reduce`, `foreach`)
     /// are handled specially by the interpreter. We register placeholders here
     /// so that `module_fn_exists` returns true for name resolution.
     fn register_builtins(&mut self) {
         use crate::primitives::{
-            Array, Io, Map, Math, Opt, Prim, Random, Res, Str, Time, Trig,
+            Array, Io, Map, Math, Opt, Prelude, Prim, Random, Res, Str, Time,
+            Trig,
         };
 
         let a = &mut self.ty_arena;
@@ -1782,11 +1783,34 @@ impl Environment {
         self.modules.insert(io_id, io_mod);
 
         // Prelude module
-        // Auto-imported into every scope; currently exports nothing.
+        // Auto-imported into every scope.
+        let a = &mut self.ty_arena;
+        let v0 = a.var(0);
+        let v1 = a.var(1);
+        // `foreach: forall A, B, F: Mappable. ((A) -> B, F[A]) -> Unit`
+        let foreach_cb = a.func(smallvec![v0], v1);
+        let tv2_of_v0 = a.hkt(TyVar::new(2), smallvec![v0]);
+        let foreach_ty =
+            a.func(smallvec![foreach_cb, tv2_of_v0], TyArena::UNIT);
+
         let prelude_id = self.consts.strings.intern("Prelude");
         self.modules.insert(
             prelude_id,
-            Module::from_prims(&[], &mut self.consts.strings),
+            Module::from_prims(
+                &[PrimDef {
+                    name: "foreach",
+                    f: Prelude::placeholder,
+                    ty: Scheme {
+                        vars: vec![TyVar::new(0), TyVar::new(1), TyVar::new(2)],
+                        ty: foreach_ty,
+                        constraints: smallvec![(
+                            TyVar::new(2),
+                            TypeClass::Hkt(ClassId::MAPPABLE, None)
+                        )],
+                    },
+                }],
+                &mut self.consts.strings,
+            ),
         );
     }
 

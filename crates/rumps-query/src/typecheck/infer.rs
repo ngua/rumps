@@ -638,11 +638,16 @@ impl<'a> InferCtx<'a> {
             let main_err = self.env.lookup(main_id).map_or_else(
                 || Some(TypeError::MissingMain(file_span)),
                 |scheme| {
-                    if scheme.ty == expected {
+                    // Resolve through union-find; the scheme's `ty` may
+                    // contain unresolved vars (e.g. from `Callable`
+                    // constraints on the last expression in `main`)
+                    let resolved =
+                        self.uf.resolve(scheme.ty, &mut self.ty_arena);
+                    if resolved == expected {
                         None
                     } else {
                         Some(TypeError::InvalidMainSignature {
-                            got: scheme.ty,
+                            got: resolved,
                             span: file_span,
                         })
                     }

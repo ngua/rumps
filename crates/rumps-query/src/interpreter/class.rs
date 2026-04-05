@@ -20,7 +20,7 @@
 //! - `Mappable`: `map`
 //! - `Filterable`: `filter`
 //! - `Foldable`: `reduce`
-//! - `Iterable`: `foreach`, `length`, `contains`, `reverse`
+//! - `Iterable`: `length`, `contains`, `reverse`, `collect`
 //!
 //! Higher-order class methods use a continuation/trampoline pattern defined in
 //! the [`hof`](super::hof) module.
@@ -360,11 +360,6 @@ impl ClassMethods {
             ClassId::FOLDABLE,
             i.intern("reduce"),
             MethodFn::Hof(Foldable::reduce),
-        );
-        self.register(
-            ClassId::ITERABLE,
-            i.intern("foreach"),
-            MethodFn::Hof(Iterable::foreach),
         );
         self.register(
             ClassId::ITERABLE,
@@ -2538,85 +2533,10 @@ impl Foldable {
     }
 }
 
-/// `Iterable` class: `foreach` method.
+/// `Iterable` class: `length`, `contains`, `reverse`, `collect` methods.
 pub(crate) struct Iterable;
 
 impl Iterable {
-    /// Start `Iterable:foreach`; returns first invocation or done for empty.
-    pub(crate) fn foreach(
-        ctx: &mut ClassCtx<'_>,
-        args: &[ValueId],
-    ) -> Result<MethodResult> {
-        let fn_id = *args
-            .first()
-            .unwrap_or_else(|| typechecked!("Iterable:foreach", "2 args"));
-        let src = *args
-            .get(1)
-            .unwrap_or_else(|| typechecked!("Iterable:foreach", "2 args"));
-
-        // Extract data before second match to satisfy borrow checker.
-        enum Kind {
-            EmptyArray,
-            Array(ValueId),
-            EmptyRange,
-            Range(i64, i64),
-            Other,
-        }
-        // Helper to unwrap Union/Newtype to get inner value
-        fn unwrap_src(arena: &ValueArena, id: ValueId) -> Option<&Value> {
-            arena.get(id).and_then(|v| match v {
-                Value::Union(_, inner) | Value::Newtype(_, inner) => {
-                    unwrap_src(arena, *inner)
-                }
-                other => Some(other),
-            })
-        }
-        let kind = match unwrap_src(ctx.arena, src) {
-            Some(Value::Array(_, elems)) if elems.is_empty() => {
-                Kind::EmptyArray
-            }
-            Some(Value::Array(_, elems)) => Kind::Array(elems[0]),
-            Some(Value::Range {
-                start,
-                end,
-                inclusive,
-            }) => {
-                let actual = if *inclusive { *end + 1 } else { *end };
-                if *start >= actual {
-                    Kind::EmptyRange
-                } else {
-                    Kind::Range(*start, actual)
-                }
-            }
-            _ => Kind::Other,
-        };
-        match kind {
-            Kind::EmptyArray | Kind::EmptyRange => {
-                Ok(MethodResult::Done(Value::Unit))
-            }
-            Kind::Array(first) => Ok(MethodResult::Invoke(Continuation {
-                callee: fn_id,
-                args: smallvec![first],
-                state: HofState::ForeachArray {
-                    source: src,
-                    idx: 0,
-                },
-            })),
-            Kind::Range(start, end) => {
-                let int_id = ctx.arena.add(Value::Int(start), ctx.span);
-                Ok(MethodResult::Invoke(Continuation {
-                    callee: fn_id,
-                    args: smallvec![int_id],
-                    state: HofState::ForeachRange {
-                        current: start + 1,
-                        end,
-                    },
-                }))
-            }
-            Kind::Other => typechecked!("Iterable:foreach", "Array or Range"),
-        }
-    }
-
     /// `Iterable:length`; returns the number of elements.
     pub(crate) fn length(_: &mut ClassCtx<'_>, v: &Value) -> Result<Value> {
         Ok(match v {

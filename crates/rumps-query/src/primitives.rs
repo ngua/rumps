@@ -3041,3 +3041,11 @@ impl Directory {
         })
     }
 }
+
+/// Primitives for the `Prelude` module.
+///
+/// `foreach` is a HoF intercepted in `invoke_module_fn`; only a placeholder
+/// is registered here.
+pub(crate) struct Prelude;
+
+impl Prim for Prelude {}

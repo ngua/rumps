@@ -102,10 +102,6 @@ pub(crate) enum HofState {
         end: i64,
         acc: ValueId,
     },
-    /// `Iterable:foreach` over array.
-    ForeachArray { source: ValueId, idx: usize },
-    /// `Iterable:foreach` over range.
-    ForeachRange { current: i64, end: i64 },
     /// `Chainable:chain`; single invocation, wraps result.
     Chain { wrapper: ChainWrapper },
     /// `Array.zip-with`.
@@ -349,41 +345,6 @@ pub(crate) fn resume(
                         current: current + 1,
                         end,
                         acc: result,
-                    },
-                }))
-            }
-        }
-        HofState::ForeachArray { source, idx } => {
-            let next_idx = idx + 1;
-            match ctx.arena.get(source) {
-                Some(Value::Array(_, elems)) if next_idx >= elems.len() => {
-                    Ok(MethodResult::Done(Value::Unit))
-                }
-                Some(Value::Array(_, elems)) => {
-                    Ok(MethodResult::Invoke(Continuation {
-                        callee: cont.callee,
-                        args: smallvec![elems[next_idx]],
-                        state: HofState::ForeachArray {
-                            source,
-                            idx: next_idx,
-                        },
-                    }))
-                }
-                _ => invariant!("ForeachArray source must be Array"),
-            }
-        }
-        HofState::ForeachRange { current, end } => {
-            // `current` is the next value to process.
-            if current >= end {
-                Ok(MethodResult::Done(Value::Unit))
-            } else {
-                let int_id = ctx.arena.add(Value::Int(current), ctx.span);
-                Ok(MethodResult::Invoke(Continuation {
-                    callee: cont.callee,
-                    args: smallvec![int_id],
-                    state: HofState::ForeachRange {
-                        current: current + 1,
-                        end,
                     },
                 }))
             }
@@ -656,11 +617,22 @@ pub(crate) fn resume_sort_by(
     }
 }
 
+/// Whether to keep or discard a module HoF's result after the trampoline
+/// completes. Used to implement functions like `foreach` that delegate to an
+/// existing HoF (e.g. `Mappable:map`) but discard the produced value.
+#[derive(Clone, Copy)]
+pub(crate) enum HofResult {
+    /// Return the value produced by the HoF directly.
+    Keep,
+    /// Discard the result, returning `Unit`.
+    Discard,
+}
+
 /// Registry for module-level HoFs (e.g., `Option.map`, `Array.sort-by`).
 ///
 /// Keyed by `(module_name, function_name)` pairs as `StringId`s.
 pub(crate) struct ModuleHofs {
-    fns: HashMap<(StringId, StringId), HofMethodFn>,
+    fns: HashMap<(StringId, StringId), (HofMethodFn, HofResult)>,
 }
 
 impl ModuleHofs {
@@ -672,14 +644,21 @@ impl ModuleHofs {
         m
     }
 
-    fn register(&mut self, module: StringId, name: StringId, f: HofMethodFn) {
-        self.fns.insert((module, name), f);
+    fn register(
+        &mut self,
+        module: StringId,
+        name: StringId,
+        f: HofMethodFn,
+        result: HofResult,
+    ) {
+        self.fns.insert((module, name), (f, result));
     }
 
     /// Look up a module HoF by path.
-    ///
-    /// Returns `Some(f)` if `path` matches a registered HoF, `None` otherwise.
-    pub(crate) fn lookup(&self, path: &[StringId]) -> Option<HofMethodFn> {
+    pub(crate) fn lookup(
+        &self,
+        path: &[StringId],
+    ) -> Option<(HofMethodFn, HofResult)> {
         match path {
             [module, name] => self.fns.get(&(*module, *name)).copied(),
             _ => None,
@@ -690,16 +669,22 @@ impl ModuleHofs {
         let option = interner.intern("Option");
         let result = interner.intern("Result");
         let array = interner.intern("Array");
+        let prelude = interner.intern("Prelude");
         let map = interner.intern("map");
         let map_err = interner.intern("map-err");
         let zip_with = interner.intern("zip-with");
         let sort_by = interner.intern("sort-by");
+        let foreach = interner.intern("foreach");
 
-        self.register(option, map, OptionHof::map);
-        self.register(result, map, ResultHof::map);
-        self.register(result, map_err, ResultHof::map_err);
-        self.register(array, zip_with, ArrayHof::zip_with);
-        self.register(array, sort_by, ArrayHof::sort_by);
+        let k = HofResult::Keep;
+        self.register(option, map, OptionHof::map, k);
+        self.register(result, map, ResultHof::map, k);
+        self.register(result, map_err, ResultHof::map_err, k);
+        self.register(array, zip_with, ArrayHof::zip_with, k);
+        self.register(array, sort_by, ArrayHof::sort_by, k);
+        // `Prelude::foreach` reuses `Mappable:map` but discards the mapped
+        // collection, evaluating to `Unit` instead.
+        self.register(prelude, foreach, Mappable::map, HofResult::Discard);
     }
 }
 

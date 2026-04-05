@@ -217,19 +217,6 @@ impl ClassRegistry {
                         )),
                     ),
                     (
-                        "foreach",
-                        MethodSpec::Standard({
-                            let cb = arena.func(smallvec![v0], TyArena::UNIT);
-                            hkt2(
-                                arena.func(
-                                    smallvec![cb, tv1_of_v0],
-                                    TyArena::UNIT,
-                                ),
-                                ClassId::ITERABLE,
-                            )
-                        }),
-                    ),
-                    (
                         "collect",
                         MethodSpec::Standard(hkt2(
                             arena.func(smallvec![tv1_of_v0], array_v0),

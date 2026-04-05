@@ -60,8 +60,8 @@ fun main() {
 
   let arr: Array[Int | String] = [1, "two", 3, "four"]
 
-  ; Iterable:foreach works on union arrays
-  Iterable:foreach(x => {
+  ; foreach works on union arrays
+  foreach(x => {
     match x {
       n is Int => { write "int: {n}" }
       s is String => { write "str: {s}" }

@@ -267,8 +267,14 @@ impl<I: IoContext> Interpreter<'_, I> {
         // signature only receives values; it has no access to the interpreter's
         // closure invocation machinery (`invoke_callable`). See `primitives.rs`
         // module docs for details.
-        if let Some(hof) = self.module_hofs.lookup(path) {
-            self.run_hof_trampoline(hof, args, span).await
+        if let Some((hof, result)) = self.module_hofs.lookup(path) {
+            let v = self.run_hof_trampoline(hof, args, span).await?;
+            // Some HoFs (e.g. `foreach`) delegate to another HoF but discard
+            // the produced value, evaluating to `Unit` instead.
+            Ok(match result {
+                super::hof::HofResult::Keep => v,
+                super::hof::HofResult::Discard => Value::Unit,
+            })
         } else if let Some(fn_def) = self.env.get_user_module_fn(path).cloned()
         {
             // User-defined module function

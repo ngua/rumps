@@ -39,9 +39,9 @@ fun main() {
   write "Reversed array: {Iterable:reverse(arr)}"
   write "Reversed range: {Iterable:reverse(1 ..= 5)}"
 
-  ; Iterable:foreach on Array and Range
-  Iterable:foreach(x => write "foreach array: {x}", [10, 20])
-  Iterable:foreach(x => write "foreach range: {x}", 1 ..= 3)
+  ; foreach on Array and Range (Range must be collected first)
+  foreach(x => write "foreach array: {x}", [10, 20])
+  foreach(x => write "foreach range: {x}", Iterable:collect(1 ..= 3))
 }
 
 ; Generic functions with Iterable constraint
