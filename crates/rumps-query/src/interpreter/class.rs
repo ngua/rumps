@@ -1376,6 +1376,23 @@ impl Into {
                     }))
             }
 
+            // Range -> Array[Int]
+            (
+                Value::Range {
+                    start,
+                    end,
+                    inclusive,
+                },
+                Ty::Named(id, _),
+            ) if *id == TypeId::ARRAY => {
+                let end = if *inclusive { *end + 1 } else { *end };
+                let elem_ty = ctx.type_exprs.named(TypeId::INT);
+                let elems = (*start..end)
+                    .map(|n| ctx.arena.add(Value::Int(n), ctx.span))
+                    .collect();
+                Ok(Value::Array(elem_ty, Arc::new(elems)))
+            }
+
             // Storable narrowing: `Storable AS T` where T is a Storable member.
             // This is the ONLY case that requires runtime type checking; all other
             // casts are validated by the type checker. If the value doesn't match

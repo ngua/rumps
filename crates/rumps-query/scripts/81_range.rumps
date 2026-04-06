@@ -63,4 +63,10 @@ fun main() {
   ; Range with named function (collect first)
   let doubles = Mappable:map(double, Iterable:collect(1 .. 5))
   write doubles  ; [2, 4, 6, 8]
+
+  ; Range to `Array[Int]` via `Into` (`as` cast)
+  write ((1 .. 5) as Array[Int])      ; [1, 2, 3, 4]
+  write ((1 ..= 5) as Array[Int])     ; [1, 2, 3, 4, 5]
+  write ((3 .. 3) as Array[Int])      ; []
+  write ((-2 .. 2) as Array[Int])     ; [-2, -1, 0, 1]
 }

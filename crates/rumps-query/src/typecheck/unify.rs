@@ -1634,6 +1634,9 @@ impl<'a> InferCtx<'a> {
                     (Ty::Named(id, _), Ty::FilePath)
                         if *id == crate::TypeId::PATH => {}
 
+                    // Range -> Array[Int]
+                    (Ty::Range, Ty::Array(elem)) if *elem == TyArena::INT => {}
+
                     // Storable to member type
                     (Ty::Union(Some(id), _), _)
                         if *id == crate::TypeId::STORABLE =>
