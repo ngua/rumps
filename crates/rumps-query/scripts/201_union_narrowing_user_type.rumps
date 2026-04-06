@@ -1,0 +1,16 @@
+; Narrowing a user-defined union via annotation should be rejected.
+; Use MATCH/IS for runtime type narrowing instead.
+
+union Num-or-str = Int | String
+
+fun get-num-or-str(x: Int) -> Num-or-str {
+  match x {
+    0 => { "hello" }
+    _ => { 42 }
+  }
+}
+
+fun main() {
+  let v: Int = get-num-or-str(1)
+  write v
+}

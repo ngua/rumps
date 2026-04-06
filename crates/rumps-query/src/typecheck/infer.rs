@@ -292,6 +292,12 @@ pub(crate) struct InferCtx<'a> {
     /// Contrast with inference variables (from method calls, etc.) which are NOT
     /// in this set and CAN be pattern-matched since they will unify to concrete types.
     pub(super) poly_param_vars: HashSet<TyVar>,
+    /// Recorded `let` annotations for post-solve union narrowing validation.
+    ///
+    /// Each entry is `(rhs_ty, ann_ty, span)`. After constraint solving resolves
+    /// type variables, these are checked: if `rhs_ty` resolved to a union and
+    /// `ann_ty` did not, the annotation illegally narrows a union type.
+    let_annotations: Vec<(TyId, TyId, Span)>,
 }
 
 impl<'a> InferCtx<'a> {
@@ -344,6 +350,7 @@ impl<'a> InferCtx<'a> {
             current_module: None,
             interactive,
             poly_param_vars: HashSet::new(),
+            let_annotations: Vec::new(),
         }
     }
 
@@ -574,8 +581,32 @@ impl<'a> InferCtx<'a> {
         });
     }
 
-    /// Check for remaining unresolved type variables and emit errors.
+    /// Check for illegal union narrowing in `let` annotations.
     ///
+    /// After constraint solving, if a `let` binding's RHS resolved to a
+    /// union type but the annotation is not a union, the user is attempting
+    /// to narrow a union via annotation. This requires `MATCH`/`IS` instead.
+    pub(crate) fn check_let_union_narrowing(&mut self) {
+        std::mem::take(&mut self.let_annotations)
+            .into_iter()
+            .for_each(|(rhs, ann, span)| {
+                let rhs = self.uf.resolve(rhs, &mut self.ty_arena);
+                let ann = self.uf.resolve(ann, &mut self.ty_arena);
+                if matches!(self.ty_arena.get(rhs), Ty::Union(..))
+                    && !matches!(
+                        self.ty_arena.get(ann),
+                        Ty::Union(..) | Ty::Error
+                    )
+                {
+                    self.errors.push(TypeError::UnionNarrowing {
+                        union_ty: rhs,
+                        narrow_ty: ann,
+                        span,
+                    });
+                }
+            });
+    }
+
     /// After constraint solving and substitution application, any remaining
     /// `Ty::Var` or `Ty::Unknown` indicates incomplete inference. This emits
     /// `MissingAnnotation` errors for such cases.
@@ -687,6 +718,9 @@ impl<'a> InferCtx<'a> {
         self.resolve_deferred_instance_calls();
 
         self.uf.disable_zonk_cache();
+
+        // Check for illegal union narrowing via let annotations
+        self.check_let_union_narrowing();
 
         // Check for remaining unresolved type variables
         self.check_remaining_unknowns();

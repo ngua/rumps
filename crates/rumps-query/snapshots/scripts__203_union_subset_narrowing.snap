@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Narrowing a 3-member union to a 2-member subset via annotation\n; is caught by normal type checking (type mismatch).\n\nunion ABC = Int | String | Bool\n\nfun get-abc(x: Int) -> ABC {\n  match x {\n    0 => { true }\n    1 => { \"hello\" }\n    _ => { 42 }\n  }\n}\n\nfun main() {\n  let v: Int | String = get-abc(1)\n  write v\n}\n"
+---
+ERROR: type mismatch: expected `Int | String`, got `ABC`

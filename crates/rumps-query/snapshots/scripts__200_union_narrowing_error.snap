@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Union narrowing via type annotation should be rejected.\n; Use MATCH/IS for runtime type narrowing instead.\n\nfun main() {\n  let r = 1 ..= 10\n  ; reverse returns Array[Int] | Range; cannot narrow to Array[Int]\n  let revd: Array[Int] = reverse(r)\n  write revd\n}\n"
+---
+ERROR: cannot narrow union `Array[Int] | Range` to `Array[Int]` via type annotation

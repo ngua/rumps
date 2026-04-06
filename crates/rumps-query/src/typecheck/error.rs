@@ -352,6 +352,19 @@ pub(crate) enum TypeError {
         span: Span,
     },
 
+    /// Attempt to narrow a union type via type annotation.
+    ///
+    /// Union types cannot be narrowed to a member type through `LET`
+    /// annotations; use `MATCH`/`IS` for runtime type narrowing instead.
+    #[error(
+        "cannot narrow union `{union_ty}` to `{narrow_ty}` via type annotation"
+    )]
+    UnionNarrowing {
+        union_ty: TyId,
+        narrow_ty: TyId,
+        span: Span,
+    },
+
     /// Invalid type cast.
     ///
     /// The source type cannot be cast to the target type. Suggests alternatives
@@ -605,6 +618,7 @@ impl TypeError {
             | Self::NegativeWord(span)
             | Self::NotAUnionMember { span, .. }
             | Self::IncompatibleVariantPattern { span, .. }
+            | Self::UnionNarrowing { span, .. }
             | Self::InvalidCast { span, .. }
             | Self::InvalidRead { span, .. }
             | Self::Custom { span, .. }
@@ -804,6 +818,14 @@ impl TypeError {
                     help,
                 )
             }
+            Self::UnionNarrowing { union_ty, narrow_ty, .. } => (
+                format!(
+                    "cannot narrow union `{}` to `{}` via type annotation",
+                    p.format(*union_ty),
+                    p.format(*narrow_ty)
+                ),
+                Some("use `MATCH`/`IS` for runtime type narrowing".to_owned()),
+            ),
             Self::InvalidCast { from, to, .. } => (
                 format!(
                     "cannot cast `{}` to `{}`",

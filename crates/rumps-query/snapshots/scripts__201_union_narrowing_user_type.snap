@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Narrowing a user-defined union via annotation should be rejected.\n; Use MATCH/IS for runtime type narrowing instead.\n\nunion Num-or-str = Int | String\n\nfun get-num-or-str(x: Int) -> Num-or-str {\n  match x {\n    0 => { \"hello\" }\n    _ => { 42 }\n  }\n}\n\nfun main() {\n  let v: Int = get-num-or-str(1)\n  write v\n}\n"
+---
+ERROR: cannot narrow union `Num-or-str` to `Int` via type annotation

@@ -698,6 +698,11 @@ impl InferCtx<'_> {
         let rhs_ty = self.expr(rhs);
         self.unify(rhs_ty, ann_ty, span);
 
+        // Record for post-solve union narrowing check. At this point
+        // `rhs_ty` may be a type variable (e.g. from a function call);
+        // we defer the check until constraint solving resolves it.
+        self.let_annotations.push((rhs_ty, ann_ty, span));
+
         // Extensible records: if rhs is an object and annotation
         // is an alias to object, keep the full object type to
         // preserve extra fields

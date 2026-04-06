@@ -1,0 +1,17 @@
+; Narrowing a 3-member union to a 2-member subset via annotation
+; is caught by normal type checking (type mismatch).
+
+union ABC = Int | String | Bool
+
+fun get-abc(x: Int) -> ABC {
+  match x {
+    0 => { true }
+    1 => { "hello" }
+    _ => { 42 }
+  }
+}
+
+fun main() {
+  let v: Int | String = get-abc(1)
+  write v
+}
