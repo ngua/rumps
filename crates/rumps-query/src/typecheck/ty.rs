@@ -203,20 +203,6 @@ impl ClassRegistry {
                         )),
                     ),
                     (
-                        "contains",
-                        MethodSpec::Standard(hkt2(
-                            arena.func(smallvec![tv1_of_v0, v0], TyArena::BOOL),
-                            ClassId::ITERABLE,
-                        )),
-                    ),
-                    (
-                        "reverse",
-                        MethodSpec::Standard(hkt2(
-                            arena.func(smallvec![tv1_of_v0], array_v0),
-                            ClassId::ITERABLE,
-                        )),
-                    ),
-                    (
                         "collect",
                         MethodSpec::Standard(hkt2(
                             arena.func(smallvec![tv1_of_v0], array_v0),

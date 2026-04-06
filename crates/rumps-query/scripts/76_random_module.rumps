@@ -62,11 +62,11 @@ fun main() {
   write Iterable:length(shuffled)  ; 5
 
   ; All elements preserved (check contains)
-  write Iterable:contains(shuffled, 1)  ; true
-  write Iterable:contains(shuffled, 2)  ; true
-  write Iterable:contains(shuffled, 3)  ; true
-  write Iterable:contains(shuffled, 4)  ; true
-  write Iterable:contains(shuffled, 5)  ; true
+  write contains(shuffled, 1)  ; true
+  write contains(shuffled, 2)  ; true
+  write contains(shuffled, 3)  ; true
+  write contains(shuffled, 4)  ; true
+  write contains(shuffled, 5)  ; true
 
   ; Empty shuffle
   let shuffle-empty = Random.shuffle([])

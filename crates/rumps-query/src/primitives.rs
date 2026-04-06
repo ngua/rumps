@@ -12,9 +12,9 @@
 //! - [`Array`]: `push`, `pop`, `head`, `tail`, `sort`, `slice`, `concat`,
 //!   `sort-by`, `zip`, `zip-with`, `unzip`, `intersperse`
 //!
-//! Iterable operations (`length`, `contains`, `reverse`, `map`, `filter`,
-//! `reduce`, `foreach`) are now handled via class method syntax
-//! (e.g. `Iterable:length`, `Mappable:map`).
+//! Iterable operations (`length`, `collect`, `map`, `filter`, `reduce`)
+//! are handled via class method syntax (e.g. `Iterable:length`, `Mappable:map`).
+//! `foreach`, `contains`, and `reverse` are standalone Prelude functions.
 //!
 //! When adding a new RUMPS module, create a new type implementing [`Prim`]
 //! and add its functions as associated functions.
@@ -3045,7 +3045,97 @@ impl Directory {
 /// Primitives for the `Prelude` module.
 ///
 /// `foreach` is a HoF intercepted in `invoke_module_fn`; only a placeholder
-/// is registered here.
+/// is registered here. `contains` and `reverse` are real primitives.
 pub(crate) struct Prelude;
 
 impl Prim for Prelude {}
+
+impl Prelude {
+    /// `forall T, F: Iterable. (F[T], T) -> Bool`
+    ///
+    /// Checks if `needle` is contained in the iterable.
+    pub(crate) fn contains<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            let haystack = ctx
+                .arena
+                .get(args[0])
+                .cloned()
+                .unwrap_or_else(|| typechecked!("contains", "haystack"));
+            let needle = ctx
+                .arena
+                .get(args[1])
+                .cloned()
+                .unwrap_or_else(|| typechecked!("contains", "needle"));
+            let found = match &haystack {
+                Value::Array(_, elems) => elems.iter().any(|eid| {
+                    ctx.arena.get(*eid).is_some_and(|v| *v == needle)
+                }),
+                Value::Range {
+                    start,
+                    end,
+                    inclusive,
+                } => match &needle {
+                    Value::Int(n) => {
+                        if *inclusive {
+                            *n >= *start && *n <= *end
+                        } else {
+                            *n >= *start && *n < *end
+                        }
+                    }
+                    _ => false,
+                },
+                _ => typechecked!("contains", "Iterable"),
+            };
+            Ok(ctx.arena.add(Value::Bool(found), ctx.span))
+        })
+    }
+
+    /// `forall T. (Array[T] | Range) -> Array[T] | Range`
+    ///
+    /// Reverses an array or range. Range reversal swaps bounds
+    /// without materialization.
+    pub(crate) fn reverse<'a>(
+        ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move {
+            let v = ctx
+                .arena
+                .get(args[0])
+                .cloned()
+                .unwrap_or_else(|| typechecked!("reverse", "value"));
+            let res = match v {
+                Value::Array(ty, elems) => {
+                    let reversed: SmallVec<[ValueId; 4]> =
+                        elems.iter().rev().copied().collect();
+                    Value::Array(ty, Arc::new(reversed))
+                }
+                Value::Range {
+                    start,
+                    end,
+                    inclusive,
+                } => {
+                    if inclusive {
+                        Value::Range {
+                            start: end,
+                            end: start,
+                            inclusive: true,
+                        }
+                    } else {
+                        // `start .. end` reversed is `end - 1 ..= start`
+                        Value::Range {
+                            start: end - 1,
+                            end: start,
+                            inclusive: true,
+                        }
+                    }
+                }
+                _ => typechecked!("reverse", "Array or Range"),
+            };
+            Ok(ctx.arena.add(res, ctx.span))
+        })
+    }
+}

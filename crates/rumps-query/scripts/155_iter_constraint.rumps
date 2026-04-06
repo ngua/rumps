@@ -9,13 +9,13 @@ fun main() {
   write "Range (1..=10) length: {Iterable:length(1 ..= 10)}"
   write "Range (1..10) length: {Iterable:length(1 .. 10)}"
 
-  ; Iterable:contains on Array
-  write "Array contains 3: {Iterable:contains(arr, 3)}"
-  write "Array contains 99: {Iterable:contains(arr, 99)}"
+  ; contains on Array
+  write "Array contains 3: {contains(arr, 3)}"
+  write "Array contains 99: {contains(arr, 99)}"
 
-  ; Iterable:contains on Range
-  write "Range contains 5: {Iterable:contains(1 ..= 10, 5)}"
-  write "Range contains 11: {Iterable:contains(1 ..= 10, 11)}"
+  ; contains on Range
+  write "Range contains 5: {contains(1 ..= 10, 5)}"
+  write "Range contains 11: {contains(1 ..= 10, 11)}"
 
   ; Mappable:map on Array (Range is not Mappable; collect first)
   write "Doubled array: {Mappable:map(x => x * 2, arr)}"
@@ -35,9 +35,9 @@ fun main() {
   write "Generic count (array): {count-iter(arr)}"
   write "Generic count (range): {count-iter(1 ..= 10)}"
 
-  ; Iterable:reverse on Array and Range
-  write "Reversed array: {Iterable:reverse(arr)}"
-  write "Reversed range: {Iterable:reverse(1 ..= 5)}"
+  ; reverse on Array and Range
+  write "Reversed array: {reverse(arr)}"
+  write "Reversed range: {reverse(1 ..= 5)}"
 
   ; foreach on Array and Range (Range must be collected first)
   foreach(x => write "foreach array: {x}", [10, 20])

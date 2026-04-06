@@ -20,7 +20,7 @@
 //! - `Mappable`: `map`
 //! - `Filterable`: `filter`
 //! - `Foldable`: `reduce`
-//! - `Iterable`: `length`, `contains`, `reverse`, `collect`
+//! - `Iterable`: `length`, `collect`
 //!
 //! Higher-order class methods use a continuation/trampoline pattern defined in
 //! the [`hof`](super::hof) module.
@@ -365,16 +365,6 @@ impl ClassMethods {
             ClassId::ITERABLE,
             i.intern("length"),
             MethodFn::Unary(Iterable::length),
-        );
-        self.register(
-            ClassId::ITERABLE,
-            i.intern("contains"),
-            MethodFn::Binary(Iterable::contains),
-        );
-        self.register(
-            ClassId::ITERABLE,
-            i.intern("reverse"),
-            MethodFn::Unary(Iterable::reverse),
         );
         self.register(
             ClassId::ITERABLE,
@@ -2533,7 +2523,7 @@ impl Foldable {
     }
 }
 
-/// `Iterable` class: `length`, `contains`, `reverse`, `collect` methods.
+/// `Iterable` class: `length`, `collect` methods.
 pub(crate) struct Iterable;
 
 impl Iterable {
@@ -2557,40 +2547,6 @@ impl Iterable {
         })
     }
 
-    /// `Iterable:contains`; checks if an element is in the iterable.
-    pub(crate) fn contains(
-        ctx: &mut ClassCtx<'_>,
-        haystack: &Value,
-        needle: &Value,
-    ) -> Result<Value> {
-        Ok(match haystack {
-            Value::Array(_, elems) => {
-                let found = elems.iter().any(|eid| {
-                    ctx.arena.get(*eid).is_some_and(|v| v == needle)
-                });
-                Value::Bool(found)
-            }
-            Value::Range {
-                start,
-                end,
-                inclusive,
-            } => {
-                let found = match needle {
-                    Value::Int(n) => {
-                        if *inclusive {
-                            *n >= *start && *n <= *end
-                        } else {
-                            *n >= *start && *n < *end
-                        }
-                    }
-                    _ => false,
-                };
-                Value::Bool(found)
-            }
-            _ => typechecked!("Iterable:contains", "Iterable"),
-        })
-    }
-
     /// `Iterable:collect`; materializes an iterable into an `Array`.
     pub(crate) fn collect(ctx: &mut ClassCtx<'_>, v: &Value) -> Result<Value> {
         Ok(match v {
@@ -2608,31 +2564,6 @@ impl Iterable {
                 Value::Array(ty, Arc::new(elems))
             }
             _ => typechecked!("Iterable:collect", "Iterable"),
-        })
-    }
-
-    /// `Iterable:reverse`; returns a reversed array.
-    pub(crate) fn reverse(ctx: &mut ClassCtx<'_>, v: &Value) -> Result<Value> {
-        Ok(match v {
-            Value::Array(ty, elems) => {
-                let reversed: SmallVec<[ValueId; 4]> =
-                    elems.iter().rev().copied().collect();
-                Value::Array(*ty, Arc::new(reversed))
-            }
-            Value::Range {
-                start,
-                end,
-                inclusive,
-            } => {
-                let actual_end = if *inclusive { *end + 1 } else { *end };
-                let elems: SmallVec<[ValueId; 4]> = (*start..actual_end)
-                    .rev()
-                    .map(|i| ctx.arena.add(Value::Int(i), ctx.span))
-                    .collect();
-                let ty = ctx.type_exprs.named(TypeId::INT);
-                Value::Array(ty, Arc::new(elems))
-            }
-            _ => typechecked!("Iterable:reverse", "Iterable"),
         })
     }
 }

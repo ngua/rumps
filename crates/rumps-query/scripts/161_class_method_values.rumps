@@ -46,12 +46,12 @@ fun main() {
   write "Piped filter: {piped-filter}"
   write "Piped reduce: {piped-reduce}"
 
-  ; Iterable methods with pipes (unary; no wrapper needed)
+  ; Iterable:length with pipe (unary; no wrapper needed)
   write "Piped length: {nums |> Iterable:length}"
-  write "Piped reverse: {nums |> Iterable:reverse}"
 
-  ; Iterable:contains with wrapper closure
-  let piped-contains = nums |> (a => Iterable:contains(a, 3))
+  ; Prelude functions with pipes
+  write "Piped reverse: {nums |> reverse}"
+  let piped-contains = nums |> (a => contains(a, 3))
   write "Piped contains: {piped-contains}"
 
   ; Monoid methods with pipes
