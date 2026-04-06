@@ -50,7 +50,7 @@ pub(crate) struct TypeEnv {
     user_module_type_vis: HashMap<QualifiedName, Visibility>,
     /// Imported type aliases: unqualified name -> qualified name.
     ///
-    /// When `IMPORT M.{ MyType }` is processed, maps `"MyType"` -> `"M.MyType"`.
+    /// When `import M.{ MyType }` is processed, maps `"MyType"` -> `"M.MyType"`.
     /// Checked first during type name resolution.
     imported_types: HashMap<StringId, QualifiedName>,
 }
@@ -189,7 +189,7 @@ impl TypeEnv {
     /// Register an imported type alias.
     ///
     /// Maps a local (unqualified) name to its qualified name. Used when
-    /// processing `IMPORT M.{ MyType }`.
+    /// processing `import M.{ MyType }`.
     pub(crate) fn import_type(
         &mut self,
         local: StringId,

@@ -35,7 +35,7 @@ pub enum Error {
     #[error("runtime error{}: {msg}", fmt_span(span))]
     Runtime { span: Option<Span>, msg: String },
 
-    #[error("RAISE at {span}: {msg}")]
+    #[error("raise at {span}: {msg}")]
     Raise { span: Span, msg: String },
 
     #[error("runtime type error at {span}: {msg}")]
@@ -254,7 +254,7 @@ impl Diagnostic for Error {
                 Some(Box::new(std::iter::once(span_to_label(*span, "here"))))
             }
             Self::Raise { span, .. } => {
-                Some(Box::new(std::iter::once(span_to_label(*span, "RAISE"))))
+                Some(Box::new(std::iter::once(span_to_label(*span, "raise"))))
             }
             Self::Runtime { span: Some(s), .. } => {
                 Some(Box::new(std::iter::once(span_to_label(*s, "here"))))
@@ -350,7 +350,7 @@ impl fmt::Display for ErrorDisplay<'_> {
                 write!(f, "runtime error: {msg}")
             }
             Error::Raise { span, msg } => {
-                write!(f, "RAISE at {}: {msg}", loc(*span))
+                write!(f, "raise at {}: {msg}", loc(*span))
             }
             Error::RuntimeType { span, msg } => {
                 write!(f, "runtime type error at {}: {msg}", loc(*span))

@@ -303,7 +303,7 @@ pub(crate) enum TypeError {
     NotATuple(TyId, Span),
 
     /// Array pattern in let binding (only allowed in match).
-    #[error("array destructuring is only allowed in MATCH expressions")]
+    #[error("array destructuring is only allowed in `match` expressions")]
     ArrayPatternInLet(Span),
 
     /// Tuple index out of bounds.
@@ -340,7 +340,7 @@ pub(crate) enum TypeError {
 
     /// Variant pattern incompatible with scrutinee type.
     ///
-    /// Example: `if x IS Option.Some(v)` where `x: F` and `F: Fallible[T]`.
+    /// Example: `if x is Option.Some(v)` where `x: F` and `F: Fallible[T]`.
     /// Type variables cannot be refined by variant patterns since the concrete
     /// type is unknown at compile time.
     #[error(
@@ -354,8 +354,8 @@ pub(crate) enum TypeError {
 
     /// Attempt to narrow a union type via type annotation.
     ///
-    /// Union types cannot be narrowed to a member type through `LET`
-    /// annotations; use `MATCH`/`IS` for runtime type narrowing instead.
+    /// Union types cannot be narrowed to a member type through `let`
+    /// annotations; use `match`/`is` for runtime type narrowing instead.
     #[error(
         "cannot narrow union `{union_ty}` to `{narrow_ty}` via type annotation"
     )]
@@ -368,15 +368,15 @@ pub(crate) enum TypeError {
     /// Invalid type cast.
     ///
     /// The source type cannot be cast to the target type. Suggests alternatives
-    /// like `read` for fallible conversion or `match`/`IS` for narrowing.
-    #[error("cannot cast `{from}` to `{to}`; use `READ` for fallible conversion or `MATCH`/`IS` for narrowing")]
+    /// like `read` for fallible conversion or `match`/`is` for narrowing.
+    #[error("cannot cast `{from}` to `{to}`; use `read` for fallible conversion or `match`/`is` for narrowing")]
     InvalidCast { from: TyId, to: TyId, span: Span },
 
     /// Invalid `read` conversion.
     ///
     /// The source type cannot be fallibly converted to the target type via `read`.
     /// Function types, regex, and refs cannot be source or target of `read`.
-    #[error("cannot `READ` `{from}` as `{to}`")]
+    #[error("cannot `read` `{from}` as `{to}`")]
     InvalidRead { from: TyId, to: TyId, span: Span },
 
     /// Custom error with a message.
@@ -442,7 +442,7 @@ pub(crate) enum TypeError {
 
     /// Attempt to implement a class for a builtin type.
     ///
-    /// Users can only implement classes for their own types (TYPE, newtype, union).
+    /// Users can only implement classes for their own types (`type`, `newtype`, `union`).
     #[error("cannot implement `{class}` for builtin type `{type_id:?}`")]
     BuiltinInstanceForbidden {
         class: ClassId,
@@ -712,7 +712,7 @@ impl TypeError {
             }
             Self::MissingAnnotation(_) => (
                 "cannot infer type; add a type annotation".to_owned(),
-                Some("e.g., `LET x: MyType = ...`".to_owned()),
+                Some("e.g., `let x: MyType = ...`".to_owned()),
             ),
             Self::UnknownType(name, _) => {
                 (format!("unknown type `{name}`"), None)
@@ -748,8 +748,8 @@ impl TypeError {
                 None,
             ),
             Self::ArrayPatternInLet(_) => (
-                "array destructuring is only allowed in MATCH expressions".to_owned(),
-                Some("use `MATCH arr { [a, b, ..] => ... }` instead".to_owned()),
+                "array destructuring is only allowed in `match` expressions".to_owned(),
+                Some("use `match arr { [a, b, ..] => ... }` instead".to_owned()),
             ),
             Self::TupleIndexOutOfBounds { idx, len, .. } => (
                 format!(
@@ -824,7 +824,7 @@ impl TypeError {
                     p.format(*union_ty),
                     p.format(*narrow_ty)
                 ),
-                Some("use `MATCH`/`IS` for runtime type narrowing".to_owned()),
+                Some("use `match`/`is` for runtime type narrowing".to_owned()),
             ),
             Self::InvalidCast { from, to, .. } => (
                 format!(
@@ -832,15 +832,15 @@ impl TypeError {
                     p.format(*from),
                     p.format(*to)
                 ),
-                Some("use `READ` for fallible conversion or `MATCH`/`IS` for narrowing".to_owned()),
+                Some("use `read` for fallible conversion or `match`/`is` for narrowing".to_owned()),
             ),
             Self::InvalidRead { from, to, .. } => (
                 format!(
-                    "cannot `READ` `{}` as `{}`",
+                    "cannot `read` `{}` as `{}`",
                     p.format(*from),
                     p.format(*to)
                 ),
-                Some("function types, regex, and refs cannot be used with `READ`".to_owned()),
+                Some("function types, regex, and refs cannot be used with `read`".to_owned()),
             ),
             Self::Custom { msg, .. } => (msg.clone(), None),
             Self::InvalidRegex(pattern, err, _) => (
@@ -853,7 +853,7 @@ impl TypeError {
             ),
             Self::PrivateAccess { module, name, .. } => (
                 format!("`{name}` is private in module `{module}`"),
-                Some("use `+` prefix to make it public (e.g., `+LET`, `+FUN`)".to_owned()),
+                Some("use `+` prefix to make it public (e.g., `+let`, `+fun`)".to_owned()),
             ),
             Self::UnknownClass(name, _) => (
                 format!("unknown class `{name}`"),
@@ -881,7 +881,7 @@ impl TypeError {
                     class.name(),
                     p.type_name(*type_id)
                 ),
-                Some("class instances can only be defined for user types (TYPE, NEWTYPE, UNION)".to_owned()),
+                Some("class instances can only be defined for user types (`type`, `newtype`, `union`)".to_owned()),
             ),
             Self::MissingInstanceMethod {
                 class,
@@ -919,7 +919,7 @@ impl TypeError {
                         "missing required associated type `{name}` for class `{}`",
                         class.name()
                     ),
-                    Some(format!("add `NEWTYPE {name} = <type>` to the instance")),
+                    Some(format!("add `newtype {name} = <type>` to the instance")),
                 )
             }
             Self::UnknownAssocTypeForClass { class, assoc, .. } => (
@@ -979,7 +979,7 @@ impl TypeError {
                     p.type_name(*type_id)
                 ),
                 Some(format!(
-                    "an instance is defined in module `{module}`; try adding `IMPORT {module}.{{ }}`"
+                    "an instance is defined in module `{module}`; try adding `import {module}.{{ }}`"
                 )),
             ),
             Self::MissingSuperclassInstance {
@@ -1006,11 +1006,11 @@ impl TypeError {
             ),
             Self::TopLevelExpr(_) => (
                 "top-level expression statements are not allowed".to_owned(),
-                Some("move code into a `FUN main() { ... }` function".to_owned()),
+                Some("move code into a `fun main() { ... }` function".to_owned()),
             ),
             Self::MissingMain(_) => (
                 "missing required `main` function".to_owned(),
-                Some("add `FUN main() { ... }` or use `--interactive` mode".to_owned()),
+                Some("add `fun main() { ... }` or use `--interactive` mode".to_owned()),
             ),
             Self::InvalidMainSignature { got, .. } => (
                 format!(

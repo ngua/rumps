@@ -141,7 +141,7 @@ impl TypeId {
     /// Builtin union: `Storable = Bool | Int | Float | Char | String | Json`.
     ///
     /// The set of types that can be stored in B-tree globals/locals.
-    /// `AS Storable` is infallible; `AS` to other unions requires `read`.
+    /// `as Storable` is infallible; `as` to other unions requires `read`.
     pub(crate) const STORABLE: Self = Self(15);
     /// Builtin union: `Scalar = Bool | Int | Float | String`.
     ///
@@ -668,7 +668,7 @@ pub(crate) enum Value {
     /// Wraps `serde_json::Value`. JSON values are created from:
     /// - Object literals with quoted keys: `{ "id": 123 }`
     /// - Heterogeneous array literals: `[1, "two", true]`
-    /// - Explicit cast: `value AS Json`
+    /// - Explicit cast: `value as Json`
     ///
     /// Access via `.` and `->` returns `Json`; `..` and `->>` extract scalars.
     Json(Arc<serde_json::Value>),
@@ -1072,7 +1072,7 @@ pub(crate) enum TypeDef {
     ///
     /// Union types represent a value that can be one of several types.
     /// Used for `union Storable = Bool | Int | ...` declarations.
-    /// At runtime, `IS` checks test against each member; `AS` casts are
+    /// At runtime, `is` checks test against each member; `as` casts are
     /// infallible only for `Storable` (special-cased).
     Union {
         name: StringId,
@@ -1424,8 +1424,8 @@ impl TypeExprArena {
     /// Convert a resolved static type to a runtime type expression.
     ///
     /// Used after type checking to create runtime type tags for:
-    /// - Runtime `IS` checks (compare value's type tag against annotation)
-    /// - Runtime `AS` casts (verify cast is valid)
+    /// - Runtime `is` checks (compare value's type tag against annotation)
+    /// - Runtime `as` casts (verify cast is valid)
     /// - Error messages with concrete types
     ///
     /// # Panics
@@ -2277,7 +2277,7 @@ impl TypeRegistry {
         });
     }
 
-    /// Register a single TYPE declaration.
+    /// Register a single `type` declaration.
     ///
     /// If a type with the same name already exists, it is shadowed.
     fn register_type(

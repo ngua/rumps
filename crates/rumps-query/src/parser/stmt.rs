@@ -537,7 +537,7 @@ impl Parser {
             })
     }
 
-    /// `IMPORT Module.{ member, ... }` or `IMPORT Module.{ ... }`.
+    /// `import Module.{ member, ... }` or `import Module.{ ... }`.
     ///
     /// Imports members from a module into the current scope.
     fn import_stmt(
@@ -545,7 +545,7 @@ impl Parser {
         // Module path: idents separated by `.`
         let path = Self::ident().separated_by(just(Token::Dot)).at_least(1);
 
-        // Named with optional alias: `name` or `name AS alias`
+        // Named with optional alias: `name` or `name as alias`
         let named = Self::ident()
             .then(just(Token::As).ignore_then(Self::ident()).or_not())
             .map(|(name, alias)| cst::ImportItem::Named { name, alias });

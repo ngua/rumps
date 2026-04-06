@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Array destructuring not allowed in LET (only in MATCH)\nLET [a, b, ...rest] = [1, 2, 3]\n"
+description: "; Array destructuring not allowed in let (only in match)\n\nfun main() {\n  let [a, b, ...rest] = [1, 2, 3]\n}\n"
 ---
-ERROR: array destructuring is only allowed in MATCH expressions
+ERROR: array destructuring is only allowed in `match` expressions

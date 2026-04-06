@@ -236,7 +236,7 @@ pub(crate) struct InferCtx<'a> {
     /// Populated when a class method is called on a newtype or union type.
     /// The interpreter uses this to dispatch to user-defined class instances,
     /// since these types don't carry their TypeId in the runtime value
-    /// (unlike TYPE/sum types which use `Value::Tagged`).
+    /// (unlike `type`/sum types which use `Value::Tagged`).
     pub(super) instance_calls: HashMap<ExprId, crate::TypeId>,
     /// Deferred instance call candidates to resolve after constraint solving.
     ///
@@ -585,7 +585,7 @@ impl<'a> InferCtx<'a> {
     ///
     /// After constraint solving, if a `let` binding's RHS resolved to a
     /// union type but the annotation is not a union, the user is attempting
-    /// to narrow a union via annotation. This requires `MATCH`/`IS` instead.
+    /// to narrow a union via annotation. This requires `match`/`is` instead.
     pub(crate) fn check_let_union_narrowing(&mut self) {
         std::mem::take(&mut self.let_annotations)
             .into_iter()

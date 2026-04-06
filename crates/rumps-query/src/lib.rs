@@ -34,9 +34,9 @@
 /// # When NOT to Use (Keep Runtime Checks)
 ///
 /// Keep runtime checks and do NOT use this macro for:
-/// - `AS` casts on `Storable` union (runtime narrowing)
+/// - `as` casts on `Storable` union (runtime narrowing)
 /// - `read` conversions (parsing can fail)
-/// - Database operations returning `Storable` (need `IS`/`AS` for narrowing)
+/// - Database operations returning `Storable` (need `is`/`as` for narrowing)
 /// - Index bounds checks (not type-level)
 /// - Division by zero (not type-level)
 macro_rules! typechecked {

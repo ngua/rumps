@@ -158,15 +158,15 @@ impl InferCtx<'_> {
             // Postfix operators: `!`
             Expr::Postfix(op, inner) => self.postfix(id, *op, *inner, span),
 
-            // Type check: `expr IS Pattern`
+            // Type check: `expr is Pattern`
             Expr::Is(scrutinee, pattern) => {
                 self.is_check(*scrutinee, pattern, span)
             }
 
-            // Type cast: `expr AS Type`
+            // Type cast: `expr as Type`
             Expr::As(inner, ty_id) => self.as_cast(*inner, *ty_id, span),
 
-            // Fallible conversion: `expr READ Type`
+            // Fallible conversion: `expr read Type`
             Expr::Read(inner, ty_id) => self.read_conv(*inner, *ty_id, span),
 
             // Database intrinsics: `@get`, `@set`, `@kill`, `@data`, `@order`, `@query`
@@ -294,7 +294,7 @@ impl InferCtx<'_> {
                 TyArena::UNIT
             }
 
-            // Raise expression: `RAISE expr`
+            // Raise expression: `raise expr`
             // Never returns; can unify with any expected type.
             Expr::Raise(inner) => {
                 let ty = self.expr(*inner);
@@ -2084,9 +2084,9 @@ impl InferCtx<'_> {
     /// - IF/ELSE: both branches must have the same type
     /// - Single-arm IF (no ELSE): body must be `Unit`, whole expression is `Unit`
     ///
-    /// # IS with Bindings
+    /// # `is` with Bindings
     ///
-    /// If the condition is `expr IS Pattern(bindings)`, the bindings are only
+    /// If the condition is `expr is Pattern(bindings)`, the bindings are only
     /// visible in the then branch, not the else branch. The type checker
     /// extracts these bindings and adds them to the then-branch scope.
     fn r#if(
@@ -2096,7 +2096,7 @@ impl InferCtx<'_> {
         else_id: Option<ExprId>,
         span: Span,
     ) -> TyId {
-        // Check if condition is an IS expression with variant bindings
+        // Check if condition is an `is` expression with variant bindings
         let cond_expr = self.ast.get_expr(cond_id).cloned();
 
         let then_ty = match cond_expr {
@@ -2104,7 +2104,7 @@ impl InferCtx<'_> {
                 scrutinee_id,
                 TypePattern::VariantBind(ref ty_name, var_name, names),
             )) => {
-                // IS with variant bindings: bindings only visible in then branch
+                // `is` with variant bindings: bindings only visible in then branch
                 let scrutinee_ty = self.expr(scrutinee_id);
 
                 // Check scrutinee is compatible with variant pattern
@@ -2633,7 +2633,7 @@ impl InferCtx<'_> {
         }
     }
 
-    /// Infer type of `IS` expression.
+    /// Infer type of `is` expression.
     ///
     /// Always returns `Bool`. Pattern bindings are extracted by `Expr::If`
     /// and added to the then-branch scope; they are not bound here.
@@ -2658,7 +2658,7 @@ impl InferCtx<'_> {
             TypePattern::Type(ty_id) => {
                 let target_ty = self.ast_type_to_ty(*ty_id, &IndexMap::new());
                 // If scrutinee is a union, verify target is a member
-                // Skip check if target is the union type itself (e.g., `x IS Storable`)
+                // Skip check if target is the union type itself (e.g., `x is Storable`)
                 // or if target is also a union that contains the scrutinee members
                 if let Some(members) = self.expand_union_members(scrutinee_ty) {
                     let target_is_same_union = scrutinee_ty == target_ty;
@@ -2783,14 +2783,14 @@ impl InferCtx<'_> {
         TyArena::BOOL
     }
 
-    /// Infer type of `AS` cast expression.
+    /// Infer type of `as` cast expression.
     ///
     /// Emits an `Into` constraint to verify the conversion is valid.
     /// The actual validation happens in `check_into` during constraint solving.
     ///
     /// Special case: when casting a type variable to a numeric type, also
     /// emit a `Numeric` constraint to ensure polymorphic expressions like
-    /// `(-2.9) AS Int` are properly constrained.
+    /// `(-2.9) as Int` are properly constrained.
     fn as_cast(
         &mut self,
         inner_id: ExprId,
@@ -2808,7 +2808,7 @@ impl InferCtx<'_> {
         });
 
         // Special case: type variable cast to numeric requires Numeric constraint
-        // This allows `(-2.9) AS Int` where `-2.9` has polymorphic Numeric type
+        // This allows `(-2.9) as Int` where `-2.9` has polymorphic Numeric type
         let inner_is_var = matches!(self.ty_arena.get(inner_ty), Ty::Var(_));
         let target_is_numeric = matches!(
             self.ty_arena.get(target_ty),
@@ -2832,7 +2832,7 @@ impl InferCtx<'_> {
 
     /// Infer type of `read` conversion expression.
     ///
-    /// `expr READ T` returns `Result[T, String]`. The conversion is fallible;
+    /// `expr read T` returns `Result[T, String]`. The conversion is fallible;
     /// if the value cannot be converted to `T`, an error message is returned.
     ///
     /// Emits a `TryInto` constraint to validate that the conversion is possible

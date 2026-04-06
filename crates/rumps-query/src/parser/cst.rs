@@ -70,7 +70,7 @@ pub(crate) struct TypeParam {
     pub constraints: SmallVec<[CstClassConstraint; 2]>,
 }
 
-/// Type pattern for the `IS` operator (CST version).
+/// Type pattern for the `is` operator (CST version).
 ///
 /// This is the CST equivalent of `ast::TypePattern`. During lowering,
 /// CST `TypeExpr` fields are converted to `AstTypeExprId`.
@@ -313,7 +313,7 @@ pub(crate) enum ExprKind {
     /// This allows `write` in expression contexts.
     Write(Box<WriteStmt>),
 
-    /// Raise a runtime error: `RAISE expr`.
+    /// Raise a runtime error: `raise expr`.
     ///
     /// Evaluates `expr` (must be `Into[String]`) and raises a runtime error.
     /// Never returns; can unify with any expected type.
@@ -537,7 +537,7 @@ pub(crate) enum StmtKind {
 
     /// Import members from a module.
     ///
-    /// Syntax: `IMPORT Module.{ member, ... }` or `IMPORT Module.{ ... }`.
+    /// Syntax: `import Module.{ member, ... }` or `import Module.{ ... }`.
     Import(ImportStmt),
 
     /// User-defined class instance: `class ClassName FOR Type { methods }`.
@@ -583,7 +583,7 @@ pub(crate) enum ModuleSource {
 /// A single import item.
 #[derive(Clone, Debug)]
 pub(crate) enum ImportItem {
-    /// Named import: `member` or `member AS alias`.
+    /// Named import: `member` or `member as alias`.
     Named {
         name: StringId,
         alias: Option<StringId>,
@@ -700,7 +700,7 @@ pub(crate) enum MatchPattern {
     /// - `Option<RestPattern>`: optional rest handling
     Array(Vec<Self>, Option<RestPattern>),
 
-    /// Type-narrowing pattern: `x IS Int`, `val IS String`
+    /// Type-narrowing pattern: `x is Int`, `val is String`
     ///
     /// Matches if the value is of the specified type and binds it to the name.
     Is(StringId, TypeExpr),

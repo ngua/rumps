@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test TryInto constraint errors\n\n; Function types cannot satisfy TryInto\nFUN bad-read[T: TryInto[Int]](x: T) -> Result[Int, String] {\n  x READ Int\n}\n\nLET f = (x: Int) -> Int => x + 1\nWRITE bad-read(f)\n"
+description: "; Test TryInto constraint errors\n\nfun main() {\n  let f = (x: Int) -> Int => x + 1\n  write bad-read(f)\n}\n\n; Function types cannot satisfy TryInto\nfun bad-read[T: TryInto[Int]](x: T) -> Result[Int, String] {\n  x read Int\n}\n"
 ---
-ERROR: cannot `READ` `(Int) -> Int` as `Int`
+ERROR: cannot `read` `(Int) -> Int` as `Int`
