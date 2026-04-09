@@ -887,6 +887,153 @@ impl<I: IoContext> Interpreter<'_, I> {
             .await
     }
 
+    /// Determine the expected arity of any callable value.
+    ///
+    /// Returns `None` if the value is not callable.
+    fn callable_arity(&self, v: &Value) -> Option<usize> {
+        match v {
+            Value::Closure { params, .. } | Value::Function { params, .. } => {
+                Some(params.len())
+            }
+            Value::ModuleFn { path } => self
+                .env
+                .get_user_module_fn(path)
+                .map(|d| d.params.len())
+                .or_else(|| {
+                    self.env
+                        .get_module_fn_type(path)
+                        .and_then(|s| s.arity(&self.ty_arena))
+                }),
+            Value::ClassMethodFn { class, method, .. } => {
+                let cs = self.arena.get_str(*class).unwrap_or_default();
+                let ms = self.arena.get_str(*method).unwrap_or_default();
+                ClassId::from_name(cs).and_then(|kind| {
+                    self.class_registry
+                        .get(kind)
+                        .method(ms, Span::default())
+                        .ok()
+                        .and_then(|spec| spec.scheme().arity(&self.ty_arena))
+                })
+            }
+            Value::PartialApp { callee, bound } => self
+                .arena
+                .get(*callee)
+                .and_then(|c| self.callable_arity(c))
+                .map(|n| n.saturating_sub(bound.len())),
+            _ => None,
+        }
+    }
+
+    /// Check if a call is a partial application.
+    ///
+    /// If `args` supplies fewer arguments than `callee` expects, returns a
+    /// `Value::PartialApp` capturing the callee and bound args. Otherwise
+    /// returns `None`, meaning the caller should proceed with full invocation.
+    fn maybe_partial_app(
+        &mut self,
+        callee: Value,
+        args: &[ValueId],
+        span: Span,
+    ) -> Option<Value> {
+        let arity = self.callable_arity(&callee)?;
+        if args.len() < arity && !args.is_empty() {
+            let callee_id = self.arena.add(callee, span);
+            Some(Value::PartialApp {
+                callee: callee_id,
+                bound: args.iter().copied().collect(),
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Variant of `maybe_partial_app` when the callee is already a `ValueId`.
+    fn maybe_partial_app_id(
+        &mut self,
+        callee_id: ValueId,
+        args: &[ValueId],
+    ) -> Option<Value> {
+        let callee = self.arena.get(callee_id)?;
+        let arity = self.callable_arity(callee)?;
+        if args.len() < arity && !args.is_empty() {
+            Some(Value::PartialApp {
+                callee: callee_id,
+                bound: args.iter().copied().collect(),
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Resolve a partial application with additional arguments.
+    ///
+    /// Combines bound args with new args and either produces another
+    /// `PartialApp` (still under-applied) or fully invokes the callee.
+    #[async_recursion]
+    async fn resolve_partial_app(
+        &mut self,
+        callee_id: ValueId,
+        bound: &[ValueId],
+        new_args: &[ValueId],
+        span: Span,
+    ) -> Result<Value> {
+        let all_args: SmallVec<[ValueId; 4]> =
+            bound.iter().chain(new_args.iter()).copied().collect();
+
+        let callee = self
+            .arena
+            .get(callee_id)
+            .cloned()
+            .unwrap_or_else(|| invariant!("PartialApp callee in arena"));
+
+        let arity = self
+            .callable_arity(&callee)
+            .unwrap_or_else(|| invariant!("PartialApp callee is callable"));
+
+        if all_args.len() > arity {
+            typechecked!("resolve_partial_app", "args <= arity")
+        } else if all_args.len() < arity {
+            Ok(Value::PartialApp {
+                callee: callee_id,
+                bound: all_args,
+            })
+        } else {
+            match callee {
+                Value::Closure {
+                    params,
+                    ret,
+                    body,
+                    env,
+                } => {
+                    self.invoke_closure(
+                        &params, ret, body, &env, &all_args, span,
+                    )
+                    .await
+                }
+                Value::Function {
+                    params, ret, body, ..
+                } => {
+                    self.invoke_function(&params, ret, body, &all_args, span)
+                        .await
+                }
+                Value::ModuleFn { path } => {
+                    self.invoke_module_fn(&path, &all_args, span).await
+                }
+                Value::ClassMethodFn {
+                    class,
+                    method,
+                    expr_id,
+                } => {
+                    self.invoke_class_method_fn(
+                        class, method, expr_id, &all_args, span,
+                    )
+                    .await
+                }
+                _ => typechecked!("resolve_partial_app", "Callable callee"),
+            }
+        }
+    }
+
     /// Check that a return value matches the declared return type.
     ///
     /// Also wraps the return value in `Value::Union` or `Value::Newtype` when
