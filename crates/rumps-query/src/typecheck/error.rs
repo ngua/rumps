@@ -244,6 +244,18 @@ pub(crate) enum TypeError {
         span: Span,
     },
 
+    /// Function called with too many arguments (more than arity).
+    #[error("too many arguments: expected at most {expected}, got {got}")]
+    TooManyArguments {
+        expected: usize,
+        got: usize,
+        span: Span,
+    },
+
+    /// Function called with zero arguments when it expects some.
+    #[error("missing arguments: expected {expected} argument(s), got 0")]
+    ZeroArguments { expected: usize, span: Span },
+
     /// Type does not satisfy a class (Numeric, Into[Json], etc.).
     #[error("type `{1}` does not satisfy `{0}` class")]
     UnsatisfiedClass(TypeClass<TyId>, TyId, Span),
@@ -598,6 +610,8 @@ impl TypeError {
             | Self::UndefinedVar(_, span)
             | Self::NotCallable(_, span)
             | Self::ArityMismatch { span, .. }
+            | Self::TooManyArguments { span, .. }
+            | Self::ZeroArguments { span, .. }
             | Self::UnsatisfiedClass(_, _, span)
             | Self::MissingField { span, .. }
             | Self::FieldTypeMismatch { span, .. }
@@ -667,6 +681,18 @@ impl TypeError {
             }
             Self::ArityMismatch { expected, got, .. } => (
                 format!("expected {expected} argument(s), got {got}"),
+                None,
+            ),
+            Self::TooManyArguments { expected, got, .. } => (
+                format!(
+                    "too many arguments: expected at most {expected}, got {got}"
+                ),
+                None,
+            ),
+            Self::ZeroArguments { expected, .. } => (
+                format!(
+                    "missing arguments: expected {expected} argument(s), got 0"
+                ),
                 None,
             ),
             Self::UnsatisfiedClass(class, ty, _) => (

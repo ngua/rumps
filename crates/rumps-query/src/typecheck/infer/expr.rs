@@ -698,14 +698,22 @@ impl InferCtx<'_> {
                 let scheme = spec.scheme();
                 let expected_arity = scheme.arity(&self.ty_arena).unwrap_or(0);
 
-                if args.len() != expected_arity {
-                    self.error(TypeError::ArityMismatch {
+                if args.len() > expected_arity {
+                    self.error(TypeError::TooManyArguments {
                         expected: expected_arity,
                         got: args.len(),
                         span,
                     });
                     TyArena::ERROR
+                } else if args.is_empty() && expected_arity > 0 {
+                    self.error(TypeError::ZeroArguments {
+                        expected: expected_arity,
+                        span,
+                    });
+                    TyArena::ERROR
                 } else {
+                    let is_partial = args.len() < expected_arity;
+
                     // Instantiate scheme with fresh type variables
                     let (fn_ty, constraints) =
                         scheme.instantiate(&mut self.uf, &mut self.ty_arena);
@@ -724,7 +732,7 @@ impl InferCtx<'_> {
                         }
                     };
 
-                    // Infer argument types and unify with params
+                    // Infer argument types and unify with prefix of params
                     let arg_tys: SmallVec<[TyId; 4]> = args
                         .iter()
                         .zip(params.iter())
@@ -804,7 +812,14 @@ impl InferCtx<'_> {
                         },
                     }
 
-                    ret
+                    if is_partial {
+                        // Residual function type from remaining params
+                        let remaining: SmallVec<[TyId; 4]> =
+                            params[args.len()..].iter().copied().collect();
+                        self.ty_arena.func(remaining, ret)
+                    } else {
+                        ret
+                    }
                 }
             }
         }

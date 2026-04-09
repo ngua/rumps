@@ -2564,22 +2564,41 @@ impl<'a> InferCtx<'a> {
         let shape = self.ty_arena.get(callee).clone();
         match shape {
             Ty::Fn(ref params, fn_ret) => {
-                if params.len() != args.len() {
-                    self.error(TypeError::ArityMismatch {
+                let params: SmallVec<[TyId; 4]> = params.clone();
+                if args.len() > params.len() {
+                    self.error(TypeError::TooManyArguments {
                         expected: params.len(),
                         got: args.len(),
                         span,
                     });
-                } else {
-                    let params: SmallVec<[TyId; 4]> = params.clone();
-                    // Unify each parameter with corresponding argument
+                } else if args.is_empty() && !params.is_empty() {
+                    self.error(TypeError::ZeroArguments {
+                        expected: params.len(),
+                        span,
+                    });
+                } else if args.len() < params.len() {
+                    // Partial application: unify supplied args with prefix
                     params.iter().zip(args.iter()).for_each(|(&p, &a)| {
                         if let Err(e) = self.unify_types(p, a, span) {
                             self.error(e);
                         }
                     });
 
-                    // Unify return type
+                    // Residual function type from remaining params
+                    let remaining: SmallVec<[TyId; 4]> =
+                        params[args.len()..].iter().copied().collect();
+                    let residual = self.ty_arena.func(remaining, fn_ret);
+                    if let Err(e) = self.unify_types(residual, ret, span) {
+                        self.error(e);
+                    }
+                } else {
+                    // Full application
+                    params.iter().zip(args.iter()).for_each(|(&p, &a)| {
+                        if let Err(e) = self.unify_types(p, a, span) {
+                            self.error(e);
+                        }
+                    });
+
                     if let Err(e) = self.unify_types(fn_ret, ret, span) {
                         self.error(e);
                     }
