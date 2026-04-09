@@ -83,10 +83,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .unwrap_or_else(|| self.type_exprs.named(TypeId::UNKNOWN));
                 self.type_exprs.fn_type(param_tys, ret_ty)
             }
-            // Module functions/consts/class methods don't have a simple type expression
+            // Module functions/consts/class methods/partial apps don't have a simple type expression
             Value::ModuleFn { .. }
             | Value::ModuleConst { .. }
-            | Value::ClassMethodFn { .. } => {
+            | Value::ClassMethodFn { .. }
+            | Value::PartialApp { .. } => {
                 self.type_exprs.named(TypeId::UNKNOWN)
             }
             Value::Range { .. } => self.type_exprs.named(TypeId::RANGE),
@@ -691,7 +692,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             | Value::Function { .. }
             | Value::ModuleFn { .. }
             | Value::ModuleConst { .. }
-            | Value::ClassMethodFn { .. } => false,
+            | Value::ClassMethodFn { .. }
+            | Value::PartialApp { .. } => false,
             Value::Range { .. } => type_id == TypeId::RANGE,
             // Internal loop control types; don't match user types
             Value::ForeverContinuation | Value::LoopContinue(_) => false,
@@ -1053,7 +1055,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                     // Check return type (if annotated)
                     && ret.is_none_or(|r| self.type_exprs.eq(r, expected_ret))
             }
-            _ => false,
+            Value::PartialApp { .. }
+            | Value::ModuleFn { .. }
+            | Value::ModuleConst { .. }
+            | Value::ClassMethodFn { .. } => false,
+            _ => typechecked!("fn_value_matches", "Callable"),
         }
     }
 

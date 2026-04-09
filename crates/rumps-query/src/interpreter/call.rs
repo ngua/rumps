@@ -59,6 +59,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                 )
                 .await
             }
+            // TODO: partial application dispatch
+            Value::PartialApp { .. } => {
+                todo!("PartialApp dispatch in pipeline")
+            }
             // Type checker guarantees rhs is callable
             _ => typechecked!("|>", "Callable"),
         }
@@ -758,6 +762,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .await?;
                 Ok(self.arena.add(result, span))
             }
+            // TODO: partial application dispatch
+            Value::PartialApp { .. } => {
+                todo!("PartialApp dispatch in invoke_callable")
+            }
             // Type checker guarantees callee is callable
             _ => typechecked!("invoke_callable", "Callable"),
         }
@@ -831,6 +839,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let new_state = self.eval(*new_state_expr).await?;
                 let state_id = self.arena.add(new_state, span);
                 Ok(Value::LoopContinue(state_id))
+            }
+            // TODO: partial application dispatch
+            Value::PartialApp { .. } => {
+                todo!("PartialApp dispatch in call_value")
             }
             // Type checker guarantees callee is callable
             _ => typechecked!("call", "Callable"),

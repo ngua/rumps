@@ -762,6 +762,18 @@ pub(crate) enum Value {
         expr_id: Option<ExprId>,
     },
 
+    /// A partially applied function.
+    ///
+    /// Created when a callable is invoked with fewer arguments than its arity.
+    /// The `callee` is the original callable (stored in the arena); `bound`
+    /// holds the already-supplied arguments. When enough args accumulate the
+    /// original callable is invoked with all args. Chained partial application
+    /// always references the original callee (no nesting).
+    PartialApp {
+        callee: ValueId,
+        bound: SmallVec<[ValueId; 4]>,
+    },
+
     /// A module constant reference.
     ///
     /// Created when a module constant like `Math.pi` is imported. The actual
@@ -871,6 +883,7 @@ impl Value {
             Self::LoopContinue(_) => Cow::Borrowed("LoopContinue"),
             Self::Ref(..) => Cow::Borrowed("Ref"),
             Self::ClassMethodFn { .. } => Cow::Borrowed("ClassMethodFn"),
+            Self::PartialApp { .. } => Cow::Borrowed("PartialApp"),
         }
     }
 
@@ -980,7 +993,8 @@ impl Value {
             | Self::Function { .. }
             | Self::ModuleFn { .. }
             | Self::ModuleConst { .. }
-            | Self::ClassMethodFn { .. } => TypeId::UNKNOWN,
+            | Self::ClassMethodFn { .. }
+            | Self::PartialApp { .. } => TypeId::UNKNOWN,
             Self::Range { .. } => TypeId::RANGE,
             Self::Ref(..) => TypeId::REF,
             // Internal types; not exposed to user code

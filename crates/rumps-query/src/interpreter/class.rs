@@ -1473,6 +1473,7 @@ impl Into {
             Value::Function { .. } => "Function".to_owned(),
             Value::ModuleFn { .. } => "ModuleFn".to_owned(),
             Value::ClassMethodFn { .. } => "ClassMethodFn".to_owned(),
+            Value::PartialApp { .. } => "PartialApp".to_owned(),
             Value::ModuleConst { .. } => "ModuleConst".to_owned(),
             Value::ForeverContinuation => "Continuation".to_owned(),
             Value::LoopContinue(_) => "LoopContinue".to_owned(),
@@ -1749,6 +1750,7 @@ impl Into {
             | Value::ModuleFn { .. }
             | Value::ClassMethodFn { .. }
             | Value::ModuleConst { .. }
+            | Value::PartialApp { .. }
             | Value::ForeverContinuation
             | Value::LoopContinue(_) => serde_json::Value::Null,
             Value::Ref(is_global, name_id, sub_ids) => {
@@ -2170,6 +2172,9 @@ impl Display {
             }
             Value::ClassMethodFn { .. } => {
                 typechecked!("Display", "Display (not ClassMethodFn)")
+            }
+            Value::PartialApp { .. } => {
+                typechecked!("Display", "Display (not PartialApp)")
             }
             Value::ModuleConst { path } => {
                 let path_str: String = path

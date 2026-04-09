@@ -60,7 +60,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             | Value::Range { .. }
             | Value::ForeverContinuation
             | Value::LoopContinue(_)
-            | Value::ClassMethodFn { .. } => {
+            | Value::ClassMethodFn { .. }
+            | Value::PartialApp { .. } => {
                 rumps_types::Value::Json(self.jsonify(v))
             }
             Value::Time(t) => rumps_types::Value::String(t.to_rfc3339()),
@@ -385,7 +386,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             | Value::ForeverContinuation
             | Value::LoopContinue(_)
             | Value::Ref(..)
-            | Value::ClassMethodFn { .. } => {
+            | Value::ClassMethodFn { .. }
+            | Value::PartialApp { .. } => {
                 typechecked!("subscript", "Subscriptable")
             }
             Value::Union(_, inner_id) | Value::Newtype(_, inner_id) => self

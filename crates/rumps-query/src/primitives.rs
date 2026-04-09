@@ -344,7 +344,8 @@ impl Array {
                     | Value::ForeverContinuation
                     | Value::LoopContinue(_)
                     | Value::Ref(..)
-                    | Value::ClassMethodFn { .. } => None,
+                    | Value::ClassMethodFn { .. }
+                    | Value::PartialApp { .. } => None,
                     // TODO(Phase 6): unwrap and build SortKey from inner value
                     Value::Union(_, _) | Value::Newtype(_, _) => {
                         todo!("Phase 6: SortKey::from_value Union/Newtype")
