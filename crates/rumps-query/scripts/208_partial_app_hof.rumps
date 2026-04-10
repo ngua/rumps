@@ -1,0 +1,31 @@
+; Partial application as a higher-order function callback
+; A partially applied function is a first-class value and can be passed
+; directly to HoFs like `Mappable:map` and `Filterable:filter`.
+
+fun add (a: Int, b: Int) -> Int { a + b }
+fun gt (a: Int, b: Int) -> Bool { b > a }
+
+fun main() {
+  ; `add(5)` is `(Int) -> Int`; pass directly to `Mappable:map`
+  write Mappable:map(add(5), [1, 2, 3])
+  ; Expected: [6, 7, 8]
+
+  ; `gt(2)` is `(Int) -> Bool`; pass directly to `Filterable:filter`
+  write Filterable:filter(gt(2), [1, 2, 3, 4, 5])
+  ; Expected: [3, 4, 5]
+
+  ; Binary named function passed directly to `reduce`; no partial app
+  ; needed, but this verifies first-class use still works
+  write Foldable:reduce(add, 0, [1, 2, 3, 4, 5])
+  ; Expected: 15
+
+  ; Stored partial passed through pipe into a HoF
+  let add10 = add(10)
+  write [1, 2, 3] |> Mappable:map(add10)
+  ; Expected: [11, 12, 13]
+
+  ; Partial passed to `reduce`; `add` is already binary, so no partial,
+  ; but `add3` partial works as binary reducer
+  write Foldable:reduce(add, 100, [1, 2, 3])
+  ; Expected: 106
+}

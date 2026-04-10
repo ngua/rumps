@@ -1,11 +1,16 @@
 ; Test: Function Arity Error
-; Calling a function with wrong number of arguments.
+; With transparent partial application, supplying fewer args than the
+; arity is valid (it produces a partial application). Supplying more
+; args than the arity, or supplying zero args to a multi-arg function,
+; is still an error.
 
 fun add (a: Int, b: Int) -> Int {
   a + b
 }
 
 fun main() {
-  ; Too few arguments
-  write add(5)
+  ; Too many arguments
+  let x = add(1, 2, 3)
+  ; Zero arguments on a multi-arg function
+  let y = add()
 }

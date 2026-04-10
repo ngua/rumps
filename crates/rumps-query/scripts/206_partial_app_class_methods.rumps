@@ -1,0 +1,41 @@
+; Partial application of class methods
+; Enables clean pipe chains like `[1, 2, 3] |> Mappable:map(inc)`.
+
+fun inc (x: Int) -> Int { x + 1 }
+fun dbl (x: Int) -> Int { x * 2 }
+
+fun main() {
+  ; Class method partially applied with a callback
+  let map-inc = Mappable:map(inc)
+  write map-inc([1, 2, 3])
+  ; Expected: [2, 3, 4]
+
+  ; Piping into partially applied class method
+  write [1, 2, 3] |> Mappable:map(inc)
+  ; Expected: [2, 3, 4]
+
+  ; Chain two class method partials via pipe
+  write [1, 2, 3] |> Mappable:map(inc) |> Mappable:map(dbl)
+  ; Expected: [4, 6, 8]
+
+  ; Filterable:filter with partial app + pipe
+  write [1, 2, 3, 4, 5] |> Filterable:filter(x => x > 2)
+  ; Expected: [3, 4, 5]
+
+  ; Foldable:reduce is 3-arg; partial app with first two args
+  write [1, 2, 3, 4] |> Foldable:reduce((acc, x) => acc + x, 0)
+  ; Expected: 10
+
+  ; Store class method partial, apply later
+  let only-evens = Filterable:filter(x => x % 2 == 0)
+  write only-evens([1, 2, 3, 4, 5, 6])
+  ; Expected: [2, 4, 6]
+
+  ; Complex pipeline using only partial apps (no wrapper closures)
+  let sum-of-squares-of-evens = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    |> Filterable:filter(x => x % 2 == 0)
+    |> Mappable:map(x => x * x)
+    |> Foldable:reduce((acc, x) => acc + x, 0)
+  write sum-of-squares-of-evens
+  ; Expected: 220 (4 + 16 + 36 + 64 + 100)
+}

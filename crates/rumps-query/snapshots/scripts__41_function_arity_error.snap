@@ -1,5 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: Function Arity Error\n; Calling a function with wrong number of arguments.\n\nFUN add (a: Int, b: Int) -> Int {\n  a + b\n}\n\n; Too few arguments\nOUTPUT add(5)\n"
+description: "; Test: Function Arity Error\n; With transparent partial application, supplying fewer args than the\n; arity is valid (it produces a partial application). Supplying more\n; args than the arity, or supplying zero args to a multi-arg function,\n; is still an error.\n\nfun add (a: Int, b: Int) -> Int {\n  a + b\n}\n\nfun main() {\n  ; Too many arguments\n  let x = add(1, 2, 3)\n  ; Zero arguments on a multi-arg function\n  let y = add()\n}\n"
 ---
-ERROR: expected 2 argument(s), got 1
+ERROR: too many arguments: expected at most 2, got 3
+missing arguments: expected 2 argument(s), got 0

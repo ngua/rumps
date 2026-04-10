@@ -1,0 +1,37 @@
+; Partial application of module functions (user and prelude)
+
+module Calc {
+  +fun add(a: Int, b: Int) -> Int { a + b }
+  +fun mul3(a: Int, b: Int, c: Int) -> Int { a * b * c }
+}
+
+fun main() {
+  ; User module fn partially applied
+  let add5 = Calc.add(5)
+  write add5(10)
+  ; Expected: 15
+
+  ; User module fn partial via pipe
+  write 10 |> Calc.add(5)
+  ; Expected: 15
+
+  ; 3-arg user module fn partial in various styles
+  write Calc.mul3(2)(3)(4)
+  ; Expected: 24
+  write Calc.mul3(2, 3)(4)
+  ; Expected: 24
+  write Calc.mul3(2)(3, 4)
+  ; Expected: 24
+
+  ; Prelude `contains` is `(container, element) -> Bool`
+  ; Partially apply the container, then test membership
+  let in-arr = contains([1, 2, 3])
+  write in-arr(2)
+  ; Expected: true
+  write in-arr(99)
+  ; Expected: false
+
+  ; Prelude function via pipe + partial app
+  write 2 |> in-arr
+  ; Expected: true
+}

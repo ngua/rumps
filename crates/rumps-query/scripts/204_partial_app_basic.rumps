@@ -1,0 +1,63 @@
+; Transparent partial function application
+; Calling a function with fewer args than its arity produces a new
+; function that accepts the remaining args.
+
+fun add (a: Int, b: Int) -> Int {
+  a + b
+}
+
+fun add3 (a: Int, b: Int, c: Int) -> Int {
+  a + b + c
+}
+
+fun main() {
+  ; Binary function partially applied, bound to a name
+  let add5 = add(5)
+  write add5(10)
+  ; Expected: 15
+
+  write add5(0)
+  ; Expected: 5
+
+  ; Chain call syntax; `f(a)(b)` directly
+  write add(5)(10)
+  ; Expected: 15
+
+  ; 3-arg function: `f(1)(2)(3)`
+  write add3(1)(2)(3)
+  ; Expected: 6
+
+  ; 3-arg function: `f(1)(2, 3)`
+  write add3(1)(2, 3)
+  ; Expected: 6
+
+  ; 3-arg function: `f(1, 2)(3)`
+  write add3(1, 2)(3)
+  ; Expected: 6
+
+  ; Full application still works
+  write add(2, 3)
+  ; Expected: 5
+  write add3(1, 2, 3)
+  ; Expected: 6
+
+  ; Partial app produces a first-class value that can be stored
+  let p = add3(1, 2)
+  write p(100)
+  ; Expected: 103
+
+  ; Intermediate partial stored and passed along
+  let p1 = add3(1)
+  let p2 = p1(2)
+  write p2(3)
+  ; Expected: 6
+
+  ; Partial application of a closure
+  let g = (a: Int, b: Int) => a * 10 + b
+  let g5 = g(5)
+  write g5(3)
+  ; Expected: 53
+
+  write g(5)(3)
+  ; Expected: 53
+}

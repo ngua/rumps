@@ -1,0 +1,12 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Partial application of module functions (user and prelude)\n\nmodule Calc {\n  +fun add(a: Int, b: Int) -> Int { a + b }\n  +fun mul3(a: Int, b: Int, c: Int) -> Int { a * b * c }\n}\n\nfun main() {\n  ; User module fn partially applied\n  let add5 = Calc.add(5)\n  write add5(10)\n  ; Expected: 15\n\n  ; User module fn partial via pipe\n  write 10 |> Calc.add(5)\n  ; Expected: 15\n\n  ; 3-arg user module fn partial in various styles\n  write Calc.mul3(2)(3)(4)\n  ; Expected: 24\n  write Calc.mul3(2, 3)(4)\n  ; Expected: 24\n  write Calc.mul3(2)(3, 4)\n  ; Expected: 24\n\n  ; Prelude `contains` is `(container, element) -> Bool`\n  ; Partially apply the container, then test membership\n  let in-arr = contains([1, 2, 3])\n  write in-arr(2)\n  ; Expected: true\n  write in-arr(99)\n  ; Expected: false\n\n  ; Prelude function via pipe + partial app\n  write 2 |> in-arr\n  ; Expected: true\n}\n"
+---
+15
+15
+24
+24
+24
+true
+false
+true
