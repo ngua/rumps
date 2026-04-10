@@ -26,45 +26,63 @@ impl<I: IoContext> Interpreter<'_, I> {
         // Intern left value as argument
         let arg_id = self.arena.add(left, span);
 
-        match right {
-            Value::Closure {
-                params,
-                ret,
-                body,
-                env,
-            } => {
-                self.invoke_closure(&params, ret, body, &env, &[arg_id], span)
+        // Handle PartialApp via resolve to avoid nesting
+        if let Value::PartialApp { callee, ref bound } = right {
+            self.resolve_partial_app(callee, bound, &[arg_id], span)
+                .await
+        // `right.clone()` is unavoidable here: `maybe_partial_app` takes
+        // ownership, but the fallthrough `match right` below also consumes
+        // `right`. In practice the clone is cheap since callable values
+        // hold `SmallVec` params and (for closures) an `Arc<CapturedEnv>`.
+        } else if let Some(partial) =
+            self.maybe_partial_app(right.clone(), &[arg_id], span)
+        {
+            Ok(partial)
+        } else {
+            // Full application (arity == 1); dispatch as before
+            match right {
+                Value::Closure {
+                    params,
+                    ret,
+                    body,
+                    env,
+                } => {
+                    self.invoke_closure(
+                        &params,
+                        ret,
+                        body,
+                        &env,
+                        &[arg_id],
+                        span,
+                    )
                     .await
-            }
-            Value::Function {
-                params, ret, body, ..
-            } => {
-                self.invoke_function(&params, ret, body, &[arg_id], span)
-                    .await
-            }
-            Value::ModuleFn { path } => {
-                self.invoke_module_fn(&path, &[arg_id], span).await
-            }
-            Value::ClassMethodFn {
-                class,
-                method,
-                expr_id,
-            } => {
-                self.invoke_class_method_fn(
+                }
+                Value::Function {
+                    params, ret, body, ..
+                } => {
+                    self.invoke_function(&params, ret, body, &[arg_id], span)
+                        .await
+                }
+                Value::ModuleFn { path } => {
+                    self.invoke_module_fn(&path, &[arg_id], span).await
+                }
+                Value::ClassMethodFn {
                     class,
                     method,
                     expr_id,
-                    &[arg_id],
-                    span,
-                )
-                .await
+                } => {
+                    self.invoke_class_method_fn(
+                        class,
+                        method,
+                        expr_id,
+                        &[arg_id],
+                        span,
+                    )
+                    .await
+                }
+                // Type checker guarantees rhs is callable
+                _ => typechecked!("|>", "Callable"),
             }
-            // TODO: partial application dispatch
-            Value::PartialApp { .. } => {
-                todo!("PartialApp dispatch in pipeline")
-            }
-            // Type checker guarantees rhs is callable
-            _ => typechecked!("|>", "Callable"),
         }
     }
 
@@ -215,8 +233,15 @@ impl<I: IoContext> Interpreter<'_, I> {
 
         match (func_def, scope_val) {
             (Some(def), _) => {
-                self.call_function(&def.params, def.ret, def.body, args, span)
-                    .await
+                self.call_function(
+                    name,
+                    &def.params,
+                    def.ret,
+                    def.body,
+                    args,
+                    span,
+                )
+                .await
             }
             (None, Some(callee)) => self.call_value(callee, args, span).await,
             // Type checker / resolver guarantees function exists
@@ -371,16 +396,29 @@ impl<I: IoContext> Interpreter<'_, I> {
         args: &SmallVec<[ExprId; 4]>,
         span: Span,
     ) -> Result<Value> {
-        let cs = self.arena.strings.get(class).unwrap_or_default();
-        let kind = ClassId::from_name(cs).unwrap_or_else(|| {
-            typechecked!("class method class", "known class")
-        });
-
-        // Evaluate arguments
         let arg_ids = self.eval_args(args).await?;
 
-        self.dispatch_class_method(Some(expr_id), kind, method, &arg_ids, span)
+        let cmf = Value::ClassMethodFn {
+            class,
+            method,
+            expr_id: Some(expr_id),
+        };
+        if let Some(partial) = self.maybe_partial_app(cmf, &arg_ids, span) {
+            Ok(partial)
+        } else {
+            let cs = self.arena.strings.get(class).unwrap_or_default();
+            let kind = ClassId::from_name(cs).unwrap_or_else(|| {
+                typechecked!("class method class", "known class")
+            });
+            self.dispatch_class_method(
+                Some(expr_id),
+                kind,
+                method,
+                &arg_ids,
+                span,
+            )
             .await
+        }
     }
 
     /// Invoke a class method from a `ClassMethodFn` value.
@@ -762,9 +800,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .await?;
                 Ok(self.arena.add(result, span))
             }
-            // TODO: partial application dispatch
-            Value::PartialApp { .. } => {
-                todo!("PartialApp dispatch in invoke_callable")
+            Value::PartialApp { callee, bound } => {
+                let result = self
+                    .resolve_partial_app(callee, &bound, args, span)
+                    .await?;
+                Ok(self.arena.add(result, span))
             }
             // Type checker guarantees callee is callable
             _ => typechecked!("invoke_callable", "Callable"),
@@ -815,11 +855,25 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .await
             }
             Value::Function {
-                params, ret, body, ..
-            } => self.call_function(&params, ret, body, args, span).await,
+                name,
+                params,
+                ret,
+                body,
+            } => {
+                self.call_function(name, &params, ret, body, args, span)
+                    .await
+            }
             Value::ModuleFn { path } => {
                 let vals = self.eval_args(args).await?;
-                self.invoke_module_fn(&path, &vals, span).await
+                if let Some(partial) = self.maybe_partial_app(
+                    Value::ModuleFn { path: path.clone() },
+                    &vals,
+                    span,
+                ) {
+                    Ok(partial)
+                } else {
+                    self.invoke_module_fn(&path, &vals, span).await
+                }
             }
             Value::ClassMethodFn {
                 class,
@@ -827,8 +881,22 @@ impl<I: IoContext> Interpreter<'_, I> {
                 expr_id,
             } => {
                 let vals = self.eval_args(args).await?;
-                self.invoke_class_method_fn(class, method, expr_id, &vals, span)
+                if let Some(partial) = self.maybe_partial_app(
+                    Value::ClassMethodFn {
+                        class,
+                        method,
+                        expr_id,
+                    },
+                    &vals,
+                    span,
+                ) {
+                    Ok(partial)
+                } else {
+                    self.invoke_class_method_fn(
+                        class, method, expr_id, &vals, span,
+                    )
                     .await
+                }
             }
             // FOREVER continuation: calling it signals loop continuation
             Value::ForeverContinuation => {
@@ -840,9 +908,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let state_id = self.arena.add(new_state, span);
                 Ok(Value::LoopContinue(state_id))
             }
-            // TODO: partial application dispatch
-            Value::PartialApp { .. } => {
-                todo!("PartialApp dispatch in call_value")
+            Value::PartialApp { callee, bound } => {
+                let vals = self.eval_args(args).await?;
+                self.resolve_partial_app(callee, &bound, &vals, span).await
             }
             // Type checker guarantees callee is callable
             _ => typechecked!("call", "Callable"),
@@ -853,18 +921,30 @@ impl<I: IoContext> Interpreter<'_, I> {
     #[async_recursion]
     pub(super) async fn call_function(
         &mut self,
+        name: StringId,
         params: &[(StringId, Option<TypeExprId>)],
         ret: Option<TypeExprId>,
         body: ExprId,
         args: &[ExprId],
         span: Span,
     ) -> Result<Value> {
-        // Type checker guarantees arity matches
-        if params.len() != args.len() {
+        if args.len() > params.len() {
             typechecked!("call_function", "correct arity")
         }
         let vals = self.eval_args(args).await?;
-        self.invoke_function(params, ret, body, &vals, span).await
+        if vals.len() < params.len() {
+            let f = Value::Function {
+                name,
+                params: params.iter().copied().collect(),
+                ret,
+                body,
+            };
+            Ok(self.maybe_partial_app(f, &vals, span).unwrap_or_else(|| {
+                invariant!("partial app when under-applied")
+            }))
+        } else {
+            self.invoke_function(params, ret, body, &vals, span).await
+        }
     }
 
     /// Call a closure with expression arguments.
@@ -878,13 +958,24 @@ impl<I: IoContext> Interpreter<'_, I> {
         args: &[ExprId],
         span: Span,
     ) -> Result<Value> {
-        // Type checker guarantees arity matches
-        if params.len() != args.len() {
+        if args.len() > params.len() {
             typechecked!("call_closure", "correct arity")
         }
         let vals = self.eval_args(args).await?;
-        self.invoke_closure(params, ret, body, env, &vals, span)
-            .await
+        if vals.len() < params.len() {
+            let c = Value::Closure {
+                params: params.iter().copied().collect(),
+                ret,
+                body,
+                env: env.clone().into(),
+            };
+            Ok(self.maybe_partial_app(c, &vals, span).unwrap_or_else(|| {
+                invariant!("partial app when under-applied")
+            }))
+        } else {
+            self.invoke_closure(params, ret, body, env, &vals, span)
+                .await
+        }
     }
 
     /// Determine the expected arity of any callable value.
@@ -938,24 +1029,6 @@ impl<I: IoContext> Interpreter<'_, I> {
         let arity = self.callable_arity(&callee)?;
         if args.len() < arity && !args.is_empty() {
             let callee_id = self.arena.add(callee, span);
-            Some(Value::PartialApp {
-                callee: callee_id,
-                bound: args.iter().copied().collect(),
-            })
-        } else {
-            None
-        }
-    }
-
-    /// Variant of `maybe_partial_app` when the callee is already a `ValueId`.
-    fn maybe_partial_app_id(
-        &mut self,
-        callee_id: ValueId,
-        args: &[ValueId],
-    ) -> Option<Value> {
-        let callee = self.arena.get(callee_id)?;
-        let arity = self.callable_arity(callee)?;
-        if args.len() < arity && !args.is_empty() {
             Some(Value::PartialApp {
                 callee: callee_id,
                 bound: args.iter().copied().collect(),

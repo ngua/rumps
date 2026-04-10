@@ -425,9 +425,16 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             .get(&main)
             .cloned()
             .unwrap_or_else(|| typechecked!("main", "defined"));
-        self.call_function(&def.params, def.ret, def.body, &[], Span::default())
-            .await
-            .map(|_| ())
+        self.call_function(
+            main,
+            &def.params,
+            def.ret,
+            def.body,
+            &[],
+            Span::default(),
+        )
+        .await
+        .map(|_| ())
     }
 
     /// Consume the interpreter and return the I/O context.
