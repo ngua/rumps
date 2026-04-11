@@ -1,0 +1,13 @@
+; Function types cannot appear in `is` patterns. The typechecker rejects
+; them because opaque callables (class method refs, module fn refs,
+; partial applications) cannot be introspected at runtime. Without this
+; check, the old runtime helper `fn_value_matches` would be asked to
+; answer an unanswerable question and panic or return a wrong answer.
+
+fun main() {
+  let v: Int | String = 1
+  match v {
+    f is ((Int, Int) -> Int) => write "got fn: {f}"
+    _ => write "other"
+  }
+}

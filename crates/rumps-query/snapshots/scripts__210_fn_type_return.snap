@@ -1,0 +1,8 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Returning opaque callables (class methods, module functions,\n; partial applications) from functions with an explicit function return\n; type. Regression test: this used to panic at runtime with\n; \"type checker guarantees `return type` satisfies `matches declaration`\"\n; because `fn_value_matches` returned `false` for these value kinds.\n\nfun main() {\n  ; Class method returned as a fn value\n  let add = mk-add()\n  write \"add(1, 2) = {add(1, 2)}\"\n\n  ; Module function returned as a fn value\n  let upper = mk-upper()\n  write \"upper(\\\"hi\\\") = {upper(\"hi\")}\"\n\n  ; Partial application returned as a fn value\n  let inc = mk-inc()\n  write \"inc(41) = {inc(41)}\"\n\n  ; Bound to a typed local and then invoked\n  let sub: ((Int, Int) -> Int) = mk-sub()\n  write \"sub(10, 3) = {sub(10, 3)}\"\n}\n\nfun mk-add() -> ((Int, Int) -> Int) {\n  Numeric:add\n}\n\nfun mk-sub() -> ((Int, Int) -> Int) {\n  Numeric:sub\n}\n\nfun mk-upper() -> ((String) -> String) {\n  String.upper\n}\n\nfun mk-inc() -> ((Int) -> Int) {\n  Numeric:add(1)\n}\n"
+---
+"add(1, 2) = 3"
+"upper("hi") = HI"
+"inc(41) = 42"
+"sub(10, 3) = 7"

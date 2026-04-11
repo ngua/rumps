@@ -2672,10 +2672,22 @@ impl InferCtx<'_> {
         match pattern {
             TypePattern::Type(ty_id) => {
                 let target_ty = self.ast_type_to_ty(*ty_id, &IndexMap::new());
-                // If scrutinee is a union, verify target is a member
-                // Skip check if target is the union type itself (e.g., `x is Storable`)
-                // or if target is also a union that contains the scrutinee members
-                if let Some(members) = self.expand_union_members(scrutinee_ty) {
+                // Function types cannot be inspected at runtime for opaque
+                // callables (class method refs, module fn refs, partial
+                // apps); reject them here (at any depth) so the interpreter's
+                // `fn_value_matches` never has to answer this question
+                // dynamically. This catches `(Int) -> Int` directly and also
+                // containers that smuggle one in (`[(Int) -> Int]`, tuples,
+                // unions, `Named` type args, etc.).
+                if Self::type_contains_fn(target_ty, &self.ty_arena) {
+                    self.error(TypeError::FnTypeInPattern(span));
+                } else if let Some(members) =
+                    self.expand_union_members(scrutinee_ty)
+                {
+                    // If scrutinee is a union, verify target is a member.
+                    // Skip check if target is the union type itself
+                    // (e.g., `x is Storable`) or if target is also a union
+                    // that contains the scrutinee members.
                     let target_is_same_union = scrutinee_ty == target_ty;
                     let target_is_member = members.contains(&target_ty)
                         || target_ty == TyArena::UNKNOWN;
@@ -2788,9 +2800,13 @@ impl InferCtx<'_> {
                         self.error(TypeError::NotAnObject(scrutinee_ty, span));
                     }
                 }
-                // Resolve field types (validates type expressions)
+                // Resolve field types (validates type expressions) and
+                // reject fn types at any depth for the same reason as above.
                 fields.iter().for_each(|(_, ty_id)| {
-                    self.ast_type_to_ty(*ty_id, &IndexMap::new());
+                    let fty = self.ast_type_to_ty(*ty_id, &IndexMap::new());
+                    if Self::type_contains_fn(fty, &self.ty_arena) {
+                        self.error(TypeError::FnTypeInPattern(span));
+                    }
                 });
             }
         }

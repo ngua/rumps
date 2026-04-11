@@ -80,6 +80,73 @@ impl InferCtx<'_> {
         }
     }
 
+    /// Check whether `ty` contains a function type anywhere in its structure.
+    ///
+    /// Walks structural containers (`Array`, `Option`, `Result`, `Map`,
+    /// `Tuple`, `Union`, `Object`) and `Named` type arguments recursively,
+    /// reporting `true` the moment a `Ty::Fn` is encountered. Used by the
+    /// `is` pattern checker to reject function types nested in containers
+    /// (e.g. `[(Int) -> Int]`, `(Int, (Int) -> Int)`, `Int | (Int) -> Int`,
+    /// `{ cb: (Int) -> Int }`) for the same reason top-level fn types are
+    /// rejected: opaque callables (class method refs, module fn refs,
+    /// partial applications) cannot be introspected at runtime, so
+    /// `fn_value_matches` has no meaningful answer for them.
+    ///
+    /// Does NOT expand `Ty::Named` aliases; smuggling a fn type through
+    /// a transparent alias like `type F = (Int) -> Int` is a narrower
+    /// corner case and is left to a follow-up.
+    pub(crate) fn type_contains_fn(ty: TyId, arena: &TyArena) -> bool {
+        match arena.get(ty) {
+            Ty::Fn(_, _) => true,
+            Ty::Array(inner) | Ty::Option(inner) => {
+                Self::type_contains_fn(*inner, arena)
+            }
+            Ty::Result(ok, err) => {
+                Self::type_contains_fn(*ok, arena)
+                    || Self::type_contains_fn(*err, arena)
+            }
+            Ty::Map(k, v) => {
+                Self::type_contains_fn(*k, arena)
+                    || Self::type_contains_fn(*v, arena)
+            }
+            Ty::Tuple(ts) | Ty::Union(_, ts) => {
+                let ts = ts.clone();
+                ts.iter().any(|&t| Self::type_contains_fn(t, arena))
+            }
+            Ty::Object(fields) => {
+                let vals: SmallVec<[TyId; 4]> =
+                    fields.values().copied().collect();
+                vals.iter().any(|&t| Self::type_contains_fn(t, arena))
+            }
+            Ty::Named(_, args) | Ty::Apply(_, args) => {
+                let args = args.clone();
+                args.iter().any(|&t| Self::type_contains_fn(t, arena))
+            }
+            Ty::Var(_)
+            | Ty::Bool
+            | Ty::Int
+            | Ty::Word
+            | Ty::Float
+            | Ty::Char
+            | Ty::String
+            | Ty::Unit
+            | Ty::Time
+            | Ty::Range
+            | Ty::Json
+            | Ty::Ordering
+            | Ty::DataStatus
+            | Ty::FilePath
+            | Ty::Path
+            | Ty::Regex
+            | Ty::RuntimeError
+            | Ty::Local
+            | Ty::Global
+            | Ty::AssocType(_, _, _)
+            | Ty::Unknown
+            | Ty::Error => false,
+        }
+    }
+
     /// Convert a runtime `TypeExprId` to a `TyId`.
     ///
     /// Used to convert union member types from the `TypeExprArena` (runtime

@@ -1035,6 +1035,16 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Check if a function/closure value matches a function type.
+    ///
+    /// For `Closure` and `Function` values, we check arity and any annotated
+    /// param/return types. For opaque callables (`ClassMethodFn`, `ModuleFn`,
+    /// `ModuleConst`, `PartialApp`), we trust the typechecker, which has
+    /// already validated the signature at the declaration/return/call site.
+    ///
+    /// Every call site of this helper is a static guarantee position:
+    /// function types cannot appear in `is` patterns (the typechecker emits
+    /// `TypeError::FnTypeInPattern`), so runtime type narrowing never needs
+    /// to introspect an opaque callable's signature.
     fn fn_value_matches(
         &self,
         val: &Value,
@@ -1058,7 +1068,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Value::PartialApp { .. }
             | Value::ModuleFn { .. }
             | Value::ModuleConst { .. }
-            | Value::ClassMethodFn { .. } => false,
+            | Value::ClassMethodFn { .. } => true,
             _ => typechecked!("fn_value_matches", "Callable"),
         }
     }

@@ -1,0 +1,12 @@
+; Returning an opaque callable whose signature doesn't match the declared
+; function return type is caught by the typechecker. `Numeric:add` has
+; arity 2 but the declared return type has arity 1.
+
+fun main() {
+  let f = bad()
+  write f(1)
+}
+
+fun bad() -> ((Int) -> Int) {
+  Numeric:add
+}

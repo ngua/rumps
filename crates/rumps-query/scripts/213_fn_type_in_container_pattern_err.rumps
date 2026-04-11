@@ -1,0 +1,15 @@
+; Function types cannot appear in `is` patterns at any depth. Even when
+; nested inside a container (array, tuple, union, object field, or a
+; user-defined type argument), the typechecker walks the type
+; structurally and rejects it. Without this, a container could smuggle
+; a fn type past the top-level check and the runtime helper
+; `fn_value_matches` would again be asked a question it can't answer
+; for opaque callables.
+
+fun main() {
+  let v: Int | String = 1
+  match v {
+    fs is Array[((Int) -> Int)] => write "got array of fns: {fs}"
+    _ => write "other"
+  }
+}

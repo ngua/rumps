@@ -1,0 +1,39 @@
+; Returning opaque callables (class methods, module functions,
+; partial applications) from functions with an explicit function return
+; type. Regression test: this used to panic at runtime with
+; "type checker guarantees `return type` satisfies `matches declaration`"
+; because `fn_value_matches` returned `false` for these value kinds.
+
+fun main() {
+  ; Class method returned as a fn value
+  let add = mk-add()
+  write "add(1, 2) = {add(1, 2)}"
+
+  ; Module function returned as a fn value
+  let upper = mk-upper()
+  write "upper(\"hi\") = {upper("hi")}"
+
+  ; Partial application returned as a fn value
+  let inc = mk-inc()
+  write "inc(41) = {inc(41)}"
+
+  ; Bound to a typed local and then invoked
+  let sub: ((Int, Int) -> Int) = mk-sub()
+  write "sub(10, 3) = {sub(10, 3)}"
+}
+
+fun mk-add() -> ((Int, Int) -> Int) {
+  Numeric:add
+}
+
+fun mk-sub() -> ((Int, Int) -> Int) {
+  Numeric:sub
+}
+
+fun mk-upper() -> ((String) -> String) {
+  String.upper
+}
+
+fun mk-inc() -> ((Int) -> Int) {
+  Numeric:add(1)
+}

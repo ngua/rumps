@@ -600,6 +600,15 @@ pub(crate) enum TypeError {
     /// arguments and returns nothing.
     #[error("`main` must have signature `() -> Unit`; got `{got}`")]
     InvalidMainSignature { got: TyId, span: Span },
+
+    /// Function type used in an `is` pattern.
+    ///
+    /// Runtime type narrowing via `is` cannot inspect the signature of an
+    /// opaque callable (class method reference, module function reference,
+    /// partial application, etc.), so function types are not permitted as
+    /// `is` targets. Bind the value and call it instead.
+    #[error("function types cannot appear in `is` patterns")]
+    FnTypeInPattern(Span),
 }
 
 impl TypeError {
@@ -658,7 +667,8 @@ impl TypeError {
             | Self::ClassRequiresArg { span, .. }
             | Self::TopLevelExpr(span)
             | Self::MissingMain(span)
-            | Self::InvalidMainSignature { span, .. } => *span,
+            | Self::InvalidMainSignature { span, .. }
+            | Self::FnTypeInPattern(span) => *span,
         }
     }
 
@@ -1044,6 +1054,13 @@ impl TypeError {
                     p.format(*got)
                 ),
                 None,
+            ),
+            Self::FnTypeInPattern(_) => (
+                "function types cannot appear in `is` patterns".to_owned(),
+                Some(
+                    "bind the value and call it, or use a typed `let` to check the signature"
+                        .to_owned(),
+                ),
             ),
         };
 

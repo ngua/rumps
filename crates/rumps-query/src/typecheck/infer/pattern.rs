@@ -239,20 +239,34 @@ impl InferCtx<'_> {
                     let narrowed_ty =
                         self.ast_type_to_ty(*ty_id, &IndexMap::new());
 
-                    // Skip check if narrowed type is the union itself
-                    let is_same_union = scrutinee_ty == narrowed_ty;
-                    if !is_same_union
-                        && self.expand_union_members(scrutinee_ty).is_some()
-                        && !self.is_union_member(scrutinee_ty, narrowed_ty)
-                    {
-                        self.error(TypeError::NotAUnionMember {
-                            member: narrowed_ty,
-                            union_ty: scrutinee_ty,
-                            span,
-                        });
-                    }
+                    // Function types cannot be inspected at runtime for
+                    // opaque callables (class method refs, module fn refs,
+                    // partial apps); reject them at any depth so the
+                    // interpreter's `fn_value_matches` never has to answer
+                    // this question dynamically. This covers the direct
+                    // case and containers that smuggle one in (arrays,
+                    // tuples, unions, objects, `Named` type args).
+                    // On rejection, bind the name to `Error` to suppress
+                    // cascading errors in the arm body.
+                    if Self::type_contains_fn(narrowed_ty, &self.ty_arena) {
+                        self.error(TypeError::FnTypeInPattern(span));
+                        self.env.bind(*name, Scheme::mono(TyArena::ERROR));
+                    } else {
+                        // Skip check if narrowed type is the union itself
+                        let is_same_union = scrutinee_ty == narrowed_ty;
+                        if !is_same_union
+                            && self.expand_union_members(scrutinee_ty).is_some()
+                            && !self.is_union_member(scrutinee_ty, narrowed_ty)
+                        {
+                            self.error(TypeError::NotAUnionMember {
+                                member: narrowed_ty,
+                                union_ty: scrutinee_ty,
+                                span,
+                            });
+                        }
 
-                    self.env.bind(*name, Scheme::mono(narrowed_ty));
+                        self.env.bind(*name, Scheme::mono(narrowed_ty));
+                    }
                 }
             }
         }
