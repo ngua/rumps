@@ -216,7 +216,7 @@ pub(crate) struct InferCtx<'a> {
     /// Mapping from numeric literal expression IDs to their inferred types.
     ///
     /// Populated during inference with type variables; resolved after
-    /// substitution to concrete `Numeric` types (`Int`, `Word`, `Float`).
+    /// substitution to concrete `Numeric` types (`Int`, `Word`, `Float`, etc...).
     /// The interpreter uses this to convert numeric literals to the
     /// correct runtime value type.
     numeric_types: HashMap<ExprId, TyId>,
@@ -228,7 +228,9 @@ pub(crate) struct InferCtx<'a> {
     /// Mapping from wrap expression IDs to their target `Wrappable` types.
     ///
     /// Populated during inference for `?` (wrap) operators; resolved after
-    /// substitution to concrete `Option[T]` or `Result[T, E]` types.
+    /// substitution to concrete `Option[T]`, `Result[T, E]`, or other
+    /// monadic types.
+    ///
     /// The interpreter uses this to produce the correct wrapper type.
     wrap_types: HashMap<ExprId, TyId>,
     /// Mapping from class method call expression IDs to their receiver's TypeId.
