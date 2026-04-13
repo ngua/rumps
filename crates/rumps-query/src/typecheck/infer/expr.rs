@@ -1961,6 +1961,10 @@ impl InferCtx<'_> {
 
         let param_tys = self.param_tys_with_subst(params, &type_param_subst);
 
+        // Snapshot the constraint count so we can scan only the
+        // constraints emitted by this closure's body.
+        let body_constraint_start = self.constraints.len();
+
         self.env.push_scope();
         self.bind_params(params, &param_tys);
 
@@ -1988,6 +1992,15 @@ impl InferCtx<'_> {
         // If there are type params, store the scheme for let binding generalization
         if !type_params.is_empty() {
             let vars: Vec<_> = name_to_tv.values().copied().collect();
+
+            // Phase 3: harvest body-emitted `Class` constraints
+            // transitively linked to quantifying vars.
+            self.harvest_body_class_constraints(
+                body_constraint_start,
+                &vars,
+                &mut scheme_constraints,
+            );
+
             let scheme = Scheme {
                 vars,
                 ty: fn_ty,

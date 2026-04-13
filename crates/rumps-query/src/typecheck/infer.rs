@@ -487,6 +487,114 @@ impl<'a> InferCtx<'a> {
         });
     }
 
+    /// Harvest body-emitted `Class` constraints that are transitively linked
+    /// to quantifying vars (via `Unify`/`Callable` constraints) and add them
+    /// to the scheme's constraint set.
+    ///
+    /// Uses UF snapshot/rollback to temporarily process body unifications
+    /// without side-effecting the main UF state.
+    pub(super) fn harvest_body_class_constraints(
+        &mut self,
+        body_constraint_start: usize,
+        vars: &[TyVar],
+        scheme_constraints: &mut SmallVec<[(TyVar, TypeClass<TyId>); 2]>,
+    ) {
+        let body_constraints: Vec<_> =
+            self.constraints[body_constraint_start..].to_vec();
+        let snap = self.uf.snapshot();
+
+        // Temporarily union vars linked by body `Unify`/`Callable` constraints
+        body_constraints.iter().for_each(|c| match c {
+            Constraint::Unify(a, b, _) => {
+                if let (Ty::Var(va), Ty::Var(vb)) =
+                    (self.ty_arena.get(*a), self.ty_arena.get(*b))
+                {
+                    let ra = self.uf.find(*va);
+                    let rb = self.uf.find(*vb);
+                    self.uf.union(ra, rb);
+                }
+            }
+            Constraint::Callable {
+                callee, args, ret, ..
+            } => {
+                let callee_ty = self.ty_arena.get(*callee).clone();
+                match callee_ty {
+                    Ty::Fn(params, fn_ret) => {
+                        params.iter().zip(args.iter()).for_each(|(&p, &a)| {
+                            if let (Ty::Var(vp), Ty::Var(va)) =
+                                (self.ty_arena.get(p), self.ty_arena.get(a))
+                            {
+                                let rp = self.uf.find(*vp);
+                                let ra = self.uf.find(*va);
+                                self.uf.union(rp, ra);
+                            }
+                        });
+                        if let (Ty::Var(vr), Ty::Var(va)) =
+                            (self.ty_arena.get(fn_ret), self.ty_arena.get(*ret))
+                        {
+                            let rr = self.uf.find(*vr);
+                            let ra = self.uf.find(*va);
+                            self.uf.union(rr, ra);
+                        }
+                    }
+                    // Higher-order: callee is a type var; link it to the
+                    // return var so constraints flow transitively
+                    Ty::Var(vc) => {
+                        if let Ty::Var(vr) = self.ty_arena.get(*ret) {
+                            let rc = self.uf.find(vc);
+                            let rr = self.uf.find(*vr);
+                            self.uf.union(rc, rr);
+                        }
+                        args.iter().for_each(|&a| {
+                            if let Ty::Var(va) = self.ty_arena.get(a) {
+                                let rc = self.uf.find(vc);
+                                let ra = self.uf.find(*va);
+                                self.uf.union(rc, ra);
+                            }
+                        });
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        });
+
+        // Map UF roots to originating quantifying vars; use the first
+        // mapping and skip collisions (two distinct type params sharing
+        // a root would indicate a unification that should not happen in
+        // well-typed code, but we guard defensively)
+        let mut root_to_orig: HashMap<TyVar, TyVar> =
+            HashMap::with_capacity(vars.len());
+        vars.iter().for_each(|&v| {
+            root_to_orig.entry(self.uf.find(v)).or_insert(v);
+        });
+
+        body_constraints
+            .iter()
+            .filter_map(|c| match c {
+                Constraint::Class { ty, class, .. } => {
+                    match self.ty_arena.get(*ty) {
+                        Ty::Var(tv) => {
+                            let root = self.uf.find(*tv);
+                            root_to_orig
+                                .get(&root)
+                                .map(|orig| (*orig, class.clone()))
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .collect::<SmallVec<[(TyVar, TypeClass<TyId>); 2]>>()
+            .into_iter()
+            .for_each(|entry| {
+                if !scheme_constraints.contains(&entry) {
+                    scheme_constraints.push(entry);
+                }
+            });
+        self.uf.rollback(snap);
+    }
+
     /// Record the inferred type for an expression.
     pub(crate) fn record_type(&mut self, id: ExprId, ty: TyId) {
         self.expr_types.insert(id, ty);

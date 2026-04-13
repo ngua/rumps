@@ -562,6 +562,10 @@ impl InferCtx<'_> {
             .func(param_tys.iter().copied().collect(), provisional_ret);
         self.env.bind(name, Scheme::mono(provisional_fn));
 
+        // Snapshot the constraint count so we can scan only the
+        // constraints emitted by this function's body.
+        let body_constraint_start = self.constraints.len();
+
         self.env.push_scope();
         self.bind_params(params, &param_tys);
 
@@ -601,6 +605,15 @@ impl InferCtx<'_> {
             .copied()
             .filter(|v| !outer_free.contains(v))
             .collect();
+
+        // Phase 3: harvest body-emitted `Class` constraints transitively
+        // linked to quantifying vars and add them to the scheme.
+        self.harvest_body_class_constraints(
+            body_constraint_start,
+            &vars,
+            &mut scheme_constraints,
+        );
+
         let scheme = Scheme {
             vars,
             ty: fn_ty,
