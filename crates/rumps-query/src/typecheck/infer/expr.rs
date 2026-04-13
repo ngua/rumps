@@ -219,12 +219,13 @@ impl InferCtx<'_> {
                                 TyArena::ERROR
                             } else {
                                 // Public member; instantiate and use
-                                let (ty, constraints) =
-                                    member.scheme.instantiate(
-                                        &mut self.uf,
-                                        &mut self.ty_arena,
-                                    );
+                                let scheme = member.scheme.clone();
+                                let (ty, constraints) = scheme.instantiate(
+                                    &mut self.uf,
+                                    &mut self.ty_arena,
+                                );
                                 self.emit_class_constraints(constraints, span);
+                                self.record_forward_ref(&scheme, ty, span);
                                 ty
                             }
                         }
@@ -943,9 +944,13 @@ impl InferCtx<'_> {
     fn var(&mut self, name: StringId, span: Span) -> TyId {
         match self.env.lookup(name) {
             Some(scheme) => {
+                let scheme = scheme.clone();
                 let (ty, constraints) =
                     scheme.instantiate(&mut self.uf, &mut self.ty_arena);
                 self.emit_class_constraints(constraints, span);
+                // Phase 4: record forward-ref instantiation if this
+                // lookup hit a not-yet-finalized hoisted scheme.
+                self.record_forward_ref(&scheme, ty, span);
                 ty
             }
             None => {

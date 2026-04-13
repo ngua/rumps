@@ -57,7 +57,15 @@ impl InferCtx<'_> {
                 ..
             }) => {
                 self.env.mark_non_import();
-                self.fun(name, &type_params, &params, ret.as_ref(), body, span);
+                self.fun(
+                    id,
+                    name,
+                    &type_params,
+                    &params,
+                    ret.as_ref(),
+                    body,
+                    span,
+                );
             }
 
             Some(Stmt::Let(pattern, ann, rhs, _)) => {
@@ -482,8 +490,10 @@ impl InferCtx<'_> {
     ///
     /// For generic functions (`fn foo[T](x: T) -> T`), explicit type parameters
     /// are bound as fresh type variables before inferring parameter/return types.
+    #[allow(clippy::too_many_arguments)]
     fn fun(
         &mut self,
+        stmt_id: StmtId,
         name: StringId,
         type_params: &SmallVec<[TypeParam; 2]>,
         params: &SmallVec<[(StringId, Option<AstTypeExprId>); 4]>,
@@ -620,6 +630,7 @@ impl InferCtx<'_> {
             constraints: scheme_constraints,
         };
         self.env.bind(name, scheme);
+        self.finalize_hoisted_fun(stmt_id, name);
     }
 
     /// Infer types for a `let` statement.
@@ -639,7 +650,7 @@ impl InferCtx<'_> {
     /// for proper generalization instead of monomorphizing.
     fn r#let(
         &mut self,
-        _stmt_id: StmtId,
+        stmt_id: StmtId,
         pattern: &BindingPattern,
         ann: Option<&AstTypeExprId>,
         rhs: ExprId,
@@ -717,6 +728,8 @@ impl InferCtx<'_> {
             match (&pattern, closure_scheme) {
                 (BindingPattern::Var(name), Some(scheme)) => {
                     self.env.bind(*name, scheme);
+                    // Phase 4: closure-RHS let parity with `fun`.
+                    self.finalize_hoisted_fun(stmt_id, *name);
                 }
                 _ => self.bind_pattern(pattern, ty, span),
             }

@@ -595,6 +595,79 @@ impl<'a> InferCtx<'a> {
         self.uf.rollback(snap);
     }
 
+    /// Record a forward-ref instantiation if `scheme` matches a
+    /// not-yet-finalized hoisted scheme.
+    ///
+    /// Uses `hoisted_fun_index` for O(1) lookup by the scheme's function
+    /// `TyId`, then confirms identity via structural `Scheme` equality.
+    /// `inst_ty` is the freshly-instantiated function type from
+    /// `scheme.instantiate`; `span` is the call site span.
+    pub(super) fn record_forward_ref(
+        &mut self,
+        scheme: &Scheme,
+        inst_ty: TyId,
+        span: Span,
+    ) {
+        if let Some(&stmt_id) = self.hoisted_fun_index.get(&scheme.ty) {
+            let is_match =
+                self.hoisted_funs.get(&stmt_id).is_some_and(|s| s == scheme);
+            if is_match {
+                self.forward_instantiations
+                    .entry(stmt_id)
+                    .or_default()
+                    .push((inst_ty, span));
+            }
+        }
+    }
+
+    /// Finalize a hoisted function: drain forward-ref instantiations
+    /// recorded against its Pass 1 scheme and retroactively unify each
+    /// one with a fresh instantiation of the Pass 2 final scheme.
+    ///
+    /// Call this from `fun()` (and any other Pass 2 site that finalizes
+    /// a hoisted function) immediately AFTER binding the final scheme
+    /// into the environment.
+    pub(super) fn finalize_hoisted_fun(
+        &mut self,
+        stmt_id: StmtId,
+        name: StringId,
+    ) {
+        // Drop the Pass 1 scheme and its reverse index entry.
+        // Retain the constraint count so we can skip already-emitted
+        // constraints during replay (the Pass 1 scheme's constraints
+        // were emitted at the original forward-ref instantiation site;
+        // only body-derived constraints added by Phase 3 are new).
+        let pass1_n = self
+            .hoisted_funs
+            .remove(&stmt_id)
+            .map(|scheme| {
+                self.hoisted_fun_index.remove(&scheme.ty);
+                scheme.constraints.len()
+            })
+            .unwrap_or(0);
+
+        // Replay each recorded forward-ref instantiation against
+        // the Pass 2 final scheme.
+        if let Some(insts) = self.forward_instantiations.remove(&stmt_id) {
+            let final_scheme = self.env.lookup(name).cloned();
+            if let Some(final_scheme) = final_scheme {
+                insts.into_iter().for_each(|(forward_ty, span)| {
+                    let (ty_inst, constraints) = final_scheme
+                        .instantiate(&mut self.uf, &mut self.ty_arena);
+                    // Only emit constraints beyond those already emitted
+                    // by the original Pass 1 instantiation.
+                    self.emit_class_constraints(
+                        constraints.into_iter().skip(pass1_n).collect(),
+                        span,
+                    );
+                    self.unify(forward_ty, ty_inst, span);
+                });
+            } else {
+                invariant!("scheme bound by Pass 2 fun")
+            }
+        }
+    }
+
     /// Record the inferred type for an expression.
     pub(crate) fn record_type(&mut self, id: ExprId, ty: TyId) {
         self.expr_types.insert(id, ty);
