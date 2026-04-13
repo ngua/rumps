@@ -11,7 +11,8 @@ use smallvec::{smallvec, SmallVec};
 
 use super::{ClassInstanceInput, InferCtx};
 use crate::ast::{
-    AstTypeExpr, AstTypeExprId, BindingPattern, Import, Stmt, StmtId, TypeParam,
+    AstTypeExpr, AstTypeExprId, BindingPattern, Expr, Import, Stmt, StmtId,
+    TypeParam,
 };
 use crate::intern::{QualifiedName, StringId};
 use crate::typecheck::error::TypeError;
@@ -64,6 +65,90 @@ impl InferCtx<'_> {
         stmts.iter().for_each(|&id| self.hoist_non_module(id));
     }
 
+    /// Hoist top-level `let` bindings.
+    ///
+    /// Only simple bindings (`BindingPattern::Var(name)`) are hoisted;
+    /// destructuring patterns fall through and are bound normally in Pass 2.
+    /// Intended to be called ONLY at script top level, after
+    /// `hoist_declarations`, and ONLY in non-interactive mode.
+    ///
+    /// Two cases:
+    ///
+    /// 1. Closure RHS: hoisted via `hoist_fun` to obtain full parity with
+    ///    `fun` hoisting (polymorphic schemes, fresh instantiation per
+    ///    forward-reference call site, finalization tracking).
+    ///
+    /// 2. Non-closure RHS: hoisted with a provisional fresh `TyVar` and
+    ///    tracked in `hoisted_lets` for the Pass 2 unify step.
+    ///
+    /// Collisions with previously bound names from top-level `fun` or an
+    /// earlier `let` of the same name emit a duplicate-binding error.
+    /// Collisions with imported names are allowed (shadowing imports is
+    /// intentional).
+    pub(crate) fn hoist_toplevel_lets(&mut self, stmts: &[StmtId]) {
+        stmts.iter().for_each(|&id| {
+            let stmt = self.ast.get_stmt(id).cloned();
+            let span = self.ast.stmt_span(id).unwrap_or_default();
+            if let Some(Stmt::Let(BindingPattern::Var(name), ann, rhs, _)) = stmt {
+                // Only reject collisions with hoisted funs and
+                // earlier hoisted lets; allow shadowing imports.
+                // Linear scan is fine; `hoisted_funs` is small (one per
+                // top-level `FUN`) and this runs once per top-level `LET`.
+                let is_hoisted_fun = self.env.lookup(name).is_some_and(|env_s| {
+                    self.hoisted_funs.values().any(|s| env_s == s)
+                });
+                let is_hoisted_let = self.hoisted_lets.contains_key(&name);
+                if is_hoisted_fun || is_hoisted_let {
+                    let n = self.env.resolve_string(name);
+                    self.error(TypeError::Custom {
+                        msg: format!(
+                            "duplicate top-level binding `{}`; \
+                             a function or earlier `let` already binds this name",
+                            n
+                        ),
+                        span,
+                    });
+                } else {
+                    let closure = self
+                        .ast
+                        .get_expr(rhs)
+                        .cloned()
+                        .and_then(|e| match e {
+                            Expr::Closure { type_params, params, ret, .. } => {
+                                Some((type_params, params, ret))
+                            }
+                            _ => None,
+                        });
+                    match closure {
+                        Some((type_params, params, ret)) => {
+                            // Closure-RHS lets: parity with `fun`.
+                            // `hoist_fun` populates `hoisted_funs` so Phase 4
+                            // forward-ref tracking applies uniformly.
+                            self.hoist_fun(
+                                id,
+                                name,
+                                &type_params,
+                                &params,
+                                ret.as_ref(),
+                                span,
+                            );
+                        }
+                        None => {
+                            let ty = match ann {
+                                Some(aid) => {
+                                    self.ast_type_to_ty(aid, &IndexMap::new())
+                                }
+                                None => self.fresh(),
+                            };
+                            self.env.bind(name, Scheme::mono(ty));
+                            self.hoisted_lets.insert(name, ty);
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     /// Hoist non-module declarations (functions and class instances).
     ///
     /// Called in Phase 3 after modules have been hoisted and imports processed.
@@ -78,9 +163,14 @@ impl InferCtx<'_> {
                 params,
                 ret,
                 ..
-            }) => {
-                self.hoist_fun(name, &type_params, &params, ret.as_ref(), span)
-            }
+            }) => self.hoist_fun(
+                id,
+                name,
+                &type_params,
+                &params,
+                ret.as_ref(),
+                span,
+            ),
 
             Some(Stmt::ClassInstance {
                 class_name,
@@ -116,6 +206,7 @@ impl InferCtx<'_> {
     /// in the scheme.
     fn hoist_fun(
         &mut self,
+        stmt_id: StmtId,
         name: StringId,
         type_params: &SmallVec<[TypeParam; 2]>,
         params: &SmallVec<[(StringId, Option<AstTypeExprId>); 4]>,
@@ -191,7 +282,10 @@ impl InferCtx<'_> {
             ty: fn_ty,
             constraints: scheme_constraints,
         };
-        self.env.bind(name, scheme);
+        // Clone is cheap: `Scheme` is a small struct with a `SmallVec`.
+        self.env.bind(name, scheme.clone());
+        self.hoisted_fun_index.insert(scheme.ty, stmt_id);
+        self.hoisted_funs.insert(stmt_id, scheme);
     }
 
     /// Hoist a module declaration and its members.
@@ -293,6 +387,7 @@ impl InferCtx<'_> {
                 }) => {
                     // Hoist the function
                     self.hoist_fun(
+                        id,
                         *name,
                         type_params,
                         params,
@@ -316,22 +411,66 @@ impl InferCtx<'_> {
                 Some(Stmt::Let(
                     BindingPattern::Var(ref const_name),
                     ref ann,
-                    _,
+                    ref rhs,
                     vis,
                 )) => {
-                    // Use annotation if present, else fresh type variable
-                    let ty = match ann {
-                        Some(id) => self.ast_type_to_ty(*id, &IndexMap::new()),
-                        None => self.fresh(),
-                    };
-                    let scheme = Scheme::mono(ty);
-                    self.env.bind(*const_name, scheme.clone());
-                    self.env.register_user_module_member(
-                        mod_path.clone(),
-                        *const_name,
-                        scheme,
-                        vis,
+                    let closure = self.ast.get_expr(*rhs).cloned().and_then(
+                        |e| match e {
+                            Expr::Closure {
+                                type_params,
+                                params,
+                                ret,
+                                ..
+                            } => Some((type_params, params, ret)),
+                            _ => None,
+                        },
                     );
+                    match closure {
+                        Some((type_params, params, ret)) => {
+                            // Closure-RHS: parity with `fun`. `hoist_fun`
+                            // registers both the env binding AND the
+                            // `hoisted_funs` entry.
+                            self.hoist_fun(
+                                id,
+                                *const_name,
+                                &type_params,
+                                &params,
+                                ret.as_ref(),
+                                item_span,
+                            );
+                            if let Some(scheme) =
+                                self.env.lookup(*const_name).cloned()
+                            {
+                                self.env.register_user_module_member(
+                                    mod_path.clone(),
+                                    *const_name,
+                                    scheme,
+                                    vis,
+                                );
+                            }
+                        }
+                        None => {
+                            // Non-closure: provisional `TyVar`, tracked for
+                            // Pass 2 unify.
+                            let ty = match ann {
+                                Some(aid) => {
+                                    self.ast_type_to_ty(*aid, &IndexMap::new())
+                                }
+                                None => self.fresh(),
+                            };
+                            let scheme = Scheme::mono(ty);
+                            self.env.bind(*const_name, scheme.clone());
+                            self.env.register_user_module_member(
+                                mod_path.clone(),
+                                *const_name,
+                                scheme,
+                                vis,
+                            );
+                            // `QualifiedName` clone is typically stack-only (`SmallVec`).
+                            self.hoisted_module_lets
+                                .insert((mod_path.clone(), *const_name), ty);
+                        }
+                    }
                 }
 
                 Some(Stmt::ClassInstance {

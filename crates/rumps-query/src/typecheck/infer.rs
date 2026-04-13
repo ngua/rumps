@@ -298,6 +298,52 @@ pub(crate) struct InferCtx<'a> {
     /// type variables, these are checked: if `rhs_ty` resolved to a union and
     /// `ann_ty` did not, the annotation illegally narrows a union type.
     let_annotations: Vec<(TyId, TyId, Span)>,
+    /// Top-level non-closure `let` bindings hoisted with a provisional type var.
+    ///
+    /// Pass 1 inserts a fresh var here for each simple `let name = ...` at
+    /// script top level (non-interactive only) whose RHS is NOT a closure
+    /// literal. Pass 2 `r#let` removes the entry, unifies the provisional
+    /// var with the inferred RHS type, and rebinds the name with the final
+    /// scheme.
+    ///
+    /// Closure-RHS `let`s are NOT tracked here; they are hoisted via
+    /// `hoist_fun` and use the existing `closure_schemes` rebind path.
+    pub(super) hoisted_lets: HashMap<StringId, TyId>,
+    /// Module-level `let` member bindings hoisted with a provisional type var.
+    ///
+    /// Same purpose as `hoisted_lets`, scoped per module path so distinct
+    /// modules cannot collide. Phase 2 hoists into this map; the
+    /// corresponding unify step happens inside `user_module` Pass 2 just
+    /// before re-registering the member.
+    pub(super) hoisted_module_lets: HashMap<(QualifiedName, StringId), TyId>,
+    /// Hoisted polymorphic schemes that have not yet been finalized by Pass 2.
+    ///
+    /// Populated by `hoist_fun` (top level, modules, blocks). The key is
+    /// the `StmtId` where the hoist originated; the value is the Pass 1
+    /// scheme so we can recognize forward-ref instantiations as referring
+    /// to it.
+    ///
+    /// An entry is removed when Pass 2 calls `finalize_hoisted_fun` for
+    /// that `StmtId`. Only entries that are still present at lookup time
+    /// count as "not finalized"; once removed, lookups go straight to the
+    /// env binding (which holds the Pass 2 final scheme).
+    pub(super) hoisted_funs: HashMap<StmtId, Scheme>,
+    /// Reverse index from hoisted scheme `TyId` to `StmtId`.
+    ///
+    /// Keyed by the `Scheme::ty` field of each entry in `hoisted_funs`.
+    /// Since each `hoist_fun` call allocates a fresh function `TyId`, these
+    /// are unique per hoisted scheme.
+    pub(super) hoisted_fun_index: HashMap<TyId, StmtId>,
+    /// Forward-reference instantiations of hoisted polymorphic schemes.
+    ///
+    /// When `var` (or `Expr::Path`) looks up a name and the returned scheme
+    /// is the Pass 1 hoisted scheme of a function whose Pass 2 finalization
+    /// has not yet run, the call site records the freshly-instantiated
+    /// function type here.
+    ///
+    /// `finalize_hoisted_fun` drains the entry, instantiates the final
+    /// Pass 2 scheme afresh once per recorded instantiation, and unifies.
+    pub(super) forward_instantiations: HashMap<StmtId, Vec<(TyId, Span)>>,
 }
 
 impl<'a> InferCtx<'a> {
@@ -351,6 +397,11 @@ impl<'a> InferCtx<'a> {
             interactive,
             poly_param_vars: HashSet::new(),
             let_annotations: Vec::new(),
+            hoisted_lets: HashMap::new(),
+            hoisted_module_lets: HashMap::new(),
+            hoisted_funs: HashMap::new(),
+            hoisted_fun_index: HashMap::new(),
+            forward_instantiations: HashMap::new(),
         }
     }
 
@@ -700,6 +751,11 @@ impl<'a> InferCtx<'a> {
     ) -> Result<TypecheckOutput> {
         // Pass 1: Hoist function and module declarations for forward references
         self.hoist_declarations(stmts);
+
+        // Pass 1.5: Hoist top-level `let` bindings (non-interactive only)
+        if !self.interactive {
+            self.hoist_toplevel_lets(stmts);
+        }
 
         // Pass 2: Infer types for all statement bodies
         stmts.iter().for_each(|id| self.stmt(*id));

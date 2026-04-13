@@ -62,7 +62,7 @@ impl InferCtx<'_> {
 
             Some(Stmt::Let(pattern, ann, rhs, _)) => {
                 self.env.mark_non_import();
-                self.r#let(&pattern, ann.as_ref(), rhs, span);
+                self.r#let(id, &pattern, ann.as_ref(), rhs, span);
             }
 
             Some(Stmt::Expr(expr)) => {
@@ -626,6 +626,7 @@ impl InferCtx<'_> {
     /// for proper generalization instead of monomorphizing.
     fn r#let(
         &mut self,
+        _stmt_id: StmtId,
         pattern: &BindingPattern,
         ann: Option<&AstTypeExprId>,
         rhs: ExprId,
@@ -678,6 +679,27 @@ impl InferCtx<'_> {
 
         // Bind variables from the pattern (if not already done)
         if let Some(ty) = ty {
+            if let BindingPattern::Var(name) = pattern {
+                // Phase 1: top-level `let` hoist unify. For annotated
+                // lets, `hoisted_ty` is the annotation type and
+                // `infer_default_let` already unified `rhs` with
+                // `annotation`; this second unify is redundant but
+                // harmless. For unannotated lets, `hoisted_ty` is the
+                // fresh var from hoisting and this is the only unify.
+                if let Some(hoisted_ty) = self.hoisted_lets.remove(name) {
+                    self.unify(hoisted_ty, ty, span);
+                }
+                // Phase 2: module-level `let` hoist unify.
+                if let Some(ref mod_path) = self.current_module {
+                    let key = (mod_path.clone(), *name);
+                    if let Some(hoisted_ty) =
+                        self.hoisted_module_lets.remove(&key)
+                    {
+                        self.unify(hoisted_ty, ty, span);
+                    }
+                }
+            }
+
             // For polymorphic closures, use the stored scheme directly
             match (&pattern, closure_scheme) {
                 (BindingPattern::Var(name), Some(scheme)) => {
