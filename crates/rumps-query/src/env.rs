@@ -310,7 +310,7 @@ impl BinOp {
         let binary_constrained = |a: &mut TyArena, v0: TyId, tag| {
             let ty = a.func(smallvec![v0, v0], v0);
             Scheme {
-                vars: vec![TyVar::new(0)],
+                vars: smallvec![TyVar::new(0)],
                 ty,
                 constraints: smallvec![(TyVar::new(0), TypeClass::Simple(tag))],
             }
@@ -320,7 +320,7 @@ impl BinOp {
         let cmp_constrained = |a: &mut TyArena, v0: TyId, tag| {
             let ty = a.func(smallvec![v0, v0], TyArena::BOOL);
             Scheme {
-                vars: vec![TyVar::new(0)],
+                vars: smallvec![TyVar::new(0)],
                 ty,
                 constraints: smallvec![(TyVar::new(0), TypeClass::Simple(tag))],
             }
@@ -442,7 +442,7 @@ impl BinOp {
                 BinOpDef {
                     name: "??",
                     ty: Scheme {
-                        vars: vec![TyVar::new(0), TyVar::new(1)],
+                        vars: smallvec![TyVar::new(0), TyVar::new(1)],
                         ty,
                         constraints: smallvec![(
                             TyVar::new(1),
@@ -460,7 +460,7 @@ impl BinOp {
                 BinOpDef {
                     name: "|>",
                     ty: Scheme {
-                        vars: vec![TyVar::new(0), TyVar::new(1)],
+                        vars: smallvec![TyVar::new(0), TyVar::new(1)],
                         ty,
                         constraints: smallvec![],
                     },
@@ -486,7 +486,7 @@ impl UnOp {
                 UnOpDef {
                     name: "-",
                     ty: Scheme {
-                        vars: vec![TyVar::new(0)],
+                        vars: smallvec![TyVar::new(0)],
                         ty,
                         constraints: smallvec![(
                             TyVar::new(0),
@@ -509,7 +509,7 @@ impl UnOp {
                 UnOpDef {
                     name: "?",
                     ty: Scheme {
-                        vars: vec![TyVar::new(0), TyVar::new(1)],
+                        vars: smallvec![TyVar::new(0), TyVar::new(1)],
                         ty,
                         constraints: smallvec![(
                             TyVar::new(1),
@@ -539,7 +539,7 @@ impl PostfixOp {
                 PostfixOpDef {
                     name: "!",
                     ty: Scheme {
-                        vars: vec![TyVar::new(0), TyVar::new(1)],
+                        vars: smallvec![TyVar::new(0), TyVar::new(1)],
                         ty,
                         constraints: smallvec![(
                             TyVar::new(1),
@@ -998,21 +998,21 @@ impl Environment {
 
         // Helper: unconstrained poly1 scheme
         let poly1 = |ty: TyId| Scheme {
-            vars: vec![TyVar::new(0)],
+            vars: smallvec![TyVar::new(0)],
             ty,
             constraints: smallvec![],
         };
 
         // Helper: unconstrained poly2 scheme
         let poly2 = |ty: TyId| Scheme {
-            vars: vec![TyVar::new(0), TyVar::new(1)],
+            vars: smallvec![TyVar::new(0), TyVar::new(1)],
             ty,
             constraints: smallvec![],
         };
 
         // Helper: unconstrained poly3 scheme
         let poly3 = |ty: TyId| Scheme {
-            vars: vec![TyVar::new(0), TyVar::new(1), TyVar::new(2)],
+            vars: smallvec![TyVar::new(0), TyVar::new(1), TyVar::new(2)],
             ty,
             constraints: smallvec![],
         };
@@ -1210,7 +1210,7 @@ impl Environment {
 
         // `forall T: Numeric. (T) -> T`
         let num_unary = |ty: TyId| Scheme {
-            vars: vec![TyVar::new(0)],
+            vars: smallvec![TyVar::new(0)],
             ty,
             constraints: smallvec![(
                 TyVar::new(0),
@@ -1219,7 +1219,7 @@ impl Environment {
         };
         // `forall T: Numeric. (T, T) -> T`
         let num_binary = |ty: TyId| Scheme {
-            vars: vec![TyVar::new(0)],
+            vars: smallvec![TyVar::new(0)],
             ty,
             constraints: smallvec![(
                 TyVar::new(0),
@@ -1369,12 +1369,12 @@ impl Environment {
 
         // Reuse poly1 closure (it was moved; redefine)
         let poly1 = |ty: TyId| Scheme {
-            vars: vec![TyVar::new(0)],
+            vars: smallvec![TyVar::new(0)],
             ty,
             constraints: smallvec![],
         };
         let poly2 = |ty: TyId| Scheme {
-            vars: vec![TyVar::new(0), TyVar::new(1)],
+            vars: smallvec![TyVar::new(0), TyVar::new(1)],
             ty,
             constraints: smallvec![],
         };
@@ -1627,12 +1627,12 @@ impl Environment {
         let opt_note_ty = a.func(smallvec![v1, opt_v0], res_tu);
 
         let poly1 = |ty: TyId| Scheme {
-            vars: vec![TyVar::new(0)],
+            vars: smallvec![TyVar::new(0)],
             ty,
             constraints: smallvec![],
         };
         let poly2 = |ty: TyId| Scheme {
-            vars: vec![TyVar::new(0), TyVar::new(1)],
+            vars: smallvec![TyVar::new(0), TyVar::new(1)],
             ty,
             constraints: smallvec![],
         };
@@ -1694,12 +1694,12 @@ impl Environment {
         let res_hush_ty = a.func(smallvec![res_tu], opt_v0);
 
         let poly2 = |ty: TyId| Scheme {
-            vars: vec![TyVar::new(0), TyVar::new(1)],
+            vars: smallvec![TyVar::new(0), TyVar::new(1)],
             ty,
             constraints: smallvec![],
         };
         let poly3 = |ty: TyId| Scheme {
-            vars: vec![TyVar::new(0), TyVar::new(1), TyVar::new(2)],
+            vars: smallvec![TyVar::new(0), TyVar::new(1), TyVar::new(2)],
             ty,
             constraints: smallvec![],
         };
@@ -1813,7 +1813,7 @@ impl Environment {
                         name: "foreach",
                         f: Prelude::placeholder,
                         ty: Scheme {
-                            vars: vec![
+                            vars: smallvec![
                                 TyVar::new(0),
                                 TyVar::new(1),
                                 TyVar::new(2),
@@ -1829,7 +1829,7 @@ impl Environment {
                         name: "contains",
                         f: Prelude::contains,
                         ty: Scheme {
-                            vars: vec![TyVar::new(0), TyVar::new(1)],
+                            vars: smallvec![TyVar::new(0), TyVar::new(1)],
                             ty: contains_ty,
                             constraints: smallvec![(
                                 TyVar::new(1),
@@ -1841,7 +1841,7 @@ impl Environment {
                         name: "reverse",
                         f: Prelude::reverse,
                         ty: Scheme {
-                            vars: vec![TyVar::new(0)],
+                            vars: smallvec![TyVar::new(0)],
                             ty: reverse_ty,
                             constraints: smallvec![],
                         },

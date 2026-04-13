@@ -550,7 +550,7 @@ impl InferCtx<'_> {
                                                 target_ty,
                                             );
                                             let scheme = Scheme {
-                                                vars: vec![input_var],
+                                                vars: smallvec![input_var],
                                                 ty: fn_ty,
                                                 constraints: smallvec::smallvec![
                                                     (input_var, class)
@@ -602,7 +602,7 @@ impl InferCtx<'_> {
                                         .ty_arena
                                         .func(smallvec![input_ty], ret_ty);
                                     let scheme = Scheme {
-                                        vars: vec![input_var],
+                                        vars: smallvec![input_var],
                                         ty: fn_ty,
                                         constraints: smallvec::smallvec![(
                                             input_var, class
@@ -1996,7 +1996,8 @@ impl InferCtx<'_> {
 
         // If there are type params, store the scheme for let binding generalization
         if !type_params.is_empty() {
-            let vars: Vec<_> = name_to_tv.values().copied().collect();
+            let vars: SmallVec<[TyVar; 4]> =
+                name_to_tv.values().copied().collect();
 
             // Phase 3: harvest body-emitted `Class` constraints
             // transitively linked to quantifying vars.

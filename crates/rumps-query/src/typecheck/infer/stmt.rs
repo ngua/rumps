@@ -610,7 +610,7 @@ impl InferCtx<'_> {
         // Include all declared type params (they may only appear in constraints,
         // not in the function type itself; e.g. `T` in `[T, F: Fallible[T]]`)
         let declared_tvs: HashSet<_> = name_to_tv.values().copied().collect();
-        let vars: Vec<_> = ty_vars
+        let vars: SmallVec<[TyVar; 4]> = ty_vars
             .union(&declared_tvs)
             .copied()
             .filter(|v| !outer_free.contains(v))

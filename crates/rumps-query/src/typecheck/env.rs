@@ -4,6 +4,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use smallvec::SmallVec;
+
 use super::ty::{ClassDef, ClassRegistry, Scheme, TyArena, TyId, TyVar};
 use super::uf::UnionFind;
 use crate::ast::Visibility;
@@ -328,7 +330,8 @@ impl TypeEnv {
     ) -> Scheme {
         let env_fv = self.free_vars(arena, uf);
         let ty_fv = uf.free_vars(ty, arena);
-        let vars: Vec<TyVar> = ty_fv.difference(&env_fv).copied().collect();
+        let vars: SmallVec<[TyVar; 4]> =
+            ty_fv.difference(&env_fv).copied().collect();
         Scheme {
             vars,
             ty,

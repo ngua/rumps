@@ -114,17 +114,17 @@ impl ClassRegistry {
         let unary_v0 = arena.func(smallvec![v0], v0);
 
         let simple1 = |ty: TyId, tag: ClassId| Scheme {
-            vars: vec![TyVar::new(0)],
+            vars: smallvec![TyVar::new(0)],
             ty,
             constraints: smallvec![(TyVar::new(0), TypeClass::Simple(tag))],
         };
         let hkt2 = |ty: TyId, tag: ClassId| Scheme {
-            vars: vec![TyVar::new(0), TyVar::new(1)],
+            vars: smallvec![TyVar::new(0), TyVar::new(1)],
             ty,
             constraints: smallvec![(TyVar::new(1), TypeClass::Hkt(tag, None))],
         };
         let hkt3 = |ty: TyId, tag: ClassId| Scheme {
-            vars: vec![TyVar::new(0), TyVar::new(1), TyVar::new(2)],
+            vars: smallvec![TyVar::new(0), TyVar::new(1), TyVar::new(2)],
             ty,
             constraints: smallvec![(TyVar::new(2), TypeClass::Hkt(tag, None))],
         };
@@ -309,7 +309,7 @@ impl ClassRegistry {
                     "into",
                     MethodSpec::Tracked {
                         scheme: Scheme {
-                            vars: vec![TyVar::new(0), TyVar::new(1)],
+                            vars: smallvec![TyVar::new(0), TyVar::new(1)],
                             ty: arena.func(smallvec![v0], v1),
                             constraints: smallvec![(
                                 TyVar::new(0),
@@ -330,7 +330,7 @@ impl ClassRegistry {
                     "try-into",
                     MethodSpec::Tracked {
                         scheme: Scheme {
-                            vars: vec![TyVar::new(0), TyVar::new(1)],
+                            vars: smallvec![TyVar::new(0), TyVar::new(1)],
                             ty: {
                                 let ret = arena.result(v1, TyArena::STRING);
                                 arena.func(smallvec![v0], ret)
@@ -354,7 +354,7 @@ impl ClassRegistry {
                     (
                         "index",
                         MethodSpec::Standard(Scheme {
-                            vars: vec![TyVar::new(0), TyVar::new(1)],
+                            vars: smallvec![TyVar::new(0), TyVar::new(1)],
                             ty: arena.func(smallvec![v0, assoc_idx], v1),
                             constraints: smallvec![(
                                 TyVar::new(0),
@@ -368,7 +368,7 @@ impl ClassRegistry {
                     (
                         "get",
                         MethodSpec::Standard(Scheme {
-                            vars: vec![TyVar::new(0), TyVar::new(1)],
+                            vars: smallvec![TyVar::new(0), TyVar::new(1)],
                             ty: {
                                 let ret = arena.option(v1);
                                 arena.func(smallvec![v0, assoc_idx], ret)
@@ -1552,7 +1552,7 @@ impl TyArena {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Scheme {
     /// Universally quantified type variables.
-    pub(crate) vars: Vec<TyVar>,
+    pub(crate) vars: SmallVec<[TyVar; 4]>,
     /// The body type (may contain the quantified variables).
     pub(crate) ty: TyId,
     /// User-specified class constraints on type variables.
@@ -1567,7 +1567,7 @@ impl Scheme {
     /// Create a monomorphic scheme (no quantified variables).
     pub(crate) fn mono(ty: TyId) -> Self {
         Self {
-            vars: vec![],
+            vars: SmallVec::new(),
             ty,
             constraints: SmallVec::new(),
         }
@@ -1580,7 +1580,7 @@ impl Scheme {
     ) -> Self {
         let t = arena.var(0);
         Self {
-            vars: vec![TyVar(0)],
+            vars: smallvec![TyVar(0)],
             ty: f(t, arena),
             constraints: SmallVec::new(),
         }
@@ -1594,7 +1594,7 @@ impl Scheme {
         let t = arena.var(0);
         let u = arena.var(1);
         Self {
-            vars: vec![TyVar(0), TyVar(1)],
+            vars: smallvec![TyVar(0), TyVar(1)],
             ty: f(t, u, arena),
             constraints: SmallVec::new(),
         }
@@ -1609,7 +1609,7 @@ impl Scheme {
         let u = arena.var(1);
         let v = arena.var(2);
         Self {
-            vars: vec![TyVar(0), TyVar(1), TyVar(2)],
+            vars: smallvec![TyVar(0), TyVar(1), TyVar(2)],
             ty: f(t, u, v, arena),
             constraints: SmallVec::new(),
         }
@@ -1827,7 +1827,7 @@ mod tests {
         let vid = a.var(0);
         let arr = a.array(vid);
         let s = Scheme {
-            vars: vec![v],
+            vars: smallvec![v],
             ty: arr,
             constraints: SmallVec::new(),
         };
@@ -1853,7 +1853,7 @@ mod tests {
         let rb = a.var(1);
         let f = a.func(smallvec![pa], rb);
         let s = Scheme {
-            vars: vec![va],
+            vars: smallvec![va],
             ty: f,
             constraints: SmallVec::new(),
         };
@@ -2019,7 +2019,7 @@ mod tests {
     fn scheme_poly_creates_one_var() {
         let mut a = TyArena::new();
         let s = Scheme::poly(&mut a, |t, a| a.array(t));
-        assert_eq!(s.vars, vec![TyVar::new(0)]);
+        assert_eq!(s.vars.as_slice(), [TyVar::new(0)]);
         let v0 = TyVar::new(0);
         match a.get(s.ty) {
             Ty::Array(inner) => {
@@ -2037,7 +2037,7 @@ mod tests {
             let arr = a.array(t);
             a.func(smallvec![arr], TyArena::INT)
         });
-        assert_eq!(s.vars, vec![TyVar::new(0)]);
+        assert_eq!(s.vars.as_slice(), [TyVar::new(0)]);
         match a.get(s.ty) {
             Ty::Fn(params, ret) => {
                 assert_eq!(params.len(), 1);
@@ -2057,7 +2057,7 @@ mod tests {
             let r = a.alloc(Ty::Tuple(smallvec![u, t]));
             a.func(smallvec![p], r)
         });
-        assert_eq!(s.vars, vec![TyVar::new(0), TyVar::new(1)]);
+        assert_eq!(s.vars.as_slice(), [TyVar::new(0), TyVar::new(1)]);
     }
 
     #[test]
@@ -2070,7 +2070,7 @@ mod tests {
             let arr_u = a.array(u);
             a.func(smallvec![arr_t, f_tu], arr_u)
         });
-        assert_eq!(s.vars, vec![TyVar::new(0), TyVar::new(1)]);
+        assert_eq!(s.vars.as_slice(), [TyVar::new(0), TyVar::new(1)]);
     }
 
     #[test]
@@ -2081,7 +2081,10 @@ mod tests {
             let tup = a.alloc(Ty::Tuple(smallvec![t, u, v]));
             a.func(smallvec![tup], t)
         });
-        assert_eq!(s.vars, vec![TyVar::new(0), TyVar::new(1), TyVar::new(2)]);
+        assert_eq!(
+            s.vars.as_slice(),
+            [TyVar::new(0), TyVar::new(1), TyVar::new(2)]
+        );
     }
 
     #[test]

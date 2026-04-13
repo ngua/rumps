@@ -273,7 +273,7 @@ impl InferCtx<'_> {
             fn_free.extend(class.free_vars(&self.ty_arena, &mut self.uf));
         });
 
-        let vars: Vec<_> = fn_free
+        let vars: SmallVec<[TyVar; 4]> = fn_free
             .into_iter()
             .filter(|v| !outer_free.contains(v))
             .collect();
