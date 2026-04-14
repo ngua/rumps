@@ -736,7 +736,7 @@ impl<T: fmt::Display> fmt::Display for TypeClass<T> {
 }
 
 /// A type variable; placeholder for an unknown type during inference.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) struct TyVar(u32);
 
 impl TyVar {

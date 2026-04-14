@@ -612,11 +612,12 @@ impl InferCtx<'_> {
         let declared_tvs: HashSet<_> = name_to_tv.values().copied().collect();
         let tv_names: HashMap<TyVar, StringId> =
             name_to_tv.iter().map(|(&name, &tv)| (tv, name)).collect();
-        let vars: SmallVec<[TyVar; 4]> = ty_vars
+        let mut vars: SmallVec<[TyVar; 4]> = ty_vars
             .union(&declared_tvs)
             .copied()
             .filter(|v| !outer_free.contains(v))
             .collect();
+        vars.sort_unstable();
 
         // Phase 3: harvest body-emitted `Class` constraints transitively
         // linked to quantifying vars and add them to the scheme.

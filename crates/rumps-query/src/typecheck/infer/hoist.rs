@@ -273,10 +273,11 @@ impl InferCtx<'_> {
             fn_free.extend(class.free_vars(&self.ty_arena, &mut self.uf));
         });
 
-        let vars: SmallVec<[TyVar; 4]> = fn_free
+        let mut vars: SmallVec<[TyVar; 4]> = fn_free
             .into_iter()
             .filter(|v| !outer_free.contains(v))
             .collect();
+        vars.sort_unstable();
         let scheme = Scheme {
             vars,
             ty: fn_ty,
