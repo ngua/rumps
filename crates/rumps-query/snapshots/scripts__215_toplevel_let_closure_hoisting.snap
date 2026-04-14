@@ -1,0 +1,8 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Top-level LET closure hoisting: forward references to closures\n; bound via LET should behave like forward references to FUNs,\n; including independent instantiation at multiple types.\n\nfun main() {\n  write id(42)\n  write id(\"hello\")\n\n  write twice(3)\n\n  write inc(10)\n}\n\nlet id = [T](x: T) -> T => x\nlet twice = [T: Numeric](x: T) -> T => x + x\nlet inc = (x: Int) -> Int => x + 1\n"
+---
+42
+"hello"
+6
+11

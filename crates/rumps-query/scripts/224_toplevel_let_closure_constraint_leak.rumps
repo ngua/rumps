@@ -1,0 +1,10 @@
+; Body of closure `inc` requires `Numeric(T)`; calling
+; `inc("hello")` from a forward-referencing `main` must be
+; rejected. Exercises Phase 3.2 (closure body harvest) and
+; Phase 4.3 (finalize for closure-RHS let).
+
+fun main() {
+  write inc("hello")
+}
+
+let inc = [T](x: T) -> T => x + 1

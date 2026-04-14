@@ -1,0 +1,9 @@
+; Body of `foo` requires `Numeric(T)`; calling `foo("hello")`
+; must be rejected at typecheck time even though `foo` is
+; defined before `main`. Verifies Phase 3 generalization.
+
+fun foo[T](x: T) -> T { x + 1 }
+
+fun main() {
+  write foo("hello")
+}

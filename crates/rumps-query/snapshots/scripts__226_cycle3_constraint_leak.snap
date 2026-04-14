@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Three-function cycle where `c` has a body-derived `Numeric(T)`\n; constraint. The constraint must propagate transitively through\n; `b` to reach `a` via virtual edges in `enrich_finalized_schemes`.\n; Calling `a(\"hello\")` should be rejected.\n\nfun a[T](x: T) -> T {\n  b(x)\n}\n\nfun b[T](x: T) -> T {\n  c(x)\n}\n\nfun c[T](x: T) -> T {\n  x + 1\n}\n\nfun main() {\n  write a(\"hello\")\n}\n"
+---
+ERROR: type `String` does not satisfy `Numeric` class

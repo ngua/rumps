@@ -1,0 +1,10 @@
+; Module member is a String; using it as Numeric must be
+; rejected at typecheck time, not panic at runtime.
+
+fun main() {
+  write M.x + 1
+}
+
+module M {
+  +let x = "hello"
+}

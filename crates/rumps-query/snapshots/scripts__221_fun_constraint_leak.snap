@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Body of `foo` requires `Numeric(T)`; calling `foo(\"hello\")`\n; must be rejected at typecheck time even though `foo` is\n; defined before `main`. Verifies Phase 3 generalization.\n\nfun foo[T](x: T) -> T { x + 1 }\n\nfun main() {\n  write foo(\"hello\")\n}\n"
+---
+ERROR: type `String` does not satisfy `Numeric` class

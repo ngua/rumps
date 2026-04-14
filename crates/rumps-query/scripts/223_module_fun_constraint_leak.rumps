@@ -1,0 +1,10 @@
+; Same constraint leak inside a module. Forward reference from
+; outside the module exercises Phase 4.
+
+fun main() {
+  write M.foo("hello")
+}
+
+module M {
+  +fun foo[T](x: T) -> T { x + 1 }
+}

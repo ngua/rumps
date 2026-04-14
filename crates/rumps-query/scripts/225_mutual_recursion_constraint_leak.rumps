@@ -1,0 +1,16 @@
+; Mutual recursion where `b` has a body-derived `Numeric(T)`
+; constraint. Forward reference from `a` to `b` must propagate
+; the constraint via Phase 4 finalization. Calling `a("hello")`
+; should be rejected.
+
+fun a[T](x: T) -> T {
+  b(x)
+}
+
+fun b[T](x: T) -> T {
+  x + 1
+}
+
+fun main() {
+  write a("hello")
+}

@@ -1,0 +1,16 @@
+; Top-level LET closure hoisting: forward references to closures
+; bound via LET should behave like forward references to FUNs,
+; including independent instantiation at multiple types.
+
+fun main() {
+  write id(42)
+  write id("hello")
+
+  write twice(3)
+
+  write inc(10)
+}
+
+let id = [T](x: T) -> T => x
+let twice = [T: Numeric](x: T) -> T => x + x
+let inc = (x: Int) -> Int => x + 1

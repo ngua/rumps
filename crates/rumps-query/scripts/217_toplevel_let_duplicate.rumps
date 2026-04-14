@@ -1,0 +1,14 @@
+; Top-level duplicate bindings are rejected (fun/let collision
+; and let/let shadowing).
+
+fun foo() -> Int { 1 }
+
+let foo = "bar"
+
+let dup = 1
+let dup = 2
+
+fun main() {
+  write foo
+  write dup
+}

@@ -1,0 +1,14 @@
+; Module-level LET hoisting: forward references from outside the
+; module to module LET members defined later.
+
+fun main() {
+  write M.greeting
+  write M.count
+  write M.items
+}
+
+module M {
+  +let greeting = "hello"
+  +let count = 42
+  +let items = ["a", "b", "c"]
+}

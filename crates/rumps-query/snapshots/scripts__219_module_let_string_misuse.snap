@@ -1,0 +1,6 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Module member is a String; using it as Numeric must be\n; rejected at typecheck time, not panic at runtime.\n\nfun main() {\n  write M.x + 1\n}\n\nmodule M {\n  +let x = \"hello\"\n}\n"
+---
+ERROR: type `String` does not satisfy `Numeric` class
+type `String` does not satisfy `Numeric` class

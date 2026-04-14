@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Destructuring patterns at top level are NOT hoisted.\n; Forward references from earlier functions error.\n\nfun main() {\n  write x\n}\n\nlet (x, y) = (1, 2)\n"
+---
+ERROR: undefined variable `x`

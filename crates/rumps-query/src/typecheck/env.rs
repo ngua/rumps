@@ -172,6 +172,18 @@ impl TypeEnv {
             .unwrap_or_default()
     }
 
+    /// Look up the visibility of a specific module member.
+    pub(crate) fn module_member_vis(
+        &self,
+        mod_path: &QualifiedName,
+        member: StringId,
+    ) -> Option<Visibility> {
+        self.user_module_members
+            .get(mod_path)
+            .and_then(|members| members.get(&member))
+            .map(|m| m.vis)
+    }
+
     /// Get all public types in a user module.
     ///
     /// Returns `(local_name, qualified_name)` pairs for direct children only.

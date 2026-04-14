@@ -1,0 +1,6 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Top-level duplicate bindings are rejected (fun/let collision\n; and let/let shadowing).\n\nfun foo() -> Int { 1 }\n\nlet foo = \"bar\"\n\nlet dup = 1\nlet dup = 2\n\nfun main() {\n  write foo\n  write dup\n}\n"
+---
+ERROR: duplicate top-level binding `foo`; a function or earlier `let` already binds this name
+duplicate top-level binding `dup`; a function or earlier `let` already binds this name

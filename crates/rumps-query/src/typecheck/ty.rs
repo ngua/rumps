@@ -1649,8 +1649,25 @@ impl Scheme {
         uf: &mut UnionFind,
         arena: &mut TyArena,
     ) -> (TyId, SmallVec<[(TyId, TypeClass<TyId>); 2]>) {
+        let (ty, cs, _) = self.instantiate_tracked(uf, arena);
+        (ty, cs)
+    }
+
+    /// Like `instantiate`, but also returns the old-var -> new-var mapping.
+    ///
+    /// Used during forward-ref replay to record which scheme vars map to
+    /// which fresh vars, enabling virtual edges in `enrich_finalized_schemes`.
+    pub(crate) fn instantiate_tracked(
+        &self,
+        uf: &mut UnionFind,
+        arena: &mut TyArena,
+    ) -> (
+        TyId,
+        SmallVec<[(TyId, TypeClass<TyId>); 2]>,
+        SmallVec<[(TyVar, TyVar); 4]>,
+    ) {
         if self.vars.is_empty() {
-            (self.ty, SmallVec::new())
+            (self.ty, SmallVec::new(), SmallVec::new())
         } else {
             // Ensure fresh vars don't overlap with scheme vars to avoid
             // infinite loops during `apply` (which recursively substitutes)
@@ -1658,11 +1675,13 @@ impl Scheme {
                 self.vars.iter().map(|v| v.idx()).max().unwrap_or(0);
             uf.reserve_through(max_scheme);
 
+            let mut var_map: SmallVec<[(TyVar, TyVar); 4]> = SmallVec::new();
             let rename = Rename(
                 self.vars
                     .iter()
                     .map(|v| {
                         let fresh = uf.fresh();
+                        var_map.push((*v, fresh));
                         (*v, arena.alloc(Ty::Var(fresh)))
                     })
                     .collect(),
@@ -1681,7 +1700,7 @@ impl Scheme {
                     (ty, class)
                 })
                 .collect();
-            (ty, constraints)
+            (ty, constraints, var_map)
         }
     }
 

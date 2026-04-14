@@ -1,0 +1,11 @@
+; Annotation says String but the module member is Int. Must be
+; rejected at typecheck time.
+
+fun main() {
+  let s: String = M.x
+  write s
+}
+
+module M {
+  +let x = 42
+}

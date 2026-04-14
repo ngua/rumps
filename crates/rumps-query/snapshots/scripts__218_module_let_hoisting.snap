@@ -1,0 +1,7 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Module-level LET hoisting: forward references from outside the\n; module to module LET members defined later.\n\nfun main() {\n  write M.greeting\n  write M.count\n  write M.items\n}\n\nmodule M {\n  +let greeting = \"hello\"\n  +let count = 42\n  +let items = [\"a\", \"b\", \"c\"]\n}\n"
+---
+"hello"
+42
+[ "a", "b", "c" ]

@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Annotation says String but the module member is Int. Must be\n; rejected at typecheck time.\n\nfun main() {\n  let s: String = M.x\n  write s\n}\n\nmodule M {\n  +let x = 42\n}\n"
+---
+ERROR: type `String` does not satisfy `Numeric` class

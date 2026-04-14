@@ -1,0 +1,8 @@
+; Destructuring patterns at top level are NOT hoisted.
+; Forward references from earlier functions error.
+
+fun main() {
+  write x
+}
+
+let (x, y) = (1, 2)
