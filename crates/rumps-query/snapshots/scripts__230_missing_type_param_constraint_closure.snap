@@ -1,6 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Closure with explicitly-declared `T` but missing `Numeric`.\n\nlet inc = [T](x: T) -> T => x + 1\n"
+description: "; Closure with explicitly-declared `T` but missing `Numeric`.\n\nlet inc = [T](x: T) -> T => x + 1\n\nfun main() {\n  write inc(1)\n}\n"
 ---
 ERROR: type parameter `T` requires `Numeric` constraint
-missing required `main` function

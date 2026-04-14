@@ -2,3 +2,7 @@
 ; the definition must be rejected.
 
 fun foo[T](x: T) -> T { x + 1 }
+
+fun main() {
+  write foo(1)
+}

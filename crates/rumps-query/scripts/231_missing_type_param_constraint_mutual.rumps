@@ -9,3 +9,7 @@ fun a[T](x: T) -> T {
 fun b[T](x: T) -> T {
   x + 1
 }
+
+fun main() {
+  write a(1)
+}
