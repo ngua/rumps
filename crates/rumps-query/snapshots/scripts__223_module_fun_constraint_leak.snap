@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Same constraint leak inside a module. Forward reference from\n; outside the module exercises Phase 4.\n\nfun main() {\n  write M.foo(\"hello\")\n}\n\nmodule M {\n  +fun foo[T](x: T) -> T { x + 1 }\n}\n"
+description: "; Calling `M.foo(\"hello\")` must be rejected because `T` is\n; constrained to `Numeric`. Module member constraint check.\n\nmodule M {\n  +fun foo[T: Numeric](x: T) -> T { x + 1 }\n}\n\nfun main() {\n  write M.foo(\"hello\")\n}\n"
 ---
 ERROR: type `String` does not satisfy `Numeric` class

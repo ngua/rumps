@@ -1,0 +1,4 @@
+; Explicitly-declared `T` without `Numeric` is used in `x + 1`;
+; the definition must be rejected.
+
+fun foo[T](x: T) -> T { x + 1 }

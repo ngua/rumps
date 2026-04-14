@@ -610,6 +610,8 @@ impl InferCtx<'_> {
         // Include all declared type params (they may only appear in constraints,
         // not in the function type itself; e.g. `T` in `[T, F: Fallible[T]]`)
         let declared_tvs: HashSet<_> = name_to_tv.values().copied().collect();
+        let tv_names: HashMap<TyVar, StringId> =
+            name_to_tv.iter().map(|(&name, &tv)| (tv, name)).collect();
         let vars: SmallVec<[TyVar; 4]> = ty_vars
             .union(&declared_tvs)
             .copied()
@@ -622,6 +624,8 @@ impl InferCtx<'_> {
             body_constraint_start,
             &vars,
             &mut scheme_constraints,
+            &declared_tvs,
+            &tv_names,
         );
 
         let scheme = Scheme {
@@ -630,7 +634,7 @@ impl InferCtx<'_> {
             constraints: scheme_constraints,
         };
         self.env.bind(name, scheme);
-        self.finalize_hoisted_fun(stmt_id, name);
+        self.finalize_hoisted_fun(stmt_id, name, declared_tvs, tv_names);
     }
 
     /// Infer types for a `let` statement.
@@ -727,9 +731,18 @@ impl InferCtx<'_> {
             // For polymorphic closures, use the stored scheme directly
             match (&pattern, closure_scheme) {
                 (BindingPattern::Var(name), Some(scheme)) => {
+                    let tv_names =
+                        self.closure_tv_names.remove(&rhs).unwrap_or_default();
+                    let declared_tvs: HashSet<TyVar> =
+                        scheme.vars.iter().copied().collect();
                     self.env.bind(*name, scheme);
                     // Phase 4: closure-RHS let parity with `fun`.
-                    self.finalize_hoisted_fun(stmt_id, *name);
+                    self.finalize_hoisted_fun(
+                        stmt_id,
+                        *name,
+                        declared_tvs,
+                        tv_names,
+                    );
                 }
                 _ => self.bind_pattern(pattern, ty, span),
             }

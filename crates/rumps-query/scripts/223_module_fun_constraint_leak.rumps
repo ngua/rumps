@@ -1,10 +1,10 @@
-; Same constraint leak inside a module. Forward reference from
-; outside the module exercises Phase 4.
+; Calling `M.foo("hello")` must be rejected because `T` is
+; constrained to `Numeric`. Module member constraint check.
+
+module M {
+  +fun foo[T: Numeric](x: T) -> T { x + 1 }
+}
 
 fun main() {
   write M.foo("hello")
-}
-
-module M {
-  +fun foo[T](x: T) -> T { x + 1 }
 }

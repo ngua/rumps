@@ -1,0 +1,3 @@
+; Closure with explicitly-declared `T` but missing `Numeric`.
+
+let inc = [T](x: T) -> T => x + 1

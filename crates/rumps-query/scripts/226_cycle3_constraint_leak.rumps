@@ -1,17 +1,17 @@
-; Three-function cycle where `c` has a body-derived `Numeric(T)`
+; Three-function cycle where `c` has a body-derived `Numeric`
 ; constraint. The constraint must propagate transitively through
 ; `b` to reach `a` via virtual edges in `enrich_finalized_schemes`.
 ; Calling `a("hello")` should be rejected.
 
-fun a[T](x: T) -> T {
+fun a(x) {
   b(x)
 }
 
-fun b[T](x: T) -> T {
+fun b(x) {
   c(x)
 }
 
-fun c[T](x: T) -> T {
+fun c(x) {
   x + 1
 }
 

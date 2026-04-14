@@ -77,6 +77,19 @@ pub(super) struct InstanceMethodInput<'a> {
     pub(super) inst_span: Span,
 }
 
+/// A finalized function entry, recording metadata needed for retroactive
+/// scheme enrichment of previously-finalized hoisted functions.
+#[derive(Clone)]
+struct FinalizedFun {
+    name: StringId,
+    vars: SmallVec<[TyVar; 4]>,
+    /// Type variables from explicitly-declared type parameters (e.g. `[T, U]`).
+    declared_tvs: HashSet<TyVar>,
+    /// Declared type variable -> user-visible name (for error messages).
+    tv_names: HashMap<TyVar, StringId>,
+    mod_ctx: Option<QualifiedName>,
+}
+
 /// A type constraint generated during inference.
 ///
 /// Constraints represent relationships between types that must hold for the
@@ -261,6 +274,9 @@ pub(crate) struct InferCtx<'a> {
     /// we retrieve this scheme for proper generalization instead of
     /// treating the closure as monomorphic.
     pub(super) closure_schemes: HashMap<ExprId, Scheme>,
+    /// Declared type-param name mappings for polymorphic closures, consumed
+    /// during `let`-binding to pass through to `finalize_hoisted_fun`.
+    closure_tv_names: HashMap<ExprId, HashMap<TyVar, StringId>>,
     /// Current transaction ID, if inside a `transaction` block.
     ///
     /// Used to enforce that global writes (`@set ^...`, `@kill ^...`) only
@@ -351,12 +367,12 @@ pub(crate) struct InferCtx<'a> {
     /// Functions whose Pass 2 finalization has completed.
     ///
     /// Each entry records the function's name, its quantified type
-    /// variables, and its module context (if any). Used by
-    /// `finalize_hoisted_fun` to detect when a forward-ref replay emits
-    /// constraints that (through union-find) apply to a previously-finalized
-    /// function's quantified vars, enabling retroactive scheme enrichment.
-    finalized_funs:
-        Vec<(StringId, SmallVec<[TyVar; 4]>, Option<QualifiedName>)>,
+    /// variables, declared type parameters, and its module context (if any).
+    /// Used by `finalize_hoisted_fun` to detect when a forward-ref replay
+    /// emits constraints that (through union-find) apply to a
+    /// previously-finalized function's quantified vars, enabling
+    /// retroactive scheme enrichment.
+    finalized_funs: Vec<FinalizedFun>,
     /// Var mappings from replay instantiations (scheme var -> fresh var).
     ///
     /// Used by `enrich_finalized_schemes` to add virtual edges that bridge
@@ -417,6 +433,7 @@ impl<'a> InferCtx<'a> {
             deferred_instance_calls: Vec::new(),
             numeric_vars: Vec::new(),
             closure_schemes: HashMap::new(),
+            closure_tv_names: HashMap::new(),
             in_transaction: None,
             next_txn_id: 0,
             class_context: None,
@@ -617,6 +634,8 @@ impl<'a> InferCtx<'a> {
         body_constraint_start: usize,
         vars: &[TyVar],
         scheme_constraints: &mut SmallVec<[(TyVar, TypeClass<TyId>); 2]>,
+        declared_tvs: &HashSet<TyVar>,
+        tv_names: &HashMap<TyVar, StringId>,
     ) {
         let end = self.constraints.len();
         let snap = self.uf.snapshot();
@@ -639,25 +658,43 @@ impl<'a> InferCtx<'a> {
         let harvested = cs[body_constraint_start..end]
             .iter()
             .filter_map(|c| match c {
-                Constraint::Class { ty, class, .. } => {
+                Constraint::Class { ty, class, span } => {
                     match self.ty_arena.get(*ty) {
                         Ty::Var(tv) => {
                             let root = self.uf.find(*tv);
                             root_to_orig
                                 .get(&root)
-                                .map(|orig| (*orig, class.clone()))
+                                .map(|orig| (*orig, class.clone(), *span))
                         }
                         _ => None,
                     }
                 }
                 _ => None,
             })
-            .collect::<SmallVec<[(TyVar, TypeClass<TyId>); 2]>>();
+            .collect::<SmallVec<[(TyVar, TypeClass<TyId>, Span); 2]>>();
         self.constraints = cs;
 
-        harvested.into_iter().for_each(|entry| {
-            if !scheme_constraints.contains(&entry) {
-                scheme_constraints.push(entry);
+        let mut rejected: SmallVec<[(TyVar, TypeClass<TyId>); 2]> =
+            SmallVec::new();
+        harvested.into_iter().for_each(|(orig, class, span)| {
+            let entry = (orig, class.clone());
+            if !scheme_constraints.contains(&entry)
+                && !rejected.contains(&entry)
+            {
+                if declared_tvs.contains(&orig) {
+                    let param = tv_names
+                        .get(&orig)
+                        .map(|&n| self.env.resolve_string(n))
+                        .unwrap_or_else(|| "?".to_owned());
+                    self.error(TypeError::MissingTypeParamConstraint {
+                        param,
+                        class,
+                        span,
+                    });
+                    rejected.push(entry);
+                } else {
+                    scheme_constraints.push(entry);
+                }
             }
         });
         self.uf.rollback(snap);
@@ -706,6 +743,8 @@ impl<'a> InferCtx<'a> {
         &mut self,
         stmt_id: StmtId,
         name: StringId,
+        declared_tvs: HashSet<TyVar>,
+        tv_names: HashMap<TyVar, StringId>,
     ) {
         // Drop the Pass 1 scheme and its reverse index entry.
         // Retain the constraint count so we can skip already-emitted
@@ -725,11 +764,13 @@ impl<'a> InferCtx<'a> {
         // for retroactive enrichment by later finalizations.
         if let Some(scheme) = self.env.lookup(name).cloned() {
             if !scheme.vars.is_empty() {
-                self.finalized_funs.push((
+                self.finalized_funs.push(FinalizedFun {
                     name,
-                    scheme.vars.clone(),
-                    self.current_module.clone(),
-                ));
+                    vars: scheme.vars.clone(),
+                    declared_tvs,
+                    tv_names,
+                    mod_ctx: self.current_module.clone(),
+                });
             }
         }
 
@@ -820,9 +861,9 @@ impl<'a> InferCtx<'a> {
         let mut root_to_orig: HashMap<TyVar, Vec<(FunKey, TyVar)>> =
             HashMap::new();
 
-        fin.iter().for_each(|(fname, fvars, mod_ctx)| {
-            let key = (*fname, mod_ctx.clone());
-            fvars.iter().for_each(|&fv| {
+        fin.iter().for_each(|f| {
+            let key = (f.name, f.mod_ctx.clone());
+            f.vars.iter().for_each(|&fv| {
                 root_to_orig
                     .entry(self.uf.find(fv))
                     .or_default()
@@ -836,18 +877,19 @@ impl<'a> InferCtx<'a> {
         let cs = mem::take(&mut self.constraints);
         let mut updates: HashMap<
             FunKey,
-            SmallVec<[(TyVar, TypeClass<TyId>); 2]>,
+            SmallVec<[(TyVar, TypeClass<TyId>, Span); 2]>,
         > = HashMap::new();
         cs[constraint_start..end].iter().for_each(|c| {
-            if let Constraint::Class { ty, class, .. } = c {
+            if let Constraint::Class { ty, class, span } = c {
                 if let Ty::Var(cv) = self.ty_arena.get(*ty) {
                     let root = self.uf.find(*cv);
                     if let Some(entries) = root_to_orig.get(&root) {
                         entries.iter().for_each(|(fkey, fv)| {
-                            updates
-                                .entry(fkey.clone())
-                                .or_default()
-                                .push((*fv, class.clone()));
+                            updates.entry(fkey.clone()).or_default().push((
+                                *fv,
+                                class.clone(),
+                                *span,
+                            ));
                         });
                     }
                 }
@@ -858,26 +900,56 @@ impl<'a> InferCtx<'a> {
 
         self.uf.rollback(snap);
 
+        // Build a lookup from `FunKey` to `&FinalizedFun` for
+        // checking `declared_tvs` during update application.
+        let fin_lookup: HashMap<FunKey, &FinalizedFun> = fin
+            .iter()
+            .map(|f| ((f.name, f.mod_ctx.clone()), f))
+            .collect();
+
         // Apply updates to env bindings and module member registry.
-        updates.into_iter().for_each(|((fname, mod_ctx), new_cs)| {
-            if let Some(mut scheme) = self.env.lookup(fname).cloned() {
-                let added: SmallVec<[(TyVar, TypeClass<TyId>); 2]> = new_cs
-                    .into_iter()
-                    .filter(|entry| !scheme.constraints.contains(entry))
-                    .collect();
-                if !added.is_empty() {
-                    added.into_iter().for_each(|entry| {
-                        scheme.constraints.push(entry);
-                    });
-                    self.env.bind(fname, scheme.clone());
+        updates.into_iter().for_each(|(key, new_cs)| {
+            if let Some(mut scheme) = self.env.lookup(key.0).cloned() {
+                let fin_entry = fin_lookup.get(&key);
+                let mut changed = false;
+                let mut rejected: SmallVec<[(TyVar, TypeClass<TyId>); 2]> =
+                    SmallVec::new();
+
+                new_cs.into_iter().for_each(|(fv, class, span)| {
+                    let entry = (fv, class.clone());
+                    if !scheme.constraints.contains(&entry)
+                        && !rejected.contains(&entry)
+                    {
+                        if fin_entry
+                            .is_some_and(|f| f.declared_tvs.contains(&fv))
+                        {
+                            let param = fin_entry
+                                .and_then(|f| f.tv_names.get(&fv))
+                                .map(|&n| self.env.resolve_string(n))
+                                .unwrap_or_else(|| "?".to_owned());
+                            self.error(TypeError::MissingTypeParamConstraint {
+                                param,
+                                class,
+                                span,
+                            });
+                            rejected.push(entry);
+                        } else {
+                            scheme.constraints.push(entry);
+                            changed = true;
+                        }
+                    }
+                });
+
+                if changed {
+                    self.env.bind(key.0, scheme.clone());
 
                     // Update module member registry if applicable.
-                    if let Some(mod_path) = mod_ctx {
+                    if let Some(mod_path) = key.1 {
                         if let Some(vis) =
-                            self.env.module_member_vis(&mod_path, fname)
+                            self.env.module_member_vis(&mod_path, key.0)
                         {
                             self.env.register_user_module_member(
-                                mod_path, fname, scheme, vis,
+                                mod_path, key.0, scheme, vis,
                             );
                         }
                     }

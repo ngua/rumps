@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Module mutual recursion: `M.a` calls `M.b` which has a body-derived\n; `Numeric(T)` constraint. The enriched scheme must also update the\n; module member registry so `M.a(\"hello\")` is rejected.\n\nmodule M {\n  +fun a[T](x: T) -> T {\n    b(x)\n  }\n\n  +fun b[T](x: T) -> T {\n    x + 1\n  }\n}\n\nfun main() {\n  write M.a(\"hello\")\n}\n"
+description: "; Module mutual recursion: `M.a` calls `M.b` which has a body-derived\n; `Numeric` constraint. The enriched scheme must also update the\n; module member registry so `M.a(\"hello\")` is rejected.\n\nmodule M {\n  +fun a(x) {\n    b(x)\n  }\n\n  +fun b(x) {\n    x + 1\n  }\n}\n\nfun main() {\n  write M.a(\"hello\")\n}\n"
 ---
 ERROR: type `String` does not satisfy `Numeric` class

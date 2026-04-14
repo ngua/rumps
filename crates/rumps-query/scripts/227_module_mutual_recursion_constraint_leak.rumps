@@ -1,13 +1,13 @@
 ; Module mutual recursion: `M.a` calls `M.b` which has a body-derived
-; `Numeric(T)` constraint. The enriched scheme must also update the
+; `Numeric` constraint. The enriched scheme must also update the
 ; module member registry so `M.a("hello")` is rejected.
 
 module M {
-  +fun a[T](x: T) -> T {
+  +fun a(x) {
     b(x)
   }
 
-  +fun b[T](x: T) -> T {
+  +fun b(x) {
     x + 1
   }
 }

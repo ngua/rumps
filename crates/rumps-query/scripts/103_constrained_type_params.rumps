@@ -95,8 +95,8 @@ fun apply-numeric[T: Numeric](f: (T) -> T, x: T) -> T {
   f(x)
 }
 
-; Into[Subscript]: type can be used as a DB subscript key
-fun format-key[K: Into[Subscript]](k: K) -> String {
+; Into[Subscript] + Into[String]: key type for DB subscripts, displayable
+fun format-key[K: Into[Subscript] + Into[String]](k: K) -> String {
   k as String
 }
 

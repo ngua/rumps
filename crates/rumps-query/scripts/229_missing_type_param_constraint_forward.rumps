@@ -1,0 +1,8 @@
+; Same as 228 but `foo` is called before its definition.
+; The error is at `foo`'s definition, not the call site.
+
+fun main() {
+  write foo("hello")
+}
+
+fun foo[T](x: T) -> T { x + 1 }

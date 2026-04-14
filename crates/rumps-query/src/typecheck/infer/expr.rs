@@ -4,7 +4,7 @@
 //! operators, collections, function calls, control flow, etc.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use indexmap::IndexMap;
 use smallvec::{smallvec, SmallVec};
@@ -1996,8 +1996,11 @@ impl InferCtx<'_> {
 
         // If there are type params, store the scheme for let binding generalization
         if !type_params.is_empty() {
+            let tv_names: HashMap<TyVar, StringId> =
+                name_to_tv.iter().map(|(&name, &tv)| (tv, name)).collect();
             let vars: SmallVec<[TyVar; 4]> =
                 name_to_tv.values().copied().collect();
+            let declared_tvs: HashSet<TyVar> = vars.iter().copied().collect();
 
             // Phase 3: harvest body-emitted `Class` constraints
             // transitively linked to quantifying vars.
@@ -2005,6 +2008,8 @@ impl InferCtx<'_> {
                 body_constraint_start,
                 &vars,
                 &mut scheme_constraints,
+                &declared_tvs,
+                &tv_names,
             );
 
             let scheme = Scheme {
@@ -2013,6 +2018,7 @@ impl InferCtx<'_> {
                 constraints: scheme_constraints,
             };
             self.closure_schemes.insert(expr_id, scheme);
+            self.closure_tv_names.insert(expr_id, tv_names);
         }
 
         fn_ty

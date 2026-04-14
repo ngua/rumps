@@ -1,0 +1,11 @@
+; `b` has an undeclared `Numeric` on explicit `T`. The constraint
+; does NOT propagate to `a` (since `b`'s scheme won't include it),
+; so only `b` errors.
+
+fun a[T](x: T) -> T {
+  b(x)
+}
+
+fun b[T](x: T) -> T {
+  x + 1
+}

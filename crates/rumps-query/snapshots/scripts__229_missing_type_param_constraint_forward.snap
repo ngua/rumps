@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Same as 228 but `foo` is called before its definition.\n; The error is at `foo`'s definition, not the call site.\n\nfun main() {\n  write foo(\"hello\")\n}\n\nfun foo[T](x: T) -> T { x + 1 }\n"
+---
+ERROR: type parameter `T` requires `Numeric` constraint

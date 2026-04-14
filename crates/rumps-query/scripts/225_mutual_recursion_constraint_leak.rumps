@@ -1,13 +1,13 @@
-; Mutual recursion where `b` has a body-derived `Numeric(T)`
+; Mutual recursion where `b` has a body-derived `Numeric`
 ; constraint. Forward reference from `a` to `b` must propagate
 ; the constraint via Phase 4 finalization. Calling `a("hello")`
 ; should be rejected.
 
-fun a[T](x: T) -> T {
+fun a(x) {
   b(x)
 }
 
-fun b[T](x: T) -> T {
+fun b(x) {
   x + 1
 }
 

@@ -609,6 +609,15 @@ pub(crate) enum TypeError {
     /// `is` targets. Bind the value and call it instead.
     #[error("function types cannot appear in `is` patterns")]
     FnTypeInPattern(Span),
+
+    /// Body of a function uses a class operation on an explicitly-declared
+    /// type parameter that does not have the corresponding constraint.
+    #[error("type parameter `{param}` requires `{class}` constraint")]
+    MissingTypeParamConstraint {
+        param: String,
+        class: TypeClass<TyId>,
+        span: Span,
+    },
 }
 
 impl TypeError {
@@ -668,7 +677,8 @@ impl TypeError {
             | Self::TopLevelExpr(span)
             | Self::MissingMain(span)
             | Self::InvalidMainSignature { span, .. }
-            | Self::FnTypeInPattern(span) => *span,
+            | Self::FnTypeInPattern(span)
+            | Self::MissingTypeParamConstraint { span, .. } => *span,
         }
     }
 
@@ -1061,6 +1071,16 @@ impl TypeError {
                     "bind the value and call it, or use a typed `let` to check the signature"
                         .to_owned(),
                 ),
+            ),
+            Self::MissingTypeParamConstraint { param, class, .. } => (
+                format!(
+                    "type parameter `{param}` requires `{}` constraint",
+                    class.tag().name()
+                ),
+                Some(format!(
+                    "add `{param}: {}` to the type parameter list",
+                    class.tag().name()
+                )),
             ),
         };
 

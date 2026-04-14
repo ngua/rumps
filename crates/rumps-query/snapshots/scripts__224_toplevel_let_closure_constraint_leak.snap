@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Body of closure `inc` requires `Numeric(T)`; calling\n; `inc(\"hello\")` from a forward-referencing `main` must be\n; rejected. Exercises Phase 3.2 (closure body harvest) and\n; Phase 4.3 (finalize for closure-RHS let).\n\nfun main() {\n  write inc(\"hello\")\n}\n\nlet inc = [T](x: T) -> T => x + 1\n"
+description: "; Closure `inc` requires `Numeric(T)`; calling `inc(\"hello\")`\n; from a forward-referencing `main` must be rejected. Exercises\n; Phase 3.2 (closure body harvest) and Phase 4.3 (finalize for\n; closure-RHS let).\n\nfun main() {\n  write inc(\"hello\")\n}\n\nlet inc = [T: Numeric](x: T) -> T => x + 1\n"
 ---
 ERROR: type `String` does not satisfy `Numeric` class
