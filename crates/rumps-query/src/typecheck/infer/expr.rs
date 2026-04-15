@@ -249,7 +249,7 @@ impl InferCtx<'_> {
                 // Compile and cache the regex pattern; invalid patterns
                 // produce a type error during compile_regex
                 self.compile_regex(pattern, span)
-                    .map(|idx| self.regex_indices.insert(id, idx));
+                    .map(|idx| self.interp.regex_indices.insert(id, idx));
                 TyArena::REGEX
             }
 
@@ -334,7 +334,7 @@ impl InferCtx<'_> {
                     class: TypeClass::Simple(ClassId::MONOID),
                     span,
                 });
-                self.mempty_types.insert(id, tv);
+                self.interp.mempty_types.insert(id, tv);
                 tv
             }
 
@@ -498,7 +498,7 @@ impl InferCtx<'_> {
                                         ),
                                         span,
                                     });
-                                    self.mempty_types.insert(id, tv);
+                                    self.interp.mempty_types.insert(id, tv);
                                     self.ty_arena.func(smallvec![], tv)
                                 }
 
@@ -513,7 +513,9 @@ impl InferCtx<'_> {
                                         target_ty_id,
                                         &empty_subst,
                                     );
-                                    self.convert_targets.insert(id, target_ty);
+                                    self.interp
+                                        .convert_targets
+                                        .insert(id, target_ty);
 
                                     let input_var = self.fresh_var();
                                     let input_ty =
@@ -581,7 +583,9 @@ impl InferCtx<'_> {
                                         target_ty_id,
                                         &empty_subst,
                                     );
-                                    self.convert_targets.insert(id, target_ty);
+                                    self.interp
+                                        .convert_targets
+                                        .insert(id, target_ty);
 
                                     let input_var = self.fresh_var();
                                     let input_ty =
@@ -774,7 +778,7 @@ impl InferCtx<'_> {
                                         )
                                         .is_some() =>
                                 {
-                                    self.instance_calls.insert(id, tid);
+                                    self.interp.instance_calls.insert(id, tid);
                                 }
                                 _ => {
                                     self.deferred_instance_calls
@@ -789,10 +793,10 @@ impl InferCtx<'_> {
                         MethodSpec::Standard(_) => {}
                         MethodSpec::Tracked { track, .. } => match track {
                             TrackKind::Mempty => {
-                                self.mempty_types.insert(id, ret);
+                                self.interp.mempty_types.insert(id, ret);
                             }
                             TrackKind::Convert => {
-                                self.convert_targets.insert(id, ret);
+                                self.interp.convert_targets.insert(id, ret);
                             }
                             TrackKind::ConvertResultInner => {
                                 // Return type is `Result[T, E]`; track inner `T`
@@ -808,7 +812,7 @@ impl InferCtx<'_> {
                                         TyArena::ERROR
                                     }
                                 };
-                                self.convert_targets.insert(id, inner);
+                                self.interp.convert_targets.insert(id, inner);
                             }
                         },
                     }
@@ -868,7 +872,7 @@ impl InferCtx<'_> {
                     span,
                 });
                 // Record for interpreter to convert to correct runtime type
-                self.numeric_types.insert(id, ty);
+                self.interp.numeric_types.insert(id, ty);
                 ty
             }
             // Float literals are NOT polymorphic; always Float
@@ -1091,7 +1095,7 @@ impl InferCtx<'_> {
                             .check_instance_available(kind, tid, span)
                             .is_some() =>
                     {
-                        self.instance_calls.insert(id, tid);
+                        self.interp.instance_calls.insert(id, tid);
                     }
                     _ => {
                         self.deferred_instance_calls.push((id, lhs_ty, kind));
@@ -1116,7 +1120,7 @@ impl InferCtx<'_> {
                             .check_instance_available(kind, tid, span)
                             .is_some() =>
                     {
-                        self.instance_calls.insert(id, tid);
+                        self.interp.instance_calls.insert(id, tid);
                     }
                     _ => {
                         self.deferred_instance_calls.push((id, lhs_ty, kind));
@@ -1146,7 +1150,7 @@ impl InferCtx<'_> {
 
         // Track wrap types for interpreter dispatch
         if matches!(op, UnOp::Wrap) {
-            self.wrap_types.insert(id, result);
+            self.interp.wrap_types.insert(id, result);
 
             // Track Wrappable instance for `?` dispatch on user types.
             // Check the result type (e.g. `Box[T]`) for a Wrappable instance.
@@ -1163,7 +1167,7 @@ impl InferCtx<'_> {
                             .check_instance_available(kind, tid, span)
                             .is_some() =>
                     {
-                        self.instance_calls.insert(id, tid);
+                        self.interp.instance_calls.insert(id, tid);
                     }
                     _ => {
                         self.deferred_instance_calls.push((id, result, kind));
@@ -2610,7 +2614,7 @@ impl InferCtx<'_> {
                             .check_instance_available(kind, tid, span)
                             .is_some() =>
                     {
-                        self.instance_calls.insert(id, tid);
+                        self.interp.instance_calls.insert(id, tid);
                     }
                     _ => {
                         self.deferred_instance_calls.push((id, inner_ty, kind));

@@ -51,6 +51,85 @@ use crate::intern::{QualifiedName, StringId, StringInterner};
 use crate::value::{TypeExprArena, TypeId, TypeRegistry};
 use crate::{ClassId, Span};
 
+/// Resolve all `TyId` values in a map through the union-find.
+fn resolve_map(
+    map: &mut HashMap<ExprId, TyId>,
+    uf: &mut UnionFind,
+    arena: &mut TyArena,
+) {
+    map.values_mut().for_each(|ty| *ty = uf.resolve(*ty, arena));
+}
+
+/// Fields populated during inference that are passed directly to the
+/// interpreter. These are write-only during inference (no post-processing)
+/// and moved into `TypecheckOutput` at the end.
+pub(super) struct InterpreterOutput {
+    /// Cache of compiled regex patterns (validated during typechecking).
+    ///
+    /// Regex literals are compiled here; invalid patterns produce type errors.
+    /// The interpreter retrieves compiled patterns by index.
+    pub(super) regex_cache: Vec<regex::Regex>,
+    /// Mapping from regex expression IDs to cache indices.
+    ///
+    /// When interpreting an `Expr::Regex`, look up the cache index here.
+    pub(super) regex_indices: HashMap<ExprId, u32>,
+    /// Mapping from mempty expression IDs to their inferred types.
+    ///
+    /// Populated during inference with type variables; resolved after
+    /// substitution to concrete `Monoid` types. The interpreter uses
+    /// this to produce the correct empty value.
+    pub(super) mempty_types: HashMap<ExprId, TyId>,
+    /// Mapping from numeric literal expression IDs to their inferred types.
+    ///
+    /// Populated during inference with type variables; resolved after
+    /// substitution to concrete `Numeric` types (`Int`, `Word`, `Float`, etc...).
+    /// The interpreter uses this to convert numeric literals to the
+    /// correct runtime value type.
+    pub(super) numeric_types: HashMap<ExprId, TyId>,
+    /// Mapping from conversion expression IDs to their target types.
+    ///
+    /// Populated when `Into::into` or `TryInto::try_into` methods are called.
+    /// The interpreter uses this to dispatch the correct conversion.
+    pub(super) convert_targets: HashMap<ExprId, TyId>,
+    /// Mapping from wrap expression IDs to their target `Wrappable` types.
+    ///
+    /// Populated during inference for `?` (wrap) operators; resolved after
+    /// substitution to concrete `Option[T]`, `Result[T, E]`, or other
+    /// monadic types.
+    ///
+    /// The interpreter uses this to produce the correct wrapper type.
+    pub(super) wrap_types: HashMap<ExprId, TyId>,
+    /// Mapping from class method call expression IDs to their receiver's `TypeId`.
+    ///
+    /// Populated when a class method is called on a newtype or union type.
+    /// The interpreter uses this to dispatch to user-defined class instances,
+    /// since these types don't carry their `TypeId` in the runtime value
+    /// (unlike `type`/sum types which use `Value::Tagged`).
+    pub(super) instance_calls: HashMap<ExprId, crate::TypeId>,
+}
+
+impl InterpreterOutput {
+    fn new() -> Self {
+        Self {
+            regex_cache: Vec::new(),
+            regex_indices: HashMap::new(),
+            mempty_types: HashMap::new(),
+            numeric_types: HashMap::new(),
+            convert_targets: HashMap::new(),
+            wrap_types: HashMap::new(),
+            instance_calls: HashMap::new(),
+        }
+    }
+
+    /// Resolve all type-variable-bearing maps through the union-find.
+    fn resolve(&mut self, uf: &mut UnionFind, arena: &mut TyArena) {
+        resolve_map(&mut self.mempty_types, uf, arena);
+        resolve_map(&mut self.numeric_types, uf, arena);
+        resolve_map(&mut self.convert_targets, uf, arena);
+        resolve_map(&mut self.wrap_types, uf, arena);
+    }
+}
+
 /// Input for `hoist_class_instance` and `class_instance`.
 ///
 /// The type parameter `A` distinguishes hoisting (where associated types are
@@ -213,48 +292,8 @@ pub(crate) struct InferCtx<'a> {
     expr_types: HashMap<ExprId, TyId>,
     /// Type errors encountered during inference.
     errors: Vec<TypeError>,
-    /// Cache of compiled regex patterns (validated during typechecking).
-    ///
-    /// Regex literals are compiled here; invalid patterns produce type errors.
-    /// The interpreter retrieves compiled patterns by index.
-    regex_cache: Vec<regex::Regex>,
-    /// Mapping from regex expression IDs to cache indices.
-    ///
-    /// When interpreting an `Expr::Regex`, look up the cache index here.
-    regex_indices: HashMap<ExprId, u32>,
-    /// Mapping from mempty expression IDs to their inferred types.
-    ///
-    /// Populated during inference with type variables; resolved after
-    /// substitution to concrete `Monoid` types. The interpreter uses
-    /// this to produce the correct empty value.
-    mempty_types: HashMap<ExprId, TyId>,
-    /// Mapping from numeric literal expression IDs to their inferred types.
-    ///
-    /// Populated during inference with type variables; resolved after
-    /// substitution to concrete `Numeric` types (`Int`, `Word`, `Float`, etc...).
-    /// The interpreter uses this to convert numeric literals to the
-    /// correct runtime value type.
-    numeric_types: HashMap<ExprId, TyId>,
-    /// Mapping from conversion expression IDs to their target types.
-    ///
-    /// Populated when `Into::into` or `TryInto::try_into` methods are called.
-    /// The interpreter uses this to dispatch the correct conversion.
-    convert_targets: HashMap<ExprId, TyId>,
-    /// Mapping from wrap expression IDs to their target `Wrappable` types.
-    ///
-    /// Populated during inference for `?` (wrap) operators; resolved after
-    /// substitution to concrete `Option[T]`, `Result[T, E]`, or other
-    /// monadic types.
-    ///
-    /// The interpreter uses this to produce the correct wrapper type.
-    wrap_types: HashMap<ExprId, TyId>,
-    /// Mapping from class method call expression IDs to their receiver's TypeId.
-    ///
-    /// Populated when a class method is called on a newtype or union type.
-    /// The interpreter uses this to dispatch to user-defined class instances,
-    /// since these types don't carry their TypeId in the runtime value
-    /// (unlike `type`/sum types which use `Value::Tagged`).
-    pub(super) instance_calls: HashMap<ExprId, crate::TypeId>,
+    /// Fields passed directly to the interpreter after inference.
+    pub(super) interp: InterpreterOutput,
     /// Deferred instance call candidates to resolve after constraint solving.
     ///
     /// During inference, class method calls on types that are still type
@@ -423,13 +462,7 @@ impl<'a> InferCtx<'a> {
             uf: UnionFind::new(),
             expr_types: HashMap::new(),
             errors: Vec::new(),
-            regex_cache: Vec::new(),
-            regex_indices: HashMap::new(),
-            mempty_types: HashMap::new(),
-            numeric_types: HashMap::new(),
-            convert_targets: HashMap::new(),
-            wrap_types: HashMap::new(),
-            instance_calls: HashMap::new(),
+            interp: InterpreterOutput::new(),
             deferred_instance_calls: Vec::new(),
             numeric_vars: Vec::new(),
             closure_schemes: HashMap::new(),
@@ -461,8 +494,8 @@ impl<'a> InferCtx<'a> {
     ) -> Option<u32> {
         match regex::Regex::new(pattern) {
             Ok(r) => {
-                let idx = self.regex_cache.len() as u32;
-                self.regex_cache.push(r);
+                let idx = self.interp.regex_cache.len() as u32;
+                self.interp.regex_cache.push(r);
                 Some(idx)
             }
             Err(e) => {
@@ -1028,37 +1061,8 @@ impl<'a> InferCtx<'a> {
     /// Called after constraint solving to replace type variables with their
     /// resolved concrete types.
     pub(crate) fn resolve_all_types(&mut self) {
-        // Resolve all type variables through the union-find
-        let expr_keys: Vec<_> = self.expr_types.keys().copied().collect();
-        expr_keys.into_iter().for_each(|k| {
-            let new = self.uf.resolve(self.expr_types[&k], &mut self.ty_arena);
-            self.expr_types.insert(k, new);
-        });
-        let mempty_keys: Vec<_> = self.mempty_types.keys().copied().collect();
-        mempty_keys.into_iter().for_each(|k| {
-            let new =
-                self.uf.resolve(self.mempty_types[&k], &mut self.ty_arena);
-            self.mempty_types.insert(k, new);
-        });
-        let numeric_keys: Vec<_> = self.numeric_types.keys().copied().collect();
-        numeric_keys.into_iter().for_each(|k| {
-            let new =
-                self.uf.resolve(self.numeric_types[&k], &mut self.ty_arena);
-            self.numeric_types.insert(k, new);
-        });
-        let convert_keys: Vec<_> =
-            self.convert_targets.keys().copied().collect();
-        convert_keys.into_iter().for_each(|k| {
-            let new = self
-                .uf
-                .resolve(self.convert_targets[&k], &mut self.ty_arena);
-            self.convert_targets.insert(k, new);
-        });
-        let wrap_keys: Vec<_> = self.wrap_types.keys().copied().collect();
-        wrap_keys.into_iter().for_each(|k| {
-            let new = self.uf.resolve(self.wrap_types[&k], &mut self.ty_arena);
-            self.wrap_types.insert(k, new);
-        });
+        resolve_map(&mut self.expr_types, &mut self.uf, &mut self.ty_arena);
+        self.interp.resolve(&mut self.uf, &mut self.ty_arena);
     }
 
     /// Resolve deferred instance calls after constraint solving.
@@ -1097,7 +1101,7 @@ impl<'a> InferCtx<'a> {
 
             if let Some(tid) = type_id {
                 if self.instance_registry.lookup(kind, tid).is_some() {
-                    self.instance_calls.insert(expr_id, tid);
+                    self.interp.instance_calls.insert(expr_id, tid);
                 }
             }
         });
@@ -1147,7 +1151,8 @@ impl<'a> InferCtx<'a> {
 
         // Mempty expressions require concrete monoid types; any remaining
         // `Ty::Var` or `Ty::Unknown` means we cannot produce the empty value.
-        self.mempty_types
+        self.interp
+            .mempty_types
             .iter()
             .filter(|(_, &ty)| {
                 matches!(self.ty_arena.get(ty), Ty::Var(_) | Ty::Unknown)
@@ -1279,13 +1284,13 @@ impl<'a> InferCtx<'a> {
         } else {
             Ok(TypecheckOutput {
                 ty_arena: self.ty_arena,
-                regex_cache: self.regex_cache,
-                regex_indices: self.regex_indices,
-                mempty_types: self.mempty_types,
-                numeric_types: self.numeric_types,
-                convert_targets: self.convert_targets,
-                wrap_types: self.wrap_types,
-                instance_calls: self.instance_calls,
+                regex_cache: self.interp.regex_cache,
+                regex_indices: self.interp.regex_indices,
+                mempty_types: self.interp.mempty_types,
+                numeric_types: self.interp.numeric_types,
+                convert_targets: self.interp.convert_targets,
+                wrap_types: self.interp.wrap_types,
+                instance_calls: self.interp.instance_calls,
                 class_registry: self.env.class_registry,
             })
         }
