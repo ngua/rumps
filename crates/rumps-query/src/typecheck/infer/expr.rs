@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use indexmap::IndexMap;
 use smallvec::{smallvec, SmallVec};
 
-use super::{Constraint, InferCtx};
+use super::{Constraint, HoistCtx, InferCtx};
 use crate::ast::{
     ArrayElem, AstTypeExpr, AstTypeExprId, BinOp, DbRef, Expr, ExprId,
     Intrinsic, JsonAccessKey, JsonAccessKind, Literal, MatchArm, NumericLit,
@@ -225,7 +225,8 @@ impl InferCtx<'_> {
                                     &mut self.ty_arena,
                                 );
                                 self.emit_class_constraints(constraints, span);
-                                self.record_forward_ref(&scheme, ty, span);
+                                self.hoist
+                                    .record_forward_ref(&scheme, ty, span);
                                 ty
                             }
                         }
@@ -954,7 +955,7 @@ impl InferCtx<'_> {
                 self.emit_class_constraints(constraints, span);
                 // Phase 4: record forward-ref instantiation if this
                 // lookup hit a not-yet-finalized hoisted scheme.
-                self.record_forward_ref(&scheme, ty, span);
+                self.hoist.record_forward_ref(&scheme, ty, span);
                 ty
             }
             None => {
@@ -2008,7 +2009,15 @@ impl InferCtx<'_> {
 
             // Phase 3: harvest body-emitted `Class` constraints
             // transitively linked to quantifying vars.
-            self.harvest_body_class_constraints(
+            self.hoist.harvest_body_class_constraints(
+                &mut HoistCtx {
+                    env: &mut self.env,
+                    uf: &mut self.uf,
+                    ty_arena: &mut self.ty_arena,
+                    constraints: &mut self.constraints,
+                    errors: &mut self.errors,
+                    current_module: &self.current_module,
+                },
                 body_constraint_start,
                 &vars,
                 &mut scheme_constraints,

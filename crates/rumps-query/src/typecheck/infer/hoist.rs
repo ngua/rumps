@@ -95,9 +95,9 @@ impl InferCtx<'_> {
                 // Linear scan is fine; `hoisted_funs` is small (one per
                 // top-level `FUN`) and this runs once per top-level `LET`.
                 let is_hoisted_fun = self.env.lookup(name).is_some_and(|env_s| {
-                    self.hoisted_funs.values().any(|s| env_s == s)
+                    self.hoist.funs.values().any(|s| env_s == s)
                 });
-                let is_hoisted_let = self.hoisted_lets.contains_key(&name);
+                let is_hoisted_let = self.hoist.lets.contains_key(&name);
                 if is_hoisted_fun || is_hoisted_let {
                     let n = self.env.resolve_string(name);
                     self.error(TypeError::Custom {
@@ -141,7 +141,7 @@ impl InferCtx<'_> {
                                 None => self.fresh(),
                             };
                             self.env.bind(name, Scheme::mono(ty));
-                            self.hoisted_lets.insert(name, ty);
+                            self.hoist.lets.insert(name, ty);
                         }
                     }
                 }
@@ -285,8 +285,8 @@ impl InferCtx<'_> {
         };
         // Clone is cheap: `Scheme` is a small struct with a `SmallVec`.
         self.env.bind(name, scheme.clone());
-        self.hoisted_fun_index.insert(scheme.ty, stmt_id);
-        self.hoisted_funs.insert(stmt_id, scheme);
+        self.hoist.fun_index.insert(scheme.ty, stmt_id);
+        self.hoist.funs.insert(stmt_id, scheme);
     }
 
     /// Hoist a module declaration and its members.
@@ -468,7 +468,8 @@ impl InferCtx<'_> {
                                 vis,
                             );
                             // `QualifiedName` clone is typically stack-only (`SmallVec`).
-                            self.hoisted_module_lets
+                            self.hoist
+                                .module_lets
                                 .insert((mod_path.clone(), *const_name), ty);
                         }
                     }

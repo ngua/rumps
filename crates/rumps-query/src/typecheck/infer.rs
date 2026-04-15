@@ -156,6 +156,535 @@ pub(super) struct InstanceMethodInput<'a> {
     pub(super) inst_span: Span,
 }
 
+/// State for hoisting and forward-reference tracking.
+///
+/// Populated during Pass 1 (hoisting) and consumed/updated during Pass 2
+/// (finalization). Logically cohesive; methods on this struct take a
+/// `&mut HoistCtx` for access to shared `InferCtx` state.
+pub(super) struct HoistState {
+    /// Top-level non-closure `let` bindings hoisted with a provisional type var.
+    ///
+    /// Pass 1 inserts a fresh var here for each simple `let name = ...` at
+    /// script top level (non-interactive only) whose RHS is NOT a closure
+    /// literal. Pass 2 `r#let` removes the entry, unifies the provisional
+    /// var with the inferred RHS type, and rebinds the name with the final
+    /// scheme.
+    ///
+    /// Closure-RHS `let`s are NOT tracked here; they are hoisted via
+    /// `hoist_fun` and use the existing `closure_schemes` rebind path.
+    pub(super) lets: HashMap<StringId, TyId>,
+    /// Module-level `let` member bindings hoisted with a provisional type var.
+    ///
+    /// Same purpose as `lets`, scoped per module path so distinct
+    /// modules cannot collide. Phase 2 hoists into this map; the
+    /// corresponding unify step happens inside `user_module` Pass 2 just
+    /// before re-registering the member.
+    pub(super) module_lets: HashMap<(QualifiedName, StringId), TyId>,
+    /// Hoisted polymorphic schemes that have not yet been finalized by Pass 2.
+    ///
+    /// Populated by `hoist_fun` (top level, modules, blocks). The key is
+    /// the `StmtId` where the hoist originated; the value is the Pass 1
+    /// scheme so we can recognize forward-ref instantiations as referring
+    /// to it.
+    ///
+    /// An entry is removed when Pass 2 calls `finalize_hoisted_fun` for
+    /// that `StmtId`. Only entries that are still present at lookup time
+    /// count as "not finalized"; once removed, lookups go straight to the
+    /// env binding (which holds the Pass 2 final scheme).
+    pub(super) funs: HashMap<StmtId, Scheme>,
+    /// Reverse index from hoisted scheme `TyId` to `StmtId`.
+    ///
+    /// Keyed by the `Scheme::ty` field of each entry in `funs`.
+    /// Since each `hoist_fun` call allocates a fresh function `TyId`, these
+    /// are unique per hoisted scheme.
+    pub(super) fun_index: HashMap<TyId, StmtId>,
+    /// Forward-reference instantiations of hoisted polymorphic schemes.
+    ///
+    /// When `var` (or `Expr::Path`) looks up a name and the returned scheme
+    /// is the Pass 1 hoisted scheme of a function whose Pass 2 finalization
+    /// has not yet run, the call site records the freshly-instantiated
+    /// function type here.
+    ///
+    /// `finalize_hoisted_fun` drains the entry, instantiates the final
+    /// Pass 2 scheme afresh once per recorded instantiation, and unifies.
+    pub(super) forward_instantiations: HashMap<StmtId, Vec<(TyId, Span)>>,
+    /// Functions whose Pass 2 finalization has completed.
+    ///
+    /// Each entry records the function's name, its quantified type
+    /// variables, declared type parameters, and its module context (if any).
+    /// Used by `finalize_hoisted_fun` to detect when a forward-ref replay
+    /// emits constraints that (through union-find) apply to a
+    /// previously-finalized function's quantified vars, enabling
+    /// retroactive scheme enrichment.
+    finalized_funs: Vec<FinalizedFun>,
+    /// Var mappings from replay instantiations (scheme var -> fresh var).
+    ///
+    /// Used by `enrich_finalized_schemes` to add virtual edges that bridge
+    /// quantified vars with their replay instantiation vars, enabling
+    /// transitive constraint propagation through arbitrary cycle lengths.
+    ///
+    /// NOTE: grows monotonically during hoisted function finalization and
+    /// is cloned on each `enrich_finalized_schemes` call. Both this and
+    /// `finalized_funs` are cleared once all hoisted functions have been
+    /// finalized (`funs` is empty). In pathological cases with
+    /// many separate groups of mutually recursive hoisted functions,
+    /// the per-enrichment clone cost is O(total replay maps so far);
+    /// this is acceptable because such programs are extremely rare.
+    replay_var_maps: Vec<SmallVec<[(TyVar, TyVar); 4]>>,
+}
+
+impl HoistState {
+    fn new() -> Self {
+        Self {
+            lets: HashMap::new(),
+            module_lets: HashMap::new(),
+            funs: HashMap::new(),
+            fun_index: HashMap::new(),
+            forward_instantiations: HashMap::new(),
+            finalized_funs: Vec::new(),
+            replay_var_maps: Vec::new(),
+        }
+    }
+
+    /// Temporarily establish union-find connectivity from `Unify` and
+    /// `Callable` constraints. Caller must create and rollback the UF
+    /// snapshot.
+    ///
+    /// Handles:
+    /// - `Unify(Var, Var)`: direct union
+    /// - `Unify(Fn, Fn)`: sub-unify param and return vars
+    /// - `Callable` with `Fn` callee: union param/ret vars
+    /// - `Callable` with `Var` callee: union callee with arg/ret vars
+    ///
+    /// Temporarily takes ownership of `cx.constraints` to avoid
+    /// cloning; callers pass a range selecting which constraints to
+    /// process.
+    fn build_constraint_unions(cx: &mut HoistCtx<'_>, range: Range<usize>) {
+        let cs = mem::take(cx.constraints);
+        cs[range].iter().for_each(|c| match c {
+            Constraint::Unify(a, b, _) => {
+                if let (Ty::Var(va), Ty::Var(vb)) =
+                    (cx.ty_arena.get(*a), cx.ty_arena.get(*b))
+                {
+                    let ra = cx.uf.find(*va);
+                    let rb = cx.uf.find(*vb);
+                    cx.uf.union(ra, rb);
+                }
+                let ta = cx.ty_arena.get(*a).clone();
+                let tb = cx.ty_arena.get(*b).clone();
+                if let (Ty::Fn(pa, ra), Ty::Fn(pb, rb)) = (ta, tb) {
+                    pa.iter().zip(pb.iter()).for_each(|(&x, &y)| {
+                        if let (Ty::Var(vx), Ty::Var(vy)) =
+                            (cx.ty_arena.get(x), cx.ty_arena.get(y))
+                        {
+                            let rx = cx.uf.find(*vx);
+                            let ry = cx.uf.find(*vy);
+                            cx.uf.union(rx, ry);
+                        }
+                    });
+                    if let (Ty::Var(vr), Ty::Var(vs)) =
+                        (cx.ty_arena.get(ra), cx.ty_arena.get(rb))
+                    {
+                        let rr = cx.uf.find(*vr);
+                        let rs = cx.uf.find(*vs);
+                        cx.uf.union(rr, rs);
+                    }
+                }
+            }
+            Constraint::Callable {
+                callee, args, ret, ..
+            } => {
+                let ct = cx.ty_arena.get(*callee).clone();
+                match ct {
+                    Ty::Fn(params, fn_ret) => {
+                        params.iter().zip(args.iter()).for_each(|(&p, &a)| {
+                            if let (Ty::Var(vp), Ty::Var(va)) =
+                                (cx.ty_arena.get(p), cx.ty_arena.get(a))
+                            {
+                                let rp = cx.uf.find(*vp);
+                                let ra = cx.uf.find(*va);
+                                cx.uf.union(rp, ra);
+                            }
+                        });
+                        if let (Ty::Var(vr), Ty::Var(va)) =
+                            (cx.ty_arena.get(fn_ret), cx.ty_arena.get(*ret))
+                        {
+                            let rr = cx.uf.find(*vr);
+                            let ra = cx.uf.find(*va);
+                            cx.uf.union(rr, ra);
+                        }
+                    }
+                    Ty::Var(vc) => {
+                        if let Ty::Var(vr) = cx.ty_arena.get(*ret) {
+                            let rc = cx.uf.find(vc);
+                            let rr = cx.uf.find(*vr);
+                            cx.uf.union(rc, rr);
+                        }
+                        args.iter().for_each(|&a| {
+                            if let Ty::Var(va) = cx.ty_arena.get(a) {
+                                let rc = cx.uf.find(vc);
+                                let ra = cx.uf.find(*va);
+                                cx.uf.union(rc, ra);
+                            }
+                        });
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        });
+        *cx.constraints = cs;
+    }
+
+    /// Harvest body-emitted `Class` constraints that are transitively linked
+    /// to quantifying vars (via `Unify`/`Callable` constraints) and add them
+    /// to the scheme's constraint set.
+    ///
+    /// Uses UF snapshot/rollback to temporarily process body unifications
+    /// without side-effecting the main UF state.
+    pub(super) fn harvest_body_class_constraints(
+        &self,
+        cx: &mut HoistCtx<'_>,
+        body_constraint_start: usize,
+        vars: &[TyVar],
+        scheme_constraints: &mut SmallVec<[(TyVar, TypeClass<TyId>); 2]>,
+        declared_tvs: &HashSet<TyVar>,
+        tv_names: &HashMap<TyVar, StringId>,
+    ) {
+        let end = cx.constraints.len();
+        let snap = cx.uf.snapshot();
+
+        Self::build_constraint_unions(cx, body_constraint_start..end);
+
+        // Map UF roots to originating quantifying vars; use the first
+        // mapping and skip collisions (two distinct type params sharing
+        // a root would indicate a unification that should not happen in
+        // well-typed code, but we guard defensively)
+        let mut root_to_orig: HashMap<TyVar, TyVar> =
+            HashMap::with_capacity(vars.len());
+        vars.iter().for_each(|&v| {
+            root_to_orig.entry(cx.uf.find(v)).or_insert(v);
+        });
+
+        // Temporarily take constraints to scan body-emitted class
+        // constraints while still having `&mut cx` for UF lookups.
+        let cs = mem::take(cx.constraints);
+        let harvested = cs[body_constraint_start..end]
+            .iter()
+            .filter_map(|c| match c {
+                Constraint::Class { ty, class, span } => {
+                    match cx.ty_arena.get(*ty) {
+                        Ty::Var(tv) => {
+                            let root = cx.uf.find(*tv);
+                            root_to_orig
+                                .get(&root)
+                                .map(|orig| (*orig, class.clone(), *span))
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .collect::<SmallVec<[(TyVar, TypeClass<TyId>, Span); 2]>>();
+        *cx.constraints = cs;
+
+        let mut rejected: SmallVec<[(TyVar, TypeClass<TyId>); 2]> =
+            SmallVec::new();
+        harvested.into_iter().for_each(|(orig, class, span)| {
+            let entry = (orig, class.clone());
+            if !scheme_constraints.contains(&entry)
+                && !rejected.contains(&entry)
+            {
+                if declared_tvs.contains(&orig) {
+                    let param = tv_names
+                        .get(&orig)
+                        .map(|&n| cx.env.resolve_string(n))
+                        .unwrap_or_else(|| "?".to_owned());
+                    cx.errors.push(TypeError::MissingTypeParamConstraint {
+                        param,
+                        class,
+                        span,
+                    });
+                    rejected.push(entry);
+                } else {
+                    scheme_constraints.push(entry);
+                }
+            }
+        });
+        cx.uf.rollback(snap);
+    }
+
+    /// Record a forward-ref instantiation if `scheme` matches a
+    /// not-yet-finalized hoisted scheme.
+    ///
+    /// Uses `fun_index` for O(1) lookup by the scheme's function
+    /// `TyId`, then confirms identity via structural `Scheme` equality.
+    /// `inst_ty` is the freshly-instantiated function type from
+    /// `scheme.instantiate`; `span` is the call site span.
+    pub(super) fn record_forward_ref(
+        &mut self,
+        scheme: &Scheme,
+        inst_ty: TyId,
+        span: Span,
+    ) {
+        if let Some(&stmt_id) = self.fun_index.get(&scheme.ty) {
+            let is_match = self.funs.get(&stmt_id).is_some_and(|s| s == scheme);
+            if is_match {
+                self.forward_instantiations
+                    .entry(stmt_id)
+                    .or_default()
+                    .push((inst_ty, span));
+            }
+        }
+    }
+
+    /// Finalize a hoisted function: drain forward-ref instantiations
+    /// recorded against its Pass 1 scheme and retroactively unify each
+    /// one with a fresh instantiation of the Pass 2 final scheme.
+    ///
+    /// Call this from `fun()` (and any other Pass 2 site that finalizes
+    /// a hoisted function) immediately AFTER binding the final scheme
+    /// into the environment.
+    ///
+    /// After replay, uses a union-find snapshot to temporarily establish
+    /// connectivity from all deferred `Unify`/`Callable` constraints,
+    /// then checks whether any newly-emitted class constraints reach
+    /// a previously-finalized function's quantified vars. If so,
+    /// enriches that function's scheme so future instantiations carry
+    /// the constraint. The snapshot is rolled back afterwards.
+    pub(super) fn finalize_hoisted_fun(
+        &mut self,
+        cx: &mut HoistCtx<'_>,
+        stmt_id: StmtId,
+        name: StringId,
+        declared_tvs: HashSet<TyVar>,
+        tv_names: HashMap<TyVar, StringId>,
+    ) {
+        // Drop the Pass 1 scheme and its reverse index entry.
+        // Retain the constraint count so we can skip already-emitted
+        // constraints during replay (the Pass 1 scheme's constraints
+        // were emitted at the original forward-ref instantiation site;
+        // only body-derived constraints added by Phase 3 are new).
+        let pass1_n = self
+            .funs
+            .remove(&stmt_id)
+            .map(|scheme| {
+                self.fun_index.remove(&scheme.ty);
+                scheme.constraints.len()
+            })
+            .unwrap_or(0);
+
+        // Register this function's quantified vars (and module context)
+        // for retroactive enrichment by later finalizations.
+        if let Some(scheme) = cx.env.lookup(name).cloned() {
+            if !scheme.vars.is_empty() {
+                self.finalized_funs.push(FinalizedFun {
+                    name,
+                    vars: scheme.vars.clone(),
+                    declared_tvs,
+                    tv_names,
+                    mod_ctx: cx.current_module.clone(),
+                });
+            }
+        }
+
+        // Replay each recorded forward-ref instantiation against
+        // the Pass 2 final scheme.
+        if let Some(insts) = self.forward_instantiations.remove(&stmt_id) {
+            let final_scheme = cx.env.lookup(name).cloned();
+            if let Some(final_scheme) = final_scheme {
+                let constraint_start = cx.constraints.len();
+
+                insts.into_iter().for_each(|(forward_ty, span)| {
+                    let (ty_inst, constraints, var_map) =
+                        final_scheme.instantiate_tracked(cx.uf, cx.ty_arena);
+                    // Only emit constraints beyond those already emitted
+                    // by the original Pass 1 instantiation.
+                    constraints.into_iter().skip(pass1_n).for_each(
+                        |(ty, class)| {
+                            cx.constraints.push(Constraint::Class {
+                                ty,
+                                class,
+                                span,
+                            });
+                        },
+                    );
+                    if !var_map.is_empty() {
+                        self.replay_var_maps.push(var_map);
+                    }
+                    cx.constraints
+                        .push(Constraint::Unify(forward_ty, ty_inst, span));
+                });
+
+                // Check whether the replay introduced class constraints
+                // that (through deferred Unify/Callable chains) reach a
+                // previously-finalized function's quantified vars. Use
+                // the same snapshot/rollback technique as
+                // `harvest_body_class_constraints`: temporarily union
+                // all deferred constraints, check, then rollback.
+                let has_new_class = cx.constraints[constraint_start..]
+                    .iter()
+                    .any(|c| matches!(c, Constraint::Class { .. }));
+
+                if has_new_class && !self.finalized_funs.is_empty() {
+                    self.enrich_finalized_schemes(cx, constraint_start);
+                }
+            } else {
+                invariant!("scheme bound by Pass 2 fun")
+            }
+        }
+
+        // Once all hoisted functions have been finalized, the
+        // enrichment bookkeeping is no longer needed; clear to
+        // avoid accumulating stale data.
+        if self.funs.is_empty() {
+            self.finalized_funs.clear();
+            self.replay_var_maps.clear();
+        }
+    }
+
+    /// Enrich previously-finalized schemes with class constraints
+    /// discovered during a finalization replay.
+    ///
+    /// Temporarily establishes union-find connectivity from ALL
+    /// deferred `Unify`/`Callable` constraints (snapshot + rollback),
+    /// plus virtual edges from `replay_var_maps` that bridge quantified
+    /// vars with their replay instantiation vars (enabling transitive
+    /// constraint propagation through cycles of any length).
+    ///
+    /// Also updates the module member registry when an enriched
+    /// function lives inside a module.
+    fn enrich_finalized_schemes(
+        &mut self,
+        cx: &mut HoistCtx<'_>,
+        constraint_start: usize,
+    ) {
+        // Build root-to-origvar map for finalized functions.
+        // Keyed on `(StringId, Option<QualifiedName>)` to disambiguate
+        // functions with the same name in different module contexts.
+        type FunKey = (StringId, Option<QualifiedName>);
+
+        let end = cx.constraints.len();
+        let fin = self.finalized_funs.clone();
+        let var_maps = self.replay_var_maps.clone();
+
+        let snap = cx.uf.snapshot();
+
+        Self::build_constraint_unions(cx, 0..end);
+
+        // Virtual edges: union each scheme var with its replay
+        // instantiation vars to bridge the gap for cycles >= 3.
+        var_maps.iter().for_each(|vm| {
+            vm.iter().for_each(|&(scheme_v, replay_v)| {
+                let rs = cx.uf.find(scheme_v);
+                let rr = cx.uf.find(replay_v);
+                cx.uf.union(rs, rr);
+            });
+        });
+
+        let mut root_to_orig: HashMap<TyVar, Vec<(FunKey, TyVar)>> =
+            HashMap::new();
+
+        fin.iter().for_each(|f| {
+            let key = (f.name, f.mod_ctx.clone());
+            f.vars.iter().for_each(|&fv| {
+                root_to_orig
+                    .entry(cx.uf.find(fv))
+                    .or_default()
+                    .push((key.clone(), fv));
+            });
+        });
+
+        // Collect scheme updates from new class constraints.
+        // Temporarily take constraints to scan while holding `&mut cx`
+        // for UF lookups.
+        let cs = mem::take(cx.constraints);
+        let mut updates: HashMap<
+            FunKey,
+            SmallVec<[(TyVar, TypeClass<TyId>, Span); 2]>,
+        > = HashMap::new();
+        cs[constraint_start..end].iter().for_each(|c| {
+            if let Constraint::Class { ty, class, span } = c {
+                if let Ty::Var(cv) = cx.ty_arena.get(*ty) {
+                    let root = cx.uf.find(*cv);
+                    if let Some(entries) = root_to_orig.get(&root) {
+                        entries.iter().for_each(|(fkey, fv)| {
+                            updates.entry(fkey.clone()).or_default().push((
+                                *fv,
+                                class.clone(),
+                                *span,
+                            ));
+                        });
+                    }
+                }
+            }
+        });
+
+        *cx.constraints = cs;
+
+        cx.uf.rollback(snap);
+
+        // Build a lookup from `FunKey` to `&FinalizedFun` for
+        // checking `declared_tvs` during update application.
+        let fin_lookup: HashMap<FunKey, &FinalizedFun> = fin
+            .iter()
+            .map(|f| ((f.name, f.mod_ctx.clone()), f))
+            .collect();
+
+        // Apply updates to env bindings and module member registry.
+        updates.into_iter().for_each(|(key, new_cs)| {
+            if let Some(mut scheme) = cx.env.lookup(key.0).cloned() {
+                let fin_entry = fin_lookup.get(&key);
+                let mut changed = false;
+                let mut rejected: SmallVec<[(TyVar, TypeClass<TyId>); 2]> =
+                    SmallVec::new();
+
+                new_cs.into_iter().for_each(|(fv, class, span)| {
+                    let entry = (fv, class.clone());
+                    if !scheme.constraints.contains(&entry)
+                        && !rejected.contains(&entry)
+                    {
+                        if fin_entry
+                            .is_some_and(|f| f.declared_tvs.contains(&fv))
+                        {
+                            let param = fin_entry
+                                .and_then(|f| f.tv_names.get(&fv))
+                                .map(|&n| cx.env.resolve_string(n))
+                                .unwrap_or_else(|| "?".to_owned());
+                            cx.errors.push(
+                                TypeError::MissingTypeParamConstraint {
+                                    param,
+                                    class,
+                                    span,
+                                },
+                            );
+                            rejected.push(entry);
+                        } else {
+                            scheme.constraints.push(entry);
+                            changed = true;
+                        }
+                    }
+                });
+
+                if changed {
+                    cx.env.bind(key.0, scheme.clone());
+
+                    // Update module member registry if applicable.
+                    if let Some(mod_path) = key.1 {
+                        if let Some(vis) =
+                            cx.env.module_member_vis(&mod_path, key.0)
+                        {
+                            cx.env.register_user_module_member(
+                                mod_path, key.0, scheme, vis,
+                            );
+                        }
+                    }
+                }
+            }
+        });
+    }
+}
+
 /// A finalized function entry, recording metadata needed for retroactive
 /// scheme enrichment of previously-finalized hoisted functions.
 #[derive(Clone)]
@@ -167,6 +696,16 @@ struct FinalizedFun {
     /// Declared type variable -> user-visible name (for error messages).
     tv_names: HashMap<TyVar, StringId>,
     mod_ctx: Option<QualifiedName>,
+}
+
+/// Borrowed `InferCtx` fields needed by `HoistState` methods.
+pub(super) struct HoistCtx<'a> {
+    pub(super) env: &'a mut TypeEnv,
+    pub(super) uf: &'a mut UnionFind,
+    pub(super) ty_arena: &'a mut TyArena,
+    pub(super) constraints: &'a mut Vec<Constraint>,
+    pub(super) errors: &'a mut Vec<TypeError>,
+    pub(super) current_module: &'a Option<QualifiedName>,
 }
 
 /// A type constraint generated during inference.
@@ -357,75 +896,8 @@ pub(crate) struct InferCtx<'a> {
     /// type variables, these are checked: if `rhs_ty` resolved to a union and
     /// `ann_ty` did not, the annotation illegally narrows a union type.
     let_annotations: Vec<(TyId, TyId, Span)>,
-    /// Top-level non-closure `let` bindings hoisted with a provisional type var.
-    ///
-    /// Pass 1 inserts a fresh var here for each simple `let name = ...` at
-    /// script top level (non-interactive only) whose RHS is NOT a closure
-    /// literal. Pass 2 `r#let` removes the entry, unifies the provisional
-    /// var with the inferred RHS type, and rebinds the name with the final
-    /// scheme.
-    ///
-    /// Closure-RHS `let`s are NOT tracked here; they are hoisted via
-    /// `hoist_fun` and use the existing `closure_schemes` rebind path.
-    pub(super) hoisted_lets: HashMap<StringId, TyId>,
-    /// Module-level `let` member bindings hoisted with a provisional type var.
-    ///
-    /// Same purpose as `hoisted_lets`, scoped per module path so distinct
-    /// modules cannot collide. Phase 2 hoists into this map; the
-    /// corresponding unify step happens inside `user_module` Pass 2 just
-    /// before re-registering the member.
-    pub(super) hoisted_module_lets: HashMap<(QualifiedName, StringId), TyId>,
-    /// Hoisted polymorphic schemes that have not yet been finalized by Pass 2.
-    ///
-    /// Populated by `hoist_fun` (top level, modules, blocks). The key is
-    /// the `StmtId` where the hoist originated; the value is the Pass 1
-    /// scheme so we can recognize forward-ref instantiations as referring
-    /// to it.
-    ///
-    /// An entry is removed when Pass 2 calls `finalize_hoisted_fun` for
-    /// that `StmtId`. Only entries that are still present at lookup time
-    /// count as "not finalized"; once removed, lookups go straight to the
-    /// env binding (which holds the Pass 2 final scheme).
-    pub(super) hoisted_funs: HashMap<StmtId, Scheme>,
-    /// Reverse index from hoisted scheme `TyId` to `StmtId`.
-    ///
-    /// Keyed by the `Scheme::ty` field of each entry in `hoisted_funs`.
-    /// Since each `hoist_fun` call allocates a fresh function `TyId`, these
-    /// are unique per hoisted scheme.
-    pub(super) hoisted_fun_index: HashMap<TyId, StmtId>,
-    /// Forward-reference instantiations of hoisted polymorphic schemes.
-    ///
-    /// When `var` (or `Expr::Path`) looks up a name and the returned scheme
-    /// is the Pass 1 hoisted scheme of a function whose Pass 2 finalization
-    /// has not yet run, the call site records the freshly-instantiated
-    /// function type here.
-    ///
-    /// `finalize_hoisted_fun` drains the entry, instantiates the final
-    /// Pass 2 scheme afresh once per recorded instantiation, and unifies.
-    pub(super) forward_instantiations: HashMap<StmtId, Vec<(TyId, Span)>>,
-    /// Functions whose Pass 2 finalization has completed.
-    ///
-    /// Each entry records the function's name, its quantified type
-    /// variables, declared type parameters, and its module context (if any).
-    /// Used by `finalize_hoisted_fun` to detect when a forward-ref replay
-    /// emits constraints that (through union-find) apply to a
-    /// previously-finalized function's quantified vars, enabling
-    /// retroactive scheme enrichment.
-    finalized_funs: Vec<FinalizedFun>,
-    /// Var mappings from replay instantiations (scheme var -> fresh var).
-    ///
-    /// Used by `enrich_finalized_schemes` to add virtual edges that bridge
-    /// quantified vars with their replay instantiation vars, enabling
-    /// transitive constraint propagation through arbitrary cycle lengths.
-    ///
-    /// NOTE: grows monotonically during hoisted function finalization and
-    /// is cloned on each `enrich_finalized_schemes` call. Both this and
-    /// `finalized_funs` are cleared once all hoisted functions have been
-    /// finalized (`hoisted_funs` is empty). In pathological cases with
-    /// many separate groups of mutually recursive hoisted functions,
-    /// the per-enrichment clone cost is O(total replay maps so far);
-    /// this is acceptable because such programs are extremely rare.
-    replay_var_maps: Vec<SmallVec<[(TyVar, TyVar); 4]>>,
+    /// Hoisting and forward-reference tracking state.
+    pub(super) hoist: HoistState,
 }
 
 impl<'a> InferCtx<'a> {
@@ -474,13 +946,7 @@ impl<'a> InferCtx<'a> {
             interactive,
             poly_param_vars: HashSet::new(),
             let_annotations: Vec::new(),
-            hoisted_lets: HashMap::new(),
-            hoisted_module_lets: HashMap::new(),
-            hoisted_funs: HashMap::new(),
-            hoisted_fun_index: HashMap::new(),
-            forward_instantiations: HashMap::new(),
-            finalized_funs: Vec::new(),
-            replay_var_maps: Vec::new(),
+            hoist: HoistState::new(),
         }
     }
 
@@ -563,431 +1029,6 @@ impl<'a> InferCtx<'a> {
     ) {
         constraints.into_iter().for_each(|(ty, class)| {
             self.constrain(Constraint::Class { ty, class, span });
-        });
-    }
-
-    /// Temporarily establish union-find connectivity from `Unify` and
-    /// `Callable` constraints. Caller must create and rollback the UF
-    /// snapshot.
-    ///
-    /// Handles:
-    /// - `Unify(Var, Var)`: direct union
-    /// - `Unify(Fn, Fn)`: sub-unify param and return vars
-    /// - `Callable` with `Fn` callee: union param/ret vars
-    /// - `Callable` with `Var` callee: union callee with arg/ret vars
-    ///
-    /// Temporarily takes ownership of `self.constraints` to avoid
-    /// cloning; callers pass a range selecting which constraints to
-    /// process.
-    fn build_constraint_unions(&mut self, range: Range<usize>) {
-        let cs = mem::take(&mut self.constraints);
-        cs[range].iter().for_each(|c| match c {
-            Constraint::Unify(a, b, _) => {
-                if let (Ty::Var(va), Ty::Var(vb)) =
-                    (self.ty_arena.get(*a), self.ty_arena.get(*b))
-                {
-                    let ra = self.uf.find(*va);
-                    let rb = self.uf.find(*vb);
-                    self.uf.union(ra, rb);
-                }
-                let ta = self.ty_arena.get(*a).clone();
-                let tb = self.ty_arena.get(*b).clone();
-                if let (Ty::Fn(pa, ra), Ty::Fn(pb, rb)) = (ta, tb) {
-                    pa.iter().zip(pb.iter()).for_each(|(&x, &y)| {
-                        if let (Ty::Var(vx), Ty::Var(vy)) =
-                            (self.ty_arena.get(x), self.ty_arena.get(y))
-                        {
-                            let rx = self.uf.find(*vx);
-                            let ry = self.uf.find(*vy);
-                            self.uf.union(rx, ry);
-                        }
-                    });
-                    if let (Ty::Var(vr), Ty::Var(vs)) =
-                        (self.ty_arena.get(ra), self.ty_arena.get(rb))
-                    {
-                        let rr = self.uf.find(*vr);
-                        let rs = self.uf.find(*vs);
-                        self.uf.union(rr, rs);
-                    }
-                }
-            }
-            Constraint::Callable {
-                callee, args, ret, ..
-            } => {
-                let ct = self.ty_arena.get(*callee).clone();
-                match ct {
-                    Ty::Fn(params, fn_ret) => {
-                        params.iter().zip(args.iter()).for_each(|(&p, &a)| {
-                            if let (Ty::Var(vp), Ty::Var(va)) =
-                                (self.ty_arena.get(p), self.ty_arena.get(a))
-                            {
-                                let rp = self.uf.find(*vp);
-                                let ra = self.uf.find(*va);
-                                self.uf.union(rp, ra);
-                            }
-                        });
-                        if let (Ty::Var(vr), Ty::Var(va)) =
-                            (self.ty_arena.get(fn_ret), self.ty_arena.get(*ret))
-                        {
-                            let rr = self.uf.find(*vr);
-                            let ra = self.uf.find(*va);
-                            self.uf.union(rr, ra);
-                        }
-                    }
-                    Ty::Var(vc) => {
-                        if let Ty::Var(vr) = self.ty_arena.get(*ret) {
-                            let rc = self.uf.find(vc);
-                            let rr = self.uf.find(*vr);
-                            self.uf.union(rc, rr);
-                        }
-                        args.iter().for_each(|&a| {
-                            if let Ty::Var(va) = self.ty_arena.get(a) {
-                                let rc = self.uf.find(vc);
-                                let ra = self.uf.find(*va);
-                                self.uf.union(rc, ra);
-                            }
-                        });
-                    }
-                    _ => {}
-                }
-            }
-            _ => {}
-        });
-        self.constraints = cs;
-    }
-
-    /// Harvest body-emitted `Class` constraints that are transitively linked
-    /// to quantifying vars (via `Unify`/`Callable` constraints) and add them
-    /// to the scheme's constraint set.
-    ///
-    /// Uses UF snapshot/rollback to temporarily process body unifications
-    /// without side-effecting the main UF state.
-    pub(super) fn harvest_body_class_constraints(
-        &mut self,
-        body_constraint_start: usize,
-        vars: &[TyVar],
-        scheme_constraints: &mut SmallVec<[(TyVar, TypeClass<TyId>); 2]>,
-        declared_tvs: &HashSet<TyVar>,
-        tv_names: &HashMap<TyVar, StringId>,
-    ) {
-        let end = self.constraints.len();
-        let snap = self.uf.snapshot();
-
-        self.build_constraint_unions(body_constraint_start..end);
-
-        // Map UF roots to originating quantifying vars; use the first
-        // mapping and skip collisions (two distinct type params sharing
-        // a root would indicate a unification that should not happen in
-        // well-typed code, but we guard defensively)
-        let mut root_to_orig: HashMap<TyVar, TyVar> =
-            HashMap::with_capacity(vars.len());
-        vars.iter().for_each(|&v| {
-            root_to_orig.entry(self.uf.find(v)).or_insert(v);
-        });
-
-        // Temporarily take constraints to scan body-emitted class
-        // constraints while still having `&mut self` for UF lookups.
-        let cs = mem::take(&mut self.constraints);
-        let harvested = cs[body_constraint_start..end]
-            .iter()
-            .filter_map(|c| match c {
-                Constraint::Class { ty, class, span } => {
-                    match self.ty_arena.get(*ty) {
-                        Ty::Var(tv) => {
-                            let root = self.uf.find(*tv);
-                            root_to_orig
-                                .get(&root)
-                                .map(|orig| (*orig, class.clone(), *span))
-                        }
-                        _ => None,
-                    }
-                }
-                _ => None,
-            })
-            .collect::<SmallVec<[(TyVar, TypeClass<TyId>, Span); 2]>>();
-        self.constraints = cs;
-
-        let mut rejected: SmallVec<[(TyVar, TypeClass<TyId>); 2]> =
-            SmallVec::new();
-        harvested.into_iter().for_each(|(orig, class, span)| {
-            let entry = (orig, class.clone());
-            if !scheme_constraints.contains(&entry)
-                && !rejected.contains(&entry)
-            {
-                if declared_tvs.contains(&orig) {
-                    let param = tv_names
-                        .get(&orig)
-                        .map(|&n| self.env.resolve_string(n))
-                        .unwrap_or_else(|| "?".to_owned());
-                    self.error(TypeError::MissingTypeParamConstraint {
-                        param,
-                        class,
-                        span,
-                    });
-                    rejected.push(entry);
-                } else {
-                    scheme_constraints.push(entry);
-                }
-            }
-        });
-        self.uf.rollback(snap);
-    }
-
-    /// Record a forward-ref instantiation if `scheme` matches a
-    /// not-yet-finalized hoisted scheme.
-    ///
-    /// Uses `hoisted_fun_index` for O(1) lookup by the scheme's function
-    /// `TyId`, then confirms identity via structural `Scheme` equality.
-    /// `inst_ty` is the freshly-instantiated function type from
-    /// `scheme.instantiate`; `span` is the call site span.
-    pub(super) fn record_forward_ref(
-        &mut self,
-        scheme: &Scheme,
-        inst_ty: TyId,
-        span: Span,
-    ) {
-        if let Some(&stmt_id) = self.hoisted_fun_index.get(&scheme.ty) {
-            let is_match =
-                self.hoisted_funs.get(&stmt_id).is_some_and(|s| s == scheme);
-            if is_match {
-                self.forward_instantiations
-                    .entry(stmt_id)
-                    .or_default()
-                    .push((inst_ty, span));
-            }
-        }
-    }
-
-    /// Finalize a hoisted function: drain forward-ref instantiations
-    /// recorded against its Pass 1 scheme and retroactively unify each
-    /// one with a fresh instantiation of the Pass 2 final scheme.
-    ///
-    /// Call this from `fun()` (and any other Pass 2 site that finalizes
-    /// a hoisted function) immediately AFTER binding the final scheme
-    /// into the environment.
-    ///
-    /// After replay, uses a union-find snapshot to temporarily establish
-    /// connectivity from all deferred `Unify`/`Callable` constraints,
-    /// then checks whether any newly-emitted class constraints reach
-    /// a previously-finalized function's quantified vars. If so,
-    /// enriches that function's scheme so future instantiations carry
-    /// the constraint. The snapshot is rolled back afterwards.
-    pub(super) fn finalize_hoisted_fun(
-        &mut self,
-        stmt_id: StmtId,
-        name: StringId,
-        declared_tvs: HashSet<TyVar>,
-        tv_names: HashMap<TyVar, StringId>,
-    ) {
-        // Drop the Pass 1 scheme and its reverse index entry.
-        // Retain the constraint count so we can skip already-emitted
-        // constraints during replay (the Pass 1 scheme's constraints
-        // were emitted at the original forward-ref instantiation site;
-        // only body-derived constraints added by Phase 3 are new).
-        let pass1_n = self
-            .hoisted_funs
-            .remove(&stmt_id)
-            .map(|scheme| {
-                self.hoisted_fun_index.remove(&scheme.ty);
-                scheme.constraints.len()
-            })
-            .unwrap_or(0);
-
-        // Register this function's quantified vars (and module context)
-        // for retroactive enrichment by later finalizations.
-        if let Some(scheme) = self.env.lookup(name).cloned() {
-            if !scheme.vars.is_empty() {
-                self.finalized_funs.push(FinalizedFun {
-                    name,
-                    vars: scheme.vars.clone(),
-                    declared_tvs,
-                    tv_names,
-                    mod_ctx: self.current_module.clone(),
-                });
-            }
-        }
-
-        // Replay each recorded forward-ref instantiation against
-        // the Pass 2 final scheme.
-        if let Some(insts) = self.forward_instantiations.remove(&stmt_id) {
-            let final_scheme = self.env.lookup(name).cloned();
-            if let Some(final_scheme) = final_scheme {
-                let constraint_start = self.constraints.len();
-
-                insts.into_iter().for_each(|(forward_ty, span)| {
-                    let (ty_inst, constraints, var_map) = final_scheme
-                        .instantiate_tracked(&mut self.uf, &mut self.ty_arena);
-                    // Only emit constraints beyond those already emitted
-                    // by the original Pass 1 instantiation.
-                    self.emit_class_constraints(
-                        constraints.into_iter().skip(pass1_n).collect(),
-                        span,
-                    );
-                    if !var_map.is_empty() {
-                        self.replay_var_maps.push(var_map);
-                    }
-                    self.unify(forward_ty, ty_inst, span);
-                });
-
-                // Check whether the replay introduced class constraints
-                // that (through deferred Unify/Callable chains) reach a
-                // previously-finalized function's quantified vars. Use
-                // the same snapshot/rollback technique as
-                // `harvest_body_class_constraints`: temporarily union
-                // all deferred constraints, check, then rollback.
-                let has_new_class = self.constraints[constraint_start..]
-                    .iter()
-                    .any(|c| matches!(c, Constraint::Class { .. }));
-
-                if has_new_class && !self.finalized_funs.is_empty() {
-                    self.enrich_finalized_schemes(constraint_start);
-                }
-            } else {
-                invariant!("scheme bound by Pass 2 fun")
-            }
-        }
-
-        // Once all hoisted functions have been finalized, the
-        // enrichment bookkeeping is no longer needed; clear to
-        // avoid accumulating stale data.
-        if self.hoisted_funs.is_empty() {
-            self.finalized_funs.clear();
-            self.replay_var_maps.clear();
-        }
-    }
-
-    /// Enrich previously-finalized schemes with class constraints
-    /// discovered during a finalization replay.
-    ///
-    /// Temporarily establishes union-find connectivity from ALL
-    /// deferred `Unify`/`Callable` constraints (snapshot + rollback),
-    /// plus virtual edges from `replay_var_maps` that bridge quantified
-    /// vars with their replay instantiation vars (enabling transitive
-    /// constraint propagation through cycles of any length).
-    ///
-    /// Also updates the module member registry when an enriched
-    /// function lives inside a module.
-    fn enrich_finalized_schemes(&mut self, constraint_start: usize) {
-        // Build root-to-origvar map for finalized functions.
-        // Keyed on `(StringId, Option<QualifiedName>)` to disambiguate
-        // functions with the same name in different module contexts.
-        type FunKey = (StringId, Option<QualifiedName>);
-
-        let end = self.constraints.len();
-        let fin = self.finalized_funs.clone();
-        let var_maps = self.replay_var_maps.clone();
-
-        let snap = self.uf.snapshot();
-
-        self.build_constraint_unions(0..end);
-
-        // Virtual edges: union each scheme var with its replay
-        // instantiation vars to bridge the gap for cycles >= 3.
-        var_maps.iter().for_each(|vm| {
-            vm.iter().for_each(|&(scheme_v, replay_v)| {
-                let rs = self.uf.find(scheme_v);
-                let rr = self.uf.find(replay_v);
-                self.uf.union(rs, rr);
-            });
-        });
-
-        let mut root_to_orig: HashMap<TyVar, Vec<(FunKey, TyVar)>> =
-            HashMap::new();
-
-        fin.iter().for_each(|f| {
-            let key = (f.name, f.mod_ctx.clone());
-            f.vars.iter().for_each(|&fv| {
-                root_to_orig
-                    .entry(self.uf.find(fv))
-                    .or_default()
-                    .push((key.clone(), fv));
-            });
-        });
-
-        // Collect scheme updates from new class constraints.
-        // Temporarily take constraints to scan while holding `&mut self`
-        // for UF lookups.
-        let cs = mem::take(&mut self.constraints);
-        let mut updates: HashMap<
-            FunKey,
-            SmallVec<[(TyVar, TypeClass<TyId>, Span); 2]>,
-        > = HashMap::new();
-        cs[constraint_start..end].iter().for_each(|c| {
-            if let Constraint::Class { ty, class, span } = c {
-                if let Ty::Var(cv) = self.ty_arena.get(*ty) {
-                    let root = self.uf.find(*cv);
-                    if let Some(entries) = root_to_orig.get(&root) {
-                        entries.iter().for_each(|(fkey, fv)| {
-                            updates.entry(fkey.clone()).or_default().push((
-                                *fv,
-                                class.clone(),
-                                *span,
-                            ));
-                        });
-                    }
-                }
-            }
-        });
-
-        self.constraints = cs;
-
-        self.uf.rollback(snap);
-
-        // Build a lookup from `FunKey` to `&FinalizedFun` for
-        // checking `declared_tvs` during update application.
-        let fin_lookup: HashMap<FunKey, &FinalizedFun> = fin
-            .iter()
-            .map(|f| ((f.name, f.mod_ctx.clone()), f))
-            .collect();
-
-        // Apply updates to env bindings and module member registry.
-        updates.into_iter().for_each(|(key, new_cs)| {
-            if let Some(mut scheme) = self.env.lookup(key.0).cloned() {
-                let fin_entry = fin_lookup.get(&key);
-                let mut changed = false;
-                let mut rejected: SmallVec<[(TyVar, TypeClass<TyId>); 2]> =
-                    SmallVec::new();
-
-                new_cs.into_iter().for_each(|(fv, class, span)| {
-                    let entry = (fv, class.clone());
-                    if !scheme.constraints.contains(&entry)
-                        && !rejected.contains(&entry)
-                    {
-                        if fin_entry
-                            .is_some_and(|f| f.declared_tvs.contains(&fv))
-                        {
-                            let param = fin_entry
-                                .and_then(|f| f.tv_names.get(&fv))
-                                .map(|&n| self.env.resolve_string(n))
-                                .unwrap_or_else(|| "?".to_owned());
-                            self.error(TypeError::MissingTypeParamConstraint {
-                                param,
-                                class,
-                                span,
-                            });
-                            rejected.push(entry);
-                        } else {
-                            scheme.constraints.push(entry);
-                            changed = true;
-                        }
-                    }
-                });
-
-                if changed {
-                    self.env.bind(key.0, scheme.clone());
-
-                    // Update module member registry if applicable.
-                    if let Some(mod_path) = key.1 {
-                        if let Some(vis) =
-                            self.env.module_member_vis(&mod_path, key.0)
-                        {
-                            self.env.register_user_module_member(
-                                mod_path, key.0, scheme, vis,
-                            );
-                        }
-                    }
-                }
-            }
         });
     }
 

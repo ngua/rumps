@@ -9,7 +9,8 @@ use indexmap::IndexMap;
 use smallvec::{smallvec, SmallVec};
 
 use super::{
-    ClassContext, ClassInstanceInput, Constraint, InferCtx, InstanceMethodInput,
+    ClassContext, ClassInstanceInput, Constraint, HoistCtx, InferCtx,
+    InstanceMethodInput,
 };
 use crate::ast::{
     AssocTypeDef, AstTypeExpr, AstTypeExprId, BindingPattern, DbRef, Expr,
@@ -621,7 +622,15 @@ impl InferCtx<'_> {
 
         // Phase 3: harvest body-emitted `Class` constraints transitively
         // linked to quantifying vars and add them to the scheme.
-        self.harvest_body_class_constraints(
+        self.hoist.harvest_body_class_constraints(
+            &mut HoistCtx {
+                env: &mut self.env,
+                uf: &mut self.uf,
+                ty_arena: &mut self.ty_arena,
+                constraints: &mut self.constraints,
+                errors: &mut self.errors,
+                current_module: &self.current_module,
+            },
             body_constraint_start,
             &vars,
             &mut scheme_constraints,
@@ -635,7 +644,20 @@ impl InferCtx<'_> {
             constraints: scheme_constraints,
         };
         self.env.bind(name, scheme);
-        self.finalize_hoisted_fun(stmt_id, name, declared_tvs, tv_names);
+        self.hoist.finalize_hoisted_fun(
+            &mut HoistCtx {
+                env: &mut self.env,
+                uf: &mut self.uf,
+                ty_arena: &mut self.ty_arena,
+                constraints: &mut self.constraints,
+                errors: &mut self.errors,
+                current_module: &self.current_module,
+            },
+            stmt_id,
+            name,
+            declared_tvs,
+            tv_names,
+        );
     }
 
     /// Infer types for a `let` statement.
@@ -715,14 +737,14 @@ impl InferCtx<'_> {
                 // `annotation`; this second unify is redundant but
                 // harmless. For unannotated lets, `hoisted_ty` is the
                 // fresh var from hoisting and this is the only unify.
-                if let Some(hoisted_ty) = self.hoisted_lets.remove(name) {
+                if let Some(hoisted_ty) = self.hoist.lets.remove(name) {
                     self.unify(hoisted_ty, ty, span);
                 }
                 // Phase 2: module-level `let` hoist unify.
                 if let Some(ref mod_path) = self.current_module {
                     let key = (mod_path.clone(), *name);
                     if let Some(hoisted_ty) =
-                        self.hoisted_module_lets.remove(&key)
+                        self.hoist.module_lets.remove(&key)
                     {
                         self.unify(hoisted_ty, ty, span);
                     }
@@ -738,7 +760,15 @@ impl InferCtx<'_> {
                         scheme.vars.iter().copied().collect();
                     self.env.bind(*name, scheme);
                     // Phase 4: closure-RHS let parity with `fun`.
-                    self.finalize_hoisted_fun(
+                    self.hoist.finalize_hoisted_fun(
+                        &mut HoistCtx {
+                            env: &mut self.env,
+                            uf: &mut self.uf,
+                            ty_arena: &mut self.ty_arena,
+                            constraints: &mut self.constraints,
+                            errors: &mut self.errors,
+                            current_module: &self.current_module,
+                        },
                         stmt_id,
                         *name,
                         declared_tvs,
