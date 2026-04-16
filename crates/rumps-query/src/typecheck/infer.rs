@@ -997,14 +997,6 @@ impl<'a> InferCtx<'a> {
         self.ty_arena.alloc(Ty::Var(v))
     }
 
-    /// Clone the collected numeric type variables for defaulting.
-    ///
-    /// Unlike `take`, this preserves the list for later use in error formatting
-    /// (so numeric vars display as `Int` instead of `T`).
-    pub(crate) fn clone_numeric_vars(&self) -> Vec<TyVar> {
-        self.numeric_vars.clone()
-    }
-
     /// Add a constraint to the collection.
     pub(crate) fn constrain(&mut self, c: Constraint) {
         self.constraints.push(c);
@@ -1067,11 +1059,6 @@ impl<'a> InferCtx<'a> {
         &self.constraints
     }
 
-    /// Take ownership of collected constraints, leaving an empty vec.
-    pub(crate) fn take_constraints(&mut self) -> Vec<Constraint> {
-        mem::take(&mut self.constraints)
-    }
-
     /// Get the inferred type for an expression, if recorded.
     pub(crate) fn get_type(&self, id: ExprId) -> Option<TyId> {
         self.expr_types.get(&id).copied()
@@ -1095,6 +1082,57 @@ impl<'a> InferCtx<'a> {
     /// Take ownership of collected errors, leaving an empty vec.
     pub(crate) fn take_errors(&mut self) -> Vec<TypeError> {
         mem::take(&mut self.errors)
+    }
+
+    /// Build a type-parameter substitution from an instance definition.
+    ///
+    /// Maps instance type params to caller-supplied type args.
+    /// Var params become entries in the returned `Rename`; concrete params
+    /// are unified via deferred constraints.
+    pub(super) fn build_instance_subst(
+        &mut self,
+        inst: &super::instance::Instance,
+        type_args: &[TyId],
+        span: Span,
+    ) -> super::ty::Rename {
+        let (vars, concretes): (
+            SmallVec<[(TyVar, TyId); 2]>,
+            SmallVec<[(TyId, TyId); 2]>,
+        ) = inst.type_params.iter().zip(type_args.iter()).fold(
+            (SmallVec::new(), SmallVec::new()),
+            |(mut vs, mut cs), (&p, &a)| {
+                match self.ty_arena.get(p) {
+                    Ty::Var(tv) => vs.push((*tv, a)),
+                    _ => cs.push((p, a)),
+                }
+                (vs, cs)
+            },
+        );
+        concretes.into_iter().for_each(|(p, a)| {
+            self.unify(p, a, span);
+        });
+        super::ty::Rename(vars.into_iter().collect())
+    }
+
+    /// Create a `SolveCtx` and run constraint solving.
+    ///
+    /// Takes ownership of constraints, then delegates to
+    /// `SolveCtx::solve_constraints`.
+    fn solve(&mut self) {
+        let constraints = mem::take(&mut self.constraints);
+        super::unify::SolveCtx {
+            ty_arena: &mut self.ty_arena,
+            uf: &mut self.uf,
+            registry: self.registry,
+            instance_registry: &self.instance_registry,
+            env: &self.env,
+            errors: &mut self.errors,
+            ast: self.ast,
+            type_exprs: self.type_exprs,
+            current_module: &self.current_module,
+            class_context: &self.class_context,
+        }
+        .solve_constraints(constraints, &self.numeric_vars);
     }
 
     /// Resolve all inferred types through the union-find.
@@ -1278,7 +1316,7 @@ impl<'a> InferCtx<'a> {
         stmts.iter().for_each(|id| self.stmt(*id));
 
         // Solve collected constraints (updates union-find in-place)
-        self.solve_constraints();
+        self.solve();
 
         // Enable zonk cache for resolution passes (bindings are frozen
         // post-solve, so memoization is safe and avoids redundant tree walks)

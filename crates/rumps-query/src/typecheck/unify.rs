@@ -19,14 +19,17 @@
 use std::collections::HashMap;
 
 use indexmap::IndexMap;
-use smallvec::SmallVec;
+use smallvec::{smallvec, SmallVec};
 
+use super::env::TypeEnv;
 use super::error::TypeError;
-use super::infer::{Constraint, InferCtx};
+use super::infer::{ClassContext, Constraint, InferCtx};
+use super::instance::InstanceRegistry;
 use super::ty::{Rename, Ty, TyArena, TyId, TyVar, TypeClass};
-use crate::ast::AstTypeExpr;
-use crate::intern::StringId;
-use crate::value::TypeDef;
+use super::uf::UnionFind;
+use crate::ast::{Ast, AstTypeExpr, AstTypeExprId};
+use crate::intern::{QualifiedName, StringId};
+use crate::value::{TypeDef, TypeExprArena, TypeExprId, TypeId, TypeRegistry};
 use crate::{ClassId, Span};
 
 /// Result of a unification attempt.
@@ -34,7 +37,525 @@ use crate::{ClassId, Span};
 /// With union-find, successful unification mutates the UF in-place.
 pub(crate) type UnifyResult = Result<(), TypeError>;
 
-impl<'a> InferCtx<'a> {
+/// Context for constraint solving (unification, class satisfaction, etc.).
+///
+/// Created from `InferCtx` fields for the duration of `solve_constraints`.
+/// Separates the solving machinery from inference-time bookkeeping.
+pub(super) struct SolveCtx<'a> {
+    pub(super) ty_arena: &'a mut TyArena,
+    pub(super) uf: &'a mut UnionFind,
+    pub(super) registry: &'a TypeRegistry,
+    pub(super) instance_registry: &'a InstanceRegistry,
+    pub(super) env: &'a TypeEnv,
+    pub(super) errors: &'a mut Vec<TypeError>,
+    /// AST reference for alias expansion and field type resolution.
+    pub(super) ast: &'a Ast,
+    /// Type expression arena for converting `TypeExprId -> TyId`.
+    pub(super) type_exprs: &'a TypeExprArena,
+    /// Current module path (for module-aware type name resolution).
+    pub(super) current_module: &'a Option<QualifiedName>,
+    /// Current class context (for associated type resolution).
+    pub(super) class_context: &'a Option<ClassContext>,
+}
+
+impl SolveCtx<'_> {
+    // -- Type conversion (subset of `InferCtx` convert.rs, for alias expansion) --
+
+    /// Resolve a type name to its `TypeId` and effective qualified name.
+    fn resolve_type_name(
+        &self,
+        name: &QualifiedName,
+    ) -> Option<(TypeId, QualifiedName)> {
+        let local = name.local_name();
+        let eff_qn = self
+            .env
+            .lookup_imported_type(local)
+            .cloned()
+            .unwrap_or_else(|| name.clone());
+
+        self.registry
+            .lookup(&eff_qn)
+            .map(|id| (id, eff_qn.clone()))
+            .or_else(|| {
+                if eff_qn.is_qualified() {
+                    None
+                } else {
+                    let eff_local = eff_qn.local_name();
+                    self.current_module.as_ref().and_then(|mod_qn| {
+                        std::iter::once(mod_qn.clone())
+                            .chain(mod_qn.ancestors())
+                            .find_map(|prefix| {
+                                let qn = prefix.child(eff_local);
+                                self.registry.lookup(&qn).map(|id| (id, qn))
+                            })
+                    })
+                }
+            })
+    }
+
+    /// Check visibility for a module-qualified type name.
+    fn check_type_visibility(
+        &mut self,
+        qn: &QualifiedName,
+        span: Span,
+    ) -> bool {
+        use crate::ast::Visibility;
+        let is_private = qn.is_qualified()
+            && self
+                .env
+                .lookup_user_module_type_vis(qn)
+                .is_some_and(|vis| vis == Visibility::Private);
+        if is_private {
+            let local = self.env.resolve_str(qn.local_name()).to_owned();
+            let module = qn
+                .parent()
+                .map_or_else(String::new, |p| p.display(&self.env.strings));
+            self.errors.push(TypeError::PrivateAccess {
+                module,
+                name: local,
+                span,
+            });
+        }
+        !is_private
+    }
+
+    /// Convert a `TypeExprId` to a `TyId`.
+    fn type_expr_to_ty(&mut self, id: TypeExprId) -> TyId {
+        let base = self.type_exprs.base_type(id);
+        let arg_ids: SmallVec<[TypeExprId; 4]> = self
+            .type_exprs
+            .type_args(id)
+            .map(|a| a.iter().copied().collect())
+            .unwrap_or_default();
+        base.map_or(TyArena::UNKNOWN, |base| {
+            let args: SmallVec<[TyId; 4]> =
+                arg_ids.iter().map(|&p| self.type_expr_to_ty(p)).collect();
+            let base_ty = self.type_id_to_ty(base);
+            self.apply_type_args(base_ty, args)
+        })
+    }
+
+    /// Convert a `TypeId` to a primitive `TyId`, `Ty::Union`, or `Ty::Named`.
+    fn type_id_to_ty(&mut self, id: TypeId) -> TyId {
+        match id {
+            TypeId::BOOL => TyArena::BOOL,
+            TypeId::INT => TyArena::INT,
+            TypeId::WORD => TyArena::WORD,
+            TypeId::FLOAT => TyArena::FLOAT,
+            TypeId::CHAR => TyArena::CHAR,
+            TypeId::STRING => TyArena::STRING,
+            TypeId::UNIT => TyArena::UNIT,
+            TypeId::TIME => TyArena::TIME,
+            TypeId::RANGE => TyArena::RANGE,
+            TypeId::JSON => TyArena::JSON,
+            TypeId::ORDERING => TyArena::ORDERING,
+            TypeId::DATA_STATUS => TyArena::DATA_STATUS,
+            TypeId::FILEPATH => TyArena::FILEPATH,
+            TypeId::PATH => TyArena::PATH,
+            TypeId::REGEX => TyArena::REGEX,
+            TypeId::ERROR => TyArena::RUNTIME_ERROR,
+            TypeId::LOCAL => TyArena::LOCAL,
+            TypeId::GLOBAL => TyArena::GLOBAL,
+            TypeId::REF => self.ty_arena.ref_ty(),
+            TypeId::STORABLE => self.ty_arena.storable(),
+            TypeId::SCALAR => self.ty_arena.scalar(),
+            TypeId::SUBSCRIPT => self.ty_arena.subscript(),
+            _ => match self.registry.get_def(id) {
+                Some(TypeDef::Union { members, .. }) => {
+                    let members = members.clone();
+                    let member_tys = members
+                        .iter()
+                        .map(|m| self.type_expr_to_ty(*m))
+                        .collect();
+                    self.ty_arena.alloc(Ty::Union(Some(id), member_tys))
+                }
+                _ => self.ty_arena.named(id, smallvec![]),
+            },
+        }
+    }
+
+    /// Apply type arguments to a base type.
+    fn apply_type_args(
+        &mut self,
+        base: TyId,
+        args: SmallVec<[TyId; 4]>,
+    ) -> TyId {
+        let base_ty = self.ty_arena.get(base).clone();
+        match base_ty {
+            Ty::Named(id, _) if id == TypeId::ARRAY => {
+                if args.len() == 1 {
+                    self.ty_arena.array(args[0])
+                } else {
+                    self.ty_arena.named(id, args)
+                }
+            }
+            Ty::Named(id, _) if id == TypeId::OPTION => {
+                if args.len() == 1 {
+                    self.ty_arena.option(args[0])
+                } else {
+                    self.ty_arena.named(id, args)
+                }
+            }
+            Ty::Named(id, _) if id == TypeId::MAP => {
+                if args.len() == 2 {
+                    self.ty_arena.map_ty(args[0], args[1])
+                } else {
+                    self.ty_arena.named(id, args)
+                }
+            }
+            Ty::Named(id, _) if id == TypeId::RESULT => {
+                if args.len() == 2 {
+                    self.ty_arena.result(args[0], args[1])
+                } else {
+                    self.ty_arena.named(id, args)
+                }
+            }
+            Ty::Named(id, _) if id == TypeId::TUPLE => {
+                self.ty_arena.alloc(Ty::Tuple(args))
+            }
+            Ty::Named(id, _) => self.ty_arena.named(id, args),
+            _ => base,
+        }
+    }
+
+    /// Convert a simple named type to a `TyId`.
+    fn named_type_to_ty(&mut self, name: &str) -> TyId {
+        InferCtx::builtin_type_from_name(name).unwrap_or_else(|| {
+            self.env
+                .lookup_str(name)
+                .and_then(|id| self.registry.lookup(&QualifiedName::local(id)))
+                .map_or(TyArena::UNKNOWN, |ty_id| {
+                    self.ty_arena.named(ty_id, smallvec![])
+                })
+        })
+    }
+
+    /// Convert a parameterized type name and args to a `TyId`.
+    fn parameterized_type_to_ty(
+        &mut self,
+        name: &str,
+        args: SmallVec<[TyId; 4]>,
+    ) -> TyId {
+        match name {
+            "Array" => args
+                .first()
+                .map_or(TyArena::ERROR, |&t| self.ty_arena.array(t)),
+            "Option" => args
+                .first()
+                .map_or(TyArena::ERROR, |&t| self.ty_arena.option(t)),
+            "Result" => args.first().map_or(TyArena::ERROR, |&ok| {
+                args.get(1).map_or(TyArena::ERROR, |&err| {
+                    self.ty_arena.result(ok, err)
+                })
+            }),
+            "Map" => args.first().map_or(TyArena::ERROR, |&k| {
+                args.get(1)
+                    .map_or(TyArena::ERROR, |&v| self.ty_arena.map_ty(k, v))
+            }),
+            _ => self
+                .env
+                .lookup_str(name)
+                .and_then(|id| self.registry.lookup(&QualifiedName::local(id)))
+                .map_or(TyArena::UNKNOWN, |ty_id| {
+                    self.ty_arena.named(ty_id, args)
+                }),
+        }
+    }
+
+    /// Convert an AST type expression to a `TyId` with the given substitution.
+    ///
+    /// Shared logic with `InferCtx::ast_type_to_ty`; the solve-phase version
+    /// skips AST rewrites (names are already resolved during inference).
+    fn ast_type_to_ty(
+        &mut self,
+        id: AstTypeExprId,
+        subst: &IndexMap<StringId, TyId>,
+    ) -> TyId {
+        match self.ast.get_type_expr(id).cloned() {
+            None => {
+                let span = self.ast.type_expr_span(id).unwrap_or_default();
+                self.errors.push(TypeError::UnknownType(
+                    "<unknown>".to_string(),
+                    span,
+                ));
+                TyArena::ERROR
+            }
+            Some(te) => match &te {
+                AstTypeExpr::Wildcard => {
+                    let v = self.uf.fresh();
+                    self.ty_arena.alloc(Ty::Var(v))
+                }
+                AstTypeExpr::Named(name) => subst
+                    .get(&name.local_name())
+                    .copied()
+                    .unwrap_or_else(|| {
+                        let span =
+                            self.ast.type_expr_span(id).unwrap_or_default();
+                        let resolved = self.resolve_type_name(name);
+                        match resolved {
+                            Some((type_id, qid)) => {
+                                if !self.check_type_visibility(&qid, span) {
+                                    TyArena::ERROR
+                                } else {
+                                    let eff = qid.display(&self.env.strings);
+                                    let exp = self
+                                        .registry
+                                        .type_param_count(type_id)
+                                        .or_else(|| {
+                                            InferCtx::expected_type_arity(&eff)
+                                        })
+                                        .unwrap_or(0);
+                                    if exp > 0 {
+                                        self.errors.push(
+                                            TypeError::TypeArityMismatch {
+                                                name: eff,
+                                                expected: exp,
+                                                got: 0,
+                                                span,
+                                            },
+                                        );
+                                        TyArena::ERROR
+                                    } else {
+                                        self.type_id_to_ty(type_id)
+                                    }
+                                }
+                            }
+                            None => {
+                                let name_s = name.display(&self.env.strings);
+                                let expected =
+                                    InferCtx::expected_type_arity(&name_s);
+                                if let Some(exp) = expected {
+                                    if exp > 0 {
+                                        self.errors.push(
+                                            TypeError::TypeArityMismatch {
+                                                name: name_s,
+                                                expected: exp,
+                                                got: 0,
+                                                span,
+                                            },
+                                        );
+                                        TyArena::ERROR
+                                    } else {
+                                        self.named_type_to_ty(&name_s)
+                                    }
+                                } else {
+                                    let ty = self.named_type_to_ty(&name_s);
+                                    if ty == TyArena::UNKNOWN {
+                                        self.errors.push(
+                                            TypeError::UnknownType(
+                                                name_s, span,
+                                            ),
+                                        );
+                                        TyArena::ERROR
+                                    } else {
+                                        ty
+                                    }
+                                }
+                            }
+                        }
+                    }),
+                AstTypeExpr::App(name, args) => {
+                    let span = self.ast.type_expr_span(id).unwrap_or_default();
+                    let resolved = self.resolve_type_name(name);
+                    let user_def = resolved.and_then(|(tid, qid)| {
+                        self.registry
+                            .type_param_count(tid)
+                            .map(|exp| (tid, qid, exp))
+                    });
+                    match user_def {
+                        Some((type_id, qid, exp)) => {
+                            if !self.check_type_visibility(&qid, span) {
+                                TyArena::ERROR
+                            } else {
+                                let n = qid.display(&self.env.strings);
+                                if args.len() != exp {
+                                    self.errors.push(
+                                        TypeError::TypeArityMismatch {
+                                            name: n,
+                                            expected: exp,
+                                            got: args.len(),
+                                            span,
+                                        },
+                                    );
+                                    TyArena::ERROR
+                                } else {
+                                    let arg_tys: SmallVec<[TyId; 4]> = args
+                                        .iter()
+                                        .map(|a| self.ast_type_to_ty(*a, subst))
+                                        .collect();
+                                    let base = self.type_id_to_ty(type_id);
+                                    self.apply_type_args(base, arg_tys)
+                                }
+                            }
+                        }
+                        None => {
+                            let name_s = name.display(&self.env.strings);
+                            let expected =
+                                InferCtx::expected_type_arity(&name_s);
+                            if let Some(exp) = expected {
+                                if args.len() != exp {
+                                    self.errors.push(
+                                        TypeError::TypeArityMismatch {
+                                            name: name_s,
+                                            expected: exp,
+                                            got: args.len(),
+                                            span,
+                                        },
+                                    );
+                                    TyArena::ERROR
+                                } else {
+                                    let arg_tys: SmallVec<[TyId; 4]> = args
+                                        .iter()
+                                        .map(|a| self.ast_type_to_ty(*a, subst))
+                                        .collect();
+                                    self.parameterized_type_to_ty(
+                                        &name_s, arg_tys,
+                                    )
+                                }
+                            } else {
+                                let arg_tys: SmallVec<[TyId; 4]> = args
+                                    .iter()
+                                    .map(|a| self.ast_type_to_ty(*a, subst))
+                                    .collect();
+                                let ty = self
+                                    .parameterized_type_to_ty(&name_s, arg_tys);
+                                if ty == TyArena::UNKNOWN {
+                                    self.errors.push(TypeError::UnknownType(
+                                        name_s, span,
+                                    ));
+                                    TyArena::ERROR
+                                } else {
+                                    ty
+                                }
+                            }
+                        }
+                    }
+                }
+                AstTypeExpr::Fn(params, ret) => {
+                    let param_tys: SmallVec<[TyId; 4]> = params
+                        .iter()
+                        .map(|p| self.ast_type_to_ty(*p, subst))
+                        .collect();
+                    let ret_ty = self.ast_type_to_ty(*ret, subst);
+                    self.ty_arena.func(param_tys, ret_ty)
+                }
+                AstTypeExpr::Tuple(elems) => {
+                    let elem_tys: SmallVec<[TyId; 4]> = elems
+                        .iter()
+                        .map(|e| self.ast_type_to_ty(*e, subst))
+                        .collect();
+                    self.ty_arena.alloc(Ty::Tuple(elem_tys))
+                }
+                AstTypeExpr::Union(members) => {
+                    if members.is_empty() {
+                        let span =
+                            self.ast.type_expr_span(id).unwrap_or_default();
+                        self.errors.push(TypeError::EmptyUnion(span));
+                        TyArena::ERROR
+                    } else {
+                        let member_tys: SmallVec<[TyId; 4]> = members
+                            .iter()
+                            .map(|m| self.ast_type_to_ty(*m, subst))
+                            .collect();
+                        self.ty_arena.alloc(Ty::Union(None, member_tys))
+                    }
+                }
+                AstTypeExpr::Object(fields) => {
+                    let field_tys = fields
+                        .iter()
+                        .map(|(name, ty_id)| {
+                            let ty = self.ast_type_to_ty(*ty_id, subst);
+                            (*name, ty)
+                        })
+                        .collect();
+                    self.ty_arena.alloc(Ty::Object(field_tys))
+                }
+                AstTypeExpr::VarApp(name, args) => {
+                    let span = self.ast.type_expr_span(id).unwrap_or_default();
+                    let arg_tys: SmallVec<[TyId; 4]> = args
+                        .iter()
+                        .map(|&a| self.ast_type_to_ty(a, subst))
+                        .collect();
+                    match subst.get(&name.local_name()).copied() {
+                        None => {
+                            self.errors.push(TypeError::UnknownType(
+                                name.display(&self.env.strings),
+                                span,
+                            ));
+                            TyArena::ERROR
+                        }
+                        Some(tid) => {
+                            let resolved = self.ty_arena.get(tid).clone();
+                            match resolved {
+                                Ty::Var(tv) => self.ty_arena.hkt(tv, arg_tys),
+                                _ => self.apply_type_args(tid, arg_tys),
+                            }
+                        }
+                    }
+                }
+                AstTypeExpr::AssocType { class, name } => {
+                    let span = self.ast.type_expr_span(id).unwrap_or_default();
+                    match class {
+                        None => self
+                            .class_context
+                            .as_ref()
+                            .and_then(|ctx| ctx.assoc_types.get(name).copied())
+                            .unwrap_or_else(|| {
+                                self.errors.push(
+                                    TypeError::AssocTypeOutsideClass {
+                                        name: self.env.resolve_string(*name),
+                                        span,
+                                    },
+                                );
+                                TyArena::ERROR
+                            }),
+                        Some(class_name) => {
+                            let cls_s = self.env.resolve_string(*class_name);
+                            ClassId::from_name(&cls_s)
+                                .map(|kind| {
+                                    let tv = self.uf.fresh();
+                                    self.ty_arena
+                                        .alloc(Ty::AssocType(tv, kind, *name))
+                                })
+                                .unwrap_or_else(|| {
+                                    self.errors.push(TypeError::UnknownClass(
+                                        cls_s, span,
+                                    ));
+                                    TyArena::ERROR
+                                })
+                        }
+                    }
+                }
+            },
+        }
+    }
+
+    /// Map a primitive `Ty` shape to its `TypeId`, if applicable.
+    fn primitive_type_id(ty: &Ty) -> Option<TypeId> {
+        match ty {
+            Ty::Bool => Some(TypeId::BOOL),
+            Ty::Int => Some(TypeId::INT),
+            Ty::Word => Some(TypeId::WORD),
+            Ty::Float => Some(TypeId::FLOAT),
+            Ty::Char => Some(TypeId::CHAR),
+            Ty::String => Some(TypeId::STRING),
+            Ty::Unit => Some(TypeId::UNIT),
+            Ty::Time => Some(TypeId::TIME),
+            Ty::Range => Some(TypeId::RANGE),
+            Ty::Json => Some(TypeId::JSON),
+            Ty::Ordering => Some(TypeId::ORDERING),
+            Ty::DataStatus => Some(TypeId::DATA_STATUS),
+            Ty::FilePath => Some(TypeId::FILEPATH),
+            Ty::Path => Some(TypeId::PATH),
+            Ty::Regex => Some(TypeId::REGEX),
+            Ty::Local => Some(TypeId::LOCAL),
+            Ty::Global => Some(TypeId::GLOBAL),
+            _ => None,
+        }
+    }
+
+    // -- Methods moved from `impl InferCtx` --
+
     /// Unify two types, recording bindings in the union-find.
     ///
     /// # Unification Rules
@@ -96,7 +617,7 @@ impl<'a> InferCtx<'a> {
             Ty::Named(id, a) => (*id, a.clone()),
             _ => None?,
         };
-        match self.registry().get_def(type_id) {
+        match self.registry.get_def(type_id) {
             Some(TypeDef::Alias {
                 type_params,
                 target,
@@ -106,7 +627,7 @@ impl<'a> InferCtx<'a> {
                 // `unify_named_with_object` handle it for proper
                 // required-field checking
                 let is_obj = self
-                    .ast()
+                    .ast
                     .get_type_expr(*target)
                     .is_some_and(|te| matches!(te, AstTypeExpr::Object(_)));
                 if is_obj {
@@ -433,7 +954,7 @@ impl<'a> InferCtx<'a> {
                 Ok(())
             } else if let Some(w_bound) = self.uf.probe(w_root) {
                 // `w` is bound; unify root with the bound type
-                if self.ty_arena.occurs_uf(w_bound, root, &mut self.uf) {
+                if self.ty_arena.occurs_uf(w_bound, root, self.uf) {
                     Err(TypeError::InfiniteType(root, w_bound, span))
                 } else {
                     self.uf.bind(root, w_bound);
@@ -443,7 +964,7 @@ impl<'a> InferCtx<'a> {
                 self.uf.union(root, w_root);
                 Ok(())
             }
-        } else if self.ty_arena.occurs_uf(t, root, &mut self.uf) {
+        } else if self.ty_arena.occurs_uf(t, root, self.uf) {
             Err(TypeError::InfiniteType(root, t, span))
         } else {
             self.uf.bind(root, t);
@@ -712,7 +1233,7 @@ impl<'a> InferCtx<'a> {
         span: Span,
     ) -> UnifyResult {
         // Look up alias definition
-        let def = self.registry().get_def(type_id);
+        let def = self.registry.get_def(type_id);
 
         match def {
             Some(TypeDef::Alias {
@@ -723,7 +1244,7 @@ impl<'a> InferCtx<'a> {
                 // Check if target is an object type
                 let target = *target;
                 let type_params = type_params.clone();
-                match self.ast().get_type_expr(target).cloned() {
+                match self.ast.get_type_expr(target).cloned() {
                     Some(AstTypeExpr::Object(alias_fields)) => {
                         // Build substitution from type params to type args
                         let param_subst: IndexMap<StringId, TyId> = type_params
@@ -755,7 +1276,7 @@ impl<'a> InferCtx<'a> {
                                         Err(TypeError::MissingField {
                                             ty: type_id,
                                             field: self
-                                                .env()
+                                                .env
                                                 .resolve_string(*field_name),
                                             span,
                                         })
@@ -810,17 +1331,13 @@ impl<'a> InferCtx<'a> {
     /// 7. `Storable` constraints (must be `Bool | Int | Float | Char | String | Json`)
     /// 8. `Fallible` constraints (must be `Option[T]` or `Result[T, E]`; third pass)
     ///
-    /// Errors are recorded via `self.error()`; unification continues to collect
+    /// Errors are recorded via `self.errors`; unification continues to collect
     /// as many errors as possible.
-    pub(crate) fn solve_constraints(&mut self) {
-        let constraints = self.take_constraints();
-
-        // Get type variables from integer literals for defaulting to Int.
-        // These have NO constraint; they can unify with any type. After solving,
-        // unresolved ones default to Int. We clone (not take) so numeric_vars
-        // remains available for error formatting (displaying vars as Int).
-        let numeric_vars = self.clone_numeric_vars();
-
+    pub(crate) fn solve_constraints(
+        &mut self,
+        constraints: Vec<Constraint>,
+        numeric_vars: &[TyVar],
+    ) {
         // First pass: process Unify, Callable, HasField, Iterable, Indexable.
         // These constraints generate type bindings (via union-find) that
         // other constraints (Numeric, Into[String], etc.) depend on.
@@ -832,10 +1349,10 @@ impl<'a> InferCtx<'a> {
                 // error messages on mismatch show unresolved type variables
                 // (e.g. `Option[T]`) instead of concrete types (e.g.
                 // `Option[Int]`).
-                let t1 = self.uf.resolve(*t1, &mut self.ty_arena);
-                let t2 = self.uf.resolve(*t2, &mut self.ty_arena);
+                let t1 = self.uf.resolve(*t1, self.ty_arena);
+                let t2 = self.uf.resolve(*t2, self.ty_arena);
                 if let Err(e) = self.unify_types(t1, t2, *span) {
-                    self.error(e);
+                    self.errors.push(e);
                 }
             }
             Constraint::Callable {
@@ -844,12 +1361,12 @@ impl<'a> InferCtx<'a> {
                 ret,
                 span,
             } => {
-                let callee = self.uf.resolve(*callee, &mut self.ty_arena);
+                let callee = self.uf.resolve(*callee, self.ty_arena);
                 let args: SmallVec<[TyId; 4]> = args
                     .iter()
-                    .map(|&t| self.uf.resolve(t, &mut self.ty_arena))
+                    .map(|&t| self.uf.resolve(t, self.ty_arena))
                     .collect();
-                let ret = self.uf.resolve(*ret, &mut self.ty_arena);
+                let ret = self.uf.resolve(*ret, self.ty_arena);
                 self.check_callable(callee, &args, ret, *span);
             }
             Constraint::HasField {
@@ -858,17 +1375,16 @@ impl<'a> InferCtx<'a> {
                 field_ty,
                 span,
             } => {
-                let base = self.uf.resolve(*base, &mut self.ty_arena);
-                let field_ty = self.uf.resolve(*field_ty, &mut self.ty_arena);
+                let base = self.uf.resolve(*base, self.ty_arena);
+                let field_ty = self.uf.resolve(*field_ty, self.ty_arena);
                 self.check_has_field(base, *field, field_ty, *span);
             }
             Constraint::Class { ty, class, span } => match class {
                 // Iterable (with element type) and Indexable: first pass
                 TypeClass::Hkt(ClassId::ITERABLE, Some(_))
                 | TypeClass::Parameterized(ClassId::INDEXABLE, _) => {
-                    let ty = self.uf.resolve(*ty, &mut self.ty_arena);
-                    let class =
-                        class.resolve_inner(&mut self.uf, &mut self.ty_arena);
+                    let ty = self.uf.resolve(*ty, self.ty_arena);
+                    let class = class.resolve_inner(self.uf, self.ty_arena);
                     self.satisfies_class(&class, ty, *span);
                 }
                 // HKT constraints deferred to third pass
@@ -898,7 +1414,7 @@ impl<'a> InferCtx<'a> {
             if let Constraint::Class { ty, class, span } = c {
                 match class {
                     TypeClass::Simple(_) => {
-                        let ty = self.uf.resolve(*ty, &mut self.ty_arena);
+                        let ty = self.uf.resolve(*ty, self.ty_arena);
                         self.satisfies_class(class, ty, *span);
                     }
                     TypeClass::Hkt(..) | TypeClass::Parameterized(..) => {}
@@ -913,9 +1429,8 @@ impl<'a> InferCtx<'a> {
             if let Constraint::Class { ty, class, span } = c {
                 match class {
                     TypeClass::Hkt(..) | TypeClass::Parameterized(..) => {
-                        let ty = self.uf.resolve(*ty, &mut self.ty_arena);
-                        let class = class
-                            .resolve_inner(&mut self.uf, &mut self.ty_arena);
+                        let ty = self.uf.resolve(*ty, self.ty_arena);
+                        let class = class.resolve_inner(self.uf, self.ty_arena);
                         self.satisfies_class(&class, ty, *span);
                     }
                     TypeClass::Simple(_) => {}
@@ -941,7 +1456,7 @@ impl<'a> InferCtx<'a> {
         let shape = self.ty_arena.get(ty).clone();
         if let Ty::AssocType(tv, assoc_class, name) = shape {
             // Resolve the base type variable through union-find
-            match self.uf.resolve_var(tv, &mut self.ty_arena) {
+            match self.uf.resolve_var(tv, self.ty_arena) {
                 Some(base) => {
                     if let Ok(resolved) =
                         self.resolve_assoc_type(base, assoc_class, name, span)
@@ -994,7 +1509,7 @@ impl<'a> InferCtx<'a> {
                                 )
                             });
                             if !any_numeric {
-                                self.error(TypeError::UnsatisfiedClass(
+                                self.errors.push(TypeError::UnsatisfiedClass(
                                     TypeClass::Simple(ClassId::NUMERIC),
                                     ty,
                                     span,
@@ -1020,7 +1535,7 @@ impl<'a> InferCtx<'a> {
                                 self.satisfies_class(class, expanded, span)
                             }
                             None => {
-                                self.error(TypeError::UnsatisfiedClass(
+                                self.errors.push(TypeError::UnsatisfiedClass(
                                     TypeClass::Simple(ClassId::NUMERIC),
                                     ty,
                                     span,
@@ -1030,7 +1545,7 @@ impl<'a> InferCtx<'a> {
                     }
                 }
                 _ => {
-                    self.error(TypeError::UnsatisfiedClass(
+                    self.errors.push(TypeError::UnsatisfiedClass(
                         TypeClass::Simple(ClassId::NUMERIC),
                         ty,
                         span,
@@ -1080,17 +1595,21 @@ impl<'a> InferCtx<'a> {
                                     self.satisfies_class(class, expanded, span)
                                 }
                                 None => {
-                                    self.error(TypeError::UnsatisfiedClass(
-                                        TypeClass::Simple(ClassId::BIT_LIKE),
-                                        ty,
-                                        span,
-                                    ));
+                                    self.errors.push(
+                                        TypeError::UnsatisfiedClass(
+                                            TypeClass::Simple(
+                                                ClassId::BIT_LIKE,
+                                            ),
+                                            ty,
+                                            span,
+                                        ),
+                                    );
                                 }
                             },
                         }
                     }
                     _ => {
-                        self.error(TypeError::UnsatisfiedClass(
+                        self.errors.push(TypeError::UnsatisfiedClass(
                             TypeClass::Simple(ClassId::BIT_LIKE),
                             ty,
                             span,
@@ -1137,7 +1656,7 @@ impl<'a> InferCtx<'a> {
                                 );
                             }
                             None => {
-                                self.error(TypeError::UnsatisfiedClass(
+                                self.errors.push(TypeError::UnsatisfiedClass(
                                     TypeClass::Simple(ClassId::NEGATABLE),
                                     ty,
                                     span,
@@ -1146,7 +1665,7 @@ impl<'a> InferCtx<'a> {
                         }
                     }
                     _ => {
-                        self.error(TypeError::UnsatisfiedClass(
+                        self.errors.push(TypeError::UnsatisfiedClass(
                             TypeClass::Simple(ClassId::NEGATABLE),
                             ty,
                             span,
@@ -1224,7 +1743,7 @@ impl<'a> InferCtx<'a> {
                                 );
                             }
                             None => {
-                                self.error(TypeError::UnsatisfiedClass(
+                                self.errors.push(TypeError::UnsatisfiedClass(
                                     TypeClass::Simple(ClassId::ORD),
                                     ty,
                                     span,
@@ -1233,7 +1752,7 @@ impl<'a> InferCtx<'a> {
                         }
                     }
                     _ => {
-                        self.error(TypeError::UnsatisfiedClass(
+                        self.errors.push(TypeError::UnsatisfiedClass(
                             TypeClass::Simple(ClassId::ORD),
                             ty,
                             span,
@@ -1320,7 +1839,7 @@ impl<'a> InferCtx<'a> {
                                 );
                             }
                             None => {
-                                self.error(TypeError::UnsatisfiedClass(
+                                self.errors.push(TypeError::UnsatisfiedClass(
                                     TypeClass::Simple(ClassId::EQ),
                                     ty,
                                     span,
@@ -1329,7 +1848,7 @@ impl<'a> InferCtx<'a> {
                         }
                     }
                     _ => {
-                        self.error(TypeError::UnsatisfiedClass(
+                        self.errors.push(TypeError::UnsatisfiedClass(
                             TypeClass::Simple(ClassId::EQ),
                             ty,
                             span,
@@ -1367,7 +1886,7 @@ impl<'a> InferCtx<'a> {
                     | Ty::Object(_) => {}
                     Ty::Var(_) | Ty::Error | Ty::Unknown => {}
                     Ty::Fn(_, _) => {
-                        self.error(TypeError::UnsatisfiedClass(
+                        self.errors.push(TypeError::UnsatisfiedClass(
                             TypeClass::Simple(ClassId::DISPLAY),
                             ty,
                             span,
@@ -1406,7 +1925,7 @@ impl<'a> InferCtx<'a> {
                                 );
                             }
                             None => {
-                                self.error(TypeError::UnsatisfiedClass(
+                                self.errors.push(TypeError::UnsatisfiedClass(
                                     TypeClass::Simple(ClassId::DISPLAY),
                                     ty,
                                     span,
@@ -1459,7 +1978,7 @@ impl<'a> InferCtx<'a> {
                             );
                         }
                         None => {
-                            self.error(TypeError::UnsatisfiedClass(
+                            self.errors.push(TypeError::UnsatisfiedClass(
                                 TypeClass::Simple(ClassId::MONOID),
                                 ty,
                                 span,
@@ -1468,7 +1987,7 @@ impl<'a> InferCtx<'a> {
                     }
                 }
                 _ => {
-                    self.error(TypeError::UnsatisfiedClass(
+                    self.errors.push(TypeError::UnsatisfiedClass(
                         TypeClass::Simple(ClassId::MONOID),
                         ty,
                         span,
@@ -1490,7 +2009,7 @@ impl<'a> InferCtx<'a> {
 
                     // Functions cannot be stringified
                     (Ty::Fn(_, _), Ty::String) => {
-                        self.error(TypeError::InvalidCast {
+                        self.errors.push(TypeError::InvalidCast {
                             from: ty,
                             to,
                             span,
@@ -1513,7 +2032,7 @@ impl<'a> InferCtx<'a> {
                     | (Ty::Regex, Ty::Json)
                     | (Ty::Local, Ty::Json)
                     | (Ty::Global, Ty::Json) => {
-                        self.error(TypeError::InvalidCast {
+                        self.errors.push(TypeError::InvalidCast {
                             from: ty,
                             to,
                             span,
@@ -1642,7 +2161,7 @@ impl<'a> InferCtx<'a> {
                         if *id == crate::TypeId::STORABLE =>
                     {
                         if !TyArena::STORABLE_MEMBERS.contains(&to) {
-                            self.error(TypeError::InvalidCast {
+                            self.errors.push(TypeError::InvalidCast {
                                 from: ty,
                                 to,
                                 span,
@@ -1665,7 +2184,7 @@ impl<'a> InferCtx<'a> {
                             TyArena::SUBSCRIPT_MEMBERS.contains(&ty)
                         };
                         if !is_member {
-                            self.error(TypeError::InvalidCast {
+                            self.errors.push(TypeError::InvalidCast {
                                 from: ty,
                                 to,
                                 span,
@@ -1691,7 +2210,7 @@ impl<'a> InferCtx<'a> {
                                         None,
                                     );
                                 } else {
-                                    self.error(TypeError::InvalidCast {
+                                    self.errors.push(TypeError::InvalidCast {
                                         from: ty,
                                         to,
                                         span,
@@ -1730,7 +2249,7 @@ impl<'a> InferCtx<'a> {
                                         &inst, &type_args, span, None,
                                     );
                                 } else {
-                                    self.error(TypeError::InvalidCast {
+                                    self.errors.push(TypeError::InvalidCast {
                                         from: ty,
                                         to,
                                         span,
@@ -1738,7 +2257,7 @@ impl<'a> InferCtx<'a> {
                                 }
                             }
                             None => {
-                                self.error(TypeError::InvalidCast {
+                                self.errors.push(TypeError::InvalidCast {
                                     from: ty,
                                     to,
                                     span,
@@ -1751,7 +2270,7 @@ impl<'a> InferCtx<'a> {
                     // E.g., `class Into[UserId] FOR Int { ... }`
                     _ => {
                         let type_id =
-                            self.primitive_type_id(self.ty_arena.get(ty));
+                            Self::primitive_type_id(self.ty_arena.get(ty));
                         match type_id.and_then(|id| {
                             self.instance_registry
                                 .lookup(ClassId::INTO, id)
@@ -1761,7 +2280,7 @@ impl<'a> InferCtx<'a> {
                                 let inst_target =
                                     inst.class_args.first().copied();
                                 if inst_target != Some(to) {
-                                    self.error(TypeError::InvalidCast {
+                                    self.errors.push(TypeError::InvalidCast {
                                         from: ty,
                                         to,
                                         span,
@@ -1769,7 +2288,7 @@ impl<'a> InferCtx<'a> {
                                 }
                             }
                             None => {
-                                self.error(TypeError::InvalidCast {
+                                self.errors.push(TypeError::InvalidCast {
                                     from: ty,
                                     to,
                                     span,
@@ -1794,7 +2313,7 @@ impl<'a> InferCtx<'a> {
 
                     // Function types cannot be source for READ
                     (Ty::Fn(_, _), _) => {
-                        self.error(TypeError::InvalidRead {
+                        self.errors.push(TypeError::InvalidRead {
                             from: ty,
                             to,
                             span,
@@ -1806,7 +2325,7 @@ impl<'a> InferCtx<'a> {
                     | (_, Ty::Regex)
                     | (_, Ty::Local)
                     | (_, Ty::Global) => {
-                        self.error(TypeError::InvalidRead {
+                        self.errors.push(TypeError::InvalidRead {
                             from: ty,
                             to,
                             span,
@@ -1817,7 +2336,7 @@ impl<'a> InferCtx<'a> {
                     (Ty::Regex, Ty::Json)
                     | (Ty::Local, Ty::Json)
                     | (Ty::Global, Ty::Json) => {
-                        self.error(TypeError::InvalidRead {
+                        self.errors.push(TypeError::InvalidRead {
                             from: ty,
                             to,
                             span,
@@ -1935,7 +2454,7 @@ impl<'a> InferCtx<'a> {
                                         None,
                                     );
                                 } else {
-                                    self.error(TypeError::InvalidCast {
+                                    self.errors.push(TypeError::InvalidCast {
                                         from: ty,
                                         to,
                                         span,
@@ -2001,7 +2520,7 @@ impl<'a> InferCtx<'a> {
                         if let Some(elem) = opt_elem {
                             if let Err(e) = self.unify_types(elem, inner, span)
                             {
-                                self.error(e);
+                                self.errors.push(e);
                             }
                         }
                     }
@@ -2010,7 +2529,7 @@ impl<'a> InferCtx<'a> {
                             if let Err(e) =
                                 self.unify_types(elem, TyArena::INT, span)
                             {
-                                self.error(e);
+                                self.errors.push(e);
                             }
                         }
                     }
@@ -2040,7 +2559,7 @@ impl<'a> InferCtx<'a> {
                                         if let Err(e) = self
                                             .unify_types(elem, resolved, span)
                                         {
-                                            self.error(e);
+                                            self.errors.push(e);
                                         }
                                     }
                                 }
@@ -2054,7 +2573,7 @@ impl<'a> InferCtx<'a> {
                             None => {
                                 let exp = opt_elem.unwrap_or(TyArena::UNKNOWN);
                                 let arr = self.ty_arena.array(exp);
-                                self.error(TypeError::Mismatch {
+                                self.errors.push(TypeError::Mismatch {
                                     expected: arr,
                                     got: ty,
                                     span,
@@ -2065,7 +2584,7 @@ impl<'a> InferCtx<'a> {
                     _ => {
                         let exp = opt_elem.unwrap_or(TyArena::UNKNOWN);
                         let arr = self.ty_arena.array(exp);
-                        self.error(TypeError::Mismatch {
+                        self.errors.push(TypeError::Mismatch {
                             expected: arr,
                             got: ty,
                             span,
@@ -2084,14 +2603,14 @@ impl<'a> InferCtx<'a> {
                     Ty::Array(inner) => {
                         // Array[T]: elem = T (index type is Int, via .Index)
                         if let Err(e) = self.unify_types(elem, inner, span) {
-                            self.error(e);
+                            self.errors.push(e);
                         }
                     }
                     Ty::Map(_key, val) => {
                         // Map[K, V]: elem = Option[V] (index type is K, via .Index)
                         let opt_val = self.ty_arena.option(val);
                         if let Err(e) = self.unify_types(elem, opt_val, span) {
-                            self.error(e);
+                            self.errors.push(e);
                         }
                     }
                     Ty::String => {
@@ -2099,7 +2618,7 @@ impl<'a> InferCtx<'a> {
                         if let Err(e) =
                             self.unify_types(elem, TyArena::CHAR, span)
                         {
-                            self.error(e);
+                            self.errors.push(e);
                         }
                     }
                     Ty::Union(_, members) => {
@@ -2128,7 +2647,7 @@ impl<'a> InferCtx<'a> {
                                     if let Err(e) =
                                         self.unify_types(elem, resolved, span)
                                     {
-                                        self.error(e);
+                                        self.errors.push(e);
                                     }
                                 }
                                 self.check_instance_constraints(
@@ -2139,7 +2658,7 @@ impl<'a> InferCtx<'a> {
                                 );
                             }
                             None => {
-                                self.error(TypeError::UnsatisfiedClass(
+                                self.errors.push(TypeError::UnsatisfiedClass(
                                     class.clone(),
                                     ty,
                                     span,
@@ -2148,7 +2667,7 @@ impl<'a> InferCtx<'a> {
                         }
                     }
                     _ => {
-                        self.error(TypeError::UnsatisfiedClass(
+                        self.errors.push(TypeError::UnsatisfiedClass(
                             class.clone(),
                             ty,
                             span,
@@ -2165,7 +2684,7 @@ impl<'a> InferCtx<'a> {
                         if let Some(elem) = opt_elem {
                             if let Err(e) = self.unify_types(elem, inner, span)
                             {
-                                self.error(e);
+                                self.errors.push(e);
                             }
                         }
                     }
@@ -2173,14 +2692,14 @@ impl<'a> InferCtx<'a> {
                         if let Some(elem) = opt_elem {
                             if let Err(e) = self.unify_types(elem, inner, span)
                             {
-                                self.error(e);
+                                self.errors.push(e);
                             }
                         }
                     }
                     Ty::Result(ok, _) => {
                         if let Some(elem) = opt_elem {
                             if let Err(e) = self.unify_types(elem, ok, span) {
-                                self.error(e);
+                                self.errors.push(e);
                             }
                         }
                     }
@@ -2210,7 +2729,7 @@ impl<'a> InferCtx<'a> {
                                         if let Err(e) = self
                                             .unify_types(elem, resolved, span)
                                         {
-                                            self.error(e);
+                                            self.errors.push(e);
                                         }
                                     }
                                 }
@@ -2222,7 +2741,7 @@ impl<'a> InferCtx<'a> {
                                 );
                             }
                             None => {
-                                self.error(TypeError::UnsatisfiedClass(
+                                self.errors.push(TypeError::UnsatisfiedClass(
                                     class.clone(),
                                     ty,
                                     span,
@@ -2231,7 +2750,7 @@ impl<'a> InferCtx<'a> {
                         }
                     }
                     _ => {
-                        self.error(TypeError::UnsatisfiedClass(
+                        self.errors.push(TypeError::UnsatisfiedClass(
                             class.clone(),
                             ty,
                             span,
@@ -2248,7 +2767,7 @@ impl<'a> InferCtx<'a> {
                         if let Some(elem) = opt_elem {
                             if let Err(e) = self.unify_types(elem, inner, span)
                             {
-                                self.error(e);
+                                self.errors.push(e);
                             }
                         }
                     }
@@ -2257,7 +2776,7 @@ impl<'a> InferCtx<'a> {
                             if let Err(e) =
                                 self.unify_types(elem, TyArena::INT, span)
                             {
-                                self.error(e);
+                                self.errors.push(e);
                             }
                         }
                     }
@@ -2287,7 +2806,7 @@ impl<'a> InferCtx<'a> {
                                         if let Err(e) = self
                                             .unify_types(elem, resolved, span)
                                         {
-                                            self.error(e);
+                                            self.errors.push(e);
                                         }
                                     }
                                 }
@@ -2299,7 +2818,7 @@ impl<'a> InferCtx<'a> {
                                 );
                             }
                             None => {
-                                self.error(TypeError::UnsatisfiedClass(
+                                self.errors.push(TypeError::UnsatisfiedClass(
                                     class.clone(),
                                     ty,
                                     span,
@@ -2308,7 +2827,7 @@ impl<'a> InferCtx<'a> {
                         }
                     }
                     _ => {
-                        self.error(TypeError::UnsatisfiedClass(
+                        self.errors.push(TypeError::UnsatisfiedClass(
                             class.clone(),
                             ty,
                             span,
@@ -2325,7 +2844,7 @@ impl<'a> InferCtx<'a> {
                         if let Some(elem) = opt_elem {
                             if let Err(e) = self.unify_types(elem, inner, span)
                             {
-                                self.error(e);
+                                self.errors.push(e);
                             }
                         }
                     }
@@ -2334,7 +2853,7 @@ impl<'a> InferCtx<'a> {
                             if let Err(e) =
                                 self.unify_types(elem, TyArena::INT, span)
                             {
-                                self.error(e);
+                                self.errors.push(e);
                             }
                         }
                     }
@@ -2364,7 +2883,7 @@ impl<'a> InferCtx<'a> {
                                         if let Err(e) = self
                                             .unify_types(elem, resolved, span)
                                         {
-                                            self.error(e);
+                                            self.errors.push(e);
                                         }
                                     }
                                 }
@@ -2376,7 +2895,7 @@ impl<'a> InferCtx<'a> {
                                 );
                             }
                             None => {
-                                self.error(TypeError::UnsatisfiedClass(
+                                self.errors.push(TypeError::UnsatisfiedClass(
                                     class.clone(),
                                     ty,
                                     span,
@@ -2385,7 +2904,7 @@ impl<'a> InferCtx<'a> {
                         }
                     }
                     _ => {
-                        self.error(TypeError::UnsatisfiedClass(
+                        self.errors.push(TypeError::UnsatisfiedClass(
                             class.clone(),
                             ty,
                             span,
@@ -2418,14 +2937,14 @@ impl<'a> InferCtx<'a> {
             Ty::Option(opt_elem) => {
                 if let Some(inner) = opt_inner {
                     if let Err(e) = self.unify_types(inner, opt_elem, span) {
-                        self.error(e);
+                        self.errors.push(e);
                     }
                 }
             }
             Ty::Result(ok, _) => {
                 if let Some(inner) = opt_inner {
                     if let Err(e) = self.unify_types(inner, ok, span) {
-                        self.error(e);
+                        self.errors.push(e);
                     }
                 }
             }
@@ -2437,7 +2956,7 @@ impl<'a> InferCtx<'a> {
             Ty::Var(v) => {
                 // Default unresolved to `Option`
                 let elem = opt_inner.unwrap_or_else(|| {
-                    let fv = self.fresh_var();
+                    let fv = self.uf.fresh();
                     self.ty_arena.alloc(Ty::Var(fv))
                 });
                 let opt_id = self.ty_arena.option(elem);
@@ -2461,7 +2980,7 @@ impl<'a> InferCtx<'a> {
                                 if let Err(e) =
                                     self.unify_types(inner, resolved, span)
                                 {
-                                    self.error(e);
+                                    self.errors.push(e);
                                 }
                             }
                         }
@@ -2473,7 +2992,7 @@ impl<'a> InferCtx<'a> {
                         );
                     }
                     None => {
-                        self.error(TypeError::UnsatisfiedClass(
+                        self.errors.push(TypeError::UnsatisfiedClass(
                             class.clone(),
                             ty,
                             span,
@@ -2482,7 +3001,7 @@ impl<'a> InferCtx<'a> {
                 }
             }
             _ => {
-                self.error(TypeError::UnsatisfiedClass(
+                self.errors.push(TypeError::UnsatisfiedClass(
                     class.clone(),
                     ty,
                     span,
@@ -2518,7 +3037,7 @@ impl<'a> InferCtx<'a> {
         );
         concretes.into_iter().for_each(|(p, a)| {
             if let Err(e) = self.unify_types(p, a, span) {
-                self.error(e);
+                self.errors.push(e);
             }
         });
         Rename(vars.into_iter().collect())
@@ -2548,7 +3067,7 @@ impl<'a> InferCtx<'a> {
         constraints.iter().for_each(|(var, class)| {
             let var_id = self.ty_arena.alloc(Ty::Var(*var));
             let ty = self.ty_arena.apply(var_id, inst_subst);
-            let class = class.apply(inst_subst, &mut self.ty_arena);
+            let class = class.apply(inst_subst, self.ty_arena);
             self.satisfies_class(&class, ty, span);
         });
     }
@@ -2566,13 +3085,13 @@ impl<'a> InferCtx<'a> {
             Ty::Fn(ref params, fn_ret) => {
                 let params: SmallVec<[TyId; 4]> = params.clone();
                 if args.len() > params.len() {
-                    self.error(TypeError::TooManyArguments {
+                    self.errors.push(TypeError::TooManyArguments {
                         expected: params.len(),
                         got: args.len(),
                         span,
                     });
                 } else if args.is_empty() && !params.is_empty() {
-                    self.error(TypeError::ZeroArguments {
+                    self.errors.push(TypeError::ZeroArguments {
                         expected: params.len(),
                         span,
                     });
@@ -2580,7 +3099,7 @@ impl<'a> InferCtx<'a> {
                     // Partial application: unify supplied args with prefix
                     params.iter().zip(args.iter()).for_each(|(&p, &a)| {
                         if let Err(e) = self.unify_types(p, a, span) {
-                            self.error(e);
+                            self.errors.push(e);
                         }
                     });
 
@@ -2589,18 +3108,18 @@ impl<'a> InferCtx<'a> {
                         params[args.len()..].iter().copied().collect();
                     let residual = self.ty_arena.func(remaining, fn_ret);
                     if let Err(e) = self.unify_types(residual, ret, span) {
-                        self.error(e);
+                        self.errors.push(e);
                     }
                 } else {
                     // Full application
                     params.iter().zip(args.iter()).for_each(|(&p, &a)| {
                         if let Err(e) = self.unify_types(p, a, span) {
-                            self.error(e);
+                            self.errors.push(e);
                         }
                     });
 
                     if let Err(e) = self.unify_types(fn_ret, ret, span) {
-                        self.error(e);
+                        self.errors.push(e);
                     }
                 }
             }
@@ -2610,14 +3129,14 @@ impl<'a> InferCtx<'a> {
                 let fn_ty =
                     self.ty_arena.func(args.iter().copied().collect(), ret);
                 if let Err(e) = self.unify_var(v, fn_ty, span) {
-                    self.error(e);
+                    self.errors.push(e);
                 }
             }
 
             Ty::Error | Ty::Unknown => {}
 
             _ => {
-                self.error(TypeError::NotCallable(callee, span));
+                self.errors.push(TypeError::NotCallable(callee, span));
             }
         }
     }
@@ -2641,16 +3160,16 @@ impl<'a> InferCtx<'a> {
                 Some(&actual_ty) => {
                     if let Err(e) = self.unify_types(field_ty, actual_ty, span)
                     {
-                        self.error(e);
+                        self.errors.push(e);
                     }
                 }
                 None => {
                     let name = self
-                        .env()
+                        .env
                         .get_str(field)
                         .unwrap_or("<unknown>")
                         .to_string();
-                    self.error(TypeError::FieldNotFound {
+                    self.errors.push(TypeError::FieldNotFound {
                         ty: base,
                         field: name,
                         span,
@@ -2661,7 +3180,7 @@ impl<'a> InferCtx<'a> {
             // Named alias to object: look up field in alias definition
             Ty::Named(type_id, ref type_args) => {
                 let type_args: SmallVec<[TyId; 4]> = type_args.clone();
-                let def = self.registry().get_def(type_id);
+                let def = self.registry.get_def(type_id);
                 match def {
                     Some(TypeDef::Alias {
                         type_params,
@@ -2671,11 +3190,11 @@ impl<'a> InferCtx<'a> {
                         let params: SmallVec<[StringId; 2]> =
                             type_params.clone();
                         let target = *target;
-                        match self.ast().get_type_expr(target).cloned() {
+                        match self.ast.get_type_expr(target).cloned() {
                             Some(AstTypeExpr::Object(alias_fields)) => {
                                 // Find field in alias object
                                 let field_str =
-                                    self.env().get_str(field).unwrap_or("");
+                                    self.env.get_str(field).unwrap_or("");
                                 let field_ty_id = alias_fields
                                     .iter()
                                     .find(|(n, _)| *n == field)
@@ -2695,25 +3214,28 @@ impl<'a> InferCtx<'a> {
                                         if let Err(e) = self.unify_types(
                                             field_ty, actual_ty, span,
                                         ) {
-                                            self.error(e);
+                                            self.errors.push(e);
                                         }
                                     }
                                     None => {
-                                        self.error(TypeError::FieldNotFound {
-                                            ty: base,
-                                            field: field_str.to_string(),
-                                            span,
-                                        });
+                                        self.errors.push(
+                                            TypeError::FieldNotFound {
+                                                ty: base,
+                                                field: field_str.to_string(),
+                                                span,
+                                            },
+                                        );
                                     }
                                 }
                             }
                             _ => {
-                                self.error(TypeError::NotAnObject(base, span));
+                                self.errors
+                                    .push(TypeError::NotAnObject(base, span));
                             }
                         }
                     }
                     _ => {
-                        self.error(TypeError::NotAnObject(base, span));
+                        self.errors.push(TypeError::NotAnObject(base, span));
                     }
                 }
             }
@@ -2722,7 +3244,7 @@ impl<'a> InferCtx<'a> {
             Ty::Json => {
                 if let Err(e) = self.unify_types(field_ty, TyArena::JSON, span)
                 {
-                    self.error(e);
+                    self.errors.push(e);
                 }
             }
 
@@ -2743,7 +3265,7 @@ impl<'a> InferCtx<'a> {
             Ty::Error | Ty::Unknown => {}
 
             _ => {
-                self.error(TypeError::NotAnObject(base, span));
+                self.errors.push(TypeError::NotAnObject(base, span));
             }
         }
     }
@@ -2773,7 +3295,7 @@ impl<'a> InferCtx<'a> {
         span: Span,
     ) -> Result<TyId, TypeError> {
         // Validate that assoc_name is a valid associated type for this class
-        let assoc_str = self.env().get_str(assoc_name);
+        let assoc_str = self.env.get_str(assoc_name);
         let assoc_types = self.env.class_def(class).assoc_types;
         if !assoc_str.is_some_and(|s| assoc_types.contains(&s)) {
             Err(TypeError::NoSuchAssocType {

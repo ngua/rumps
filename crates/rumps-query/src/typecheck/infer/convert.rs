@@ -683,7 +683,9 @@ impl InferCtx<'_> {
     ///
     /// Returns `None` for non-builtin names. This is the single source of
     /// truth for simple (non-parameterized) builtin type names.
-    fn builtin_type_from_name(name: &str) -> Option<TyId> {
+    pub(in crate::typecheck) fn builtin_type_from_name(
+        name: &str,
+    ) -> Option<TyId> {
         match name {
             "Bool" => Some(TyArena::BOOL),
             "Int" => Some(TyArena::INT),
@@ -770,7 +772,9 @@ impl InferCtx<'_> {
     /// Returns the expected type argument arity for builtin parameterized types.
     ///
     /// Returns `None` for user-defined types (arity checked elsewhere).
-    fn expected_type_arity(name: &str) -> Option<usize> {
+    pub(in crate::typecheck) fn expected_type_arity(
+        name: &str,
+    ) -> Option<usize> {
         match name {
             "Array" | "Option" => Some(1),
             "Result" | "Map" => Some(2),
