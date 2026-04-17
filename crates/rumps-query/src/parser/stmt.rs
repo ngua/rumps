@@ -13,7 +13,7 @@ impl Parser {
     pub(super) fn stmt(
         interner: &mut StringInterner,
     ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
-        let import_stmt = Self::import_stmt();
+        let import_stmt = Self::import();
         let type_stmt = Self::type_stmt(interner);
         let newtype_stmt = Self::newtype_stmt(interner);
         let union_stmt = Self::union_stmt(interner);
@@ -540,7 +540,7 @@ impl Parser {
     /// `import Module.{ member, ... }` or `import Module.{ ... }`.
     ///
     /// Imports members from a module into the current scope.
-    fn import_stmt(
+    fn import(
     ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> + Clone {
         // Module path: idents separated by `.`
         let path = Self::ident().separated_by(just(Token::Dot)).at_least(1);

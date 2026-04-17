@@ -51,13 +51,13 @@ impl InferCtx<'_> {
         // in scope, then process user imports (which may shadow them).
         {
             let pid = self.env.intern(crate::env::PRELUDE_MODULE);
-            self.import_stmt(&Import::wildcard(pid), Span::default());
+            self.import(&Import::wildcard(pid), Span::default());
         }
         stmts.iter().for_each(|&id| {
             let stmt = self.ast.get_stmt(id).cloned();
             if let Some(Stmt::Import(ref import)) = stmt {
                 let span = self.ast.stmt_span(id).unwrap_or_default();
-                self.import_stmt(import, span);
+                self.import(import, span);
             }
         });
 
@@ -368,7 +368,7 @@ impl InferCtx<'_> {
             let item = self.ast.get_stmt(id).cloned();
 
             if let Some(Stmt::Import(ref import)) = item {
-                self.import_stmt(import, item_span);
+                self.import(import, item_span);
             }
         });
 

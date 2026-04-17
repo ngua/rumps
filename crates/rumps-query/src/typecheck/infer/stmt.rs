@@ -46,7 +46,7 @@ impl InferCtx<'_> {
                         span,
                     });
                 }
-                // Don't call import_stmt(); already processed during hoisting
+                // Don't call import(); already processed during hoisting
             }
 
             Some(Stmt::Fun {
@@ -324,7 +324,7 @@ impl InferCtx<'_> {
     ///
     /// Called during both hoisting (for type imports) and Pass 2 (for full
     /// processing). Visibility is `pub(super)` so `hoist.rs` can call it.
-    pub(super) fn import_stmt(&mut self, import: &Import, span: Span) {
+    pub(super) fn import(&mut self, import: &Import, span: Span) {
         let mod_qn = QualifiedName::new(import.path.to_vec());
 
         // Check if module exists (builtin or user-defined)
