@@ -102,7 +102,7 @@ impl InferCtx<'_> {
                 // fully saturated.
                 let subst = self.type_param_subst(type_params);
                 members.iter().for_each(|m| {
-                    self.ast_type_to_ty(*m, &subst);
+                    self.convert().ast_type_to_ty(*m, &subst);
                 });
             }
 
@@ -117,7 +117,7 @@ impl InferCtx<'_> {
                 // saturated (e.g. `newtype G = Array` is invalid because
                 // `Array` expects a type argument).
                 let subst = self.type_param_subst(type_params);
-                self.ast_type_to_ty(target, &subst);
+                self.convert().ast_type_to_ty(target, &subst);
             }
 
             Some(Stmt::Module { name, body }) => {
@@ -270,7 +270,7 @@ impl InferCtx<'_> {
                     self.env.register_user_module_type_vis(qn, vis);
                     let subst = self.type_param_subst(type_params);
                     members.iter().for_each(|m| {
-                        self.ast_type_to_ty(*m, &subst);
+                        self.convert().ast_type_to_ty(*m, &subst);
                     });
                 }
                 Some(Stmt::NewType {
@@ -282,7 +282,7 @@ impl InferCtx<'_> {
                     let qn = mod_path.child(*name);
                     self.env.register_user_module_type_vis(qn, vis);
                     let subst = self.type_param_subst(type_params);
-                    self.ast_type_to_ty(target, &subst);
+                    self.convert().ast_type_to_ty(target, &subst);
                 }
                 Some(Stmt::Import(_)) => {
                     // Imports inside modules are processed during hoisting;
@@ -530,7 +530,8 @@ impl InferCtx<'_> {
             let ty = self.ty_arena.alloc(Ty::Var(tv));
 
             tp.constraints.iter().for_each(|c| {
-                let class = self.ast_class_to_ty_class(c, &type_param_subst);
+                let class =
+                    self.convert().ast_class_to_ty_class(c, &type_param_subst);
                 scheme_constraints.push((tv, class.clone()));
 
                 // Emit constraint for checking the function body
@@ -564,7 +565,7 @@ impl InferCtx<'_> {
 
         // Declared return type annotation (if any)
         let declared_ret =
-            ret.map(|id| self.ast_type_to_ty(*id, &type_param_subst));
+            ret.map(|id| self.convert().ast_type_to_ty(*id, &type_param_subst));
 
         // Fresh var for provisional return (supports recursive calls)
         let provisional_ret = self.fresh();
@@ -688,7 +689,8 @@ impl InferCtx<'_> {
         let ty = match ann {
             None => Some(self.expr(rhs)),
             Some(id) => {
-                let ann_ty = self.ast_type_to_ty(*id, &IndexMap::new());
+                let ann_ty =
+                    self.convert().ast_type_to_ty(*id, &IndexMap::new());
 
                 // Clone to avoid borrow issues with mutable self
                 let rhs_expr = self.ast.get_expr(rhs).cloned();
@@ -1037,7 +1039,8 @@ impl InferCtx<'_> {
         };
 
         // Merge type vars from `for_type` (e.g. `T` in `X[T]`)
-        self.merge_for_type_vars(for_type, &mut type_param_subst);
+        self.convert()
+            .merge_for_type_vars(for_type, &mut type_param_subst);
 
         // 3. Resolve for_type and get its TypeId
         //    HKT classes need partial application logic (bare name or fewer
@@ -1056,12 +1059,16 @@ impl InferCtx<'_> {
                     None => (TyArena::UNKNOWN, None, SmallVec::new()),
                 },
                 _ => {
-                    let for_ty =
-                        self.ast_type_to_ty(for_type, &type_param_subst);
+                    let for_ty = self
+                        .convert()
+                        .ast_type_to_ty(for_type, &type_param_subst);
                     let type_id = self.extract_type_id(for_ty);
                     let class_arg_tys: SmallVec<[TyId; 2]> = class_args
                         .iter()
-                        .map(|id| self.ast_type_to_ty(*id, &type_param_subst))
+                        .map(|id| {
+                            self.convert()
+                                .ast_type_to_ty(*id, &type_param_subst)
+                        })
                         .collect();
                     (for_ty, type_id, class_arg_tys)
                 }
@@ -1126,7 +1133,8 @@ impl InferCtx<'_> {
                 param_constraints.iter().for_each(|c| {
                     scheme_constraints.push((
                         tv,
-                        self.ast_class_to_ty_class(c, &type_param_subst),
+                        self.convert()
+                            .ast_class_to_ty_class(c, &type_param_subst),
                     ));
                 });
             });
@@ -1138,7 +1146,9 @@ impl InferCtx<'_> {
         let assoc_type_map: HashMap<_, _> = assoc_types
             .iter()
             .map(|def| {
-                let ty = self.ast_type_to_ty(def.target, &type_param_subst);
+                let ty = self
+                    .convert()
+                    .ast_type_to_ty(def.target, &type_param_subst);
                 (def.name, ty)
             })
             .collect();
@@ -1234,7 +1244,7 @@ impl InferCtx<'_> {
                                 .constraint
                                 .as_ref()
                                 .map(|c| {
-                                    self.ast_class_to_ty_class(
+                                    self.convert().ast_class_to_ty_class(
                                         c,
                                         &type_param_subst,
                                     )
@@ -1397,11 +1407,11 @@ impl InferCtx<'_> {
             method_subst = type_param_subst.clone();
             method.params.iter().for_each(|(_, ann)| {
                 if let Some(id) = ann {
-                    self.merge_for_type_vars(*id, &mut method_subst);
+                    self.convert().merge_for_type_vars(*id, &mut method_subst);
                 }
             });
             if let Some(ret) = method.ret {
-                self.merge_for_type_vars(ret, &mut method_subst);
+                self.convert().merge_for_type_vars(ret, &mut method_subst);
             }
             &method_subst
         } else {
@@ -1430,7 +1440,9 @@ impl InferCtx<'_> {
         // Determine expected return type (user annotation or class signature)
         let ret_ty = method
             .ret
-            .map(|ret_id| self.ast_type_to_ty(ret_id, type_param_subst))
+            .map(|ret_id| {
+                self.convert().ast_type_to_ty(ret_id, type_param_subst)
+            })
             .unwrap_or(expected_ret_ty);
 
         // Unify body with return type
@@ -1592,7 +1604,7 @@ impl InferCtx<'_> {
             TypeDefAst::Sum(variants) => {
                 variants.iter().for_each(|v| {
                     v.payloads.iter().for_each(|p| {
-                        self.ast_type_to_ty(*p, &subst);
+                        self.convert().ast_type_to_ty(*p, &subst);
                     });
                 });
             }

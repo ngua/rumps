@@ -28,12 +28,13 @@ impl InferCtx<'_> {
         scrutinee_ty: TyId,
         span: Span,
     ) -> SmallVec<[TyId; 4]> {
-        let lookup =
-            self.resolve_type_name(ty_name).and_then(|(type_id, _)| {
+        let lookup = self.convert().resolve_type_name(ty_name).and_then(
+            |(type_id, _)| {
                 self.registry
                     .lookup_variant(type_id, var_name)
                     .map(|var_def| (type_id, var_def))
-            });
+            },
+        );
 
         match lookup {
             None => {
@@ -88,7 +89,9 @@ impl InferCtx<'_> {
                     var_def
                         .payloads
                         .iter()
-                        .map(|ty_id| self.ast_type_to_ty(*ty_id, &subst))
+                        .map(|ty_id| {
+                            self.convert().ast_type_to_ty(*ty_id, &subst)
+                        })
                         .collect()
                 }
             }
@@ -133,6 +136,7 @@ impl InferCtx<'_> {
 
                     // Resolve type name using module-aware lookup
                     let qid = self
+                        .convert()
                         .resolve_type_name(ty_name)
                         .map(|(_, qid)| qid)
                         .filter(|qid| *qid != *ty_name);
@@ -237,7 +241,7 @@ impl InferCtx<'_> {
 
                 MatchPattern::Is(name, ty_id) => {
                     let narrowed_ty =
-                        self.ast_type_to_ty(*ty_id, &IndexMap::new());
+                        self.convert().ast_type_to_ty(*ty_id, &IndexMap::new());
 
                     // Function types cannot be inspected at runtime for
                     // opaque callables (class method refs, module fn refs,
@@ -457,7 +461,8 @@ impl InferCtx<'_> {
                     let covered: SmallVec<[TyId; 4]> = ty_ids
                         .into_iter()
                         .map(|ty_id| {
-                            self.ast_type_to_ty(ty_id, &IndexMap::new())
+                            self.convert()
+                                .ast_type_to_ty(ty_id, &IndexMap::new())
                         })
                         .collect();
 

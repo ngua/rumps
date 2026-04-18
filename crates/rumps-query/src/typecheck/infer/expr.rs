@@ -452,6 +452,7 @@ impl InferCtx<'_> {
                                             match v_opt {
                                                 Some(v) => {
                                                     let arg_ty = self
+                                                        .convert()
                                                         .ast_type_to_ty(
                                                             arg_id,
                                                             &empty_subst,
@@ -488,7 +489,8 @@ impl InferCtx<'_> {
                                     let tv = if let Some(&ty_id) =
                                         type_args.first()
                                     {
-                                        self.ast_type_to_ty(ty_id, &empty_subst)
+                                        self.convert()
+                                            .ast_type_to_ty(ty_id, &empty_subst)
                                     } else {
                                         self.fresh()
                                     };
@@ -510,10 +512,11 @@ impl InferCtx<'_> {
                                     // Convert methods need convert_targets.
                                     // Type arg is required (checked above).
                                     let target_ty_id = type_args[0];
-                                    let target_ty = self.ast_type_to_ty(
-                                        target_ty_id,
-                                        &empty_subst,
-                                    );
+                                    let target_ty =
+                                        self.convert().ast_type_to_ty(
+                                            target_ty_id,
+                                            &empty_subst,
+                                        );
                                     self.interp
                                         .convert_targets
                                         .insert(id, target_ty);
@@ -580,10 +583,11 @@ impl InferCtx<'_> {
                                 } => {
                                     // TryInto:try-into needs convert_targets.
                                     let target_ty_id = type_args[0];
-                                    let target_ty = self.ast_type_to_ty(
-                                        target_ty_id,
-                                        &empty_subst,
-                                    );
+                                    let target_ty =
+                                        self.convert().ast_type_to_ty(
+                                            target_ty_id,
+                                            &empty_subst,
+                                        );
                                     self.interp
                                         .convert_targets
                                         .insert(id, target_ty);
@@ -1355,6 +1359,7 @@ impl InferCtx<'_> {
                             let empty_subst = IndexMap::new();
                             fields.iter().for_each(|(name, ast_ty_id)| {
                                 let field_ty = self
+                                    .convert()
                                     .ast_type_to_ty(*ast_ty_id, &empty_subst);
                                 acc.insert(*name, field_ty);
                             });
@@ -1465,7 +1470,8 @@ impl InferCtx<'_> {
         // Try to resolve as a type with a variant (any arity)
         let field_id = self.env.intern(field);
         let variant_lookup = ty_name_opt.and_then(|ty_name_id| {
-            self.resolve_type_name(&QualifiedName::local(ty_name_id))
+            self.convert()
+                .resolve_type_name(&QualifiedName::local(ty_name_id))
                 .and_then(|(type_id, qid)| {
                     self.registry
                         .lookup_variant(type_id, field_id)
@@ -1878,7 +1884,7 @@ impl InferCtx<'_> {
         params
             .iter()
             .map(|(_, ann)| match ann {
-                Some(id) => self.ast_type_to_ty(*id, subst),
+                Some(id) => self.convert().ast_type_to_ty(*id, subst),
                 None => self.fresh(),
             })
             .collect()
@@ -1940,7 +1946,8 @@ impl InferCtx<'_> {
             let ty = self.ty_arena.alloc(Ty::Var(tv));
 
             tp.constraints.iter().for_each(|c| {
-                let class = self.ast_class_to_ty_class(c, &type_param_subst);
+                let class =
+                    self.convert().ast_class_to_ty_class(c, &type_param_subst);
                 scheme_constraints.push((tv, class.clone()));
 
                 // Emit constraint for body inference
@@ -1989,7 +1996,8 @@ impl InferCtx<'_> {
         // If return annotation present, unify body with it
         let ret_ty = match ret {
             Some(ret_id) => {
-                let expected = self.ast_type_to_ty(*ret_id, &type_param_subst);
+                let expected =
+                    self.convert().ast_type_to_ty(*ret_id, &type_param_subst);
                 self.unify(body_ty, expected, span);
                 expected
             }
@@ -2082,7 +2090,8 @@ impl InferCtx<'_> {
 
         // Try to resolve as variant constructor
         let resolved = variant_info.and_then(|(ty_name_id, var_name_id)| {
-            self.resolve_type_name(&QualifiedName::local(ty_name_id))
+            self.convert()
+                .resolve_type_name(&QualifiedName::local(ty_name_id))
                 .and_then(|(type_id, qid)| {
                     self.registry
                         .lookup_variant(type_id, var_name_id)
@@ -2368,7 +2377,7 @@ impl InferCtx<'_> {
         let arg_tys: Vec<TyId> = args.iter().map(|id| self.expr(*id)).collect();
 
         // Resolve type name using module-aware lookup
-        let resolved = self.resolve_type_name(&ty_name);
+        let resolved = self.convert().resolve_type_name(&ty_name);
 
         match resolved {
             None => {
@@ -2461,10 +2470,11 @@ impl InferCtx<'_> {
                                         .iter()
                                         .zip(arg_tys.iter())
                                         .for_each(|(expected_id, &got)| {
-                                            let expected = self.ast_type_to_ty(
-                                                *expected_id,
-                                                &subst,
-                                            );
+                                            let expected =
+                                                self.convert().ast_type_to_ty(
+                                                    *expected_id,
+                                                    &subst,
+                                                );
                                             self.unify(expected, got, span);
                                         });
 
@@ -2547,7 +2557,9 @@ impl InferCtx<'_> {
                 let param_tys: SmallVec<[TyId; 4]> = vd
                     .payloads
                     .iter()
-                    .map(|&te_id| self.ast_type_to_ty(te_id, &type_arg_map))
+                    .map(|&te_id| {
+                        self.convert().ast_type_to_ty(te_id, &type_arg_map)
+                    })
                     .collect();
 
                 self.ty_arena.func(param_tys, result_ty)
@@ -2644,12 +2656,13 @@ impl InferCtx<'_> {
     /// This enforces parametricity: a function with `F: Fallible[T]` cannot
     /// inspect whether `F` is `Option` or `Result` at runtime.
     pub(super) fn scrutinee_compatible_with_variant(
-        &self,
+        &mut self,
         scrutinee_ty: TyId,
         name: &QualifiedName,
     ) -> bool {
         let s = self.env.resolve_str(name.local_name());
-        match self.ty_arena.get(scrutinee_ty) {
+        let ty = self.ty_arena.get(scrutinee_ty).clone();
+        match ty {
             // Concrete Option/Result: check type name matches
             Ty::Option(_) => s == "Option",
             Ty::Result(_, _) => s == "Result",
@@ -2659,24 +2672,22 @@ impl InferCtx<'_> {
 
             // Named types: resolve pattern type name and compare TypeIds
             Ty::Named(scrutinee_id, _) => self
+                .convert()
                 .resolve_type_name(name)
-                .is_some_and(|(pattern_id, _)| pattern_id == *scrutinee_id),
+                .is_some_and(|(pattern_id, _)| pattern_id == scrutinee_id),
 
             // Union: at least one member must be compatible
-            Ty::Union(_, members) => {
-                let members = members.clone();
-                members
-                    .iter()
-                    .any(|&m| self.scrutinee_compatible_with_variant(m, name))
-            }
+            Ty::Union(_, members) => members
+                .iter()
+                .any(|&m| self.scrutinee_compatible_with_variant(m, name)),
 
             // Type variable: reject only polymorphic parameters (universally quantified);
             // inference variables (from calls) are allowed since they resolve to concrete types
-            Ty::Var(v) => !self.poly_param_vars.contains(v),
+            Ty::Var(v) => !self.poly_param_vars.contains(&v),
 
             // HKT type variable application: `F[T]` where `F` is a type var;
             // if `F` is a polymorphic parameter, pattern matching is unsound
-            Ty::Apply(tv, _) => !self.poly_param_vars.contains(tv),
+            Ty::Apply(tv, _) => !self.poly_param_vars.contains(&tv),
 
             // Error/Unknown: allow to avoid cascading errors
             Ty::Error | Ty::Unknown => true,
@@ -2709,7 +2720,8 @@ impl InferCtx<'_> {
 
         match pattern {
             TypePattern::Type(ty_id) => {
-                let target_ty = self.ast_type_to_ty(*ty_id, &IndexMap::new());
+                let target_ty =
+                    self.convert().ast_type_to_ty(*ty_id, &IndexMap::new());
                 // Function types cannot be inspected at runtime for opaque
                 // callables (class method refs, module fn refs, partial
                 // apps); reject them here (at any depth) so the interpreter's
@@ -2754,6 +2766,7 @@ impl InferCtx<'_> {
 
                 // Validate that the variant exists
                 let exists = self
+                    .convert()
                     .resolve_type_name(ty_name)
                     .and_then(|(type_id, _)| {
                         self.registry.lookup_variant(type_id, *var_name)
@@ -2782,8 +2795,10 @@ impl InferCtx<'_> {
                 }
 
                 // Validate variant and arity; bindings are handled by IF
-                let lookup =
-                    self.resolve_type_name(ty_name).and_then(|(type_id, _)| {
+                let lookup = self
+                    .convert()
+                    .resolve_type_name(ty_name)
+                    .and_then(|(type_id, _)| {
                         self.registry
                             .lookup_variant(type_id, *var_name)
                             .map(|v| (type_id, v))
@@ -2841,7 +2856,8 @@ impl InferCtx<'_> {
                 // Resolve field types (validates type expressions) and
                 // reject fn types at any depth for the same reason as above.
                 fields.iter().for_each(|(_, ty_id)| {
-                    let fty = self.ast_type_to_ty(*ty_id, &IndexMap::new());
+                    let fty =
+                        self.convert().ast_type_to_ty(*ty_id, &IndexMap::new());
                     if Self::type_contains_fn(fty, &self.ty_arena) {
                         self.error(TypeError::FnTypeInPattern(span));
                     }
@@ -2867,7 +2883,7 @@ impl InferCtx<'_> {
         span: Span,
     ) -> TyId {
         let inner_ty = self.expr(inner_id);
-        let target_ty = self.ast_type_to_ty(ty_id, &IndexMap::new());
+        let target_ty = self.convert().ast_type_to_ty(ty_id, &IndexMap::new());
 
         // Emit Into constraint for validation
         self.constrain(Constraint::Class {
@@ -2913,7 +2929,7 @@ impl InferCtx<'_> {
         span: Span,
     ) -> TyId {
         let inner_ty = self.expr(inner_id);
-        let target_ty = self.ast_type_to_ty(ty_id, &IndexMap::new());
+        let target_ty = self.convert().ast_type_to_ty(ty_id, &IndexMap::new());
 
         // Emit TryInto constraint for validation
         self.constrain(Constraint::Class {
@@ -3089,7 +3105,7 @@ impl InferCtx<'_> {
         ty_id: AstTypeExprId,
         span: Span,
     ) -> TyId {
-        let ann_ty = self.ast_type_to_ty(ty_id, &IndexMap::new());
+        let ann_ty = self.convert().ast_type_to_ty(ty_id, &IndexMap::new());
 
         // Clone inner expression to avoid borrow issues
         let inner_expr = self.ast.get_expr(inner_id).cloned();
@@ -3217,7 +3233,7 @@ impl InferCtx<'_> {
         // State parameter type: annotation or unify with seed
         let state_ty = state_param
             .1
-            .map(|id| self.ast_type_to_ty(id, &IndexMap::new()))
+            .map(|id| self.convert().ast_type_to_ty(id, &IndexMap::new()))
             .unwrap_or(seed_ty);
 
         // Unify seed with state type
@@ -3231,7 +3247,8 @@ impl InferCtx<'_> {
 
         // Check cont_param annotation if present
         if let Some(ann_id) = cont_param.1 {
-            let ann_ty = self.ast_type_to_ty(ann_id, &IndexMap::new());
+            let ann_ty =
+                self.convert().ast_type_to_ty(ann_id, &IndexMap::new());
             self.unify(cont_ty, ann_ty, span);
         }
 

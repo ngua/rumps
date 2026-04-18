@@ -21,9 +21,10 @@ use std::collections::HashMap;
 use indexmap::IndexMap;
 use smallvec::{smallvec, SmallVec};
 
+use super::convert::ConvertCtx;
 use super::env::TypeEnv;
 use super::error::TypeError;
-use super::infer::{ClassContext, Constraint, InferCtx};
+use super::infer::{ClassContext, Constraint};
 use super::instance::InstanceRegistry;
 use super::ty::{Rename, Ty, TyArena, TyId, TyVar, TypeClass};
 use super::uf::UnionFind;
@@ -228,7 +229,7 @@ impl SolveCtx<'_> {
 
     /// Convert a simple named type to a `TyId`.
     fn named_type_to_ty(&mut self, name: &str) -> TyId {
-        InferCtx::builtin_type_from_name(name).unwrap_or_else(|| {
+        ConvertCtx::builtin_type_from_name(name).unwrap_or_else(|| {
             self.env
                 .lookup_str(name)
                 .and_then(|id| self.registry.lookup(&QualifiedName::local(id)))
@@ -310,7 +311,9 @@ impl SolveCtx<'_> {
                                         .registry
                                         .type_param_count(type_id)
                                         .or_else(|| {
-                                            InferCtx::expected_type_arity(&eff)
+                                            ConvertCtx::expected_type_arity(
+                                                &eff,
+                                            )
                                         })
                                         .unwrap_or(0);
                                     if exp > 0 {
@@ -331,7 +334,7 @@ impl SolveCtx<'_> {
                             None => {
                                 let name_s = name.display(&self.env.strings);
                                 let expected =
-                                    InferCtx::expected_type_arity(&name_s);
+                                    ConvertCtx::expected_type_arity(&name_s);
                                 if let Some(exp) = expected {
                                     if exp > 0 {
                                         self.errors.push(
@@ -399,7 +402,7 @@ impl SolveCtx<'_> {
                         None => {
                             let name_s = name.display(&self.env.strings);
                             let expected =
-                                InferCtx::expected_type_arity(&name_s);
+                                ConvertCtx::expected_type_arity(&name_s);
                             if let Some(exp) = expected {
                                 if args.len() != exp {
                                     self.errors.push(

@@ -4,9 +4,6 @@
 //! expressions to `TyId`s. Both `InferCtx` (inference phase) and `SolveCtx`
 //! (solve phase) construct a `ConvertCtx` on demand to perform conversions.
 
-// No callers yet; wired in Stages 2 and 3.
-#![allow(dead_code)]
-
 use indexmap::IndexMap;
 use smallvec::{smallvec, SmallVec};
 

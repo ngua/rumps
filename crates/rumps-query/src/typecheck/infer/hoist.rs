@@ -136,7 +136,7 @@ impl InferCtx<'_> {
                         None => {
                             let ty = match ann {
                                 Some(aid) => {
-                                    self.ast_type_to_ty(aid, &IndexMap::new())
+                                    self.convert().ast_type_to_ty(aid, &IndexMap::new())
                                 }
                                 None => self.fresh(),
                             };
@@ -236,7 +236,8 @@ impl InferCtx<'_> {
             SmallVec::new();
         type_param_vars.iter().for_each(|(tp, tv)| {
             tp.constraints.iter().for_each(|c| {
-                let class = self.ast_class_to_ty_class(c, &type_param_subst);
+                let class =
+                    self.convert().ast_class_to_ty_class(c, &type_param_subst);
                 scheme_constraints.push((*tv, class));
             });
         });
@@ -245,14 +246,16 @@ impl InferCtx<'_> {
         let param_tys: SmallVec<[TyId; 4]> = params
             .iter()
             .map(|(_, ann)| match ann {
-                Some(id) => self.ast_type_to_ty(*id, &type_param_subst),
+                Some(id) => {
+                    self.convert().ast_type_to_ty(*id, &type_param_subst)
+                }
                 None => self.fresh(),
             })
             .collect();
 
         // Return type: use annotation if present, else fresh var
         let ret_ty = match ret {
-            Some(id) => self.ast_type_to_ty(*id, &type_param_subst),
+            Some(id) => self.convert().ast_type_to_ty(*id, &type_param_subst),
             None => self.fresh(),
         };
 
@@ -330,7 +333,7 @@ impl InferCtx<'_> {
                     let n =
                         self.env.resolve_str(*name).to_owned();
                     // Check for shadowing of builtin types
-                    if self.named_type_to_ty(&n) != TyArena::UNKNOWN {
+                    if self.convert().named_type_to_ty(&n) != TyArena::UNKNOWN {
                         self.error(TypeError::Custom {
                             msg: format!(
                                 "type `{}` shadows a builtin type",
@@ -343,7 +346,7 @@ impl InferCtx<'_> {
                         // Temporarily set current_module to parent for lookup
                         let saved =
                             self.current_module.replace(parent);
-                        if self.resolve_type_name(&QualifiedName::local(*name)).is_some() {
+                        if self.convert().resolve_type_name(&QualifiedName::local(*name)).is_some() {
                             self.error(TypeError::Custom {
                                 msg: format!(
                                     "type `{}` already in scope from outer module",
@@ -454,9 +457,9 @@ impl InferCtx<'_> {
                             // Non-closure: provisional `TyVar`, tracked for
                             // Pass 2 unify.
                             let ty = match ann {
-                                Some(aid) => {
-                                    self.ast_type_to_ty(*aid, &IndexMap::new())
-                                }
+                                Some(aid) => self
+                                    .convert()
+                                    .ast_type_to_ty(*aid, &IndexMap::new()),
                                 None => self.fresh(),
                             };
                             let scheme = Scheme::mono(ty);
@@ -553,7 +556,8 @@ impl InferCtx<'_> {
             };
 
             // Merge type vars from `for_type` (e.g. `T` in `X[T]`)
-            self.merge_for_type_vars(for_type, &mut type_param_subst);
+            self.convert()
+                .merge_for_type_vars(for_type, &mut type_param_subst);
 
             // Resolve for_type and class args; HKT classes use partial
             // application (fewer type args than the type expects)
@@ -567,8 +571,9 @@ impl InferCtx<'_> {
                     span,
                 ),
                 _ => {
-                    let for_ty =
-                        self.ast_type_to_ty(for_type, &type_param_subst);
+                    let for_ty = self
+                        .convert()
+                        .ast_type_to_ty(for_type, &type_param_subst);
 
                     // Fallback for module-scoped unqualified type names
                     let for_ty = if for_ty == TyArena::UNKNOWN {
@@ -595,7 +600,10 @@ impl InferCtx<'_> {
 
                     let class_arg_tys: SmallVec<[TyId; 2]> = class_args
                         .iter()
-                        .map(|id| self.ast_type_to_ty(*id, &type_param_subst))
+                        .map(|id| {
+                            self.convert()
+                                .ast_type_to_ty(*id, &type_param_subst)
+                        })
                         .collect();
 
                     let for_ty_ref = self.ty_arena.get(for_ty).clone();
@@ -637,7 +645,7 @@ impl InferCtx<'_> {
                             param_constraints.iter().for_each(|c| {
                                 scheme_constraints.push((
                                     tv,
-                                    self.ast_class_to_ty_class(
+                                    self.convert().ast_class_to_ty_class(
                                         c,
                                         &type_param_subst,
                                     ),
@@ -755,6 +763,7 @@ impl InferCtx<'_> {
 
         // Resolve type name (with module fallback)
         let (type_id, qn) = self
+            .convert()
             .resolve_type_name(&type_name)
             .or_else(|| {
                 module.as_ref().and_then(|mod_qn| {
@@ -815,7 +824,7 @@ impl InferCtx<'_> {
         // Convert supplied type args
         let supplied_args: SmallVec<[TyId; 4]> = ast_args
             .iter()
-            .map(|a| self.ast_type_to_ty(*a, subst))
+            .map(|a| self.convert().ast_type_to_ty(*a, subst))
             .collect();
 
         // Get param names from `TypeDef` for naming element vars

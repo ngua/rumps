@@ -42,14 +42,14 @@ use super::ty::{Scheme, Ty, TyArena, TyId, TyVar, TypeClass};
 use super::uf::UnionFind;
 use super::TypecheckOutput;
 use crate::ast::{
-    AssocTypeDef, AstClassConstraints, AstTypeExprId, ExprId,
+    self, AssocTypeDef, AstClassConstraints, AstTypeExprId, ExprId,
     InstanceMethodDef, Stmt, StmtId, TxnId, TypeParam,
 };
 use crate::env::Environment;
 use crate::error::Result;
-use crate::intern::{QualifiedName, StringId, StringInterner};
-use crate::value::{TypeExprArena, TypeId, TypeRegistry};
-use crate::{ClassId, Span};
+use crate::intern::{self, QualifiedName, StringId, StringInterner};
+use crate::value::{self, TypeExprArena, TypeId, TypeRegistry};
+use crate::{ClassId, Error, Span};
 
 /// Resolve all `TyId` values in a map through the union-find.
 fn resolve_map(
@@ -105,7 +105,7 @@ pub(super) struct InterpreterOutput {
     /// The interpreter uses this to dispatch to user-defined class instances,
     /// since these types don't carry their `TypeId` in the runtime value
     /// (unlike `type`/sum types which use `Value::Tagged`).
-    pub(super) instance_calls: HashMap<ExprId, crate::TypeId>,
+    pub(super) instance_calls: HashMap<ExprId, TypeId>,
 }
 
 impl InterpreterOutput {
@@ -748,7 +748,7 @@ pub(crate) enum Constraint {
     /// `HasField { base: ?t, field: "name", field_ty: ?f }`.
     HasField {
         base: TyId,
-        field: crate::intern::StringId,
+        field: intern::StringId,
         field_ty: TyId,
         span: Span,
     },
@@ -807,7 +807,7 @@ pub(crate) struct ClassContext {
 /// constraints are solved via unification to produce final types.
 pub(crate) struct InferCtx<'a> {
     /// Mutable AST for populating `TxnId` fields during typecheck.
-    pub(super) ast: &'a mut crate::ast::Ast,
+    pub(super) ast: &'a mut ast::Ast,
     /// Registry of user-defined and builtin types.
     pub(super) registry: &'a TypeRegistry,
     /// Arena of type expressions (for converting `TypeExprId -> Ty`).
@@ -910,7 +910,7 @@ impl<'a> InferCtx<'a> {
     /// Set `interactive` to `true` to allow top-level expressions without
     /// requiring a `main` function.
     pub(crate) fn new(
-        ast: &'a mut crate::ast::Ast,
+        ast: &'a mut ast::Ast,
         registry: &'a TypeRegistry,
         type_exprs: &'a TypeExprArena,
         runtime_env: &'a Environment,
@@ -1035,7 +1035,7 @@ impl<'a> InferCtx<'a> {
     }
 
     /// Get the AST being type-checked.
-    pub(crate) fn ast(&self) -> &crate::ast::Ast {
+    pub(crate) fn ast(&self) -> &ast::Ast {
         self.ast
     }
 
@@ -1302,7 +1302,7 @@ impl<'a> InferCtx<'a> {
         mut self,
         stmts: &[StmtId],
         registry: &TypeRegistry,
-        arena: &crate::value::ValueArena,
+        arena: &value::ValueArena,
     ) -> Result<TypecheckOutput> {
         // Pass 1: Hoist function and module declarations for forward references
         self.hoist_declarations(stmts);
@@ -1347,7 +1347,7 @@ impl<'a> InferCtx<'a> {
     fn into_output(
         self,
         registry: &TypeRegistry,
-        val_arena: &crate::value::ValueArena,
+        val_arena: &value::ValueArena,
     ) -> Result<TypecheckOutput> {
         if let Some(errs) = NonEmpty::from_vec(self.errors) {
             let printer = TyPrinter::new(
@@ -1358,8 +1358,8 @@ impl<'a> InferCtx<'a> {
                 &self.numeric_vars,
             );
             let formatted = errs.map(|e| e.format_with(&printer));
-            let errors = formatted.map(crate::Error::FormattedType);
-            Err(crate::Error::multiple(errors))
+            let errors = formatted.map(Error::FormattedType);
+            Err(Error::multiple(errors))
         } else {
             Ok(TypecheckOutput {
                 ty_arena: self.ty_arena,
