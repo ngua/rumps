@@ -16,8 +16,6 @@
 //!
 //! See `infer.rs` for the full rationale on our testing approach.
 
-use std::collections::HashMap;
-
 use indexmap::IndexMap;
 use smallvec::{smallvec, SmallVec};
 
@@ -28,9 +26,9 @@ use super::infer::{ClassContext, Constraint};
 use super::instance::InstanceRegistry;
 use super::ty::{Rename, Ty, TyArena, TyId, TyVar, TypeClass};
 use super::uf::UnionFind;
-use crate::ast::{Ast, AstTypeExpr, AstTypeExprId};
+use crate::ast::{Ast, AstTypeExpr};
 use crate::intern::{QualifiedName, StringId};
-use crate::value::{TypeDef, TypeExprArena, TypeExprId, TypeId, TypeRegistry};
+use crate::value::{TypeDef, TypeExprArena, TypeId, TypeRegistry};
 use crate::{ClassId, Span};
 
 /// Result of a unification attempt.
@@ -50,7 +48,7 @@ pub(super) struct SolveCtx<'a> {
     pub(super) env: &'a TypeEnv,
     pub(super) errors: &'a mut Vec<TypeError>,
     /// AST reference for alias expansion and field type resolution.
-    pub(super) ast: &'a Ast,
+    pub(super) ast: &'a mut Ast,
     /// Type expression arena for converting `TypeExprId -> TyId`.
     pub(super) type_exprs: &'a TypeExprArena,
     /// Current module path (for module-aware type name resolution).
@@ -68,479 +66,6 @@ enum Satisfaction {
 }
 
 impl SolveCtx<'_> {
-    // -- Type conversion (subset of `InferCtx` convert.rs, for alias expansion) --
-
-    /// Resolve a type name to its `TypeId` and effective qualified name.
-    fn resolve_type_name(
-        &self,
-        name: &QualifiedName,
-    ) -> Option<(TypeId, QualifiedName)> {
-        let local = name.local_name();
-        let eff_qn = self
-            .env
-            .lookup_imported_type(local)
-            .cloned()
-            .unwrap_or_else(|| name.clone());
-
-        self.registry
-            .lookup(&eff_qn)
-            .map(|id| (id, eff_qn.clone()))
-            .or_else(|| {
-                if eff_qn.is_qualified() {
-                    None
-                } else {
-                    let eff_local = eff_qn.local_name();
-                    self.current_module.as_ref().and_then(|mod_qn| {
-                        std::iter::once(mod_qn.clone())
-                            .chain(mod_qn.ancestors())
-                            .find_map(|prefix| {
-                                let qn = prefix.child(eff_local);
-                                self.registry.lookup(&qn).map(|id| (id, qn))
-                            })
-                    })
-                }
-            })
-    }
-
-    /// Check visibility for a module-qualified type name.
-    fn check_type_visibility(
-        &mut self,
-        qn: &QualifiedName,
-        span: Span,
-    ) -> bool {
-        use crate::ast::Visibility;
-        let is_private = qn.is_qualified()
-            && self
-                .env
-                .lookup_user_module_type_vis(qn)
-                .is_some_and(|vis| vis == Visibility::Private);
-        if is_private {
-            let local = self.env.resolve_str(qn.local_name()).to_owned();
-            let module = qn
-                .parent()
-                .map_or_else(String::new, |p| p.display(&self.env.strings));
-            self.errors.push(TypeError::PrivateAccess {
-                module,
-                name: local,
-                span,
-            });
-        }
-        !is_private
-    }
-
-    /// Convert a `TypeExprId` to a `TyId`.
-    fn type_expr_to_ty(&mut self, id: TypeExprId) -> TyId {
-        let base = self.type_exprs.base_type(id);
-        let arg_ids: SmallVec<[TypeExprId; 4]> = self
-            .type_exprs
-            .type_args(id)
-            .map(|a| a.iter().copied().collect())
-            .unwrap_or_default();
-        base.map_or(TyArena::UNKNOWN, |base| {
-            let args: SmallVec<[TyId; 4]> =
-                arg_ids.iter().map(|&p| self.type_expr_to_ty(p)).collect();
-            let base_ty = self.type_id_to_ty(base);
-            self.apply_type_args(base_ty, args)
-        })
-    }
-
-    /// Convert a `TypeId` to a primitive `TyId`, `Ty::Union`, or `Ty::Named`.
-    fn type_id_to_ty(&mut self, id: TypeId) -> TyId {
-        match id {
-            TypeId::BOOL => TyArena::BOOL,
-            TypeId::INT => TyArena::INT,
-            TypeId::WORD => TyArena::WORD,
-            TypeId::FLOAT => TyArena::FLOAT,
-            TypeId::CHAR => TyArena::CHAR,
-            TypeId::STRING => TyArena::STRING,
-            TypeId::UNIT => TyArena::UNIT,
-            TypeId::TIME => TyArena::TIME,
-            TypeId::RANGE => TyArena::RANGE,
-            TypeId::JSON => TyArena::JSON,
-            TypeId::ORDERING => TyArena::ORDERING,
-            TypeId::DATA_STATUS => TyArena::DATA_STATUS,
-            TypeId::FILEPATH => TyArena::FILEPATH,
-            TypeId::PATH => TyArena::PATH,
-            TypeId::REGEX => TyArena::REGEX,
-            TypeId::ERROR => TyArena::RUNTIME_ERROR,
-            TypeId::LOCAL => TyArena::LOCAL,
-            TypeId::GLOBAL => TyArena::GLOBAL,
-            TypeId::REF => self.ty_arena.ref_ty(),
-            TypeId::STORABLE => self.ty_arena.storable(),
-            TypeId::SCALAR => self.ty_arena.scalar(),
-            TypeId::SUBSCRIPT => self.ty_arena.subscript(),
-            _ => match self.registry.get_def(id) {
-                Some(TypeDef::Union { members, .. }) => {
-                    let members = members.clone();
-                    let member_tys = members
-                        .iter()
-                        .map(|m| self.type_expr_to_ty(*m))
-                        .collect();
-                    self.ty_arena.alloc(Ty::Union(Some(id), member_tys))
-                }
-                _ => self.ty_arena.named(id, smallvec![]),
-            },
-        }
-    }
-
-    /// Apply type arguments to a base type.
-    fn apply_type_args(
-        &mut self,
-        base: TyId,
-        args: SmallVec<[TyId; 4]>,
-    ) -> TyId {
-        let base_ty = self.ty_arena.get(base).clone();
-        match base_ty {
-            Ty::Named(id, _) if id == TypeId::ARRAY => {
-                if args.len() == 1 {
-                    self.ty_arena.array(args[0])
-                } else {
-                    self.ty_arena.named(id, args)
-                }
-            }
-            Ty::Named(id, _) if id == TypeId::OPTION => {
-                if args.len() == 1 {
-                    self.ty_arena.option(args[0])
-                } else {
-                    self.ty_arena.named(id, args)
-                }
-            }
-            Ty::Named(id, _) if id == TypeId::MAP => {
-                if args.len() == 2 {
-                    self.ty_arena.map_ty(args[0], args[1])
-                } else {
-                    self.ty_arena.named(id, args)
-                }
-            }
-            Ty::Named(id, _) if id == TypeId::RESULT => {
-                if args.len() == 2 {
-                    self.ty_arena.result(args[0], args[1])
-                } else {
-                    self.ty_arena.named(id, args)
-                }
-            }
-            Ty::Named(id, _) if id == TypeId::TUPLE => {
-                self.ty_arena.alloc(Ty::Tuple(args))
-            }
-            Ty::Named(id, _) => self.ty_arena.named(id, args),
-            _ => base,
-        }
-    }
-
-    /// Convert a simple named type to a `TyId`.
-    fn named_type_to_ty(&mut self, name: &str) -> TyId {
-        ConvertCtx::builtin_type_from_name(name).unwrap_or_else(|| {
-            self.env
-                .lookup_str(name)
-                .and_then(|id| self.registry.lookup(&QualifiedName::local(id)))
-                .map_or(TyArena::UNKNOWN, |ty_id| {
-                    self.ty_arena.named(ty_id, smallvec![])
-                })
-        })
-    }
-
-    /// Convert a parameterized type name and args to a `TyId`.
-    fn parameterized_type_to_ty(
-        &mut self,
-        name: &str,
-        args: SmallVec<[TyId; 4]>,
-    ) -> TyId {
-        match name {
-            "Array" => args
-                .first()
-                .map_or(TyArena::ERROR, |&t| self.ty_arena.array(t)),
-            "Option" => args
-                .first()
-                .map_or(TyArena::ERROR, |&t| self.ty_arena.option(t)),
-            "Result" => args.first().map_or(TyArena::ERROR, |&ok| {
-                args.get(1).map_or(TyArena::ERROR, |&err| {
-                    self.ty_arena.result(ok, err)
-                })
-            }),
-            "Map" => args.first().map_or(TyArena::ERROR, |&k| {
-                args.get(1)
-                    .map_or(TyArena::ERROR, |&v| self.ty_arena.map_ty(k, v))
-            }),
-            _ => self
-                .env
-                .lookup_str(name)
-                .and_then(|id| self.registry.lookup(&QualifiedName::local(id)))
-                .map_or(TyArena::UNKNOWN, |ty_id| {
-                    self.ty_arena.named(ty_id, args)
-                }),
-        }
-    }
-
-    /// Convert an AST type expression to a `TyId` with the given substitution.
-    ///
-    /// Shared logic with `InferCtx::ast_type_to_ty`; the solve-phase version
-    /// skips AST rewrites (names are already resolved during inference).
-    fn ast_type_to_ty(
-        &mut self,
-        id: AstTypeExprId,
-        subst: &IndexMap<StringId, TyId>,
-    ) -> TyId {
-        match self.ast.get_type_expr(id).cloned() {
-            None => {
-                let span = self.ast.type_expr_span(id).unwrap_or_default();
-                self.errors.push(TypeError::UnknownType(
-                    "<unknown>".to_string(),
-                    span,
-                ));
-                TyArena::ERROR
-            }
-            Some(te) => match &te {
-                AstTypeExpr::Wildcard => {
-                    let v = self.uf.fresh();
-                    self.ty_arena.alloc(Ty::Var(v))
-                }
-                AstTypeExpr::Named(name) => subst
-                    .get(&name.local_name())
-                    .copied()
-                    .unwrap_or_else(|| {
-                        let span =
-                            self.ast.type_expr_span(id).unwrap_or_default();
-                        let resolved = self.resolve_type_name(name);
-                        match resolved {
-                            Some((type_id, qid)) => {
-                                if !self.check_type_visibility(&qid, span) {
-                                    TyArena::ERROR
-                                } else {
-                                    let eff = qid.display(&self.env.strings);
-                                    let exp = self
-                                        .registry
-                                        .type_param_count(type_id)
-                                        .or_else(|| {
-                                            ConvertCtx::expected_type_arity(
-                                                &eff,
-                                            )
-                                        })
-                                        .unwrap_or(0);
-                                    if exp > 0 {
-                                        self.errors.push(
-                                            TypeError::TypeArityMismatch {
-                                                name: eff,
-                                                expected: exp,
-                                                got: 0,
-                                                span,
-                                            },
-                                        );
-                                        TyArena::ERROR
-                                    } else {
-                                        self.type_id_to_ty(type_id)
-                                    }
-                                }
-                            }
-                            None => {
-                                let name_s = name.display(&self.env.strings);
-                                let expected =
-                                    ConvertCtx::expected_type_arity(&name_s);
-                                if let Some(exp) = expected {
-                                    if exp > 0 {
-                                        self.errors.push(
-                                            TypeError::TypeArityMismatch {
-                                                name: name_s,
-                                                expected: exp,
-                                                got: 0,
-                                                span,
-                                            },
-                                        );
-                                        TyArena::ERROR
-                                    } else {
-                                        self.named_type_to_ty(&name_s)
-                                    }
-                                } else {
-                                    let ty = self.named_type_to_ty(&name_s);
-                                    if ty == TyArena::UNKNOWN {
-                                        self.errors.push(
-                                            TypeError::UnknownType(
-                                                name_s, span,
-                                            ),
-                                        );
-                                        TyArena::ERROR
-                                    } else {
-                                        ty
-                                    }
-                                }
-                            }
-                        }
-                    }),
-                AstTypeExpr::App(name, args) => {
-                    let span = self.ast.type_expr_span(id).unwrap_or_default();
-                    let resolved = self.resolve_type_name(name);
-                    let user_def = resolved.and_then(|(tid, qid)| {
-                        self.registry
-                            .type_param_count(tid)
-                            .map(|exp| (tid, qid, exp))
-                    });
-                    match user_def {
-                        Some((type_id, qid, exp)) => {
-                            if !self.check_type_visibility(&qid, span) {
-                                TyArena::ERROR
-                            } else {
-                                let n = qid.display(&self.env.strings);
-                                if args.len() != exp {
-                                    self.errors.push(
-                                        TypeError::TypeArityMismatch {
-                                            name: n,
-                                            expected: exp,
-                                            got: args.len(),
-                                            span,
-                                        },
-                                    );
-                                    TyArena::ERROR
-                                } else {
-                                    let arg_tys: SmallVec<[TyId; 4]> = args
-                                        .iter()
-                                        .map(|a| self.ast_type_to_ty(*a, subst))
-                                        .collect();
-                                    let base = self.type_id_to_ty(type_id);
-                                    self.apply_type_args(base, arg_tys)
-                                }
-                            }
-                        }
-                        None => {
-                            let name_s = name.display(&self.env.strings);
-                            let expected =
-                                ConvertCtx::expected_type_arity(&name_s);
-                            if let Some(exp) = expected {
-                                if args.len() != exp {
-                                    self.errors.push(
-                                        TypeError::TypeArityMismatch {
-                                            name: name_s,
-                                            expected: exp,
-                                            got: args.len(),
-                                            span,
-                                        },
-                                    );
-                                    TyArena::ERROR
-                                } else {
-                                    let arg_tys: SmallVec<[TyId; 4]> = args
-                                        .iter()
-                                        .map(|a| self.ast_type_to_ty(*a, subst))
-                                        .collect();
-                                    self.parameterized_type_to_ty(
-                                        &name_s, arg_tys,
-                                    )
-                                }
-                            } else {
-                                let arg_tys: SmallVec<[TyId; 4]> = args
-                                    .iter()
-                                    .map(|a| self.ast_type_to_ty(*a, subst))
-                                    .collect();
-                                let ty = self
-                                    .parameterized_type_to_ty(&name_s, arg_tys);
-                                if ty == TyArena::UNKNOWN {
-                                    self.errors.push(TypeError::UnknownType(
-                                        name_s, span,
-                                    ));
-                                    TyArena::ERROR
-                                } else {
-                                    ty
-                                }
-                            }
-                        }
-                    }
-                }
-                AstTypeExpr::Fn(params, ret) => {
-                    let param_tys: SmallVec<[TyId; 4]> = params
-                        .iter()
-                        .map(|p| self.ast_type_to_ty(*p, subst))
-                        .collect();
-                    let ret_ty = self.ast_type_to_ty(*ret, subst);
-                    self.ty_arena.func(param_tys, ret_ty)
-                }
-                AstTypeExpr::Tuple(elems) => {
-                    let elem_tys: SmallVec<[TyId; 4]> = elems
-                        .iter()
-                        .map(|e| self.ast_type_to_ty(*e, subst))
-                        .collect();
-                    self.ty_arena.alloc(Ty::Tuple(elem_tys))
-                }
-                AstTypeExpr::Union(members) => {
-                    if members.is_empty() {
-                        let span =
-                            self.ast.type_expr_span(id).unwrap_or_default();
-                        self.errors.push(TypeError::EmptyUnion(span));
-                        TyArena::ERROR
-                    } else {
-                        let member_tys: SmallVec<[TyId; 4]> = members
-                            .iter()
-                            .map(|m| self.ast_type_to_ty(*m, subst))
-                            .collect();
-                        self.ty_arena.alloc(Ty::Union(None, member_tys))
-                    }
-                }
-                AstTypeExpr::Object(fields) => {
-                    let field_tys = fields
-                        .iter()
-                        .map(|(name, ty_id)| {
-                            let ty = self.ast_type_to_ty(*ty_id, subst);
-                            (*name, ty)
-                        })
-                        .collect();
-                    self.ty_arena.alloc(Ty::Object(field_tys))
-                }
-                AstTypeExpr::VarApp(name, args) => {
-                    let span = self.ast.type_expr_span(id).unwrap_or_default();
-                    let arg_tys: SmallVec<[TyId; 4]> = args
-                        .iter()
-                        .map(|&a| self.ast_type_to_ty(a, subst))
-                        .collect();
-                    match subst.get(&name.local_name()).copied() {
-                        None => {
-                            self.errors.push(TypeError::UnknownType(
-                                name.display(&self.env.strings),
-                                span,
-                            ));
-                            TyArena::ERROR
-                        }
-                        Some(tid) => {
-                            let resolved = self.ty_arena.get(tid).clone();
-                            match resolved {
-                                Ty::Var(tv) => self.ty_arena.hkt(tv, arg_tys),
-                                _ => self.apply_type_args(tid, arg_tys),
-                            }
-                        }
-                    }
-                }
-                AstTypeExpr::AssocType { class, name } => {
-                    let span = self.ast.type_expr_span(id).unwrap_or_default();
-                    match class {
-                        None => self
-                            .class_context
-                            .as_ref()
-                            .and_then(|ctx| ctx.assoc_types.get(name).copied())
-                            .unwrap_or_else(|| {
-                                self.errors.push(
-                                    TypeError::AssocTypeOutsideClass {
-                                        name: self.env.resolve_string(*name),
-                                        span,
-                                    },
-                                );
-                                TyArena::ERROR
-                            }),
-                        Some(class_name) => {
-                            let cls_s = self.env.resolve_string(*class_name);
-                            ClassId::from_name(&cls_s)
-                                .map(|kind| {
-                                    let tv = self.uf.fresh();
-                                    self.ty_arena
-                                        .alloc(Ty::AssocType(tv, kind, *name))
-                                })
-                                .unwrap_or_else(|| {
-                                    self.errors.push(TypeError::UnknownClass(
-                                        cls_s, span,
-                                    ));
-                                    TyArena::ERROR
-                                })
-                        }
-                    }
-                }
-            },
-        }
-    }
-
     /// Map a primitive `Ty` shape to its `TypeId`, if applicable.
     fn primitive_type_id(ty: &Ty) -> Option<TypeId> {
         match ty {
@@ -565,7 +90,20 @@ impl SolveCtx<'_> {
         }
     }
 
-    // -- Methods moved from `impl InferCtx` --
+    fn convert_ctx(&mut self) -> ConvertCtx<'_> {
+        ConvertCtx {
+            ty_arena: self.ty_arena,
+            uf: self.uf,
+            registry: self.registry,
+            env: self.env,
+            ast: self.ast,
+            errors: self.errors,
+            current_module: self.current_module,
+            class_context: self.class_context,
+            type_exprs: self.type_exprs,
+            rewrite_ast: false,
+        }
+    }
 
     /// Unify two types, recording bindings in the union-find.
     ///
@@ -650,7 +188,7 @@ impl SolveCtx<'_> {
                         .map(|(p, a)| (*p, *a))
                         .collect();
                     let target = *target;
-                    Some(self.ast_type_to_ty(target, &subst))
+                    Some(self.convert_ctx().ast_type_to_ty(target, &subst))
                 }
             }
             _ => None,
@@ -1274,6 +812,7 @@ impl SolveCtx<'_> {
                         fields_with_ids.iter().try_for_each(
                             |(field_name, field_ty_id)| {
                                 let expected_ty = self
+                                    .convert_ctx()
                                     .ast_type_to_ty(*field_ty_id, &param_subst);
 
                                 match obj_fields.get(field_name) {
@@ -2637,10 +2176,11 @@ impl SolveCtx<'_> {
                                                 .zip(type_args.iter())
                                                 .map(|(p, &a)| (*p, a))
                                                 .collect();
-                                        let actual_ty = self.ast_type_to_ty(
-                                            ast_ty_id,
-                                            &param_subst,
-                                        );
+                                        let actual_ty =
+                                            self.convert_ctx().ast_type_to_ty(
+                                                ast_ty_id,
+                                                &param_subst,
+                                            );
                                         if let Err(e) = self.unify_types(
                                             field_ty, actual_ty, span,
                                         ) {

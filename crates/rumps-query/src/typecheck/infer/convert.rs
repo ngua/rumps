@@ -110,7 +110,7 @@ impl InferCtx<'_> {
     /// Does NOT expand `Ty::Named` aliases; smuggling a fn type through
     /// a transparent alias like `type F = (Int) -> Int` is a narrower
     /// corner case and is left to a follow-up.
-    pub(crate) fn type_contains_fn(ty: TyId, arena: &TyArena) -> bool {
+    pub(super) fn type_contains_fn(ty: TyId, arena: &TyArena) -> bool {
         match arena.get(ty) {
             Ty::Fn(_, _) => true,
             Ty::Array(inner) | Ty::Option(inner) => {
@@ -168,7 +168,7 @@ impl InferCtx<'_> {
     /// non-unions. All unions (builtin and user-defined) are expanded to
     /// `Ty::Union` at construction time in `type_id_to_ty`, so this is a
     /// simple pattern match.
-    pub(crate) fn expand_union_members(
+    pub(super) fn expand_union_members(
         &mut self,
         ty: TyId,
     ) -> Option<SmallVec<[TyId; 4]>> {
@@ -181,7 +181,7 @@ impl InferCtx<'_> {
     /// Check if a type is a member of a union.
     ///
     /// Returns `true` if `member` is one of the types in `union_ty`.
-    pub(crate) fn is_union_member(
+    pub(super) fn is_union_member(
         &mut self,
         union_ty: TyId,
         member: TyId,

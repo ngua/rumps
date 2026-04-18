@@ -1536,7 +1536,7 @@ impl InferCtx<'_> {
     }
 
     /// Get the `TypeId` for a primitive `Ty`.
-    pub(crate) fn primitive_type_id(&self, ty: &Ty) -> Option<TypeId> {
+    pub(super) fn primitive_type_id(&self, ty: &Ty) -> Option<TypeId> {
         match ty {
             Ty::Bool => Some(TypeId::BOOL),
             Ty::Int => Some(TypeId::INT),

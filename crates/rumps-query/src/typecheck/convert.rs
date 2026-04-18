@@ -107,7 +107,7 @@ impl ConvertCtx<'_> {
 
     /// Check if `name` refers to a known (builtin or user-defined) type,
     /// as opposed to a type variable.
-    pub(super) fn is_known_type_name(&self, name: &QualifiedName) -> bool {
+    fn is_known_type_name(&self, name: &QualifiedName) -> bool {
         let s = name.display(&self.env.strings);
         Self::builtin_type_from_name(&s).is_some()
             || Self::expected_type_arity(&s).is_some()
@@ -115,7 +115,7 @@ impl ConvertCtx<'_> {
     }
 
     /// Convert a runtime `TypeExprId` to a `TyId`.
-    pub(super) fn type_expr_to_ty(&mut self, id: TypeExprId) -> TyId {
+    fn type_expr_to_ty(&mut self, id: TypeExprId) -> TyId {
         let base = self.type_exprs.base_type(id);
         let arg_ids: SmallVec<[TypeExprId; 4]> = self
             .type_exprs
@@ -136,7 +136,7 @@ impl ConvertCtx<'_> {
     /// `Ty::Union(Some(id), members)` at construction time, so all
     /// union-related logic goes through a single code path. `Ty::Named` is
     /// reserved for sum types and aliases.
-    pub(super) fn type_id_to_ty(&mut self, id: TypeId) -> TyId {
+    fn type_id_to_ty(&mut self, id: TypeId) -> TyId {
         match id {
             TypeId::BOOL => TyArena::BOOL,
             TypeId::INT => TyArena::INT,
@@ -178,7 +178,7 @@ impl ConvertCtx<'_> {
     ///
     /// Converts generic `Ty::Named` types to their specialized forms
     /// (e.g., `Named(ARRAY, [Int])` -> `Array(Int)`).
-    pub(super) fn apply_type_args(
+    fn apply_type_args(
         &mut self,
         base: TyId,
         args: SmallVec<[TyId; 4]>,
@@ -234,7 +234,7 @@ impl ConvertCtx<'_> {
     }
 
     /// Convert a parameterized type to a `TyId`.
-    pub(super) fn parameterized_type_to_ty(
+    fn parameterized_type_to_ty(
         &mut self,
         name: &str,
         args: SmallVec<[TyId; 4]>,
@@ -559,7 +559,7 @@ impl ConvertCtx<'_> {
     /// Recursively walks the type expression tree, returning names that
     /// are type variables (i.e. not known/builtin types). Used to extract
     /// implicit type parameters from `for_type` in class instances.
-    pub(super) fn collect_type_vars_from_ast(
+    fn collect_type_vars_from_ast(
         &self,
         id: AstTypeExprId,
     ) -> SmallVec<[StringId; 4]> {
@@ -632,7 +632,7 @@ impl ConvertCtx<'_> {
     ///
     /// Returns `None` for non-builtin names. This is the single source of
     /// truth for simple (non-parameterized) builtin type names.
-    pub(super) fn builtin_type_from_name(name: &str) -> Option<TyId> {
+    fn builtin_type_from_name(name: &str) -> Option<TyId> {
         match name {
             "Bool" => Some(TyArena::BOOL),
             "Int" => Some(TyArena::INT),
@@ -661,7 +661,7 @@ impl ConvertCtx<'_> {
     /// types.
     ///
     /// Returns `None` for user-defined types (arity checked elsewhere).
-    pub(super) fn expected_type_arity(name: &str) -> Option<usize> {
+    fn expected_type_arity(name: &str) -> Option<usize> {
         match name {
             "Array" | "Option" => Some(1),
             "Result" | "Map" => Some(2),
