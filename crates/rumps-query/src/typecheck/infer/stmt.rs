@@ -1011,11 +1011,15 @@ impl InferCtx<'_> {
         } = input;
 
         // 1. Resolve class name to `ClassId`
-        let cn = self.env.resolve_str(class_name).to_owned();
-        let class = ClassId::from_name(&cn).unwrap_or_else(|| {
-            self.error(TypeError::UnknownClass(cn.clone(), span));
-            ClassId::DISPLAY // Default to `Display` to avoid cascading errors
-        });
+        let class = self
+            .env
+            .class_registry()
+            .lookup_by_name(class_name)
+            .unwrap_or_else(|| {
+                let cn = self.env.resolve_str(class_name).to_owned();
+                self.error(TypeError::UnknownClass(cn, span));
+                ClassId::DISPLAY
+            });
 
         // 2. Build type parameter substitution map (BEFORE resolving for_type)
         //    If `type_params` is empty, extract type param names from the
@@ -1154,13 +1158,12 @@ impl InferCtx<'_> {
             .collect();
 
         // 6.6. Validate all required associated types are provided
-        let req_assocs = self.env.class_def(class).assoc_types;
-        req_assocs.iter().for_each(|req| {
-            let req_id = self.env.intern(req);
-            if !assoc_type_map.contains_key(&req_id) {
+        let req_assocs = self.env.class_def(class).assoc_types.clone();
+        req_assocs.iter().for_each(|&req| {
+            if !assoc_type_map.contains_key(&req) {
                 self.error(TypeError::MissingAssocType {
                     class,
-                    assoc: req_id,
+                    assoc: req,
                     span,
                 });
             }
@@ -1178,15 +1181,18 @@ impl InferCtx<'_> {
             methods.iter().map(|m| m.name).collect();
 
         // 8. Check all required methods are present
-        let required: Vec<&str> =
+        let required: Vec<StringId> =
             self.env.class_def(class).method_names().collect();
-        let required_hint = required.join(", ");
-        required.iter().for_each(|req| {
-            let req_id = self.env.intern(req);
-            if !provided_methods.contains(&req_id) {
+        let required_hint = required
+            .iter()
+            .map(|&s| self.env.resolve_str(s).to_owned())
+            .collect::<Vec<_>>()
+            .join(", ");
+        required.iter().for_each(|&req| {
+            if !provided_methods.contains(&req) {
                 self.error(TypeError::MissingInstanceMethod {
                     class,
-                    method: req.to_string(),
+                    method: self.env.resolve_str(req).to_owned(),
                     required_hint: required_hint.clone(),
                     span,
                 });
@@ -1211,13 +1217,17 @@ impl InferCtx<'_> {
         // 10. Register instance (if we have a valid type_id)
         let type_name = self.extract_type_name_from_ast(for_type);
         if let Some(tid) = type_id {
+            let class_name_str = self
+                .env
+                .resolve_str(self.env.class_registry().name(class))
+                .to_owned();
             let method_map: HashMap<_, _> = methods
                 .iter()
                 .map(|m| {
                     let mn = self.env.resolve_str(m.name);
                     let fn_name =
                         crate::interpreter::instance::instance_fn_name(
-                            class.name(),
+                            &class_name_str,
                             &type_name,
                             mn,
                         );
@@ -1295,8 +1305,11 @@ impl InferCtx<'_> {
         let m_span = method.span;
 
         // Get expected method signature from class
-        let mn = self.env.resolve_str(method.name).to_owned();
-        let expected = self.env.class_def(class).method(&mn, m_span).cloned();
+        let expected = self
+            .env
+            .class_def(class)
+            .method(method.name, m_span)
+            .cloned();
 
         // Handle unknown method error
         let (expected_param_tys, expected_ret_ty) = match expected {
@@ -1389,7 +1402,7 @@ impl InferCtx<'_> {
         if method.params.len() != expected_param_tys.len() {
             self.error(TypeError::MethodSignatureMismatch {
                 class,
-                method: mn.clone(),
+                method: self.env.resolve_str(method.name).to_owned(),
                 expected: expected_param_tys.len(),
                 got: method.params.len(),
                 span: m_span,

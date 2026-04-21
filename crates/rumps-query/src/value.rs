@@ -305,6 +305,9 @@ impl ClassId {
     }
 
     /// Returns the name of builtin classes as a `&'static str`.
+    ///
+    /// User-defined classes (id `>= BUILTIN_COUNT`) return `"<user class>"`;
+    /// use `ClassRegistry::name()` to get the actual name via the string arena.
     pub(crate) const fn name(self) -> &'static str {
         match self.0 {
             0 => "Numeric",
@@ -324,30 +327,7 @@ impl ClassId {
             14 => "Eq",
             15 => "Wrappable",
             16 => "Chainable",
-            _ => "<unknown class>",
-        }
-    }
-
-    pub(crate) fn from_name(s: &str) -> Option<Self> {
-        match s {
-            "Numeric" => Some(Self::NUMERIC),
-            "Iterable" => Some(Self::ITERABLE),
-            "Monoid" => Some(Self::MONOID),
-            "BitLike" => Some(Self::BIT_LIKE),
-            "Negatable" => Some(Self::NEGATABLE),
-            "Fallible" => Some(Self::FALLIBLE),
-            "Into" => Some(Self::INTO),
-            "TryInto" => Some(Self::TRY_INTO),
-            "Indexable" => Some(Self::INDEXABLE),
-            "Ord" => Some(Self::ORD),
-            "Mappable" => Some(Self::MAPPABLE),
-            "Foldable" => Some(Self::FOLDABLE),
-            "Filterable" => Some(Self::FILTERABLE),
-            "Display" => Some(Self::DISPLAY),
-            "Eq" => Some(Self::EQ),
-            "Wrappable" => Some(Self::WRAPPABLE),
-            "Chainable" => Some(Self::CHAINABLE),
-            _ => None,
+            _ => "<user class>",
         }
     }
 }

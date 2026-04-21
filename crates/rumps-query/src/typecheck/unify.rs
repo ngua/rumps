@@ -2265,9 +2265,8 @@ impl SolveCtx<'_> {
         span: Span,
     ) -> Result<TyId, TypeError> {
         // Validate that assoc_name is a valid associated type for this class
-        let assoc_str = self.env.get_str(assoc_name);
-        let assoc_types = self.env.class_def(class).assoc_types;
-        if !assoc_str.is_some_and(|s| assoc_types.contains(&s)) {
+        let assoc_types = &self.env.class_def(class).assoc_types;
+        if !assoc_types.contains(&assoc_name) {
             Err(TypeError::NoSuchAssocType {
                 class,
                 name: assoc_name,

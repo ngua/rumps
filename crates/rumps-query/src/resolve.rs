@@ -34,6 +34,7 @@ use smallvec::{smallvec, SmallVec};
 use crate::ast::{Ast, AstTypeExpr, Expr, ExprId, Stmt, StmtId};
 use crate::env::BUILTIN_MODULE_NAMES;
 use crate::intern::{QualifiedName, StringId};
+use crate::typecheck::ClassRegistry;
 use crate::value::{TypeRegistry, ValueArena};
 use crate::ClassId;
 
@@ -62,6 +63,7 @@ pub(crate) struct ResolveCtx<'a> {
     ast: &'a mut Ast,
     arena: &'a mut ValueArena,
     registry: &'a TypeRegistry,
+    class_registry: &'a ClassRegistry,
     user_modules: HashSet<StringId>,
 }
 
@@ -70,12 +72,14 @@ impl<'a> ResolveCtx<'a> {
         ast: &'a mut Ast,
         arena: &'a mut ValueArena,
         registry: &'a TypeRegistry,
+        class_registry: &'a ClassRegistry,
     ) -> Self {
         let user_modules = Self::collect_user_modules(ast);
         Self {
             ast,
             arena,
             registry,
+            class_registry,
             user_modules,
         }
     }
@@ -351,9 +355,7 @@ impl<'a> ResolveCtx<'a> {
                 methods,
                 ..
             } => {
-                let cn =
-                    self.arena.strings.get(*class_name).unwrap_or_default();
-                let class = ClassId::from_name(cn)?;
+                let class = self.class_registry.lookup_by_name(*class_name)?;
                 let raw_qn = Self::extract_type_qn(self.ast, *for_type)?;
 
                 let type_qn = match module {
@@ -363,6 +365,12 @@ impl<'a> ResolveCtx<'a> {
                     _ => raw_qn,
                 };
                 let type_disp = type_qn.display(&self.arena.strings);
+                let class_name_str = self
+                    .arena
+                    .strings
+                    .get(self.class_registry.name(class))
+                    .unwrap_or_default()
+                    .to_owned();
                 let methods = methods.clone();
                 let mappings: Vec<(StringId, StringId)> = methods
                     .iter()
@@ -371,7 +379,7 @@ impl<'a> ResolveCtx<'a> {
                             self.arena.strings.get(m.name).unwrap_or_default();
                         let fn_name =
                             crate::interpreter::instance::instance_fn_name(
-                                class.name(),
+                                &class_name_str,
                                 &type_disp,
                                 mn,
                             );
@@ -417,8 +425,20 @@ mod tests {
         let mut arena = ValueArena::with_interner(interner);
         let mut type_exprs = TypeExprArena::new();
         let registry = TypeRegistry::new(&mut arena, &mut type_exprs);
-        let _ =
-            ResolveCtx::new(&mut result.ast, &mut arena, &registry).resolve();
+        let class_registry = {
+            let mut tmp = crate::typecheck::TyArena::new();
+            crate::typecheck::ClassRegistry::builtins(
+                &mut |s| arena.strings.intern(s),
+                &mut tmp,
+            )
+        };
+        let _ = ResolveCtx::new(
+            &mut result.ast,
+            &mut arena,
+            &registry,
+            &class_registry,
+        )
+        .resolve();
         (result.ast, arena)
     }
 

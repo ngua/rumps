@@ -406,10 +406,10 @@ impl<I: IoContext> Interpreter<'_, I> {
         if let Some(partial) = self.maybe_partial_app(cmf, &arg_ids, span) {
             Ok(partial)
         } else {
-            let cs = self.arena.strings.get(class).unwrap_or_default();
-            let kind = ClassId::from_name(cs).unwrap_or_else(|| {
-                typechecked!("class method class", "known class")
-            });
+            let kind =
+                self.class_registry.lookup_by_name(class).unwrap_or_else(
+                    || typechecked!("class method class", "known class"),
+                );
             self.dispatch_class_method(
                 Some(expr_id),
                 kind,
@@ -436,14 +436,12 @@ impl<I: IoContext> Interpreter<'_, I> {
         args: &[ValueId],
         span: Span,
     ) -> Result<Value> {
-        let class_str = self
-            .arena
-            .get_str(class)
-            .unwrap_or_else(|| invariant!("class StringId in arena"));
-
-        let kind = ClassId::from_name(class_str).unwrap_or_else(|| {
-            typechecked!("invoke_class_method_fn", "known class")
-        });
+        let kind =
+            self.class_registry
+                .lookup_by_name(class)
+                .unwrap_or_else(|| {
+                    typechecked!("invoke_class_method_fn", "known class")
+                });
 
         self.dispatch_class_method(expr_id, kind, method, args, span)
             .await
@@ -996,12 +994,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                         .and_then(|s| s.arity(&self.ty_arena))
                 }),
             Value::ClassMethodFn { class, method, .. } => {
-                let cs = self.arena.get_str(*class).unwrap_or_default();
-                let ms = self.arena.get_str(*method).unwrap_or_default();
-                ClassId::from_name(cs).and_then(|kind| {
+                self.class_registry.lookup_by_name(*class).and_then(|kind| {
                     self.class_registry
                         .get(kind)
-                        .method(ms, Span::default())
+                        .method(*method, Span::default())
                         .ok()
                         .and_then(|spec| spec.scheme().arity(&self.ty_arena))
                 })

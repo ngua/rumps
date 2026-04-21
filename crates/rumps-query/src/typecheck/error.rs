@@ -7,7 +7,7 @@ use std::fmt;
 
 use thiserror::Error;
 
-use super::ty::{Ty, TyArena, TyId, TyVar, TypeClass};
+use super::ty::{ClassRegistry, Ty, TyArena, TyId, TyVar, TypeClass};
 use crate::intern::StringInterner;
 use crate::value::{TypeRegistry, ValueArena};
 use crate::{ClassId, Span, StringId, TypeId};
@@ -21,6 +21,7 @@ pub(crate) struct TyPrinter<'a> {
     val_arena: &'a ValueArena,
     pub(crate) ty_arena: &'a TyArena,
     pub(crate) strings: &'a StringInterner,
+    class_registry: &'a ClassRegistry,
     numeric_vars: &'a [TyVar],
 }
 
@@ -36,6 +37,7 @@ impl<'a> TyPrinter<'a> {
         val_arena: &'a ValueArena,
         ty_arena: &'a TyArena,
         strings: &'a StringInterner,
+        class_registry: &'a ClassRegistry,
         numeric_vars: &'a [TyVar],
     ) -> Self {
         Self {
@@ -43,8 +45,16 @@ impl<'a> TyPrinter<'a> {
             val_arena,
             ty_arena,
             strings,
+            class_registry,
             numeric_vars,
         }
+    }
+
+    /// Resolve a `ClassId` to a human-readable name.
+    pub(crate) fn class_name(&self, id: ClassId) -> &str {
+        self.strings
+            .get(self.class_registry.name(id))
+            .unwrap_or(id.name())
     }
 
     /// Format a type as a human-readable string.
@@ -422,11 +432,11 @@ pub(crate) enum TypeError {
     #[error("unknown class `{0}`")]
     UnknownClass(String, Span),
 
-    /// Unknown method name for a class.
-    #[error("class `{class}` has no method `{method}`")]
-    UnknownMethod {
-        class: String,
-        method: String,
+    /// Unknown method name for a class (with `StringId`s).
+    #[error("class has no such method")]
+    UnknownMethodId {
+        class: StringId,
+        method: StringId,
         span: Span,
     },
 
@@ -572,12 +582,12 @@ pub(crate) enum TypeError {
     },
 
     /// Simple or HKT class given type arguments it does not accept.
-    #[error("class `{class}` does not accept type arguments")]
-    ClassRejectsArg { class: &'static str, span: Span },
+    #[error("class does not accept type arguments")]
+    ClassRejectsArg { class: ClassId, span: Span },
 
     /// Parameterized class missing required type arguments.
-    #[error("class `{class}` requires type arguments")]
-    ClassRequiresArg { class: &'static str, span: Span },
+    #[error("class requires type arguments")]
+    ClassRequiresArg { class: ClassId, span: Span },
 
     /// Top-level expression statement outside of `main`.
     ///
@@ -658,7 +668,7 @@ impl TypeError {
             | Self::NotFoundInModule { span, .. }
             | Self::PrivateAccess { span, .. }
             | Self::UnknownClass(_, span)
-            | Self::UnknownMethod { span, .. }
+            | Self::UnknownMethodId { span, .. }
             | Self::ConvertMethodNeedsType { span, .. }
             | Self::DuplicateInstance { span, .. }
             | Self::BuiltinInstanceForbidden { span, .. }
@@ -719,7 +729,7 @@ impl TypeError {
                 format!(
                     "type `{}` does not satisfy `{}` class",
                     p.format(*ty),
-                    class.tag().name()
+                    p.class_name(class.tag())
                 ),
                 None,
             ),
@@ -905,10 +915,14 @@ impl TypeError {
                 format!("unknown class `{name}`"),
                 Some("valid classes: Numeric, Monoid, Ord, Fallible, Indexable, etc.".to_owned()),
             ),
-            Self::UnknownMethod { class, method, .. } => (
-                format!("class `{class}` has no method `{method}`"),
-                None,
-            ),
+            Self::UnknownMethodId { class, method, .. } => {
+                let cn = p.strings.get(*class).unwrap_or("<unknown>");
+                let mn = p.strings.get(*method).unwrap_or("<unknown>");
+                (
+                    format!("class `{cn}` has no method `{mn}`"),
+                    None,
+                )
+            }
             Self::ConvertMethodNeedsType { class, method, .. } => (
                 format!("convert method `{class}:{method}` requires type parameter"),
                 Some(format!("use `{class}[TargetType]:{method}`")),
@@ -916,7 +930,7 @@ impl TypeError {
             Self::DuplicateInstance { class, type_id, .. } => (
                 format!(
                     "duplicate `{}` instance for type `{}`",
-                    class.name(),
+                    p.class_name(*class),
                     p.type_name(*type_id)
                 ),
                 Some("a type can only have one instance of each class".to_owned()),
@@ -924,7 +938,7 @@ impl TypeError {
             Self::BuiltinInstanceForbidden { class, type_id, .. } => (
                 format!(
                     "cannot implement `{}` for builtin type `{}`",
-                    class.name(),
+                    p.class_name(*class),
                     p.type_name(*type_id)
                 ),
                 Some("class instances can only be defined for user types (`type`, `newtype`, `union`)".to_owned()),
@@ -938,7 +952,7 @@ impl TypeError {
                 format!(
                     "missing required method `{}` for class `{}`",
                     method,
-                    class.name()
+                    p.class_name(*class)
                 ),
                 Some(format!("required methods: {}", required_hint)),
             ),
@@ -952,7 +966,7 @@ impl TypeError {
                 format!(
                     "method `{}` of class `{}` has wrong arity: expected {} parameter(s), got {}",
                     method,
-                    class.name(),
+                    p.class_name(*class),
                     expected,
                     got
                 ),
@@ -963,7 +977,7 @@ impl TypeError {
                 (
                     format!(
                         "missing required associated type `{name}` for class `{}`",
-                        class.name()
+                        p.class_name(*class)
                     ),
                     Some(format!("add `newtype {name} = <type>` to the instance")),
                 )
@@ -971,7 +985,7 @@ impl TypeError {
             Self::UnknownAssocTypeForClass { class, assoc, .. } => (
                 format!(
                     "class `{}` has no associated type `{assoc}`",
-                    class.name()
+                    p.class_name(*class)
                 ),
                 None,
             ),
@@ -1008,7 +1022,7 @@ impl TypeError {
                 (
                     format!(
                         "class `{}` has no associated type `{assoc}`",
-                        class.name()
+                        p.class_name(*class)
                     ),
                     None,
                 )
@@ -1021,7 +1035,7 @@ impl TypeError {
             } => (
                 format!(
                     "no `{}` instance for `{}` in scope",
-                    class.name(),
+                    p.class_name(*class),
                     p.type_name(*type_id)
                 ),
                 Some(format!(
@@ -1036,18 +1050,18 @@ impl TypeError {
             } => (
                 format!(
                     "cannot implement `{}` for `{}`; missing required superclass instance `{}`",
-                    class.name(),
+                    p.class_name(*class),
                     p.type_name(*type_id),
-                    superclass.name()
+                    p.class_name(*superclass)
                 ),
                 None,
             ),
             Self::ClassRejectsArg { class, .. } => (
-                format!("class `{class}` does not accept type arguments"),
+                format!("class `{}` does not accept type arguments", p.class_name(*class)),
                 None,
             ),
             Self::ClassRequiresArg { class, .. } => (
-                format!("class `{class}` requires type arguments"),
+                format!("class `{}` requires type arguments", p.class_name(*class)),
                 None,
             ),
             Self::TopLevelExpr(_) => (
@@ -1075,11 +1089,11 @@ impl TypeError {
             Self::MissingTypeParamConstraint { param, class, .. } => (
                 format!(
                     "type parameter `{param}` requires `{}` constraint",
-                    class.tag().name()
+                    p.class_name(class.tag())
                 ),
                 Some(format!(
                     "add `{param}: {}` to the type parameter list",
-                    class.tag().name()
+                    p.class_name(class.tag())
                 )),
             ),
         };

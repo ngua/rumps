@@ -57,35 +57,33 @@ impl MethodSpec {
 
 /// Full definition of a type class, keyed by `ClassId`.
 pub(crate) struct ClassDef {
-    pub(crate) name: &'static str,
+    pub(crate) name: StringId,
     pub(crate) shape: ClassShape,
-    pub(crate) assoc_types: &'static [&'static str],
-    pub(crate) methods: Vec<(&'static str, MethodSpec)>,
-    pub(crate) supers: &'static [ClassId],
+    pub(crate) assoc_types: SmallVec<[StringId; 2]>,
+    pub(crate) methods: Vec<(StringId, MethodSpec)>,
+    pub(crate) supers: SmallVec<[ClassId; 2]>,
 }
 
 impl ClassDef {
     /// Look up a method by name.
     pub(crate) fn method(
         &self,
-        name: &str,
+        name: StringId,
         span: Span,
     ) -> Result<&MethodSpec, TypeError> {
         self.methods
             .iter()
             .find(|(n, _)| *n == name)
             .map(|(_, spec)| spec)
-            .ok_or_else(|| TypeError::UnknownMethod {
-                class: self.name.to_string(),
-                method: name.to_string(),
+            .ok_or(TypeError::UnknownMethodId {
+                class: self.name,
+                method: name,
                 span,
             })
     }
 
     /// All method names (all methods are required).
-    pub(crate) fn method_names(
-        &self,
-    ) -> impl Iterator<Item = &'static str> + '_ {
+    pub(crate) fn method_names(&self) -> impl Iterator<Item = StringId> + '_ {
         self.methods.iter().map(|(n, _)| *n)
     }
 }
@@ -93,7 +91,7 @@ impl ClassDef {
 /// Registry of all known type classes, indexed by `ClassId`.
 pub(crate) struct ClassRegistry {
     defs: Vec<ClassDef>,
-    by_name: HashMap<&'static str, ClassId>,
+    by_name: HashMap<StringId, ClassId>,
 }
 
 impl ClassRegistry {
@@ -136,51 +134,54 @@ impl ClassRegistry {
             idx_name,
         ));
 
+        // Shorthand for interning
+        let s = intern;
+
         let defs = vec![
             // 0: Numeric
             ClassDef {
-                name: "Numeric",
+                name: s("Numeric"),
                 shape: ClassShape::Simple,
-                assoc_types: &[],
-                supers: &[],
+                assoc_types: smallvec![],
+                supers: smallvec![],
                 methods: vec![
                     (
-                        "add",
+                        s("add"),
                         MethodSpec::Standard(simple1(
                             binary_v0,
                             ClassId::NUMERIC,
                         )),
                     ),
                     (
-                        "sub",
+                        s("sub"),
                         MethodSpec::Standard(simple1(
                             binary_v0,
                             ClassId::NUMERIC,
                         )),
                     ),
                     (
-                        "mul",
+                        s("mul"),
                         MethodSpec::Standard(simple1(
                             binary_v0,
                             ClassId::NUMERIC,
                         )),
                     ),
                     (
-                        "floor-div",
+                        s("floor-div"),
                         MethodSpec::Standard(simple1(
                             binary_v0,
                             ClassId::NUMERIC,
                         )),
                     ),
                     (
-                        "mod",
+                        s("mod"),
                         MethodSpec::Standard(simple1(
                             binary_v0,
                             ClassId::NUMERIC,
                         )),
                     ),
                     (
-                        "pow",
+                        s("pow"),
                         MethodSpec::Standard(simple1(
                             binary_v0,
                             ClassId::NUMERIC,
@@ -190,20 +191,20 @@ impl ClassRegistry {
             },
             // 1: Iterable
             ClassDef {
-                name: "Iterable",
+                name: s("Iterable"),
                 shape: ClassShape::Hkt { kind: 1 },
-                assoc_types: &[],
-                supers: &[],
+                assoc_types: smallvec![],
+                supers: smallvec![],
                 methods: vec![
                     (
-                        "length",
+                        s("length"),
                         MethodSpec::Standard(hkt2(
                             arena.func(smallvec![tv1_of_v0], TyArena::INT),
                             ClassId::ITERABLE,
                         )),
                     ),
                     (
-                        "collect",
+                        s("collect"),
                         MethodSpec::Standard(hkt2(
                             arena.func(smallvec![tv1_of_v0], array_v0),
                             ClassId::ITERABLE,
@@ -213,13 +214,13 @@ impl ClassRegistry {
             },
             // 2: Monoid
             ClassDef {
-                name: "Monoid",
+                name: s("Monoid"),
                 shape: ClassShape::Simple,
-                assoc_types: &[],
-                supers: &[],
+                assoc_types: smallvec![],
+                supers: smallvec![],
                 methods: vec![
                     (
-                        "identity",
+                        s("identity"),
                         MethodSpec::Tracked {
                             scheme: simple1(
                                 arena.func(smallvec![], v0),
@@ -229,7 +230,7 @@ impl ClassRegistry {
                         },
                     ),
                     (
-                        "concat",
+                        s("concat"),
                         MethodSpec::Standard(simple1(
                             binary_v0,
                             ClassId::MONOID,
@@ -239,34 +240,34 @@ impl ClassRegistry {
             },
             // 3: BitLike
             ClassDef {
-                name: "BitLike",
+                name: s("BitLike"),
                 shape: ClassShape::Simple,
-                assoc_types: &[],
-                supers: &[],
+                assoc_types: smallvec![],
+                supers: smallvec![],
                 methods: vec![
                     (
-                        "bit-and",
+                        s("bit-and"),
                         MethodSpec::Standard(simple1(
                             binary_v0,
                             ClassId::BIT_LIKE,
                         )),
                     ),
                     (
-                        "bit-or",
+                        s("bit-or"),
                         MethodSpec::Standard(simple1(
                             binary_v0,
                             ClassId::BIT_LIKE,
                         )),
                     ),
                     (
-                        "shl",
+                        s("shl"),
                         MethodSpec::Standard(simple1(
                             binary_v0,
                             ClassId::BIT_LIKE,
                         )),
                     ),
                     (
-                        "shr",
+                        s("shr"),
                         MethodSpec::Standard(simple1(
                             binary_v0,
                             ClassId::BIT_LIKE,
@@ -276,23 +277,23 @@ impl ClassRegistry {
             },
             // 4: Negatable
             ClassDef {
-                name: "Negatable",
+                name: s("Negatable"),
                 shape: ClassShape::Simple,
-                assoc_types: &[],
-                supers: &[],
+                assoc_types: smallvec![],
+                supers: smallvec![],
                 methods: vec![(
-                    "neg",
+                    s("neg"),
                     MethodSpec::Standard(simple1(unary_v0, ClassId::NEGATABLE)),
                 )],
             },
             // 5: Fallible
             ClassDef {
-                name: "Fallible",
+                name: s("Fallible"),
                 shape: ClassShape::Hkt { kind: 1 },
-                assoc_types: &[],
-                supers: &[ClassId::WRAPPABLE],
+                assoc_types: smallvec![],
+                supers: smallvec![ClassId::WRAPPABLE],
                 methods: vec![(
-                    "unwrap",
+                    s("unwrap"),
                     MethodSpec::Standard(hkt2(
                         arena.func(smallvec![tv1_of_v0], v0),
                         ClassId::FALLIBLE,
@@ -301,12 +302,12 @@ impl ClassRegistry {
             },
             // 6: Into
             ClassDef {
-                name: "Into",
+                name: s("Into"),
                 shape: ClassShape::Parameterized { params: 1 },
-                assoc_types: &[],
-                supers: &[],
+                assoc_types: smallvec![],
+                supers: smallvec![],
                 methods: vec![(
-                    "into",
+                    s("into"),
                     MethodSpec::Tracked {
                         scheme: Scheme {
                             vars: smallvec![TyVar::new(0), TyVar::new(1)],
@@ -322,12 +323,12 @@ impl ClassRegistry {
             },
             // 7: TryInto
             ClassDef {
-                name: "TryInto",
+                name: s("TryInto"),
                 shape: ClassShape::Parameterized { params: 1 },
-                assoc_types: &[],
-                supers: &[],
+                assoc_types: smallvec![],
+                supers: smallvec![],
                 methods: vec![(
-                    "try-into",
+                    s("try-into"),
                     MethodSpec::Tracked {
                         scheme: Scheme {
                             vars: smallvec![TyVar::new(0), TyVar::new(1)],
@@ -346,13 +347,13 @@ impl ClassRegistry {
             },
             // 8: Indexable
             ClassDef {
-                name: "Indexable",
+                name: s("Indexable"),
                 shape: ClassShape::Parameterized { params: 1 },
-                assoc_types: &["Index"],
-                supers: &[],
+                assoc_types: smallvec![idx_name],
+                supers: smallvec![],
                 methods: vec![
                     (
-                        "index",
+                        s("index"),
                         MethodSpec::Standard(Scheme {
                             vars: smallvec![TyVar::new(0), TyVar::new(1)],
                             ty: arena.func(smallvec![v0, assoc_idx], v1),
@@ -366,7 +367,7 @@ impl ClassRegistry {
                         }),
                     ),
                     (
-                        "get",
+                        s("get"),
                         MethodSpec::Standard(Scheme {
                             vars: smallvec![TyVar::new(0), TyVar::new(1)],
                             ty: {
@@ -386,12 +387,12 @@ impl ClassRegistry {
             },
             // 9: Ord
             ClassDef {
-                name: "Ord",
+                name: s("Ord"),
                 shape: ClassShape::Simple,
-                assoc_types: &[],
-                supers: &[],
+                assoc_types: smallvec![],
+                supers: smallvec![],
                 methods: vec![(
-                    "compare",
+                    s("compare"),
                     MethodSpec::Standard(simple1(
                         arena.func(smallvec![v0, v0], TyArena::ORDERING),
                         ClassId::ORD,
@@ -400,12 +401,12 @@ impl ClassRegistry {
             },
             // 10: Mappable
             ClassDef {
-                name: "Mappable",
+                name: s("Mappable"),
                 shape: ClassShape::Hkt { kind: 1 },
-                assoc_types: &[],
-                supers: &[],
+                assoc_types: smallvec![],
+                supers: smallvec![],
                 methods: vec![(
-                    "map",
+                    s("map"),
                     MethodSpec::Standard({
                         let cb = arena.func(smallvec![v0], v1);
                         hkt3(
@@ -417,12 +418,12 @@ impl ClassRegistry {
             },
             // 11: Foldable
             ClassDef {
-                name: "Foldable",
+                name: s("Foldable"),
                 shape: ClassShape::Hkt { kind: 1 },
-                assoc_types: &[],
-                supers: &[],
+                assoc_types: smallvec![],
+                supers: smallvec![],
                 methods: vec![(
-                    "reduce",
+                    s("reduce"),
                     MethodSpec::Standard({
                         let cb = arena.func(smallvec![v1, v0], v1);
                         hkt3(
@@ -434,12 +435,12 @@ impl ClassRegistry {
             },
             // 12: Filterable
             ClassDef {
-                name: "Filterable",
+                name: s("Filterable"),
                 shape: ClassShape::Hkt { kind: 1 },
-                assoc_types: &[],
-                supers: &[],
+                assoc_types: smallvec![],
+                supers: smallvec![],
                 methods: vec![(
-                    "filter",
+                    s("filter"),
                     MethodSpec::Standard({
                         let pred = arena.func(smallvec![v0], TyArena::BOOL);
                         hkt2(
@@ -451,12 +452,12 @@ impl ClassRegistry {
             },
             // 13: Display
             ClassDef {
-                name: "Display",
+                name: s("Display"),
                 shape: ClassShape::Simple,
-                assoc_types: &[],
-                supers: &[],
+                assoc_types: smallvec![],
+                supers: smallvec![],
                 methods: vec![(
-                    "display",
+                    s("display"),
                     MethodSpec::Standard(simple1(
                         arena.func(smallvec![v0], TyArena::STRING),
                         ClassId::DISPLAY,
@@ -465,12 +466,12 @@ impl ClassRegistry {
             },
             // 14: Eq
             ClassDef {
-                name: "Eq",
+                name: s("Eq"),
                 shape: ClassShape::Simple,
-                assoc_types: &[],
-                supers: &[],
+                assoc_types: smallvec![],
+                supers: smallvec![],
                 methods: vec![(
-                    "eq",
+                    s("eq"),
                     MethodSpec::Standard(simple1(
                         arena.func(smallvec![v0, v0], TyArena::BOOL),
                         ClassId::EQ,
@@ -479,12 +480,12 @@ impl ClassRegistry {
             },
             // 15: Wrappable
             ClassDef {
-                name: "Wrappable",
+                name: s("Wrappable"),
                 shape: ClassShape::Hkt { kind: 1 },
-                assoc_types: &[],
-                supers: &[],
+                assoc_types: smallvec![],
+                supers: smallvec![],
                 methods: vec![(
-                    "wrap",
+                    s("wrap"),
                     MethodSpec::Tracked {
                         scheme: hkt2(
                             arena.func(smallvec![v0], tv1_of_v0),
@@ -496,12 +497,12 @@ impl ClassRegistry {
             },
             // 16: Chainable
             ClassDef {
-                name: "Chainable",
+                name: s("Chainable"),
                 shape: ClassShape::Hkt { kind: 1 },
-                assoc_types: &[],
-                supers: &[ClassId::WRAPPABLE],
+                assoc_types: smallvec![],
+                supers: smallvec![ClassId::WRAPPABLE],
                 methods: vec![(
-                    "chain",
+                    s("chain"),
                     MethodSpec::Standard({
                         let cb = arena.func(smallvec![v0], tv2_of_v1);
                         hkt3(
@@ -526,11 +527,34 @@ impl ClassRegistry {
         &self.defs[id.idx()]
     }
 
-    pub(crate) fn lookup_by_name(&self, s: &str) -> Option<ClassId> {
-        self.by_name.get(s).copied()
+    pub(crate) fn get_mut(&mut self, id: ClassId) -> &mut ClassDef {
+        &mut self.defs[id.idx()]
     }
 
-    pub(crate) fn name(&self, id: ClassId) -> &str {
+    pub(crate) fn lookup_by_name(&self, s: StringId) -> Option<ClassId> {
+        self.by_name.get(&s).copied()
+    }
+
+    /// Register a new user-defined class. Returns `Err` if the name
+    /// conflicts with an existing class.
+    pub(crate) fn register(
+        &mut self,
+        def: ClassDef,
+    ) -> std::result::Result<ClassId, DuplicateClassError> {
+        if let Some(&existing) = self.by_name.get(&def.name) {
+            Err(DuplicateClassError {
+                name: def.name,
+                existing,
+            })
+        } else {
+            let id = ClassId::new(self.defs.len() as u32);
+            self.by_name.insert(def.name, id);
+            self.defs.push(def);
+            Ok(id)
+        }
+    }
+
+    pub(crate) fn name(&self, id: ClassId) -> StringId {
         self.get(id).name
     }
 
@@ -539,7 +563,7 @@ impl ClassRegistry {
     }
 
     pub(crate) fn supers(&self, id: ClassId) -> &[ClassId] {
-        self.get(id).supers
+        &self.get(id).supers
     }
 
     /// All transitive superclasses in dependency order (parents before children).
@@ -559,6 +583,12 @@ impl ClassRegistry {
             acc.push(id);
         }
     }
+}
+
+/// Error when registering a class whose name already exists.
+pub(crate) struct DuplicateClassError {
+    pub(crate) name: StringId,
+    pub(crate) existing: ClassId,
 }
 
 /// Lightweight, cloneable class constraint reference, generic over the type
@@ -644,22 +674,14 @@ impl<T> TypeClass<T> {
         match shape {
             ClassShape::Simple => {
                 if arg.is_some() {
-                    Err(TypeError::ClassRejectsArg {
-                        class: tag.name(),
-                        span,
-                    })
+                    Err(TypeError::ClassRejectsArg { class: tag, span })
                 } else {
                     Ok(Self::Simple(tag))
                 }
             }
             ClassShape::Hkt { .. } => Ok(Self::Hkt(tag, arg)),
             ClassShape::Parameterized { .. } => arg.map_or_else(
-                || {
-                    Err(TypeError::ClassRequiresArg {
-                        class: tag.name(),
-                        span,
-                    })
-                },
+                || Err(TypeError::ClassRequiresArg { class: tag, span }),
                 |a| Ok(Self::Parameterized(tag, a)),
             ),
         }

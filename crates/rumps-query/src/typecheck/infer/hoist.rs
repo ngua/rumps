@@ -531,8 +531,9 @@ impl InferCtx<'_> {
         } = input;
 
         // Parse class name; silently skip if invalid (error in Pass 2)
-        let cn = self.env.resolve_str(class_name).to_owned();
-        if let Some(class) = ClassId::from_name(&cn) {
+        if let Some(class) =
+            self.env.class_registry().lookup_by_name(class_name)
+        {
             // Build type parameter substitution from WHERE constraints
             let mut type_param_subst: IndexMap<_, _> = if type_params.is_empty()
             {
@@ -670,13 +671,17 @@ impl InferCtx<'_> {
                             }
                             _ => self.extract_type_name_from_ast(for_type),
                         };
+                    let class_name_str = self
+                        .env
+                        .resolve_str(self.env.class_registry().name(class))
+                        .to_owned();
                     let method_map: HashMap<_, _> = methods
                         .iter()
                         .map(|m| {
                             let mn = self.env.resolve_str(m.name);
                             let fn_name =
                                 crate::interpreter::instance::instance_fn_name(
-                                    class.name(),
+                                    &class_name_str,
                                     &type_name_for_fn,
                                     mn,
                                 );
@@ -735,7 +740,7 @@ impl InferCtx<'_> {
                 msg: format!(
                     "class `{}` is higher-kinded; element types are \
                      inferred from the type's remaining parameters",
-                    class.name(),
+                    self.env.resolve_str(self.env.class_registry().name(class)),
                 ),
                 span,
             });
@@ -812,7 +817,7 @@ impl InferCtx<'_> {
                      requires exactly {} unfilled, but {} are unfilled",
                     type_name_s,
                     total,
-                    class.name(),
+                    self.env.resolve_str(self.env.class_registry().name(class)),
                     k,
                     remaining,
                 ),

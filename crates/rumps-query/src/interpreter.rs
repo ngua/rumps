@@ -112,6 +112,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
+use env::Environment;
 use ordered_float::OrderedFloat;
 use rumps_storage::{Database, Transaction};
 use smallvec::SmallVec;
@@ -122,15 +123,14 @@ use crate::ast::{
     OutputFormat, OutputTarget, Stmt, StmtId, TxnId, TypeDefAst, TypeParam,
     TypePattern, UnOp, WriteExpr,
 };
-use crate::env::Environment;
 use crate::intern::{QualifiedName, StringId, StringInterner};
 use crate::io::IoContext;
 use crate::resolve::ResolveCtx;
 use crate::value::{
-    CapturedEnv, FunctionDef, TypeExprArena, TypeExprId, TypeId, TypeRegistry,
-    Value, ValueArena, ValueId,
+    CapturedEnv, FunctionDef, TypeDef, TypeExprArena, TypeExprId, TypeId,
+    TypeRegistry, Value, ValueArena, ValueId,
 };
-use crate::{ClassId, Result, Span};
+use crate::{env, typecheck, ClassId, Error, Result, Span};
 
 /// The RUMPS interpreter.
 ///
@@ -183,30 +183,30 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
 
     /// Type arena from typechecking; owns all interned `Ty` values referenced
     /// by `TyId` handles in the maps below.
-    ty_arena: crate::typecheck::TyArena,
+    ty_arena: typecheck::TyArena,
 
     /// Mapping from mempty expression IDs to their resolved types.
     ///
     /// Populated during typechecking; used to produce the correct empty value.
-    mempty_types: HashMap<ExprId, crate::typecheck::TyId>,
+    mempty_types: HashMap<ExprId, typecheck::TyId>,
 
     /// Mapping from numeric literal expression IDs to their resolved types.
     ///
     /// Populated during typechecking; used to convert polymorphic numeric
     /// literals to the correct runtime type (`Int`, `Word`, or `Float`).
-    numeric_types: HashMap<ExprId, crate::typecheck::TyId>,
+    numeric_types: HashMap<ExprId, typecheck::TyId>,
 
     /// Mapping from conversion expression IDs to their target types.
     ///
     /// Populated during typechecking; used to dispatch `Into::into` and
     /// `TryInto::try_into` methods with the correct target type.
-    convert_targets: HashMap<ExprId, crate::typecheck::TyId>,
+    convert_targets: HashMap<ExprId, typecheck::TyId>,
 
     /// Mapping from wrap expression IDs to their target `Wrappable` types.
     ///
     /// Populated during typechecking; used by the `?` prefix operator to
     /// produce `Option.Some` or `Result.Ok` depending on context.
-    wrap_types: HashMap<ExprId, crate::typecheck::TyId>,
+    wrap_types: HashMap<ExprId, typecheck::TyId>,
 
     /// Registry of class methods for dispatch.
     class_methods: class::ClassMethods,
@@ -229,10 +229,10 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
     ///
     /// Populated during typechecking; used at runtime to look up the correct
     /// user instance for dispatch.
-    instance_calls: HashMap<ExprId, crate::value::TypeId>,
+    instance_calls: HashMap<ExprId, TypeId>,
 
     /// Class registry; carries class definitions indexed by `ClassId`.
-    class_registry: crate::typecheck::ClassRegistry,
+    class_registry: typecheck::ClassRegistry,
 
     /// Resolved class instance information from the resolution pass.
     ///
@@ -265,7 +265,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
 
         // Pre-intern builtin module names so all interner clones (Environment,
         // TypeEnv) share the same `StringId`s.
-        crate::env::BUILTIN_MODULE_NAMES.iter().for_each(|n| {
+        env::BUILTIN_MODULE_NAMES.iter().for_each(|n| {
             arena.strings.intern(n);
         });
 
@@ -276,13 +276,27 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         // convert `Status.Pending` to `Expr::Variant` for user types
         registry.register_from_ast(ast, stmts, &mut arena, &mut type_exprs);
 
-        let resolved_instances =
-            ResolveCtx::new(ast, &mut arena, &registry).resolve();
+        // Build a class registry for the resolve pass (name -> `ClassId` mapping)
+        let resolve_class_registry = {
+            let mut tmp_arena = typecheck::TyArena::new();
+            typecheck::ClassRegistry::builtins(
+                &mut |s| arena.strings.intern(s),
+                &mut tmp_arena,
+            )
+        };
+
+        let resolved_instances = ResolveCtx::new(
+            ast,
+            &mut arena,
+            &registry,
+            &resolve_class_registry,
+        )
+        .resolve();
 
         let env = Environment::with_interner(arena.interner());
 
         // Run type checking after resolution
-        let tc = crate::typecheck::InferCtx::new(
+        let tc = typecheck::InferCtx::new(
             ast,
             &registry,
             &type_exprs,
@@ -340,7 +354,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
 
         // Auto-import the `Prelude` module so its members are in scope
         {
-            let pid = self.arena.strings.intern(crate::env::PRELUDE_MODULE);
+            let pid = self.arena.strings.intern(env::PRELUDE_MODULE);
             self.import(&Import::wildcard(pid), Span::default())?;
         }
 
@@ -461,8 +475,8 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             cm.register_all(&mut arena.strings);
             cm
         };
-        let mut ty_arena = crate::typecheck::TyArena::new();
-        let class_registry = crate::typecheck::ClassRegistry::builtins(
+        let mut ty_arena = typecheck::TyArena::new();
+        let class_registry = typecheck::ClassRegistry::builtins(
             &mut |s| arena.strings.intern(s),
             &mut ty_arena,
         );
@@ -604,7 +618,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 } else {
                     self.stringify(&val)
                 };
-                Err(crate::Error::raise(span, msg))
+                Err(Error::raise(span, msg))
             }
             Expr::Forever {
                 seed,
@@ -725,7 +739,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         body: &[StmtId],
         span: Span,
     ) -> Result<()> {
-        let mut module = crate::env::UserModule::default();
+        let mut module = env::UserModule::default();
         let mod_path = self.arena.strings.resolve(name);
         self.env.scopes.push();
         let res = self
@@ -745,7 +759,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     async fn populate_module(
         &mut self,
         ids: &[StmtId],
-        module: &mut crate::env::UserModule,
+        module: &mut env::UserModule,
         mod_path: &str,
         span: Span,
     ) -> Result<()> {
@@ -820,7 +834,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                             name: sub_name,
                             body: sub_body,
                         } => {
-                            let mut sub = crate::env::UserModule::default();
+                            let mut sub = env::UserModule::default();
                             let sub_path = format!(
                                 "{}.{}",
                                 mod_path,
@@ -1165,7 +1179,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
             // Register the type
             self.registry.register(
-                crate::value::TypeDef::Sum {
+                TypeDef::Sum {
                     name: name_id,
                     type_params: type_param_ids,
                     variants: variant_defs,
@@ -1206,7 +1220,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
             // Register the alias
             self.registry.register(
-                crate::value::TypeDef::Alias {
+                TypeDef::Alias {
                     name: name_id,
                     type_params: type_param_ids,
                     target,
@@ -1256,7 +1270,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
             // Register the union type
             self.registry.register(
-                crate::value::TypeDef::Union {
+                TypeDef::Union {
                     name: name_id,
                     type_params: type_param_ids,
                     members: member_exprs?,
@@ -1333,13 +1347,13 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .map(|&tid| self.ty_arena.get(tid));
                 match (n, ty) {
                     // Integer literals are polymorphic over Int/Word/Float
-                    (NumericLit::Int(v), Some(crate::typecheck::Ty::Int)) => {
+                    (NumericLit::Int(v), Some(typecheck::Ty::Int)) => {
                         Value::Int(*v)
                     }
-                    (NumericLit::Int(v), Some(crate::typecheck::Ty::Word)) => {
+                    (NumericLit::Int(v), Some(typecheck::Ty::Word)) => {
                         Value::Word(*v as usize)
                     }
-                    (NumericLit::Int(v), Some(crate::typecheck::Ty::Float)) => {
+                    (NumericLit::Int(v), Some(typecheck::Ty::Float)) => {
                         Value::Float(OrderedFloat(*v as f64))
                     }
                     // Float literals are NOT polymorphic; always Float
@@ -1997,11 +2011,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .base_type(expected_ty)
                 .and_then(|type_id| {
                     self.registry.get_def(type_id).and_then(|def| match def {
-                        crate::value::TypeDef::Union { .. } => {
+                        TypeDef::Union { .. } => {
                             let inner_id = self.arena.add(val.clone(), span);
                             Some(Value::Union(expected_ty, inner_id))
                         }
-                        crate::value::TypeDef::Alias { .. } => {
+                        TypeDef::Alias { .. } => {
                             let inner_id = self.arena.add(val.clone(), span);
                             Some(Value::Newtype(expected_ty, inner_id))
                         }

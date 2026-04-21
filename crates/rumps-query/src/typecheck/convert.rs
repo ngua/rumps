@@ -523,21 +523,22 @@ impl ConvertCtx<'_> {
                                 );
                                 TyArena::ERROR
                             }),
-                        Some(class_name) => {
-                            let cls_s = self.env.resolve_string(*class_name);
-                            ClassId::from_name(&cls_s)
-                                .map(|kind| {
-                                    let tv = self.uf.fresh();
-                                    self.ty_arena
-                                        .alloc(Ty::AssocType(tv, kind, *name))
-                                })
-                                .unwrap_or_else(|| {
-                                    self.errors.push(TypeError::UnknownClass(
-                                        cls_s, span,
-                                    ));
-                                    TyArena::ERROR
-                                })
-                        }
+                        Some(class_name) => self
+                            .env
+                            .class_registry()
+                            .lookup_by_name(*class_name)
+                            .map(|kind| {
+                                let tv = self.uf.fresh();
+                                self.ty_arena
+                                    .alloc(Ty::AssocType(tv, kind, *name))
+                            })
+                            .unwrap_or_else(|| {
+                                let cls_s =
+                                    self.env.resolve_string(*class_name);
+                                self.errors
+                                    .push(TypeError::UnknownClass(cls_s, span));
+                                TyArena::ERROR
+                            }),
                     }
                 }
             },

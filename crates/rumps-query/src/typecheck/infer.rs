@@ -1355,6 +1355,7 @@ impl<'a> InferCtx<'a> {
                 val_arena,
                 &self.ty_arena,
                 &self.env.strings,
+                self.env.class_registry(),
                 &self.numeric_vars,
             );
             let formatted = errs.map(|e| e.format_with(&printer));

@@ -354,18 +354,12 @@ impl InferCtx<'_> {
 
             // Class method call: `Class:method(args)`
             Expr::ClassMethod(class, method, args) => {
-                let c = self.env.get_str(*class).unwrap_or_default().to_owned();
-                let m =
-                    self.env.get_str(*method).unwrap_or_default().to_owned();
-                self.class_method(id, &c, &m, args, span)
+                self.class_method(id, *class, *method, args, span)
             }
 
             // Class method reference: `Class:method` or `Class[T]:method`
             Expr::ClassMethodRef(class, type_args, method) => {
-                let c = self.env.get_str(*class).unwrap_or_default().to_owned();
-                let m =
-                    self.env.get_str(*method).unwrap_or_default().to_owned();
-                self.class_method_ref(id, &c, type_args, &m, span)
+                self.class_method_ref(id, *class, type_args, *method, span)
             }
         }
     }
@@ -377,17 +371,18 @@ impl InferCtx<'_> {
     fn class_method(
         &mut self,
         id: ExprId,
-        class: &str,
-        method: &str,
+        class: StringId,
+        method: StringId,
         args: &SmallVec<[ExprId; 4]>,
         span: Span,
     ) -> TyId {
-        match ClassId::from_name(class) {
+        match self.env.class_registry().lookup_by_name(class) {
             Some(k) => {
                 self.call_class_method_generic(id, k, method, args, span)
             }
             None => {
-                self.error(TypeError::UnknownClass(class.to_string(), span));
+                let cn = self.env.resolve_str(class).to_owned();
+                self.error(TypeError::UnknownClass(cn, span));
                 TyArena::ERROR
             }
         }
@@ -400,14 +395,14 @@ impl InferCtx<'_> {
     fn class_method_ref(
         &mut self,
         id: ExprId,
-        class: &str,
+        class: StringId,
         type_args: &SmallVec<[AstTypeExprId; 2]>,
-        method: &str,
+        method: StringId,
         span: Span,
     ) -> TyId {
         let empty_subst = IndexMap::new();
 
-        match ClassId::from_name(class) {
+        match self.env.class_registry().lookup_by_name(class) {
             Some(k) => {
                 match self.env.class_def(k).method(method, span).cloned() {
                     Err(e) => {
@@ -425,9 +420,11 @@ impl InferCtx<'_> {
                             }
                         );
                         if needs_type_arg && type_args.is_empty() {
+                            let cn = self.env.resolve_str(class).to_owned();
+                            let mn = self.env.resolve_str(method).to_owned();
                             self.error(TypeError::ConvertMethodNeedsType {
-                                class: class.to_string(),
-                                method: method.to_string(),
+                                class: cn,
+                                method: mn,
                                 span,
                             });
                             TyArena::ERROR
@@ -525,7 +522,8 @@ impl InferCtx<'_> {
                                     let input_ty =
                                         self.ty_arena.alloc(Ty::Var(input_var));
 
-                                    match (k, method) {
+                                    let ms = self.env.resolve_str(method);
+                                    match (k, ms) {
                                         (ClassId::WRAPPABLE, "wrap") => {
                                             self.constrain(Constraint::Class {
                                                 ty: target_ty,
@@ -626,7 +624,8 @@ impl InferCtx<'_> {
                 }
             }
             None => {
-                self.error(TypeError::UnknownClass(class.to_string(), span));
+                let cn = self.env.resolve_str(class).to_owned();
+                self.error(TypeError::UnknownClass(cn, span));
                 TyArena::ERROR
             }
         }
@@ -695,7 +694,7 @@ impl InferCtx<'_> {
         &mut self,
         id: ExprId,
         kind: ClassId,
-        method: &str,
+        method: StringId,
         args: &SmallVec<[ExprId; 4]>,
         span: Span,
     ) -> TyId {
