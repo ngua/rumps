@@ -7,7 +7,7 @@ use smallvec::SmallVec;
 use super::{ParseErr, Parser};
 use crate::intern::{StringId, StringInterner};
 use crate::parser::cst;
-use crate::{ClassId, Span, Token};
+use crate::{Span, Token};
 
 impl Parser {
     /// Parse a type expression.
@@ -363,28 +363,6 @@ impl Parser {
         interner: &mut StringInterner,
     ) -> impl chumsky::Parser<Token, cst::CstClassConstraint, Error = ParseErr> + Clone
     {
-        // Intern class names locally for `StringId` comparison at parse time.
-        let class_tags = [
-            ClassId::NUMERIC,
-            ClassId::ITERABLE,
-            ClassId::MONOID,
-            ClassId::BIT_LIKE,
-            ClassId::NEGATABLE,
-            ClassId::FALLIBLE,
-            ClassId::WRAPPABLE,
-            ClassId::CHAINABLE,
-            ClassId::INTO,
-            ClassId::TRY_INTO,
-            ClassId::INDEXABLE,
-            ClassId::ORD,
-            ClassId::MAPPABLE,
-            ClassId::FOLDABLE,
-            ClassId::FILTERABLE,
-            ClassId::DISPLAY,
-            ClassId::EQ,
-        ]
-        .map(|t| (interner.intern(t.name()), t));
-
         let type_args = just(Token::LBracket)
             .ignore_then(
                 Self::type_expr_atom(interner)
@@ -395,25 +373,10 @@ impl Parser {
 
         select! { Token::Ident(s) => s }
             .then(type_args.or_not())
-            .try_map(move |(name, args), span| {
-                let tag = class_tags
-                    .iter()
-                    .find(|(s, _)| *s == name)
-                    .map(|(_, t)| *t)
-                    .ok_or_else(|| chumsky::error::Simple::custom(
-                        span,
-                        "unknown class; valid classes are: \
-                         Numeric, Negatable, Iterable, Monoid, BitLike, \
-                         Fallible, Wrappable, Chainable, Into[T], TryInto[T], \
-                         Indexable[E], Ord, Eq, Mappable, Foldable, Filterable, \
-                         Display",
-                    ))?;
-
-                Ok(cst::CstClassConstraint {
-                    tag,
-                    args: args.into_iter().flatten().collect(),
-                    span,
-                })
+            .map_with_span(|(name, args), span| cst::CstClassConstraint {
+                tag: name,
+                args: args.into_iter().flatten().collect(),
+                span,
             })
     }
 

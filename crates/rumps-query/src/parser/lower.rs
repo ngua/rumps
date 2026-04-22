@@ -114,13 +114,16 @@ impl<'a> LowerCtx<'a> {
 
     /// Resolve a CST class constraint to a `TypeClass<AstTypeExprId>`.
     ///
-    /// Looks up the class shape from the registry and validates arity.
+    /// Looks up the class by name from the registry and validates arity.
     fn class(
         &mut self,
         c: cst::CstClassConstraint,
     ) -> Result<TypeClass<AstTypeExprId>> {
-        let shape = self.registry.shape(c.tag);
-        let name = c.tag.name();
+        let name = self.interner.get(c.tag).unwrap_or_default().to_owned();
+        let id = self.registry.lookup_by_name(c.tag).ok_or_else(|| {
+            Error::static_err(c.span, format!("unknown class `{name}`"))
+        })?;
+        let shape = self.registry.shape(id);
         match shape {
             ClassShape::Simple => {
                 if !c.args.is_empty() {
@@ -129,7 +132,7 @@ impl<'a> LowerCtx<'a> {
                         format!("`{name}` does not accept type arguments"),
                     ))?
                 }
-                Ok(TypeClass::Simple(c.tag))
+                Ok(TypeClass::Simple(id))
             }
             ClassShape::Hkt { .. } => {
                 if !c.args.is_empty() {
@@ -142,7 +145,7 @@ impl<'a> LowerCtx<'a> {
                         ),
                     ))?
                 }
-                Ok(TypeClass::Hkt(c.tag, None))
+                Ok(TypeClass::Hkt(id, None))
             }
             ClassShape::Parameterized { params } => {
                 let mut args = c.args.into_iter();
@@ -164,7 +167,7 @@ impl<'a> LowerCtx<'a> {
                     ))?
                 }
                 let ty_id = self.type_expr(ty)?;
-                Ok(TypeClass::Parameterized(c.tag, ty_id))
+                Ok(TypeClass::Parameterized(id, ty_id))
             }
         }
     }

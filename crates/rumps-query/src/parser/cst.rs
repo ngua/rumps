@@ -47,16 +47,17 @@ use smallvec::SmallVec;
 
 use crate::ast::{BinOp, Intrinsic, JsonAccessKind, Literal, UnOp};
 use crate::intern::StringId;
-use crate::{ClassId, Span};
+use crate::Span;
 
 /// A shape-agnostic class constraint as parsed from source.
 ///
-/// Stores the class id and whatever type arguments the user wrote, without
-/// classifying them as `Simple`/`Hkt`/`Parameterized`. Shape resolution
-/// happens during lowering, where the `ClassRegistry` is available.
+/// Stores the class name as a `StringId` and whatever type arguments the user
+/// wrote, without classifying them as `Simple`/`Hkt`/`Parameterized`.
+/// Shape resolution happens during lowering, where the `ClassRegistry` is
+/// available.
 #[derive(Clone, Debug)]
 pub(crate) struct CstClassConstraint {
-    pub(crate) tag: ClassId,
+    pub(crate) tag: StringId,
     pub(crate) args: SmallVec<[TypeExpr; 1]>,
     pub(crate) span: Span,
 }
