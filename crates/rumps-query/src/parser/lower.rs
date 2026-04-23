@@ -1836,16 +1836,16 @@ impl<'a> MergeCtx<'a> {
                 methods,
             } => {
                 let new_methods: Result<SmallVec<_>> = methods
-                    .iter()
+                    .into_iter()
                     .map(|m| {
                         let new_params: Result<SmallVec<_>> = m
                             .params
-                            .iter()
+                            .into_iter()
                             .map(|(n, ty_opt)| {
                                 let new_ty = ty_opt
                                     .map(|t| self.type_expr(t, span))
                                     .transpose()?;
-                                Ok((*n, new_ty))
+                                Ok((n, new_ty))
                             })
                             .collect();
                         let new_ret = m
@@ -1854,18 +1854,25 @@ impl<'a> MergeCtx<'a> {
                             .transpose()?;
                         Ok(ast::AstClassMethodSig {
                             name: m.name,
-                            type_params: m.type_params.clone(),
+                            type_params: m.type_params,
                             params: new_params?,
                             ret: new_ret,
                             span: m.span,
                         })
                     })
                     .collect();
+                // `TypeClass` variants can contain `AstTypeExprId`s that
+                // are indices into the source arena; remap them into the
+                // target arena so they don't become stale.
+                let new_supers: Result<SmallVec<_>> = supers
+                    .into_iter()
+                    .map(|tc| tc.try_map(|t| self.type_expr(t, span)))
+                    .collect();
                 Stmt::ClassDef {
                     name,
                     class_params,
                     self_var,
-                    supers,
+                    supers: new_supers?,
                     assoc_types,
                     methods: new_methods?,
                 }
@@ -1884,33 +1891,45 @@ impl<'a> MergeCtx<'a> {
                     .map(|&t| self.type_expr(t, span))
                     .collect();
                 let new_for_type = self.type_expr(for_type, span)?;
+                // Remap `AstTypeExprId`s inside `TypeClass` variants from
+                // the source arena into the target arena.
                 let new_constraints: Result<SmallVec<_>> = constraints
-                    .iter()
-                    .map(|(name, cs)| Ok((*name, cs.clone())))
+                    .into_iter()
+                    .map(|(name, cs)| {
+                        let new_cs: Result<SmallVec<_>> = cs
+                            .into_iter()
+                            .map(|tc| tc.try_map(|t| self.type_expr(t, span)))
+                            .collect();
+                        Ok((name, new_cs?))
+                    })
                     .collect();
                 let new_assoc_types: Result<SmallVec<_>> = assoc_types
-                    .iter()
+                    .into_iter()
                     .map(|a| {
+                        let new_constraint = a
+                            .constraint
+                            .map(|tc| tc.try_map(|t| self.type_expr(t, span)))
+                            .transpose()?;
                         let new_target = self.type_expr(a.target, span)?;
                         Ok(ast::AssocTypeDef {
                             name: a.name,
-                            constraint: a.constraint.clone(),
+                            constraint: new_constraint,
                             target: new_target,
                             span: a.span,
                         })
                     })
                     .collect();
                 let new_methods: Result<SmallVec<_>> = methods
-                    .iter()
+                    .into_iter()
                     .map(|m| {
                         let new_params: Result<SmallVec<_>> = m
                             .params
-                            .iter()
+                            .into_iter()
                             .map(|(n, ty_opt)| {
                                 let new_ty = ty_opt
                                     .map(|t| self.type_expr(t, span))
                                     .transpose()?;
-                                Ok((*n, new_ty))
+                                Ok((n, new_ty))
                             })
                             .collect();
                         let new_ret = m
