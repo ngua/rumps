@@ -396,7 +396,8 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                     // Already hoisted
                     Stmt::Fun { .. }
                     | Stmt::Module { .. }
-                    | Stmt::ClassInstance { .. } => {}
+                    | Stmt::ClassInstance { .. }
+                    | Stmt::ClassDef { .. } => {}
                     Stmt::Type {
                         name,
                         type_params,
@@ -719,8 +720,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                 self.user_module(name, &body, span).await
             }
             Stmt::Import(ref import) => self.import(import, span),
-            Stmt::ClassInstance { .. } => {
-                // Class instances are hoisted during `hoist_declarations()`.
+            Stmt::ClassInstance { .. } | Stmt::ClassDef { .. } => {
+                // Class instances and definitions are hoisted during
+                // `hoist_declarations()`.
                 Ok(())
             }
         }

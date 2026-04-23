@@ -98,11 +98,120 @@ impl<'a> LowerCtx<'a> {
     ) -> Result<(Ast, Vec<StmtId>)> {
         let base_dir = src_path.and_then(|p| p.parent().map(Path::to_path_buf));
         let mut ctx = Self::new(base_dir, interner);
+        ctx.prescan_class_defs(&stmts)?;
         let ids = stmts
             .into_iter()
             .map(|s| ctx.stmt(s))
             .collect::<Result<Vec<_>>>()?;
         Ok((ctx.ast, ids))
+    }
+
+    /// Pre-scan CST for `ClassDef` nodes and register stubs in the
+    /// `ClassRegistry` so that `class()` can resolve user class names
+    /// during the main lowering pass.
+    fn prescan_class_defs(&mut self, stmts: &[cst::Stmt]) -> Result<()> {
+        stmts.iter().try_for_each(|s| {
+            if let cst::StmtKind::ClassDef {
+                name,
+                class_params,
+                self_var,
+                assoc_types,
+                methods,
+                ..
+            } = &s.kind
+            {
+                let shape = Self::detect_class_shape(
+                    class_params,
+                    *self_var,
+                    methods,
+                    s.span,
+                )?;
+                let assoc_names = assoc_types.iter().map(|a| a.name).collect();
+                let stub = crate::typecheck::ClassDef {
+                    name: *name,
+                    shape,
+                    assoc_types: assoc_names,
+                    methods: vec![],
+                    supers: SmallVec::new(),
+                };
+                self.registry.register(stub).map_err(|e| {
+                    let nm = self.interner.get(e.name).unwrap_or_default();
+                    Error::static_err(
+                        s.span,
+                        format!("duplicate class definition `{nm}`"),
+                    )
+                })?;
+                Ok(())
+            } else {
+                Ok(())
+            }
+        })
+    }
+
+    /// Detect the `ClassShape` from a class definition's CST.
+    ///
+    /// - Non-empty `class_params` -> `Parameterized`
+    /// - Self var used as type constructor (`C[T]` in method sigs) -> `Hkt`
+    /// - Otherwise -> `Simple`
+    fn detect_class_shape(
+        class_params: &[cst::TypeParam],
+        sv: StringId,
+        methods: &[cst::ClassMethodSig],
+        span: crate::Span,
+    ) -> Result<ClassShape> {
+        let is_param = !class_params.is_empty();
+        let is_hkt = Self::self_var_is_hkt(sv, methods);
+        if is_param && is_hkt {
+            Err(Error::static_err(
+                span,
+                "class cannot have both class-level type parameters \
+                 and use the self variable as a type constructor"
+                    .to_owned(),
+            ))
+        } else if is_param {
+            Ok(ClassShape::Parameterized {
+                params: class_params.len() as u8,
+            })
+        } else if is_hkt {
+            Ok(ClassShape::Hkt { kind: 1 })
+        } else {
+            Ok(ClassShape::Simple)
+        }
+    }
+
+    /// Check whether `sv` appears as a type constructor (head of `App`)
+    /// in any method signature.
+    fn self_var_is_hkt(sv: StringId, methods: &[cst::ClassMethodSig]) -> bool {
+        methods.iter().any(|m| {
+            m.params
+                .iter()
+                .filter_map(|(_, ty)| ty.as_ref())
+                .chain(m.ret.as_ref())
+                .any(|te| Self::type_expr_has_hkt_usage(sv, te))
+        })
+    }
+
+    /// Recursively check whether `sv` appears in `App` head position.
+    fn type_expr_has_hkt_usage(sv: StringId, te: &cst::TypeExpr) -> bool {
+        match &te.kind {
+            cst::TypeExprKind::App(path, args) => {
+                (path.len() == 1 && path.first() == Some(&sv))
+                    || args.iter().any(|a| Self::type_expr_has_hkt_usage(sv, a))
+            }
+            cst::TypeExprKind::Named(_) | cst::TypeExprKind::Wildcard => false,
+            cst::TypeExprKind::AssocType { .. } => false,
+            cst::TypeExprKind::Fn(params, ret) => {
+                params.iter().any(|p| Self::type_expr_has_hkt_usage(sv, p))
+                    || Self::type_expr_has_hkt_usage(sv, ret)
+            }
+            cst::TypeExprKind::Tuple(elems)
+            | cst::TypeExprKind::Union(elems) => {
+                elems.iter().any(|e| Self::type_expr_has_hkt_usage(sv, e))
+            }
+            cst::TypeExprKind::Object(fields) => fields
+                .iter()
+                .any(|(_, te)| Self::type_expr_has_hkt_usage(sv, te)),
+        }
     }
 
     fn vis(vis: cst::Visibility) -> Visibility {
@@ -512,6 +621,76 @@ impl<'a> LowerCtx<'a> {
                     path: imp.path,
                     items,
                 })
+            }
+            cst::StmtKind::ClassDef {
+                name,
+                class_params,
+                self_var,
+                supers,
+                assoc_types,
+                methods,
+            } => {
+                self.push_type_params(
+                    class_params
+                        .iter()
+                        .map(|tp| tp.name)
+                        .chain(std::iter::once(self_var)),
+                );
+
+                // Push method-local type params for each method
+                // (they share the same scope as class params for lowering)
+                let methods_lowered = methods
+                    .into_iter()
+                    .map(|m| {
+                        self.push_type_params(
+                            m.type_params.iter().map(|tp| tp.name),
+                        );
+                        let params = m
+                            .params
+                            .into_iter()
+                            .map(|(n, t)| {
+                                t.map(|te| self.type_expr(te))
+                                    .transpose()
+                                    .map(|ty_id| (n, ty_id))
+                            })
+                            .collect::<Result<SmallVec<_>>>()?;
+                        let ret =
+                            m.ret.map(|t| self.type_expr(t)).transpose()?;
+                        let tp = self.type_param_list(m.type_params)?;
+                        self.pop_type_params();
+                        Ok(ast::AstClassMethodSig {
+                            name: m.name,
+                            type_params: tp,
+                            params,
+                            ret,
+                            span: m.span,
+                        })
+                    })
+                    .collect::<Result<SmallVec<_>>>()?;
+
+                let supers_lowered = supers
+                    .into_iter()
+                    .map(|c| self.class(c))
+                    .collect::<Result<SmallVec<_>>>()?;
+                let cp_lowered = self.type_param_list(class_params)?;
+
+                let assoc_lowered = assoc_types
+                    .into_iter()
+                    .map(|a| ast::AstClassAssocTypeDecl {
+                        name: a.name,
+                        span: a.span,
+                    })
+                    .collect();
+
+                self.pop_type_params();
+                Stmt::ClassDef {
+                    name,
+                    class_params: cp_lowered,
+                    self_var,
+                    supers: supers_lowered,
+                    assoc_types: assoc_lowered,
+                    methods: methods_lowered,
+                }
             }
             cst::StmtKind::ClassInstance {
                 class_name,
@@ -1648,6 +1827,49 @@ impl<'a> MergeCtx<'a> {
                 }
             }
             Stmt::Import(import) => Stmt::Import(import),
+            Stmt::ClassDef {
+                name,
+                class_params,
+                self_var,
+                supers,
+                assoc_types,
+                methods,
+            } => {
+                let new_methods: Result<SmallVec<_>> = methods
+                    .iter()
+                    .map(|m| {
+                        let new_params: Result<SmallVec<_>> = m
+                            .params
+                            .iter()
+                            .map(|(n, ty_opt)| {
+                                let new_ty = ty_opt
+                                    .map(|t| self.type_expr(t, span))
+                                    .transpose()?;
+                                Ok((*n, new_ty))
+                            })
+                            .collect();
+                        let new_ret = m
+                            .ret
+                            .map(|t| self.type_expr(t, span))
+                            .transpose()?;
+                        Ok(ast::AstClassMethodSig {
+                            name: m.name,
+                            type_params: m.type_params.clone(),
+                            params: new_params?,
+                            ret: new_ret,
+                            span: m.span,
+                        })
+                    })
+                    .collect();
+                Stmt::ClassDef {
+                    name,
+                    class_params,
+                    self_var,
+                    supers,
+                    assoc_types,
+                    methods: new_methods?,
+                }
+            }
             Stmt::ClassInstance {
                 class_name,
                 class_args,

@@ -317,11 +317,160 @@ impl Parser {
             })
     }
 
-    /// `class ClassName[ClassArgs] FOR TypeExpr [WHERE constraints] { methods }`
+    /// Class definition or instance.
     ///
-    /// User-defined class instance declaration. Implements a builtin class
-    /// (e.g., `Display`, `Into`, `Ord`) for a user type.
+    /// Definition: `class Name[Params] SelfVar [: Supers] { sigs }`
+    /// Instance: `class Name[Args] FOR Type [WHERE constraints] { methods }`
+    ///
+    /// Disambiguation: after `class Name [brackets]`, `FOR` selects the
+    /// instance path; any other ident selects the definition path.
     fn class_stmt(
+        interner: &mut StringInterner,
+        stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
+        let class_def = Self::class_def_stmt(interner);
+        let class_inst = Self::class_instance_stmt(interner, stmt);
+        class_def.or(class_inst)
+    }
+
+    /// Class definition: `class Name[Params] SelfVar [: Super1 + Super2] { body }`.
+    ///
+    /// Body items are method signatures (`fun`) and associated type
+    /// declarations (`newtype`).
+    fn class_def_stmt(
+        interner: &mut StringInterner,
+    ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
+        let for_ = interner.intern("for");
+
+        // Self var: any ident EXCEPT `for` (which disambiguates instances)
+        let self_var = select! { Token::Ident(s) if s != for_ => s };
+
+        // Superclass constraints: `: Super1 + Super2`
+        let supers = just(Token::Colon)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(
+                Self::constraint(interner)
+                    .separated_by(
+                        Self::opt_newlines()
+                            .ignore_then(just(Token::Plus))
+                            .then_ignore(Self::opt_newlines()),
+                    )
+                    .at_least(1),
+            )
+            .or_not()
+            .map(|cs| SmallVec::from_vec(cs.unwrap_or_default()));
+
+        // Method signature param: `name: Type` or `name` (missing annotation)
+        let sig_param = Self::ident().then(
+            just(Token::Colon)
+                .ignore_then(Self::opt_newlines())
+                .ignore_then(Self::type_expr(interner))
+                .or_not(),
+        );
+        let sig_param_sep =
+            just(Token::Comma).then_ignore(Self::opt_newlines());
+        let sig_params = just(Token::LParen)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(sig_param.separated_by(sig_param_sep).allow_trailing())
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RParen));
+        let sig_ret = Self::opt_newlines()
+            .ignore_then(just(Token::Arrow))
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(Self::type_expr(interner))
+            .or_not();
+
+        // Method signature: `fun name[T, U](params) -> RetType` (no body)
+        let method_sig = just(Token::Fun)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(Self::ident())
+            .then_ignore(Self::opt_newlines())
+            .then(Self::type_params(interner))
+            .then_ignore(Self::opt_newlines())
+            .then(sig_params)
+            .then(sig_ret)
+            .map_with_span(|(((name, type_params), params_vec), ret), span| {
+                let params = SmallVec::from_vec(params_vec);
+                cst::ClassMethodSig {
+                    name,
+                    type_params,
+                    params,
+                    ret,
+                    span,
+                }
+            });
+
+        // Associated type declaration: `newtype Name` (no `= Type`)
+        let assoc_decl = just(Token::NewType)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(Self::ident())
+            .map_with_span(|name, span| cst::ClassAssocTypeDecl { name, span });
+
+        // Definition body item: method sig or associated type decl
+        #[derive(Clone)]
+        #[allow(clippy::large_enum_variant)]
+        enum DefItem {
+            AssocType(cst::ClassAssocTypeDecl),
+            Method(cst::ClassMethodSig),
+        }
+        let def_item = assoc_decl
+            .map(DefItem::AssocType)
+            .or(method_sig.map(DefItem::Method));
+
+        // Definition body: `{ items }`
+        let def_body = just(Token::LBrace)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(
+                def_item.separated_by(Self::item_sep()).allow_trailing(),
+            )
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RBrace))
+            .map(|items| {
+                let mut assoc_types = SmallVec::new();
+                let mut methods = Vec::new();
+                items.into_iter().for_each(|item| match item {
+                    DefItem::AssocType(a) => assoc_types.push(a),
+                    DefItem::Method(m) => methods.push(m),
+                });
+                (assoc_types, methods)
+            });
+
+        just(Token::Class)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(Self::ident())
+            .then_ignore(Self::opt_newlines())
+            .then(Self::type_params(interner))
+            .then_ignore(Self::opt_newlines())
+            .then(self_var)
+            .then_ignore(Self::opt_newlines())
+            .then(supers)
+            .then_ignore(Self::opt_newlines())
+            .then(def_body)
+            .map_with_span(
+                |(
+                    (((name, class_params), self_var), supers),
+                    (assoc_types, methods),
+                ),
+                 span| {
+                    cst::Stmt::new(
+                        cst::StmtKind::ClassDef {
+                            name,
+                            class_params,
+                            self_var,
+                            supers,
+                            assoc_types,
+                            methods,
+                        },
+                        span,
+                    )
+                },
+            )
+    }
+
+    /// Class instance: `class Name[Args] FOR Type [WHERE constraints] { methods }`.
+    fn class_instance_stmt(
         interner: &mut StringInterner,
         stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
             + Clone
@@ -471,7 +620,7 @@ impl Parser {
                 (assoc_types, methods)
             });
 
-        // Full CLASS statement
+        // Full CLASS instance statement
         just(Token::Class)
             .ignore_then(Self::opt_newlines())
             .ignore_then(Self::ident())

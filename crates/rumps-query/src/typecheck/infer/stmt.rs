@@ -148,6 +148,11 @@ impl InferCtx<'_> {
                 });
             }
 
+            // Class definitions are processed during hoisting (Pass 1).
+            Some(Stmt::ClassDef { .. }) => {
+                self.env.mark_non_import();
+            }
+
             None => {}
         }
     }
@@ -309,6 +314,8 @@ impl InferCtx<'_> {
                         span: item_span,
                     });
                 }
+                // Class definitions are processed during hoisting.
+                Some(Stmt::ClassDef { .. }) => {}
                 None => {}
             }
         });

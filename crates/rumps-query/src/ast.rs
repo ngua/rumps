@@ -1164,6 +1164,29 @@ impl Import {
     }
 }
 
+/// An associated type declaration in a class definition.
+///
+/// Represents `newtype Element` inside a `class ... { ... }` block.
+/// Declaration only; the `= Type` assignment belongs to instances.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct AstClassAssocTypeDecl {
+    pub(crate) name: StringId,
+    pub(crate) span: Span,
+}
+
+/// A method signature in a class definition.
+///
+/// Represents `fun method[T](params) -> RetType` inside a class definition.
+/// Signature only; no body (bodies belong to instances).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct AstClassMethodSig {
+    pub(crate) name: StringId,
+    pub(crate) type_params: SmallVec<[TypeParam; 2]>,
+    pub(crate) params: SmallVec<[(StringId, Option<AstTypeExprId>); 4]>,
+    pub(crate) ret: Option<AstTypeExprId>,
+    pub(crate) span: Span,
+}
+
 /// A method definition in a class instance.
 ///
 /// Represents `fun method(params) -> RetType { body }` inside a `class ... for ...` block.
@@ -1309,6 +1332,29 @@ pub(crate) enum Stmt {
     /// - `import M.{ ... }` ; import all public members
     /// - `import M.{ ..., -excluded }` ; wildcard with exclusions
     Import(Import),
+
+    /// User-defined class definition: `class Name[params] SelfVar : Supers { body }`.
+    ///
+    /// Declares a new typeclass with method signatures and associated types.
+    ///
+    /// Examples:
+    /// - `class MyEq C { fun eq(a: C, b: C) -> Bool }`
+    /// - `class Into[T] C { fun into(x: C) -> T }`
+    /// - `class Container C { newtype Element; fun get(c: C, idx: Int) -> :Element }`
+    ClassDef {
+        /// Class name (e.g., `"MyEq"`, `"Container"`).
+        name: StringId,
+        /// Class-level type parameters (e.g., `[T]` in `class Into[T] C`).
+        class_params: SmallVec<[TypeParam; 2]>,
+        /// The constrained type variable (e.g., `C`).
+        self_var: StringId,
+        /// Superclass constraints.
+        supers: SmallVec<[TypeClass<AstTypeExprId>; 2]>,
+        /// Associated type declarations (e.g., `newtype Element`).
+        assoc_types: SmallVec<[AstClassAssocTypeDecl; 2]>,
+        /// Method signatures (no bodies).
+        methods: SmallVec<[AstClassMethodSig; 4]>,
+    },
 
     /// User-defined class instance: `class ClassName for Type { methods }`.
     ///
