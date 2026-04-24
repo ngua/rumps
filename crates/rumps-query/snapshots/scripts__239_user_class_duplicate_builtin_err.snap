@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Error: defining a class with a name that conflicts with a builtin class.\n\nclass Into[T] C {\n  fun convert(x: C) -> T\n}\n\nfun main() {}\n"
+---
+ERROR: 76..120: duplicate class definition `Into`

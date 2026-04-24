@@ -106,6 +106,13 @@ pub(super) struct InterpreterOutput {
     /// since these types don't carry their `TypeId` in the runtime value
     /// (unlike `type`/sum types which use `Value::Tagged`).
     pub(super) instance_calls: HashMap<ExprId, TypeId>,
+    /// Resolved function names for parameterized user class method calls.
+    ///
+    /// When a parameterized class has multiple instances for the same type
+    /// (e.g., `MyInto[A] for X` and `MyInto[B] for X`), the generic
+    /// `(ClassId, TypeId, method)` lookup is ambiguous. This map records
+    /// the specific generated function name for each call site.
+    pub(super) resolved_instance_fns: HashMap<ExprId, StringId>,
 }
 
 impl InterpreterOutput {
@@ -118,6 +125,7 @@ impl InterpreterOutput {
             convert_targets: HashMap::new(),
             wrap_types: HashMap::new(),
             instance_calls: HashMap::new(),
+            resolved_instance_fns: HashMap::new(),
         }
     }
 
@@ -839,6 +847,12 @@ pub(crate) struct InferCtx<'a> {
     /// variables are recorded here. After `resolve_all_types`, we resolve the types
     /// and populate `instance_calls` for any user instances found.
     deferred_instance_calls: Vec<(ExprId, TyId, ClassId)>,
+    /// Deferred parameterized user class method calls.
+    ///
+    /// `(ExprId, ClassId, method, receiver_ty, class_arg_ty)`. After constraint
+    /// solving, the class_arg_ty resolves to a concrete type; we look up the
+    /// matching instance and record its function name in `resolved_instance_fns`.
+    deferred_param_calls: Vec<(ExprId, ClassId, StringId, TyId, TyId)>,
     /// Type variables created for integer literals, for defaulting to `Int`.
     ///
     /// Integer literals are polymorphic (no constraint) so they can unify with
@@ -936,6 +950,7 @@ impl<'a> InferCtx<'a> {
             errors: Vec::new(),
             interp: InterpreterOutput::new(),
             deferred_instance_calls: Vec::new(),
+            deferred_param_calls: Vec::new(),
             numeric_vars: Vec::new(),
             closure_schemes: HashMap::new(),
             closure_tv_names: HashMap::new(),
@@ -1186,6 +1201,44 @@ impl<'a> InferCtx<'a> {
         });
     }
 
+    /// Resolve deferred parameterized user class method calls.
+    ///
+    /// After constraint solving, the class_arg type is concrete. We look up
+    /// the matching instance and record the specific generated function name
+    /// so the runtime can dispatch correctly when multiple instances of the
+    /// same parameterized class exist for one type.
+    pub(crate) fn resolve_deferred_param_calls(&mut self) {
+        let deferred = mem::take(&mut self.deferred_param_calls);
+        deferred
+            .into_iter()
+            .for_each(|(eid, cid, method, recv, ca)| {
+                let recv_r = self.uf.resolve(recv, &mut self.ty_arena);
+                let ca_r = self.uf.resolve(ca, &mut self.ty_arena);
+                let tid = match self.ty_arena.get(recv_r) {
+                    Ty::Named(id, _) | Ty::Union(Some(id), _) => Some(*id),
+                    _ => None,
+                };
+                if let Some(tid) = tid {
+                    let insts = self.instance_registry.lookup_all(cid, tid);
+                    // Only need disambiguation when multiple instances exist
+                    if insts.len() > 1 {
+                        insts
+                            .iter()
+                            .find(|i| {
+                                i.class_args.first().copied() == Some(ca_r)
+                            })
+                            .and_then(|i| i.methods.get(&method).copied())
+                            .into_iter()
+                            .for_each(|fn_id| {
+                                self.interp
+                                    .resolved_instance_fns
+                                    .insert(eid, fn_id);
+                            });
+                    }
+                }
+            });
+    }
+
     /// Check for illegal union narrowing in `let` annotations.
     ///
     /// After constraint solving, if a `let` binding's RHS resolved to a
@@ -1328,6 +1381,9 @@ impl<'a> InferCtx<'a> {
         // Resolve deferred instance calls (now that types are resolved)
         self.resolve_deferred_instance_calls();
 
+        // Resolve parameterized user class method call function names
+        self.resolve_deferred_param_calls();
+
         self.uf.disable_zonk_cache();
 
         // Check for illegal union narrowing via let annotations
@@ -1371,6 +1427,7 @@ impl<'a> InferCtx<'a> {
                 convert_targets: self.interp.convert_targets,
                 wrap_types: self.interp.wrap_types,
                 instance_calls: self.interp.instance_calls,
+                resolved_instance_fns: self.interp.resolved_instance_fns,
                 class_registry: self.env.class_registry,
             })
         }

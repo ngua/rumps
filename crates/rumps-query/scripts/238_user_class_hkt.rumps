@@ -1,0 +1,26 @@
+; User-defined HKT class (higher-kinded type variable).
+;
+; Defines `MyFunctor` where the self var `F` is applied as `F[T]`,
+; making it kind `* -> *`.
+
+type Box[T] = Box(T)
+
+class MyFunctor F {
+  fun fmap[A, B](x: F[A], f: (A) -> B) -> F[B]
+}
+
+class MyFunctor for Box {
+  fun fmap(x: Box[A], f: (A) -> B) -> Box[B] {
+    match x {
+      Box.Box(v) => { Box.Box(f(v)) }
+    }
+  }
+}
+
+fun main() {
+  let b = Box.Box(10)
+  let b2 = MyFunctor:fmap(b, x => x * 2)
+  write b2
+  let b3 = MyFunctor:fmap(b2, x => "{x}!")
+  write b3
+}

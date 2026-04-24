@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Error: class method parameter missing a type annotation.\n\nclass BadClass C {\n  fun method(x) -> Int\n}\n\nfun main() {}\n"
+---
+ERROR: class method parameter requires a type annotation

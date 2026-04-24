@@ -1,0 +1,29 @@
+; User-defined class definition and instance (simple shape).
+;
+; Defines a custom `MyEq` class and implements it for `Point`.
+
+type Point = Point(Int, Int)
+
+class MyEq C {
+  fun eq(a: C, b: C) -> Bool
+}
+
+class MyEq for Point {
+  fun eq(a: Point, b: Point) -> Bool {
+    match a {
+      Point.Point(ax, ay) => {
+        match b {
+          Point.Point(bx, by) => { ax == bx && ay == by }
+        }
+      }
+    }
+  }
+}
+
+fun main() {
+  let p1 = Point.Point(1, 2)
+  let p2 = Point.Point(1, 2)
+  let p3 = Point.Point(3, 4)
+  write "p1 eq p2: {MyEq:eq(p1, p2)}"
+  write "p1 eq p3: {MyEq:eq(p1, p3)}"
+}

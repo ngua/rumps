@@ -1,0 +1,8 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; User-defined class with forward references.\n;\n; The class def, instance, and usage are all out of order\n; to test that hoisting works correctly.\n\nfun main() {\n  let a = Pair.Pair(1, 2)\n  let b = Pair.Pair(1, 2)\n  let c = Pair.Pair(3, 4)\n  write \"a eq b: {MyEq:eq(a, b)}\"\n  write \"a eq c: {MyEq:eq(a, c)}\"\n  write \"describe a: {Describe:describe(a)}\"\n  write \"describe c: {Describe:describe(c)}\"\n}\n\nclass Describe C {\n  fun describe(x: C) -> String\n}\n\ntype Pair = Pair(Int, Int)\n\nclass MyEq C {\n  fun eq(a: C, b: C) -> Bool\n}\n\nclass MyEq for Pair {\n  fun eq(a: Pair, b: Pair) -> Bool {\n    match a {\n      Pair.Pair(ax, ay) => {\n        match b {\n          Pair.Pair(bx, by) => { ax == bx && ay == by }\n        }\n      }\n    }\n  }\n}\n\nclass Describe for Pair {\n  fun describe(x: Pair) -> String {\n    match x {\n      Pair.Pair(a, b) => { \"({a}, {b})\" }\n    }\n  }\n}\n"
+---
+"a eq b: true"
+"a eq c: false"
+"describe a: (1, 2)"
+"describe c: (3, 4)"

@@ -1,0 +1,40 @@
+; User-defined class used as a constraint on a function.
+;
+; The `Printable` class is used in `[T: Printable]` to constrain
+; the type parameter at call sites.
+
+type Color = Red | Green | Blue
+type Wrapper = Wrap(String)
+
+class Printable C {
+  fun to-str(x: C) -> String
+}
+
+class Printable for Color {
+  fun to-str(x: Color) -> String {
+    match x {
+      Color.Red => { "red" }
+      Color.Green => { "green" }
+      Color.Blue => { "blue" }
+    }
+  }
+}
+
+class Printable for Wrapper {
+  fun to-str(x: Wrapper) -> String {
+    match x {
+      Wrapper.Wrap(s) => { "wrapped({s})" }
+    }
+  }
+}
+
+fun show[T: Printable](x: T) -> String {
+  Printable:to-str(x)
+}
+
+fun main() {
+  write show(Color.Red)
+  write show(Color.Green)
+  write show(Color.Blue)
+  write show(Wrapper.Wrap("hello"))
+}

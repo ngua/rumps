@@ -1,0 +1,7 @@
+; Error: class method parameter missing a type annotation.
+
+class BadClass C {
+  fun method(x) -> Int
+}
+
+fun main() {}

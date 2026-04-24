@@ -1,0 +1,44 @@
+; User-defined class with associated type declarations.
+;
+; Defines a `HasUnit` class with `newtype Unit` associated type
+; and implements it for two types.
+
+type Meters = Meters(Float)
+type Seconds = Seconds(Float)
+
+class HasUnit C {
+  newtype Unit
+  fun value(x: C) -> Float
+  fun unit-name(x: C) -> String
+}
+
+class HasUnit for Meters {
+  newtype Unit = String
+  fun value(x: Meters) -> Float {
+    match x {
+      Meters.Meters(v) => { v }
+    }
+  }
+  fun unit-name(x: Meters) -> String {
+    "meters"
+  }
+}
+
+class HasUnit for Seconds {
+  newtype Unit = String
+  fun value(x: Seconds) -> Float {
+    match x {
+      Seconds.Seconds(v) => { v }
+    }
+  }
+  fun unit-name(x: Seconds) -> String {
+    "seconds"
+  }
+}
+
+fun main() {
+  let m = Meters.Meters(3.14)
+  let s = Seconds.Seconds(9.81)
+  write "{HasUnit:value(m)} {HasUnit:unit-name(m)}"
+  write "{HasUnit:value(s)} {HasUnit:unit-name(s)}"
+}

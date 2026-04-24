@@ -351,6 +351,7 @@ impl<'a> ResolveCtx<'a> {
         match stmt {
             Stmt::ClassInstance {
                 class_name,
+                class_args,
                 for_type,
                 methods,
                 ..
@@ -371,6 +372,11 @@ impl<'a> ResolveCtx<'a> {
                     .get(self.class_registry.name(class))
                     .unwrap_or_default()
                     .to_owned();
+                let ca_names: Vec<String> = class_args
+                    .iter()
+                    .filter_map(|id| Self::extract_type_qn(self.ast, *id))
+                    .map(|qn| qn.display(&self.arena.strings))
+                    .collect();
                 let methods = methods.clone();
                 let mappings: Vec<(StringId, StringId)> = methods
                     .iter()
@@ -378,10 +384,11 @@ impl<'a> ResolveCtx<'a> {
                         let mn =
                             self.arena.strings.get(m.name).unwrap_or_default();
                         let fn_name =
-                            crate::interpreter::instance::instance_fn_name(
+                            crate::interpreter::instance::instance_fn_name_owned(
                                 &class_name_str,
                                 &type_disp,
                                 mn,
+                                &ca_names,
                             );
                         let fn_id = self.arena.strings.intern(&fn_name);
                         (m.name, fn_id)

@@ -1,0 +1,34 @@
+; Multiple instances of a parameterized user class for the same for-type
+; with different class args, using turbofish syntax to select the instance.
+
+type Wrapper = Wrapper(Int)
+type Label = Label(String)
+
+class MyInto[T] C {
+  fun convert(x: C) -> T
+}
+
+class MyInto[Label] for Wrapper {
+  fun convert(x: Wrapper) -> Label {
+    match x {
+      Wrapper.Wrapper(n) => { Label.Label("w:{n}") }
+    }
+  }
+}
+
+class MyInto[Int] for Wrapper {
+  fun convert(x: Wrapper) -> Int {
+    match x {
+      Wrapper.Wrapper(n) => { n }
+    }
+  }
+}
+
+fun main() {
+  let w = Wrapper.Wrapper(99)
+  ; turbofish selects the correct instance
+  let lbl = MyInto[Label]:convert(w)
+  let n = MyInto[Int]:convert(w)
+  write lbl
+  write n
+}

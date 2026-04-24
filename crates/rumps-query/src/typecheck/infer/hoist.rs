@@ -11,17 +11,52 @@ use smallvec::{smallvec, SmallVec};
 
 use super::{ClassInstanceInput, InferCtx};
 use crate::ast::{
-    AstTypeExpr, AstTypeExprId, BindingPattern, Expr, Import, Stmt, StmtId,
-    TypeParam,
+    AstClassMethodSig, AstTypeExpr, AstTypeExprId, BindingPattern, Expr,
+    Import, Stmt, StmtId, TypeParam,
 };
 use crate::intern::{QualifiedName, StringId};
 use crate::typecheck::error::TypeError;
 use crate::typecheck::instance::Instance;
 use crate::typecheck::ty::{
-    ClassShape, Scheme, Ty, TyArena, TyId, TyVar, TypeClass,
+    ClassShape, MethodSpec, Scheme, Ty, TyArena, TyId, TyVar, TypeClass,
 };
 use crate::value::{TypeDef, TypeId};
 use crate::{ClassId, Span};
+
+/// AST-level class definition fields, bundled for `hoist_class_def`.
+struct ClassDefInput<'a> {
+    name: StringId,
+    class_params: &'a [TypeParam],
+    self_var: StringId,
+    supers: &'a SmallVec<[TypeClass<AstTypeExprId>; 2]>,
+    assoc_types: &'a [crate::ast::AstClassAssocTypeDecl],
+    methods: &'a [AstClassMethodSig],
+    span: Span,
+}
+
+/// Resolved class-level context shared by all methods in a class def.
+///
+/// Built once in `hoist_class_def`; passed to `build_class_method_spec`.
+struct ClassDefCtx<'a> {
+    class_id: ClassId,
+    shape: ClassShape,
+    self_var: StringId,
+    class_params: &'a [TypeParam],
+    assoc_types: &'a [crate::ast::AstClassAssocTypeDecl],
+}
+
+/// Per-method context for resolving types in a user class definition.
+///
+/// Built once per method in `build_class_method_spec`; passed by reference
+/// to `resolve_class_method_type` for each parameter/return type expression.
+struct ClassMethodCtx {
+    class_id: ClassId,
+    shape: ClassShape,
+    self_var: StringId,
+    self_var_idx: u32,
+    subst: IndexMap<StringId, TyId>,
+    assoc_map: HashMap<StringId, TyId>,
+}
 
 impl InferCtx<'_> {
     /// Pass 1: Register all function/module declarations with provisional types.
@@ -37,6 +72,30 @@ impl InferCtx<'_> {
     /// 2. **Phase 2**: Process imports (populates `imported_types` mapping)
     /// 3. **Phase 3**: Hoist functions and class instances
     pub(crate) fn hoist_declarations(&mut self, stmts: &[StmtId]) {
+        // Phase 0: Register user-defined class stubs so class names
+        // are available for constraint resolution and method lookup
+        stmts.iter().for_each(|&id| {
+            let stmt = self.ast.get_stmt(id).cloned();
+            if let Some(Stmt::ClassDef {
+                ref name,
+                ref class_params,
+                self_var,
+                ref assoc_types,
+                ref methods,
+                ..
+            }) = stmt
+            {
+                self.register_class_stub(
+                    *name,
+                    class_params,
+                    self_var,
+                    assoc_types,
+                    methods,
+                    self.ast.stmt_span(id).unwrap_or_default(),
+                );
+            }
+        });
+
         // Phase 1: Hoist modules only (registers module types)
         stmts.iter().for_each(|&id| {
             let stmt = self.ast.get_stmt(id).cloned();
@@ -189,6 +248,23 @@ impl InferCtx<'_> {
                 methods: &methods,
                 assoc_types: (),
                 module: None,
+                span,
+            }),
+
+            Some(Stmt::ClassDef {
+                name,
+                class_params,
+                self_var,
+                supers,
+                assoc_types,
+                methods,
+            }) => self.hoist_class_def(ClassDefInput {
+                name,
+                class_params: &class_params,
+                self_var,
+                supers: &supers,
+                assoc_types: &assoc_types,
+                methods: &methods,
                 span,
             }),
 
@@ -509,6 +585,342 @@ impl InferCtx<'_> {
         self.current_module = prev_module;
     }
 
+    /// Register a user-defined class stub in the class registry.
+    ///
+    /// Called during Phase 0 of hoisting to make class names available
+    /// for constraint resolution and method lookup in later phases.
+    fn register_class_stub(
+        &mut self,
+        name: StringId,
+        class_params: &[TypeParam],
+        self_var: StringId,
+        assoc_types: &[crate::ast::AstClassAssocTypeDecl],
+        methods: &[AstClassMethodSig],
+        span: Span,
+    ) {
+        // Detect shape from AST method signatures
+        let is_param = !class_params.is_empty();
+        let is_hkt = methods.iter().any(|m| {
+            m.params
+                .iter()
+                .filter_map(|(_, ty)| ty.as_ref())
+                .chain(m.ret.as_ref())
+                .any(|&te| self.ast_type_expr_has_hkt_usage(self_var, te))
+        });
+
+        let shape = if is_param && is_hkt {
+            self.error(TypeError::Custom {
+                msg: "class cannot have both class-level type parameters \
+                      and use the self variable as a type constructor"
+                    .into(),
+                span,
+            });
+            ClassShape::Simple
+        } else if is_param {
+            ClassShape::Parameterized {
+                params: class_params.len() as u8,
+            }
+        } else if is_hkt {
+            ClassShape::Hkt { kind: 1 }
+        } else {
+            ClassShape::Simple
+        };
+
+        let assoc_names = assoc_types.iter().map(|a| a.name).collect();
+        let stub = crate::typecheck::ty::ClassDef {
+            name,
+            shape,
+            assoc_types: assoc_names,
+            methods: vec![],
+            supers: smallvec![],
+        };
+
+        if let Err(e) = self.env.class_registry.register(stub) {
+            let nm = self.env.resolve_str(e.name).to_owned();
+            self.error(TypeError::Custom {
+                msg: format!("duplicate class definition `{nm}`"),
+                span,
+            });
+        }
+    }
+
+    /// Check whether `sv` appears as a type constructor (head of `VarApp`)
+    /// in an AST type expression.
+    fn ast_type_expr_has_hkt_usage(
+        &self,
+        sv: StringId,
+        te: AstTypeExprId,
+    ) -> bool {
+        match self.ast.get_type_expr(te).cloned() {
+            Some(AstTypeExpr::VarApp(name, args)) => {
+                (!name.is_qualified() && name.local_name() == sv)
+                    || args
+                        .iter()
+                        .any(|&a| self.ast_type_expr_has_hkt_usage(sv, a))
+            }
+            Some(AstTypeExpr::App(_, args)) => args
+                .iter()
+                .any(|&a| self.ast_type_expr_has_hkt_usage(sv, a)),
+            Some(AstTypeExpr::Fn(params, ret)) => {
+                params
+                    .iter()
+                    .any(|&p| self.ast_type_expr_has_hkt_usage(sv, p))
+                    || self.ast_type_expr_has_hkt_usage(sv, ret)
+            }
+            Some(AstTypeExpr::Tuple(elems) | AstTypeExpr::Union(elems)) => {
+                elems
+                    .iter()
+                    .any(|&e| self.ast_type_expr_has_hkt_usage(sv, e))
+            }
+            Some(AstTypeExpr::Object(fields)) => fields
+                .iter()
+                .any(|&(_, te)| self.ast_type_expr_has_hkt_usage(sv, te)),
+            _ => false,
+        }
+    }
+
+    /// Hoist a user-defined class definition.
+    ///
+    /// Builds method schemes for each method signature and updates the
+    /// stub `ClassDef` (registered during Phase 0) with full
+    /// methods and resolved superclass constraints.
+    fn hoist_class_def(&mut self, input: ClassDefInput<'_>) {
+        if let Some(class_id) =
+            self.env.class_registry().lookup_by_name(input.name)
+        {
+            let shape = self.env.class_registry().shape(class_id);
+            let def_ctx = ClassDefCtx {
+                class_id,
+                shape,
+                self_var: input.self_var,
+                class_params: input.class_params,
+                assoc_types: input.assoc_types,
+            };
+
+            // Build method specs
+            let method_specs: Vec<(StringId, MethodSpec)> = input
+                .methods
+                .iter()
+                .filter_map(|m| {
+                    self.build_class_method_spec(&def_ctx, m, input.span)
+                })
+                .collect();
+
+            // Resolve superclass constraints
+            let empty_subst = IndexMap::new();
+            let resolved_supers: SmallVec<[ClassId; 2]> = input
+                .supers
+                .iter()
+                .map(|sup| {
+                    self.convert()
+                        .ast_class_to_ty_class(sup, &empty_subst)
+                        .tag()
+                })
+                .collect();
+
+            // Update the stub ClassDef in the registry
+            let def = self.env.class_registry.get_mut(class_id);
+            def.methods = method_specs;
+            def.supers = resolved_supers;
+        }
+    }
+
+    /// Build a `MethodSpec` for a single method signature in a user class def.
+    fn build_class_method_spec(
+        &mut self,
+        dc: &ClassDefCtx<'_>,
+        method: &AstClassMethodSig,
+        span: Span,
+    ) -> Option<(StringId, MethodSpec)> {
+        // (a) Allocate type variables and build substitution map
+        let mut subst: IndexMap<StringId, TyId> = IndexMap::new();
+        let (total_vars, self_var_idx, class_constraint) = match dc.shape {
+            ClassShape::Simple => {
+                // Self var -> TyVar(0), method-local params -> TyVar(1), ...
+                let sv_ty = self.ty_arena.var(0);
+                subst.insert(dc.self_var, sv_ty);
+                let mut next = 1u32;
+                method.type_params.iter().for_each(|tp| {
+                    subst.insert(tp.name, self.ty_arena.var(next));
+                    next += 1;
+                });
+                let total = next;
+                let constraint =
+                    (TyVar::new(0), TypeClass::Simple(dc.class_id));
+                (total, 0u32, constraint)
+            }
+            ClassShape::Parameterized { .. } => {
+                // Self var -> TyVar(0), class params -> TyVar(1..n),
+                // method-local -> TyVar(n+1..)
+                let sv_ty = self.ty_arena.var(0);
+                subst.insert(dc.self_var, sv_ty);
+                let mut next = 1u32;
+                dc.class_params.iter().for_each(|tp| {
+                    subst.insert(tp.name, self.ty_arena.var(next));
+                    next += 1;
+                });
+                // For constraint, use the first class param
+                let class_arg_ty = if dc.class_params.is_empty() {
+                    TyArena::UNKNOWN
+                } else {
+                    self.ty_arena.var(1)
+                };
+                method.type_params.iter().for_each(|tp| {
+                    subst.insert(tp.name, self.ty_arena.var(next));
+                    next += 1;
+                });
+                let total = next;
+                let constraint = (
+                    TyVar::new(0),
+                    TypeClass::Parameterized(dc.class_id, class_arg_ty),
+                );
+                (total, 0u32, constraint)
+            }
+            ClassShape::Hkt { .. } => {
+                // Method-local type params get lower indices;
+                // self var gets the highest index
+                let mut next = 0u32;
+                method.type_params.iter().for_each(|tp| {
+                    subst.insert(tp.name, self.ty_arena.var(next));
+                    next += 1;
+                });
+                let sv_idx = next;
+                let sv_ty = self.ty_arena.var(sv_idx);
+                subst.insert(dc.self_var, sv_ty);
+                let total = sv_idx + 1;
+                let constraint =
+                    (TyVar::new(sv_idx), TypeClass::Hkt(dc.class_id, None));
+                (total, sv_idx, constraint)
+            }
+        };
+
+        // (c) Pre-allocate associated type nodes
+        let assoc_map: HashMap<StringId, TyId> = dc
+            .assoc_types
+            .iter()
+            .map(|a| {
+                let sv_tv = TyVar::new(self_var_idx);
+                let ty = self.ty_arena.alloc(Ty::AssocType(
+                    sv_tv,
+                    dc.class_id,
+                    a.name,
+                ));
+                (a.name, ty)
+            })
+            .collect();
+
+        let ctx = ClassMethodCtx {
+            class_id: dc.class_id,
+            shape: dc.shape,
+            self_var: dc.self_var,
+            self_var_idx,
+            subst,
+            assoc_map,
+        };
+
+        // (d) Resolve method param/return types
+        let param_tys: SmallVec<[TyId; 4]> = method
+            .params
+            .iter()
+            .map(|(_, ty_opt)| match ty_opt {
+                Some(te) => self.resolve_class_method_type(*te, &ctx),
+                None => {
+                    self.error(TypeError::Custom {
+                        msg: "class method parameter requires a type \
+                              annotation"
+                            .into(),
+                        span,
+                    });
+                    TyArena::ERROR
+                }
+            })
+            .collect();
+
+        let ret_ty = method.ret.map_or(TyArena::UNIT, |te| {
+            self.resolve_class_method_type(te, &ctx)
+        });
+
+        // (e) Build function type
+        let fn_ty = self.ty_arena.func(param_tys, ret_ty);
+
+        // (g) Assemble scheme
+        let scheme = Scheme {
+            vars: (0..total_vars).map(TyVar::new).collect(),
+            ty: fn_ty,
+            constraints: smallvec![class_constraint],
+        };
+
+        Some((method.name, MethodSpec::Standard(scheme)))
+    }
+
+    /// Resolve a type expression in a class method signature.
+    ///
+    /// Handles the substitution map for type variables, HKT self var
+    /// usage (producing `Ty::Apply`), and associated type references.
+    fn resolve_class_method_type(
+        &mut self,
+        te: AstTypeExprId,
+        ctx: &ClassMethodCtx,
+    ) -> TyId {
+        let expr = self.ast.get_type_expr(te).cloned();
+        match expr {
+            Some(AstTypeExpr::Named(ref name))
+                if !name.is_qualified()
+                    && ctx.subst.contains_key(&name.local_name()) =>
+            {
+                ctx.subst
+                    .get(&name.local_name())
+                    .copied()
+                    .unwrap_or(TyArena::ERROR)
+            }
+            Some(AstTypeExpr::App(ref name, ref args))
+                if !name.is_qualified()
+                    && name.local_name() == ctx.self_var
+                    && matches!(ctx.shape, ClassShape::Hkt { .. }) =>
+            {
+                // HKT self var applied to args: C[T] -> Apply(TyVar(sv), [args])
+                let arg_tys: SmallVec<[TyId; 4]> = args
+                    .iter()
+                    .map(|&a| self.resolve_class_method_type(a, ctx))
+                    .collect();
+                self.ty_arena.hkt(TyVar::new(ctx.self_var_idx), arg_tys)
+            }
+            Some(AstTypeExpr::VarApp(ref name, ref args))
+                if !name.is_qualified()
+                    && ctx.subst.contains_key(&name.local_name()) =>
+            {
+                let base = ctx
+                    .subst
+                    .get(&name.local_name())
+                    .copied()
+                    .unwrap_or(TyArena::ERROR);
+                let base_ty = self.ty_arena.get(base).clone();
+                let arg_tys: SmallVec<[TyId; 4]> = args
+                    .iter()
+                    .map(|&a| self.resolve_class_method_type(a, ctx))
+                    .collect();
+                match base_ty {
+                    Ty::Var(tv) => self.ty_arena.hkt(tv, arg_tys),
+                    _ => self.convert().apply_type_args(base, arg_tys),
+                }
+            }
+            Some(AstTypeExpr::AssocType { class: None, name }) => {
+                ctx.assoc_map.get(&name).copied().unwrap_or_else(|| {
+                    self.error(TypeError::NoSuchAssocType {
+                        class: ctx.class_id,
+                        name,
+                        span: self.ast.type_expr_span(te).unwrap_or_default(),
+                    });
+                    TyArena::ERROR
+                })
+            }
+            _ => {
+                // Fall through to standard resolution with subst
+                self.convert().ast_type_to_ty(te, &ctx.subst)
+            }
+        }
+    }
+
     /// Hoist a class instance declaration.
     ///
     /// Registers the instance in `instance_registry` so that class method
@@ -675,15 +1087,20 @@ impl InferCtx<'_> {
                         .env
                         .resolve_str(self.env.class_registry().name(class))
                         .to_owned();
+                    let ca_names: Vec<String> = class_args
+                        .iter()
+                        .map(|id| self.extract_type_name_from_ast(*id))
+                        .collect();
                     let method_map: HashMap<_, _> = methods
                         .iter()
                         .map(|m| {
                             let mn = self.env.resolve_str(m.name);
                             let fn_name =
-                                crate::interpreter::instance::instance_fn_name(
+                                crate::interpreter::instance::instance_fn_name_owned(
                                     &class_name_str,
                                     &type_name_for_fn,
                                     mn,
+                                    &ca_names,
                                 );
                             let fn_name_id = self.env.intern(&fn_name);
                             (m.name, fn_name_id)

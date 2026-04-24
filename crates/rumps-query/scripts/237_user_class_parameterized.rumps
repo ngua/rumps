@@ -1,0 +1,35 @@
+; User-defined parameterized class (class with type args).
+;
+; Defines `MyInto[T]` with a `convert` method and implements it
+; for distinct user types.
+
+type Celsius = Celsius(Float)
+type Fahrenheit = Fahrenheit(Float)
+
+class MyInto[T] C {
+  fun convert(x: C) -> T
+}
+
+class MyInto[Fahrenheit] for Celsius {
+  fun convert(x: Celsius) -> Fahrenheit {
+    match x {
+      Celsius.Celsius(c) => { Fahrenheit.Fahrenheit(c * 1.8 + 32.0) }
+    }
+  }
+}
+
+class MyInto[Celsius] for Fahrenheit {
+  fun convert(x: Fahrenheit) -> Celsius {
+    match x {
+      Fahrenheit.Fahrenheit(f) => { Celsius.Celsius((f - 32.0) / 1.8) }
+    }
+  }
+}
+
+fun main() {
+  let c = Celsius.Celsius(100.0)
+  let f = MyInto:convert(c)
+  write f
+  let back = MyInto:convert(f)
+  write back
+}

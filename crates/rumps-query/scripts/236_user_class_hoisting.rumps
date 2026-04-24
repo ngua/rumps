@@ -1,0 +1,44 @@
+; User-defined class with forward references.
+;
+; The class def, instance, and usage are all out of order
+; to test that hoisting works correctly.
+
+fun main() {
+  let a = Pair.Pair(1, 2)
+  let b = Pair.Pair(1, 2)
+  let c = Pair.Pair(3, 4)
+  write "a eq b: {MyEq:eq(a, b)}"
+  write "a eq c: {MyEq:eq(a, c)}"
+  write "describe a: {Describe:describe(a)}"
+  write "describe c: {Describe:describe(c)}"
+}
+
+class Describe C {
+  fun describe(x: C) -> String
+}
+
+type Pair = Pair(Int, Int)
+
+class MyEq C {
+  fun eq(a: C, b: C) -> Bool
+}
+
+class MyEq for Pair {
+  fun eq(a: Pair, b: Pair) -> Bool {
+    match a {
+      Pair.Pair(ax, ay) => {
+        match b {
+          Pair.Pair(bx, by) => { ax == bx && ay == by }
+        }
+      }
+    }
+  }
+}
+
+class Describe for Pair {
+  fun describe(x: Pair) -> String {
+    match x {
+      Pair.Pair(a, b) => { "({a}, {b})" }
+    }
+  }
+}

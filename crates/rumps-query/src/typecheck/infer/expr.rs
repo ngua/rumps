@@ -433,19 +433,37 @@ impl InferCtx<'_> {
                                 MethodSpec::Standard(scheme) => {
                                     // For standard method refs, instantiate the scheme.
                                     // If type args provided, substitute them.
-                                    let (ty, vars) = scheme.instantiate(
+                                    let (ty, constraints) = scheme.instantiate(
                                         &mut self.uf,
                                         &mut self.ty_arena,
                                     );
-                                    match (type_args.first(), vars.first()) {
-                                        (Some(&arg_id), Some(&(var_id, _))) => {
-                                            // Check the var is actually a `Ty::Var`
-                                            let v_opt =
-                                                match self.ty_arena.get(var_id)
-                                                {
-                                                    Ty::Var(v) => Some(*v),
-                                                    _ => None,
-                                                };
+                                    match (
+                                        type_args.first(),
+                                        constraints.first(),
+                                    ) {
+                                        (
+                                            Some(&arg_id),
+                                            Some(&(var_id, ref class)),
+                                        ) => {
+                                            // For parameterized classes, the type arg
+                                            // corresponds to the class param (inside the
+                                            // `Parameterized` constraint), not the
+                                            // constraint's subject (the self var).
+                                            let target_ty = match class {
+                                                TypeClass::Parameterized(
+                                                    _,
+                                                    p,
+                                                ) => *p,
+                                                _ => var_id,
+                                            };
+                                            // Check the target is actually a `Ty::Var`
+                                            let v_opt = match self
+                                                .ty_arena
+                                                .get(target_ty)
+                                            {
+                                                Ty::Var(v) => Some(*v),
+                                                _ => None,
+                                            };
                                             match v_opt {
                                                 Some(v) => {
                                                     let arg_ty = self
@@ -460,8 +478,28 @@ impl InferCtx<'_> {
                                                         ))
                                                         .collect(),
                                                     );
-                                                    self.ty_arena
-                                                        .apply(ty, &rename)
+                                                    let result = self
+                                                        .ty_arena
+                                                        .apply(ty, &rename);
+
+                                                    // For parameterized user classes,
+                                                    // register a deferred param call so
+                                                    // the correct instance function is
+                                                    // resolved after constraint solving.
+                                                    // `var_id` is the self-var (receiver);
+                                                    // `arg_ty` is the concrete class arg.
+                                                    if matches!(
+                                                        class,
+                                                        TypeClass::Parameterized(_, _)
+                                                    ) && k.idx() >= ClassId::BUILTIN_COUNT
+                                                    {
+                                                        self.deferred_param_calls.push((
+                                                            id, k, method,
+                                                            var_id, arg_ty,
+                                                        ));
+                                                    }
+
+                                                    result
                                                 }
                                                 None => {
                                                     self.error(TypeError::Custom {
@@ -788,6 +826,20 @@ impl InferCtx<'_> {
                                     self.deferred_instance_calls
                                         .push((id, ty, kind));
                                 }
+                            }
+                        }
+
+                        // For parameterized user classes, record info for
+                        // deferred resolution of the specific instance fn.
+                        let is_param_user = matches!(
+                            self.env.class_registry().shape(kind),
+                            ClassShape::Parameterized { .. }
+                        ) && kind.idx()
+                            >= ClassId::BUILTIN_COUNT;
+                        if is_param_user {
+                            if let Some(ty) = arg_tys.first().copied() {
+                                self.deferred_param_calls
+                                    .push((id, kind, method, ty, ret));
                             }
                         }
                     }

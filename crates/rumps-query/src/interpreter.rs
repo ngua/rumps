@@ -231,6 +231,12 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
     /// user instance for dispatch.
     instance_calls: HashMap<ExprId, TypeId>,
 
+    /// Resolved function names for parameterized user class method calls.
+    ///
+    /// When a parameterized class has multiple instances for the same type,
+    /// the runtime checks this map first to find the exact function to call.
+    resolved_instance_fns: HashMap<ExprId, StringId>,
+
     /// Class registry; carries class definitions indexed by `ClassId`.
     class_registry: typecheck::ClassRegistry,
 
@@ -276,14 +282,28 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         // convert `Status.Pending` to `Expr::Variant` for user types
         registry.register_from_ast(ast, stmts, &mut arena, &mut type_exprs);
 
-        // Build a class registry for the resolve pass (name -> `ClassId` mapping)
-        let resolve_class_registry = {
+        // Build a class registry for the resolve pass (name -> `ClassId` mapping).
+        // Includes user-defined class stubs so the resolver can map class names
+        // to `ClassId`s for instance resolution.
+        let mut resolve_class_registry = {
             let mut tmp_arena = typecheck::TyArena::new();
             typecheck::ClassRegistry::builtins(
                 &mut |s| arena.strings.intern(s),
                 &mut tmp_arena,
             )
         };
+        stmts.iter().for_each(|&id| {
+            if let Some(Stmt::ClassDef { name, .. }) = ast.get_stmt(id).cloned()
+            {
+                let _ = resolve_class_registry.register(typecheck::ClassDef {
+                    name,
+                    shape: typecheck::ClassShape::Simple,
+                    assoc_types: Default::default(),
+                    methods: vec![],
+                    supers: Default::default(),
+                });
+            }
+        });
 
         let resolved_instances = ResolveCtx::new(
             ast,
@@ -334,6 +354,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             module_hofs,
             user_instances: instance::RuntimeInstanceRegistry::new(),
             instance_calls: tc.instance_calls,
+            resolved_instance_fns: tc.resolved_instance_fns,
             class_registry: tc.class_registry,
             resolved_instances,
         })
@@ -502,6 +523,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             module_hofs,
             user_instances: instance::RuntimeInstanceRegistry::new(),
             instance_calls: HashMap::new(),
+            resolved_instance_fns: HashMap::new(),
             resolved_instances: HashMap::new(),
             class_registry,
         }

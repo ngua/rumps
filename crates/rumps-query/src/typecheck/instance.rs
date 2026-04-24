@@ -1,10 +1,9 @@
-//! User-defined typeclass instance registry.
+//! Typeclass instance registry.
 //!
-//! Tracks which user types implement which builtin classes. Used during
-//! constraint solving to determine if a `Ty::Named` satisfies a class
+//! Tracks which types implement which classes (both builtin and user-defined).
+//! Used during constraint solving to determine if a type satisfies a class
 //! constraint via a user-provided implementation.
 
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
 use smallvec::SmallVec;
@@ -30,7 +29,7 @@ pub(crate) struct AssocTypeDef {
     pub(crate) span: Span,
 }
 
-/// A user-defined instance of a builtin class for a user type.
+/// A user-defined instance of a class for a type.
 ///
 /// Example: `class Display FOR Point { ... }` creates an instance with
 /// `class = Display`, `for_type = Point's TypeId`.
@@ -80,11 +79,13 @@ impl Instance {
 
 /// Registry of user-defined class instances.
 ///
-/// Keyed by `(ClassId, TypeId)` for O(1) lookup during constraint solving.
-/// A type can have at most one instance per class.
+/// Keyed by `(ClassId, TypeId)` for lookup during constraint solving.
+/// For non-parameterized classes, a type has at most one instance per class.
+/// For parameterized classes (e.g., `MyInto[T]`), a type may have multiple
+/// instances with different class type arguments.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct InstanceRegistry {
-    instances: HashMap<(ClassId, TypeId), Instance>,
+    instances: HashMap<(ClassId, TypeId), SmallVec<[Instance; 1]>>,
 }
 
 impl InstanceRegistry {
@@ -93,33 +94,68 @@ impl InstanceRegistry {
         Self::default()
     }
 
-    /// Look up an instance for a class and type.
+    /// Look up the first (or only) instance for a class and type.
+    ///
+    /// For non-parameterized classes this always returns the unique instance.
+    /// For parameterized classes with multiple instances, returns the first;
+    /// prefer `has_with_args` when checking for a specific class arg combination.
     pub(crate) fn lookup(
         &self,
         class: ClassId,
         type_id: TypeId,
     ) -> Option<&Instance> {
-        self.instances.get(&(class, type_id))
+        self.instances
+            .get(&(class, type_id))
+            .and_then(|v| v.first())
+    }
+
+    /// Look up all instances for a class and type.
+    ///
+    /// Returns an empty slice when no instances exist.
+    pub(crate) fn lookup_all(
+        &self,
+        class: ClassId,
+        type_id: TypeId,
+    ) -> &[Instance] {
+        self.instances
+            .get(&(class, type_id))
+            .map(SmallVec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    /// Check whether an instance with the given `class_args` already exists.
+    pub(crate) fn has_with_args(
+        &self,
+        class: ClassId,
+        type_id: TypeId,
+        args: &[TyId],
+    ) -> bool {
+        self.instances
+            .get(&(class, type_id))
+            .is_some_and(|v| v.iter().any(|i| i.class_args.as_slice() == args))
     }
 
     /// Register a new instance.
     ///
-    /// Returns `Err` if an instance already exists for this `(class, type_id)`.
+    /// Returns `Err` if an instance with the same `class_args` already
+    /// exists for this `(class, type_id)`.
     pub(crate) fn register(
         &mut self,
         type_id: TypeId,
         inst: Instance,
     ) -> Result<(), TypeError> {
-        match self.instances.entry((inst.class, type_id)) {
-            Entry::Occupied(_) => Err(TypeError::DuplicateInstance {
+        let v = self.instances.entry((inst.class, type_id)).or_default();
+        if v.iter()
+            .any(|i| i.class_args.as_slice() == inst.class_args.as_slice())
+        {
+            Err(TypeError::DuplicateInstance {
                 class: inst.class,
                 type_id,
                 span: inst.span,
-            }),
-            Entry::Vacant(e) => {
-                e.insert(inst);
-                Ok(())
-            }
+            })
+        } else {
+            v.push(inst);
+            Ok(())
         }
     }
 }

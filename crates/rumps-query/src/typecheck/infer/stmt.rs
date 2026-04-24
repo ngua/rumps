@@ -1087,16 +1087,20 @@ impl InferCtx<'_> {
 
         // 5. Check for forbidden builtin instance
         //
-        // We allow implementing classes for builtin types IF the class has
-        // type args that include user-defined types. For example:
+        // We allow implementing classes for builtin types IF the class is
+        // user-defined OR if the class has type args that include user-defined
+        // types. For example:
         //   - `class Display FOR Int` is forbidden (builtin has Display)
         //   - `class Into[String] FOR Int` is forbidden (builtin has Into[String])
         //   - `class Into[UserId] FOR Int` is ALLOWED (no builtin Into[UserId])
+        //   - `class MyClass FOR Int` is ALLOWED (user-defined class)
         //
-        // The heuristic: if for_type is builtin AND all class args are builtin,
-        // reject. If any class arg is a user type, we allow it.
+        // The heuristic: if the class is builtin AND for_type is builtin AND
+        // all class args are builtin, reject. User-defined classes can always
+        // be implemented for any type.
         if let Some(tid) = type_id {
-            if self.is_builtin_type(tid) {
+            let is_builtin_class = class.idx() < ClassId::BUILTIN_COUNT;
+            if is_builtin_class && self.is_builtin_type(tid) {
                 let all_args_builtin = class_arg_tys.is_empty()
                     || class_arg_tys.iter().all(|&ty| self.is_builtin_ty(ty));
                 if all_args_builtin {
@@ -1228,15 +1232,20 @@ impl InferCtx<'_> {
                 .env
                 .resolve_str(self.env.class_registry().name(class))
                 .to_owned();
+            let ca_names: Vec<String> = class_args
+                .iter()
+                .map(|id| self.extract_type_name_from_ast(*id))
+                .collect();
             let method_map: HashMap<_, _> = methods
                 .iter()
                 .map(|m| {
                     let mn = self.env.resolve_str(m.name);
                     let fn_name =
-                        crate::interpreter::instance::instance_fn_name(
+                        crate::interpreter::instance::instance_fn_name_owned(
                             &class_name_str,
                             &type_name,
                             mn,
+                            &ca_names,
                         );
                     let fn_name_id = self.env.intern(&fn_name);
                     (m.name, fn_name_id)
@@ -1247,7 +1256,10 @@ impl InferCtx<'_> {
                 type_param_subst.values().copied().collect();
 
             // Skip registration if already hoisted (avoid duplicate error)
-            if self.instance_registry.lookup(class, tid).is_none() {
+            if !self
+                .instance_registry
+                .has_with_args(class, tid, &class_arg_tys)
+            {
                 // Convert AST associated types to instance associated types
                 let inst_assoc_types: SmallVec<[instance::AssocTypeDef; 1]> =
                     assoc_types
@@ -1575,6 +1587,10 @@ impl InferCtx<'_> {
             Ty::Regex => Some(TypeId::REGEX),
             Ty::Local => Some(TypeId::LOCAL),
             Ty::Global => Some(TypeId::GLOBAL),
+            Ty::Array(_) => Some(TypeId::ARRAY),
+            Ty::Option(_) => Some(TypeId::OPTION),
+            Ty::Result(_, _) => Some(TypeId::RESULT),
+            Ty::Map(_, _) => Some(TypeId::MAP),
             _ => None,
         }
     }

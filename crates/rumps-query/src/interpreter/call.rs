@@ -490,11 +490,15 @@ impl<I: IoContext> Interpreter<'_, I> {
                     })
             });
 
+        // Check for resolved parameterized instance function first
+        let resolved_fn =
+            expr_id.and_then(|id| self.resolved_instance_fns.get(&id).copied());
+
         // If we have a user type, check for user instance
         if let Some(type_id) = user_type_id {
-            if let Some(fn_name) =
+            if let Some(fn_name) = resolved_fn.or_else(|| {
                 self.user_instances.lookup_method(class, type_id, method)
-            {
+            }) {
                 // Dispatch to user-defined instance method
                 let func_def = self.functions.get(&fn_name).cloned();
                 if let Some(def) = func_def {

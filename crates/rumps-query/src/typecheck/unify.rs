@@ -23,7 +23,7 @@ use super::convert::ConvertCtx;
 use super::env::TypeEnv;
 use super::error::TypeError;
 use super::infer::{ClassContext, Constraint};
-use super::instance::InstanceRegistry;
+use super::instance::{Instance, InstanceRegistry};
 use super::ty::{Rename, Ty, TyArena, TyId, TyVar, TypeClass};
 use super::uf::UnionFind;
 use crate::ast::{Ast, AstTypeExpr};
@@ -86,7 +86,32 @@ impl SolveCtx<'_> {
             Ty::Regex => Some(TypeId::REGEX),
             Ty::Local => Some(TypeId::LOCAL),
             Ty::Global => Some(TypeId::GLOBAL),
+            Ty::Array(_) => Some(TypeId::ARRAY),
+            Ty::Option(_) => Some(TypeId::OPTION),
+            Ty::Result(_, _) => Some(TypeId::RESULT),
+            Ty::Map(_, _) => Some(TypeId::MAP),
             _ => None,
+        }
+    }
+
+    /// Map a `Ty` to its `(TypeId, type_args)` pair for instance lookup.
+    ///
+    /// Handles both primitive types (no args) and parameterized builtins
+    /// (`Array[T]`, `Option[T]`, `Result[Ok, Err]`, `Map[K, V]`), as well
+    /// as `Ty::Named`.
+    fn ty_to_type_id_and_args(
+        &self,
+        ty: TyId,
+    ) -> Option<(TypeId, SmallVec<[TyId; 4]>)> {
+        match self.ty_arena.get(ty).clone() {
+            Ty::Named(id, args) => Some((id, args)),
+            Ty::Array(e) => Some((TypeId::ARRAY, smallvec![e])),
+            Ty::Option(e) => Some((TypeId::OPTION, smallvec![e])),
+            Ty::Result(ok, err) => Some((TypeId::RESULT, smallvec![ok, err])),
+            Ty::Map(k, v) => Some((TypeId::MAP, smallvec![k, v])),
+            ref shape => {
+                Self::primitive_type_id(shape).map(|id| (id, smallvec![]))
+            }
         }
     }
 
@@ -1031,18 +1056,7 @@ impl SolveCtx<'_> {
         span: Span,
     ) {
         match class {
-            TypeClass::Simple(id)
-                if matches!(
-                    *id,
-                    ClassId::NUMERIC
-                        | ClassId::BIT_LIKE
-                        | ClassId::NEGATABLE
-                        | ClassId::MONOID
-                        | ClassId::ORD
-                        | ClassId::EQ
-                        | ClassId::DISPLAY
-                ) =>
-            {
+            TypeClass::Simple(id) => {
                 self.check_simple_class(*id, class, ty, span)
             }
             TypeClass::Parameterized(ClassId::INTO, to) => {
@@ -1053,6 +1067,11 @@ impl SolveCtx<'_> {
             }
             TypeClass::Parameterized(ClassId::INDEXABLE, elem) => {
                 self.check_indexable(class, ty, *elem, span)
+            }
+            TypeClass::Parameterized(id, arg)
+                if id.idx() >= ClassId::BUILTIN_COUNT =>
+            {
+                self.check_user_parameterized(*id, *arg, class, ty, span)
             }
             TypeClass::Hkt(id, opt_elem)
                 if matches!(
@@ -1065,9 +1084,15 @@ impl SolveCtx<'_> {
             {
                 self.check_hkt_class(*id, *opt_elem, class, ty, span)
             }
-            TypeClass::Hkt(tag, opt_elem) => {
-                // `Fallible`, `Wrappable`, `Chainable`
+            // Builtin HKT (Fallible, Wrappable, Chainable)
+            TypeClass::Hkt(tag, opt_elem)
+                if tag.idx() < ClassId::BUILTIN_COUNT =>
+            {
                 self.satisfies_hkt_class(*tag, *opt_elem, class, ty, span);
+            }
+            // User HKT classes: instance-only dispatch
+            TypeClass::Hkt(tag, opt_elem) => {
+                self.check_user_hkt(*tag, *opt_elem, class, ty, span);
             }
             _ => {}
         }
@@ -1260,6 +1285,34 @@ impl SolveCtx<'_> {
                                 ),
                             }
                         }
+                    }
+                }
+                // User classes: handle parameterized builtins via instance lookup
+                _ if class_id.idx() >= ClassId::BUILTIN_COUNT => {
+                    match self.ty_to_type_id_and_args(ty) {
+                        Some((tid, args)) => {
+                            match self
+                                .instance_registry
+                                .lookup(class_id, tid)
+                                .cloned()
+                            {
+                                Some(inst) => self.check_instance_constraints(
+                                    &inst, &args, span, None,
+                                ),
+                                None => self.errors.push(
+                                    TypeError::UnsatisfiedClass(
+                                        class.clone(),
+                                        ty,
+                                        span,
+                                    ),
+                                ),
+                            }
+                        }
+                        None => self.errors.push(TypeError::UnsatisfiedClass(
+                            class.clone(),
+                            ty,
+                            span,
+                        )),
                     }
                 }
                 _ => {
@@ -1544,25 +1597,10 @@ impl SolveCtx<'_> {
 
             // Union handling
             (Ty::Union(prov, members), _) => {
-                match prov.and_then(|id| {
-                    self.instance_registry.lookup(ClassId::INTO, id).cloned()
-                }) {
+                let inst = prov.and_then(|id| self.find_into_instance(id, to));
+                match inst {
                     Some(inst) => {
-                        let inst_target = inst.class_args.first().copied();
-                        if inst_target == Some(to) {
-                            self.check_instance_constraints(
-                                &inst,
-                                &[],
-                                span,
-                                None,
-                            );
-                        } else {
-                            self.errors.push(TypeError::InvalidCast {
-                                from: ty,
-                                to,
-                                span,
-                            });
-                        }
+                        self.check_instance_constraints(&inst, &[], span, None);
                     }
                     None => {
                         let ms: SmallVec<[TyId; 4]> = members.clone();
@@ -1580,21 +1618,11 @@ impl SolveCtx<'_> {
             // User type with `Into` instance
             (Ty::Named(id, type_args), _) => {
                 let (id, type_args) = (*id, type_args.clone());
-                match self.instance_registry.lookup(ClassId::INTO, id).cloned()
-                {
+                match self.find_into_instance(id, to) {
                     Some(inst) => {
-                        let inst_target = inst.class_args.first().copied();
-                        if inst_target == Some(to) {
-                            self.check_instance_constraints(
-                                &inst, &type_args, span, None,
-                            );
-                        } else {
-                            self.errors.push(TypeError::InvalidCast {
-                                from: ty,
-                                to,
-                                span,
-                            });
-                        }
+                        self.check_instance_constraints(
+                            &inst, &type_args, span, None,
+                        );
                     }
                     None => {
                         self.errors.push(TypeError::InvalidCast {
@@ -1610,18 +1638,9 @@ impl SolveCtx<'_> {
             // E.g., `class Into[UserId] FOR Int { ... }`.
             _ => {
                 let type_id = Self::primitive_type_id(self.ty_arena.get(ty));
-                match type_id.and_then(|id| {
-                    self.instance_registry.lookup(ClassId::INTO, id).cloned()
-                }) {
+                match type_id.and_then(|id| self.find_into_instance(id, to)) {
                     Some(inst) => {
-                        let inst_target = inst.class_args.first().copied();
-                        if inst_target != Some(to) {
-                            self.errors.push(TypeError::InvalidCast {
-                                from: ty,
-                                to,
-                                span,
-                            });
-                        }
+                        self.check_instance_constraints(&inst, &[], span, None);
                     }
                     None => {
                         self.errors.push(TypeError::InvalidCast {
@@ -1979,6 +1998,189 @@ impl SolveCtx<'_> {
         }
     }
 
+    /// Check a parameterized user class constraint via instance lookup.
+    fn check_user_parameterized(
+        &mut self,
+        class_id: ClassId,
+        class_arg: TyId,
+        class: &TypeClass<TyId>,
+        ty: TyId,
+        span: Span,
+    ) {
+        let shape = self.ty_arena.get(ty).clone();
+        match shape {
+            Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+            Ty::Union(prov, members) => {
+                let insts = prov
+                    .map(|id| self.instance_registry.lookup_all(class_id, id))
+                    .unwrap_or(&[]);
+                if insts.is_empty() {
+                    members
+                        .iter()
+                        .for_each(|&m| self.satisfies_class(class, m, span));
+                } else {
+                    // Find matching instance by class_arg
+                    let matched =
+                        self.find_matching_instance(insts, class_arg, &[]);
+                    match matched {
+                        Some(inst) => self.check_instance_constraints(
+                            &inst,
+                            &[],
+                            span,
+                            None,
+                        ),
+                        None => members.iter().for_each(|&m| {
+                            self.satisfies_class(class, m, span)
+                        }),
+                    }
+                }
+            }
+            _ => match self.ty_to_type_id_and_args(ty) {
+                Some((tid, args)) => {
+                    let insts =
+                        self.instance_registry.lookup_all(class_id, tid);
+                    match self.find_matching_instance(insts, class_arg, &args) {
+                        Some(inst) => {
+                            let subst =
+                                self.build_instance_subst(&inst, &args, span);
+                            if let Some(&ia) = inst.class_args.first() {
+                                let resolved = self.ty_arena.apply(ia, &subst);
+                                if let Err(e) =
+                                    self.unify_types(class_arg, resolved, span)
+                                {
+                                    self.errors.push(e);
+                                }
+                            }
+                            self.check_instance_constraints(
+                                &inst,
+                                &args,
+                                span,
+                                Some(&subst),
+                            );
+                        }
+                        None => self.errors.push(TypeError::UnsatisfiedClass(
+                            class.clone(),
+                            ty,
+                            span,
+                        )),
+                    }
+                }
+                None => self.errors.push(TypeError::UnsatisfiedClass(
+                    class.clone(),
+                    ty,
+                    span,
+                )),
+            },
+        }
+    }
+
+    /// Find an instance whose `class_args` match the expected `class_arg`.
+    ///
+    /// If only one instance exists, returns it directly.
+    /// For multiple instances, builds each instance's substitution and
+    /// checks if the resolved class arg matches `class_arg`.
+    fn find_matching_instance(
+        &mut self,
+        insts: &[Instance],
+        class_arg: TyId,
+        type_args: &[TyId],
+    ) -> Option<Instance> {
+        match insts {
+            [] => None,
+            [single] => Some(single.clone()),
+            many => {
+                let resolved_arg =
+                    self.uf.resolve(class_arg, &mut self.ty_arena);
+                many.iter()
+                    .find(|inst| {
+                        inst.class_args.first().map_or(false, |&ia| {
+                            let subst = self
+                                .build_instance_subst_readonly(inst, type_args);
+                            let resolved = self.ty_arena.apply(ia, &subst);
+                            resolved == resolved_arg
+                        })
+                    })
+                    .cloned()
+            }
+        }
+    }
+
+    /// Find an `Into[T]` instance for a type whose `class_args` target matches `to`.
+    fn find_into_instance(
+        &self,
+        type_id: TypeId,
+        to: TyId,
+    ) -> Option<Instance> {
+        let insts = self.instance_registry.lookup_all(ClassId::INTO, type_id);
+        insts
+            .iter()
+            .find(|i| i.class_args.first().copied() == Some(to))
+            .cloned()
+    }
+
+    /// Check a user-defined HKT class constraint via instance lookup.
+    ///
+    /// Unlike `satisfies_hkt_class`, does NOT default `Ty::Var` to `Option`
+    /// and does NOT hardcode `Ty::Option`/`Ty::Result` as satisfying.
+    fn check_user_hkt(
+        &mut self,
+        class_id: ClassId,
+        opt_elem: Option<TyId>,
+        class: &TypeClass<TyId>,
+        ty: TyId,
+        span: Span,
+    ) {
+        let shape = self.ty_arena.get(ty).clone();
+        match shape {
+            Ty::Var(_) | Ty::Apply(_, _) | Ty::Error | Ty::Unknown => {}
+            Ty::Union(_, members) => {
+                members
+                    .iter()
+                    .for_each(|&m| self.satisfies_class(class, m, span));
+            }
+            _ => match self.ty_to_type_id_and_args(ty) {
+                Some((tid, args)) => {
+                    match self.instance_registry.lookup(class_id, tid).cloned()
+                    {
+                        Some(inst) => {
+                            let subst =
+                                self.build_instance_subst(&inst, &args, span);
+                            if let Some(elem) = opt_elem {
+                                if let Some(&inst_elem) =
+                                    inst.class_args.first()
+                                {
+                                    let resolved =
+                                        self.ty_arena.apply(inst_elem, &subst);
+                                    if let Err(e) =
+                                        self.unify_types(elem, resolved, span)
+                                    {
+                                        self.errors.push(e);
+                                    }
+                                }
+                            }
+                            self.check_instance_constraints(
+                                &inst,
+                                &args,
+                                span,
+                                Some(&subst),
+                            );
+                        }
+                        None => self.errors.push(TypeError::UnsatisfiedClass(
+                            class.clone(),
+                            ty,
+                            span,
+                        )),
+                    }
+                }
+                None => self.errors.push(TypeError::UnsatisfiedClass(
+                    class.clone(),
+                    ty,
+                    span,
+                )),
+            },
+        }
+    }
+
     /// Build a `Rename` from an instance's `type_params` and the actual
     /// `type_args` at a use site. For `Ty::Var` entries, adds the mapping
     /// to the rename. For concrete entries, unifies with the corresponding
@@ -2009,6 +2211,26 @@ impl SolveCtx<'_> {
                 self.errors.push(e);
             }
         });
+        Rename(vars.into_iter().collect())
+    }
+
+    /// Like `build_instance_subst` but only builds the var-to-type mapping
+    /// without performing unification on concrete entries. Used when
+    /// probing for a matching instance among several candidates.
+    fn build_instance_subst_readonly(
+        &self,
+        inst: &super::instance::Instance,
+        type_args: &[TyId],
+    ) -> Rename {
+        let vars: SmallVec<[(TyVar, TyId); 2]> = inst
+            .type_params
+            .iter()
+            .zip(type_args.iter())
+            .filter_map(|(&p, &a)| match self.ty_arena.get(p) {
+                Ty::Var(tv) => Some((*tv, a)),
+                _ => None,
+            })
+            .collect();
         Rename(vars.into_iter().collect())
     }
 
@@ -2327,6 +2549,57 @@ impl SolveCtx<'_> {
 
                 // Error/Unknown: propagate
                 Ty::Error | Ty::Unknown => Ok(TyArena::ERROR),
+
+                // User classes: handle parameterized builtins via instance lookup
+                _ if class.idx() >= ClassId::BUILTIN_COUNT => {
+                    match self.ty_to_type_id_and_args(base) {
+                        Some((tid, type_args)) => {
+                            match self
+                                .instance_registry
+                                .lookup(class, tid)
+                                .cloned()
+                            {
+                                Some(inst) => {
+                                    let param_rename = self
+                                        .build_instance_subst(
+                                            &inst, &type_args, span,
+                                        );
+                                    match inst.get_assoc_type(assoc_name) {
+                                        Some(assoc_def) => {
+                                            Ok(self.ty_arena.apply(
+                                                assoc_def.ty,
+                                                &param_rename,
+                                            ))
+                                        }
+                                        None => {
+                                            Err(TypeError::MissingAssocType {
+                                                class,
+                                                assoc: assoc_name,
+                                                span,
+                                            })
+                                        }
+                                    }
+                                }
+                                None => Err(TypeError::UnsatisfiedClass(
+                                    TypeClass::placeholder(
+                                        class,
+                                        self.env.class_def(class).shape,
+                                    ),
+                                    base,
+                                    span,
+                                )),
+                            }
+                        }
+                        None => Err(TypeError::UnsatisfiedClass(
+                            TypeClass::placeholder(
+                                class,
+                                self.env.class_def(class).shape,
+                            ),
+                            base,
+                            span,
+                        )),
+                    }
+                }
 
                 // Other types: no instance for this class
                 _ => Err(TypeError::UnsatisfiedClass(

@@ -178,7 +178,7 @@ impl ConvertCtx<'_> {
     ///
     /// Converts generic `Ty::Named` types to their specialized forms
     /// (e.g., `Named(ARRAY, [Int])` -> `Array(Int)`).
-    fn apply_type_args(
+    pub(super) fn apply_type_args(
         &mut self,
         base: TyId,
         args: SmallVec<[TyId; 4]>,

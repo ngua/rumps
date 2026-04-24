@@ -19,7 +19,8 @@ use crate::ClassId;
 
 /// Generate the internal function name for a class instance method.
 ///
-/// Pattern: `__inst_{Class}_{Type}__{method}`
+/// Pattern: `__inst_{Class}_{Type}__{method}` for non-parameterized classes,
+/// or `__inst_{Class}_{Arg1}_{Arg2}_.._{Type}__{method}` for parameterized.
 ///
 /// These names are internal and not user-callable directly. They follow a
 /// consistent format so both the typechecker and interpreter can independently
@@ -31,10 +32,29 @@ pub(crate) fn instance_fn_name(
     class_name: &str,
     type_name: &str,
     method: &str,
+    class_args: &[&str],
 ) -> String {
     // Sanitize `.` to `_` for module-qualified type names
     let safe_name = type_name.replace('.', "_");
-    format!("__inst_{class_name}_{safe_name}__{method}")
+    if class_args.is_empty() {
+        format!("__inst_{class_name}_{safe_name}__{method}")
+    } else {
+        let args = class_args.join("_");
+        format!("__inst_{class_name}_{args}_{safe_name}__{method}")
+    }
+}
+
+/// Like `instance_fn_name`, but accepts owned `String` class args.
+///
+/// Avoids the repeated `Vec<String>` -> `Vec<&str>` conversion at call sites.
+pub(crate) fn instance_fn_name_owned(
+    class_name: &str,
+    type_name: &str,
+    method: &str,
+    class_args: &[String],
+) -> String {
+    let refs: Vec<&str> = class_args.iter().map(String::as_str).collect();
+    instance_fn_name(class_name, type_name, method, &refs)
 }
 
 /// Runtime representation of a user-defined class instance.

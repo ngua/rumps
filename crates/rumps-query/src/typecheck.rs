@@ -34,6 +34,7 @@ pub(crate) use ty::{
 };
 
 use crate::ast::ExprId;
+use crate::intern::StringId;
 use crate::TypeId;
 
 /// Output from type checking.
@@ -60,6 +61,8 @@ pub(crate) struct TypecheckOutput {
     ///
     /// Used to dispatch to user-defined class instances at runtime.
     pub(crate) instance_calls: HashMap<ExprId, TypeId>,
+    /// Resolved function names for ambiguous parameterized class method calls.
+    pub(crate) resolved_instance_fns: HashMap<ExprId, StringId>,
     /// Class registry; carries class definitions indexed by `ClassId`.
     pub(crate) class_registry: ClassRegistry,
 }

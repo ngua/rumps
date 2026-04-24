@@ -1,0 +1,28 @@
+; Error: user class constraint not satisfied.
+;
+; `Int` does not implement `Printable`, so passing an `Int`
+; to `show` should produce a type error.
+
+type Color = Red | Green | Blue
+
+class Printable C {
+  fun to-str(x: C) -> String
+}
+
+class Printable for Color {
+  fun to-str(x: Color) -> String {
+    match x {
+      Color.Red => { "red" }
+      Color.Green => { "green" }
+      Color.Blue => { "blue" }
+    }
+  }
+}
+
+fun show[T: Printable](x: T) -> String {
+  Printable:to-str(x)
+}
+
+fun main() {
+  write show(42)
+}
