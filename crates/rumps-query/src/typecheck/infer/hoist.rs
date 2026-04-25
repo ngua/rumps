@@ -1284,6 +1284,20 @@ impl InferCtx<'_> {
             .copied()
             .collect();
 
-        Some((type_id, self.ty_arena.named(type_id, full_args), elem_tys))
+        // Normalize builtin parameterized types to their canonical `Ty`
+        // form so that the HKT `Apply` resolution in `apply_inner`
+        // produces the correct variant (e.g. `Ty::Option(T)` instead of
+        // `Ty::Named(OPTION, [T])`)
+        let for_ty = match (type_id, full_args.as_slice()) {
+            (TypeId::ARRAY, &[a, ..]) => self.ty_arena.alloc(Ty::Array(a)),
+            (TypeId::OPTION, &[a, ..]) => self.ty_arena.alloc(Ty::Option(a)),
+            (TypeId::RESULT, &[ok, err, ..]) => {
+                self.ty_arena.alloc(Ty::Result(ok, err))
+            }
+            (TypeId::MAP, &[k, v, ..]) => self.ty_arena.alloc(Ty::Map(k, v)),
+            _ => self.ty_arena.named(type_id, full_args),
+        };
+
+        Some((type_id, for_ty, elem_tys))
     }
 }

@@ -1718,15 +1718,24 @@ impl TypeRegistry {
     }
 
     /// Get the number of type parameters for a type.
-    ///
-    /// Returns `None` for builtin types (handled separately).
     pub(crate) fn type_param_count(&self, id: TypeId) -> Option<usize> {
-        self.get_def(id).and_then(|def| match def {
-            TypeDef::Builtin(_) => None,
-            TypeDef::Sum { type_params, .. }
-            | TypeDef::Alias { type_params, .. }
-            | TypeDef::Union { type_params, .. } => Some(type_params.len()),
-        })
+        self.get_def(id)
+            .and_then(|def| match def {
+                TypeDef::Builtin(_) => None,
+                TypeDef::Sum { type_params, .. }
+                | TypeDef::Alias { type_params, .. }
+                | TypeDef::Union { type_params, .. } => Some(type_params.len()),
+            })
+            .or_else(|| Self::builtin_type_param_count(id))
+    }
+
+    /// Type parameter count for builtin parameterized types.
+    fn builtin_type_param_count(id: TypeId) -> Option<usize> {
+        match id {
+            TypeId::ARRAY | TypeId::OPTION => Some(1),
+            TypeId::RESULT | TypeId::MAP => Some(2),
+            _ => None,
+        }
     }
 
     /// Get the registered name for a type by reverse lookup in `by_name`.

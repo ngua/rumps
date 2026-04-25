@@ -1,0 +1,27 @@
+; User-defined HKT class instance for builtin `Option`.
+;
+; Verifies that user HKT classes can be implemented for builtin
+; parameterized types, not just user-defined types.
+
+class MyFunctor F {
+  fun fmap[A, B](x: F[A], f: (A) -> B) -> F[B]
+}
+
+class MyFunctor for Option {
+  fun fmap(x: Option[A], f: (A) -> B) -> Option[B] {
+    match x {
+      Option.Some(a) => { Option.Some(f(a)) }
+      Option.None => { Option.None }
+    }
+  }
+}
+
+fun main() {
+  let x = Option.Some(10)
+  let y = MyFunctor:fmap(x, n => n * 2)
+  write y
+  let z = MyFunctor:fmap(Option.Some("hello"), s => "{s}!")
+  write z
+  let w = MyFunctor:fmap(Option.None, n => n + 1)
+  write w
+}

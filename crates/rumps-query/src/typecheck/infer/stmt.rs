@@ -1355,18 +1355,27 @@ impl InferCtx<'_> {
                             if let Some((&container_var, elem_vars)) =
                                 scheme.vars.split_last()
                             {
-                                // Use `for_ty` directly; it has all
-                                // positions filled (fixed params + elem
-                                // vars). `apply_inner` will replace the
-                                // last `na.len()` positions, which are
-                                // exactly the element slots.
-                                let ctor_ty = for_ty;
+                                // First, rewrite `for_ty` so that any vars
+                                // inside it that collide with scheme vars are
+                                // replaced with fresh vars. This prevents a
+                                // cycle in the rename (e.g. `for_ty` contains
+                                // `Var(TyVar(2))` which is also the container
+                                // var being mapped to `for_ty`).
+                                let mut pre_rename = HashMap::new();
+                                scheme.vars.iter().for_each(|&sv| {
+                                    pre_rename.insert(sv, self.fresh());
+                                });
+                                let pre_rename = Rename(pre_rename);
+                                let ctor_ty =
+                                    self.ty_arena.apply(for_ty, &pre_rename);
+
                                 let mut rename = HashMap::new();
                                 rename.insert(container_var, ctor_ty);
                                 elem_vars.iter().for_each(|&ev| {
                                     rename.insert(ev, self.fresh());
                                 });
                                 let rename = Rename(rename);
+
                                 let ps: Vec<_> = params
                                     .iter()
                                     .map(|&p| self.ty_arena.apply(p, &rename))

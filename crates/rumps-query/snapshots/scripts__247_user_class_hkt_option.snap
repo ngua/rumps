@@ -1,0 +1,7 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; User-defined HKT class instance for builtin `Option`.\n;\n; Verifies that user HKT classes can be implemented for builtin\n; parameterized types, not just user-defined types.\n\nclass MyFunctor F {\n  fun fmap[A, B](x: F[A], f: (A) -> B) -> F[B]\n}\n\nclass MyFunctor for Option {\n  fun fmap(x: Option[A], f: (A) -> B) -> Option[B] {\n    match x {\n      Option.Some(a) => { Option.Some(f(a)) }\n      Option.None => { Option.None }\n    }\n  }\n}\n\nfun main() {\n  let x = Option.Some(10)\n  let y = MyFunctor:fmap(x, n => n * 2)\n  write y\n  let z = MyFunctor:fmap(Option.Some(\"hello\"), s => \"{s}!\")\n  write z\n  let w = MyFunctor:fmap(Option.None, n => n + 1)\n  write w\n}\n"
+---
+Option.Some(20)
+Option.Some("hello!")
+Option.None
