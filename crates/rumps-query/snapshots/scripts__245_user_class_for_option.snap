@@ -1,0 +1,7 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; User-defined class instance for parameterized builtin `Option`.\n;\n; Verifies that user classes can be implemented for builtin\n; parameterized types, not just scalar builtins.\n\nclass Describe C {\n  fun describe(x: C) -> String\n}\n\nclass Describe for Option[T] {\n  fun describe(x: Option[T]) -> String {\n    match x {\n      Option.Some(v) => { \"some\" }\n      Option.None => { \"none\" }\n    }\n  }\n}\n\nfun main() {\n  write Describe:describe(Option.Some(42))\n  write Describe:describe(Option.Some(\"hi\"))\n  write Describe:describe(Option.None)\n}\n"
+---
+"some"
+"some"
+"none"

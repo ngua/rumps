@@ -1,0 +1,9 @@
+; Error: unknown class used in a constraint.
+
+fun foo[T: NonExistent](x: T) -> T {
+  x
+}
+
+fun main() {
+  write foo(42)
+}

@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Associated-type-only class (no methods).\n;\n; Defines `HasKey` with only a `newtype` declaration and\n; uses the associated type via qualified `HasKey:Key` syntax.\n\ntype User = User(String, Int)\n\nclass HasKey C {\n  newtype Key\n}\n\nclass HasKey for User {\n  newtype Key = Int\n}\n\nfun get-key[T: HasKey](x: T) -> HasKey:Key {\n  42\n}\n\nfun main() {\n  let u = User.User(\"Alice\", 1)\n  write get-key(u)\n}\n"
+---
+42

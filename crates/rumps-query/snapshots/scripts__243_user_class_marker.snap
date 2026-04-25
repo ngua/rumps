@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Marker class (empty body, no methods or associated types).\n;\n; Defines a `Marker` class with an empty body and uses it\n; as a constraint on a function.\n\ntype Point = Point(Int, Int)\n\nclass Marker C { }\n\nclass Marker for Point { }\n\nfun needs-marker[T: Marker](x: T) -> T {\n  x\n}\n\nfun main() {\n  let p = Point.Point(1, 2)\n  write needs-marker(p)\n}\n"
+---
+Point.Point(1, 2)

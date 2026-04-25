@@ -1,0 +1,23 @@
+; Associated-type-only class (no methods).
+;
+; Defines `HasKey` with only a `newtype` declaration and
+; uses the associated type via qualified `HasKey:Key` syntax.
+
+type User = User(String, Int)
+
+class HasKey C {
+  newtype Key
+}
+
+class HasKey for User {
+  newtype Key = Int
+}
+
+fun get-key[T: HasKey](x: T) -> HasKey:Key {
+  42
+}
+
+fun main() {
+  let u = User.User("Alice", 1)
+  write get-key(u)
+}

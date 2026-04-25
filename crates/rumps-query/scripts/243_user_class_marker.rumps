@@ -1,0 +1,19 @@
+; Marker class (empty body, no methods or associated types).
+;
+; Defines a `Marker` class with an empty body and uses it
+; as a constraint on a function.
+
+type Point = Point(Int, Int)
+
+class Marker C { }
+
+class Marker for Point { }
+
+fun needs-marker[T: Marker](x: T) -> T {
+  x
+}
+
+fun main() {
+  let p = Point.Point(1, 2)
+  write needs-marker(p)
+}
