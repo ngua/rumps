@@ -150,9 +150,9 @@ impl<'a> LowerCtx<'a> {
 
     /// Detect the `ClassShape` from a class definition's CST.
     ///
-    /// - Non-empty `class_params` -> `Parameterized`
+    /// - Non-empty `class_params` -> `Concrete { params: n }`
     /// - Self var used as type constructor (`C[T]` in method sigs) -> `Hkt`
-    /// - Otherwise -> `Simple`
+    /// - Otherwise -> `Concrete { params: 0 }`
     fn detect_class_shape(
         class_params: &[cst::TypeParam],
         sv: StringId,
@@ -169,13 +169,13 @@ impl<'a> LowerCtx<'a> {
                     .to_owned(),
             ))
         } else if is_param {
-            Ok(ClassShape::Parameterized {
+            Ok(ClassShape::Concrete {
                 params: class_params.len() as u8,
             })
         } else if is_hkt {
-            Ok(ClassShape::Hkt { kind: 1 })
+            Ok(ClassShape::Hkt { kind: 1, params: 0 })
         } else {
-            Ok(ClassShape::Simple)
+            Ok(ClassShape::Concrete { params: 0 })
         }
     }
 
@@ -234,7 +234,7 @@ impl<'a> LowerCtx<'a> {
         })?;
         let shape = self.registry.shape(id);
         match shape {
-            ClassShape::Simple => {
+            ClassShape::Concrete { params: 0 } => {
                 if !c.args.is_empty() {
                     Err(Error::static_err(
                         c.span,
@@ -256,7 +256,7 @@ impl<'a> LowerCtx<'a> {
                 }
                 Ok(TypeClass::Hkt(id, None))
             }
-            ClassShape::Parameterized { params } => {
+            ClassShape::Concrete { params } => {
                 let mut args = c.args.into_iter();
                 let ty = args.next().ok_or_else(|| {
                     Error::static_err(

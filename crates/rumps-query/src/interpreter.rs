@@ -297,7 +297,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             {
                 let _ = resolve_class_registry.register(typecheck::ClassDef {
                     name,
-                    shape: typecheck::ClassShape::Simple,
+                    shape: typecheck::ClassShape::Concrete { params: 0 },
                     assoc_types: Default::default(),
                     methods: vec![],
                     supers: Default::default(),

@@ -615,15 +615,15 @@ impl InferCtx<'_> {
                     .into(),
                 span,
             });
-            ClassShape::Simple
+            ClassShape::Concrete { params: 0 }
         } else if is_param {
-            ClassShape::Parameterized {
+            ClassShape::Concrete {
                 params: class_params.len() as u8,
             }
         } else if is_hkt {
-            ClassShape::Hkt { kind: 1 }
+            ClassShape::Hkt { kind: 1, params: 0 }
         } else {
-            ClassShape::Simple
+            ClassShape::Concrete { params: 0 }
         };
 
         let assoc_names = assoc_types.iter().map(|a| a.name).collect();
@@ -735,7 +735,7 @@ impl InferCtx<'_> {
         // (a) Allocate type variables and build substitution map
         let mut subst: IndexMap<StringId, TyId> = IndexMap::new();
         let (total_vars, self_var_idx, class_constraint) = match dc.shape {
-            ClassShape::Simple => {
+            ClassShape::Concrete { params: 0 } => {
                 // Self var -> TyVar(0), method-local params -> TyVar(1), ...
                 let sv_ty = self.ty_arena.var(0);
                 subst.insert(dc.self_var, sv_ty);
@@ -749,7 +749,7 @@ impl InferCtx<'_> {
                     (TyVar::new(0), TypeClass::Simple(dc.class_id));
                 (total, 0u32, constraint)
             }
-            ClassShape::Parameterized { .. } => {
+            ClassShape::Concrete { .. } => {
                 // Self var -> TyVar(0), class params -> TyVar(1..n),
                 // method-local -> TyVar(n+1..)
                 let sv_ty = self.ty_arena.var(0);
@@ -1148,7 +1148,7 @@ impl InferCtx<'_> {
         span: Span,
     ) -> Option<(TypeId, TyId, SmallVec<[TyId; 2]>)> {
         let kind = match self.env.class_registry().shape(class) {
-            ClassShape::Hkt { kind } => kind,
+            ClassShape::Hkt { kind, .. } => kind,
             _ => 0,
         };
         // HKT element types are inferred; explicit class args not allowed

@@ -2089,11 +2089,10 @@ impl SolveCtx<'_> {
             [] => None,
             [single] => Some(single.clone()),
             many => {
-                let resolved_arg =
-                    self.uf.resolve(class_arg, &mut self.ty_arena);
+                let resolved_arg = self.uf.resolve(class_arg, self.ty_arena);
                 many.iter()
                     .find(|inst| {
-                        inst.class_args.first().map_or(false, |&ia| {
+                        inst.class_args.first().is_some_and(|&ia| {
                             let subst = self
                                 .build_instance_subst_readonly(inst, type_args);
                             let resolved = self.ty_arena.apply(ia, &subst);

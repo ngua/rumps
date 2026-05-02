@@ -19,12 +19,11 @@ use crate::{ClassId, Span, TypeId};
 /// Determines how many and what kind of type parameters the class carries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ClassShape {
-    /// Kind `*`; no type params in constraint.
-    Simple,
-    /// Kind `* -> *` (or higher); element type comes from usage sites (`F[T]`).
-    Hkt { kind: u8 },
-    /// Kind `*`; has explicit type params in constraint (e.g., `Into[T]`).
-    Parameterized { params: u8 },
+    /// Kind `*`; optionally carries fixed type params in constraints.
+    Concrete { params: u8 },
+    /// Kind `* -> *` (or higher); element types from usage sites, plus optional
+    /// fixed params.
+    Hkt { kind: u8, params: u8 },
 }
 
 /// What kind of type tracking a method requires for runtime dispatch.
@@ -141,7 +140,7 @@ impl ClassRegistry {
             // 0: Numeric
             ClassDef {
                 name: s("Numeric"),
-                shape: ClassShape::Simple,
+                shape: ClassShape::Concrete { params: 0 },
                 assoc_types: smallvec![],
                 supers: smallvec![],
                 methods: vec![
@@ -192,7 +191,7 @@ impl ClassRegistry {
             // 1: Iterable
             ClassDef {
                 name: s("Iterable"),
-                shape: ClassShape::Hkt { kind: 1 },
+                shape: ClassShape::Hkt { kind: 1, params: 0 },
                 assoc_types: smallvec![],
                 supers: smallvec![],
                 methods: vec![
@@ -215,7 +214,7 @@ impl ClassRegistry {
             // 2: Monoid
             ClassDef {
                 name: s("Monoid"),
-                shape: ClassShape::Simple,
+                shape: ClassShape::Concrete { params: 0 },
                 assoc_types: smallvec![],
                 supers: smallvec![],
                 methods: vec![
@@ -241,7 +240,7 @@ impl ClassRegistry {
             // 3: BitLike
             ClassDef {
                 name: s("BitLike"),
-                shape: ClassShape::Simple,
+                shape: ClassShape::Concrete { params: 0 },
                 assoc_types: smallvec![],
                 supers: smallvec![],
                 methods: vec![
@@ -278,7 +277,7 @@ impl ClassRegistry {
             // 4: Negatable
             ClassDef {
                 name: s("Negatable"),
-                shape: ClassShape::Simple,
+                shape: ClassShape::Concrete { params: 0 },
                 assoc_types: smallvec![],
                 supers: smallvec![],
                 methods: vec![(
@@ -289,7 +288,7 @@ impl ClassRegistry {
             // 5: Fallible
             ClassDef {
                 name: s("Fallible"),
-                shape: ClassShape::Hkt { kind: 1 },
+                shape: ClassShape::Hkt { kind: 1, params: 0 },
                 assoc_types: smallvec![],
                 supers: smallvec![ClassId::WRAPPABLE],
                 methods: vec![(
@@ -303,7 +302,7 @@ impl ClassRegistry {
             // 6: Into
             ClassDef {
                 name: s("Into"),
-                shape: ClassShape::Parameterized { params: 1 },
+                shape: ClassShape::Concrete { params: 1 },
                 assoc_types: smallvec![],
                 supers: smallvec![],
                 methods: vec![(
@@ -324,7 +323,7 @@ impl ClassRegistry {
             // 7: TryInto
             ClassDef {
                 name: s("TryInto"),
-                shape: ClassShape::Parameterized { params: 1 },
+                shape: ClassShape::Concrete { params: 1 },
                 assoc_types: smallvec![],
                 supers: smallvec![],
                 methods: vec![(
@@ -348,7 +347,7 @@ impl ClassRegistry {
             // 8: Indexable
             ClassDef {
                 name: s("Indexable"),
-                shape: ClassShape::Parameterized { params: 1 },
+                shape: ClassShape::Concrete { params: 1 },
                 assoc_types: smallvec![idx_name],
                 supers: smallvec![],
                 methods: vec![
@@ -388,7 +387,7 @@ impl ClassRegistry {
             // 9: Ord
             ClassDef {
                 name: s("Ord"),
-                shape: ClassShape::Simple,
+                shape: ClassShape::Concrete { params: 0 },
                 assoc_types: smallvec![],
                 supers: smallvec![],
                 methods: vec![(
@@ -402,7 +401,7 @@ impl ClassRegistry {
             // 10: Mappable
             ClassDef {
                 name: s("Mappable"),
-                shape: ClassShape::Hkt { kind: 1 },
+                shape: ClassShape::Hkt { kind: 1, params: 0 },
                 assoc_types: smallvec![],
                 supers: smallvec![],
                 methods: vec![(
@@ -419,7 +418,7 @@ impl ClassRegistry {
             // 11: Foldable
             ClassDef {
                 name: s("Foldable"),
-                shape: ClassShape::Hkt { kind: 1 },
+                shape: ClassShape::Hkt { kind: 1, params: 0 },
                 assoc_types: smallvec![],
                 supers: smallvec![],
                 methods: vec![(
@@ -436,7 +435,7 @@ impl ClassRegistry {
             // 12: Filterable
             ClassDef {
                 name: s("Filterable"),
-                shape: ClassShape::Hkt { kind: 1 },
+                shape: ClassShape::Hkt { kind: 1, params: 0 },
                 assoc_types: smallvec![],
                 supers: smallvec![],
                 methods: vec![(
@@ -453,7 +452,7 @@ impl ClassRegistry {
             // 13: Display
             ClassDef {
                 name: s("Display"),
-                shape: ClassShape::Simple,
+                shape: ClassShape::Concrete { params: 0 },
                 assoc_types: smallvec![],
                 supers: smallvec![],
                 methods: vec![(
@@ -467,7 +466,7 @@ impl ClassRegistry {
             // 14: Eq
             ClassDef {
                 name: s("Eq"),
-                shape: ClassShape::Simple,
+                shape: ClassShape::Concrete { params: 0 },
                 assoc_types: smallvec![],
                 supers: smallvec![],
                 methods: vec![(
@@ -481,7 +480,7 @@ impl ClassRegistry {
             // 15: Wrappable
             ClassDef {
                 name: s("Wrappable"),
-                shape: ClassShape::Hkt { kind: 1 },
+                shape: ClassShape::Hkt { kind: 1, params: 0 },
                 assoc_types: smallvec![],
                 supers: smallvec![],
                 methods: vec![(
@@ -498,7 +497,7 @@ impl ClassRegistry {
             // 16: Chainable
             ClassDef {
                 name: s("Chainable"),
-                shape: ClassShape::Hkt { kind: 1 },
+                shape: ClassShape::Hkt { kind: 1, params: 0 },
                 assoc_types: smallvec![],
                 supers: smallvec![ClassId::WRAPPABLE],
                 methods: vec![(
@@ -672,18 +671,18 @@ impl<T> TypeClass<T> {
         span: Span,
     ) -> Result<Self, TypeError> {
         match shape {
-            ClassShape::Simple => {
+            ClassShape::Concrete { params: 0 } => {
                 if arg.is_some() {
                     Err(TypeError::ClassRejectsArg { class: tag, span })
                 } else {
                     Ok(Self::Simple(tag))
                 }
             }
-            ClassShape::Hkt { .. } => Ok(Self::Hkt(tag, arg)),
-            ClassShape::Parameterized { .. } => arg.map_or_else(
+            ClassShape::Concrete { .. } => arg.map_or_else(
                 || Err(TypeError::ClassRequiresArg { class: tag, span }),
                 |a| Ok(Self::Parameterized(tag, a)),
             ),
+            ClassShape::Hkt { .. } => Ok(Self::Hkt(tag, arg)),
         }
     }
 }
@@ -737,11 +736,11 @@ impl TypeClass<TyId> {
     /// Create a placeholder constraint for error messages.
     pub(crate) fn placeholder(tag: ClassId, shape: ClassShape) -> Self {
         match shape {
-            ClassShape::Simple => Self::Simple(tag),
-            ClassShape::Hkt { .. } => Self::Hkt(tag, None),
-            ClassShape::Parameterized { .. } => {
+            ClassShape::Concrete { params: 0 } => Self::Simple(tag),
+            ClassShape::Concrete { .. } => {
                 Self::Parameterized(tag, TyArena::UNKNOWN)
             }
+            ClassShape::Hkt { .. } => Self::Hkt(tag, None),
         }
     }
 }

@@ -833,7 +833,7 @@ impl InferCtx<'_> {
                         // deferred resolution of the specific instance fn.
                         let is_param_user = matches!(
                             self.env.class_registry().shape(kind),
-                            ClassShape::Parameterized { .. }
+                            ClassShape::Concrete { params } if params > 0
                         ) && kind.idx()
                             >= ClassId::BUILTIN_COUNT;
                         if is_param_user {
