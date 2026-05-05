@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use smallvec::SmallVec;
+use smallvec::{smallvec, SmallVec};
 
 use super::cst;
 use crate::ast::{
@@ -120,12 +120,8 @@ impl<'a> LowerCtx<'a> {
                 ..
             } = &s.kind
             {
-                let shape = Self::detect_class_shape(
-                    class_params,
-                    *self_var,
-                    methods,
-                    s.span,
-                )?;
+                let shape =
+                    Self::detect_class_shape(class_params, *self_var, methods);
                 let assoc_names = assoc_types.iter().map(|a| a.name).collect();
                 let stub = crate::typecheck::ClassDef {
                     name: *name,
@@ -150,32 +146,30 @@ impl<'a> LowerCtx<'a> {
 
     /// Detect the `ClassShape` from a class definition's CST.
     ///
-    /// - Non-empty `class_params` -> `Concrete { params: n }`
+    /// - Both class params and HKT self var -> `Hkt { kind: 1, params: n }`
+    /// - Non-empty `class_params` only -> `Concrete { params: n }`
     /// - Self var used as type constructor (`C[T]` in method sigs) -> `Hkt`
     /// - Otherwise -> `Concrete { params: 0 }`
     fn detect_class_shape(
         class_params: &[cst::TypeParam],
         sv: StringId,
         methods: &[cst::ClassMethodSig],
-        span: crate::Span,
-    ) -> Result<ClassShape> {
+    ) -> ClassShape {
         let is_param = !class_params.is_empty();
         let is_hkt = Self::self_var_is_hkt(sv, methods);
         if is_param && is_hkt {
-            Err(Error::static_err(
-                span,
-                "class cannot have both class-level type parameters \
-                 and use the self variable as a type constructor"
-                    .to_owned(),
-            ))
-        } else if is_param {
-            Ok(ClassShape::Concrete {
+            ClassShape::Hkt {
+                kind: 1,
                 params: class_params.len() as u8,
-            })
+            }
+        } else if is_param {
+            ClassShape::Concrete {
+                params: class_params.len() as u8,
+            }
         } else if is_hkt {
-            Ok(ClassShape::Hkt { kind: 1, params: 0 })
+            ClassShape::Hkt { kind: 1, params: 0 }
         } else {
-            Ok(ClassShape::Concrete { params: 0 })
+            ClassShape::Concrete { params: 0 }
         }
     }
 
@@ -241,9 +235,27 @@ impl<'a> LowerCtx<'a> {
                         format!("`{name}` does not accept type arguments"),
                     ))?
                 }
-                Ok(TypeClass::Simple(id))
+                Ok(TypeClass::simple(id))
             }
-            ClassShape::Hkt { .. } => {
+            ClassShape::Concrete { params } => {
+                if c.args.len() != params as usize {
+                    Err(Error::static_err(
+                        c.span,
+                        format!(
+                            "`{name}` expects {params} type argument(s), \
+                             but received {}",
+                            c.args.len()
+                        ),
+                    ))?
+                }
+                let params: SmallVec<[AstTypeExprId; 1]> = c
+                    .args
+                    .into_iter()
+                    .map(|a| self.type_expr(a))
+                    .collect::<Result<_>>()?;
+                Ok(TypeClass::Concrete { id, params })
+            }
+            ClassShape::Hkt { params: 0, .. } => {
                 if !c.args.is_empty() {
                     Err(Error::static_err(
                         c.span,
@@ -254,29 +266,29 @@ impl<'a> LowerCtx<'a> {
                         ),
                     ))?
                 }
-                Ok(TypeClass::Hkt(id, None))
+                Ok(TypeClass::hkt(id))
             }
-            ClassShape::Concrete { params } => {
-                let mut args = c.args.into_iter();
-                let ty = args.next().ok_or_else(|| {
-                    Error::static_err(
-                        c.span,
-                        format!(
-                            "`{name}` requires a type argument: `{name}[T]`"
-                        ),
-                    )
-                })?;
-                if args.next().is_some() {
+            ClassShape::Hkt { params, .. } => {
+                if c.args.len() != params as usize {
                     Err(Error::static_err(
                         c.span,
                         format!(
-                            "`{name}` expects {params} type argument(s), \
-                             but received more"
+                            "`{name}` expects {params} fixed type argument(s), \
+                             but received {}",
+                            c.args.len()
                         ),
                     ))?
                 }
-                let ty_id = self.type_expr(ty)?;
-                Ok(TypeClass::Parameterized(id, ty_id))
+                let params: SmallVec<[AstTypeExprId; 1]> = c
+                    .args
+                    .into_iter()
+                    .map(|a| self.type_expr(a))
+                    .collect::<Result<_>>()?;
+                Ok(TypeClass::Hkt {
+                    id,
+                    elems: smallvec![],
+                    params,
+                })
             }
         }
     }
