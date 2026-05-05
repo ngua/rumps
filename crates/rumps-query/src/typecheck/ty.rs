@@ -113,17 +113,17 @@ impl ClassRegistry {
         let simple1 = |ty: TyId, tag: ClassId| Scheme {
             vars: smallvec![TyVar::new(0)],
             ty,
-            constraints: smallvec![(TyVar::new(0), TypeClass::Simple(tag))],
+            constraints: smallvec![(TyVar::new(0), TypeClass::simple(tag))],
         };
         let hkt2 = |ty: TyId, tag: ClassId| Scheme {
             vars: smallvec![TyVar::new(0), TyVar::new(1)],
             ty,
-            constraints: smallvec![(TyVar::new(1), TypeClass::Hkt(tag, None))],
+            constraints: smallvec![(TyVar::new(1), TypeClass::hkt(tag))],
         };
         let hkt3 = |ty: TyId, tag: ClassId| Scheme {
             vars: smallvec![TyVar::new(0), TyVar::new(1), TyVar::new(2)],
             ty,
-            constraints: smallvec![(TyVar::new(2), TypeClass::Hkt(tag, None))],
+            constraints: smallvec![(TyVar::new(2), TypeClass::hkt(tag))],
         };
 
         let idx_name = intern("Index");
@@ -313,7 +313,7 @@ impl ClassRegistry {
                             ty: arena.func(smallvec![v0], v1),
                             constraints: smallvec![(
                                 TyVar::new(0),
-                                TypeClass::Parameterized(ClassId::INTO, v1)
+                                TypeClass::param(ClassId::INTO, v1)
                             )],
                         },
                         track: TrackKind::Convert,
@@ -337,7 +337,7 @@ impl ClassRegistry {
                             },
                             constraints: smallvec![(
                                 TyVar::new(0),
-                                TypeClass::Parameterized(ClassId::TRY_INTO, v1)
+                                TypeClass::param(ClassId::TRY_INTO, v1)
                             )],
                         },
                         track: TrackKind::ConvertResultInner,
@@ -358,10 +358,7 @@ impl ClassRegistry {
                             ty: arena.func(smallvec![v0, assoc_idx], v1),
                             constraints: smallvec![(
                                 TyVar::new(0),
-                                TypeClass::Parameterized(
-                                    ClassId::INDEXABLE,
-                                    v1
-                                )
+                                TypeClass::param(ClassId::INDEXABLE, v1)
                             )],
                         }),
                     ),
@@ -375,10 +372,7 @@ impl ClassRegistry {
                             },
                             constraints: smallvec![(
                                 TyVar::new(0),
-                                TypeClass::Parameterized(
-                                    ClassId::INDEXABLE,
-                                    v1
-                                )
+                                TypeClass::param(ClassId::INDEXABLE, v1)
                             )],
                         }),
                     ),
@@ -599,39 +593,85 @@ pub(crate) struct DuplicateClassError {
 /// - Ty:  `TypeClass<TyId>`
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TypeClass<T> {
-    /// Kind `*` class; no type parameters.
-    Simple(ClassId),
-    /// Kind `* -> *` class; `None` = polymorphic, `Some` = resolved element type.
-    Hkt(ClassId, Option<T>),
-    /// Parameterized class; always carries explicit type arg(s).
-    Parameterized(ClassId, T),
+    /// Kind `*` class with optional fixed type params.
+    Concrete {
+        id: ClassId,
+        params: SmallVec<[T; 1]>,
+    },
+    /// Kind `* -> *` (or higher) class; `elems` from usage sites, `params`
+    /// are fixed type params.
+    Hkt {
+        id: ClassId,
+        elems: SmallVec<[T; 1]>,
+        params: SmallVec<[T; 1]>,
+    },
 }
 
-impl<T: Copy> TypeClass<T> {
-    /// Preserves the HKT inner type while swapping the class tag.
+impl<T: Clone> TypeClass<T> {
+    /// Preserves the HKT inner types while swapping the class tag.
     /// Returns `None` if `self` is not an HKT class.
     pub(crate) fn with_tag(&self, tag: ClassId) -> Option<Self> {
         match self {
-            Self::Hkt(_, inner) => Some(Self::Hkt(tag, *inner)),
+            Self::Hkt { elems, params, .. } => Some(Self::Hkt {
+                id: tag,
+                elems: elems.clone(),
+                params: params.clone(),
+            }),
             _ => None,
         }
     }
 }
 
 impl<T> TypeClass<T> {
+    pub(crate) fn simple(id: ClassId) -> Self {
+        Self::Concrete {
+            id,
+            params: smallvec![],
+        }
+    }
+
+    pub(crate) fn hkt(id: ClassId) -> Self {
+        Self::Hkt {
+            id,
+            elems: smallvec![],
+            params: smallvec![],
+        }
+    }
+
+    pub(crate) fn hkt_elem(id: ClassId, e: T) -> Self {
+        Self::Hkt {
+            id,
+            elems: smallvec![e],
+            params: smallvec![],
+        }
+    }
+
+    pub(crate) fn param(id: ClassId, p: T) -> Self {
+        Self::Concrete {
+            id,
+            params: smallvec![p],
+        }
+    }
+
     /// Extract the class id for dispatch/lookup.
     pub(crate) fn tag(&self) -> ClassId {
         match self {
-            Self::Simple(t) | Self::Hkt(t, _) | Self::Parameterized(t, _) => *t,
+            Self::Concrete { id, .. } | Self::Hkt { id, .. } => *id,
         }
     }
 
     /// Map over inner types (for layer conversion).
     pub(crate) fn map<U>(self, mut f: impl FnMut(T) -> U) -> TypeClass<U> {
         match self {
-            Self::Simple(t) => TypeClass::Simple(t),
-            Self::Hkt(t, opt) => TypeClass::Hkt(t, opt.map(&mut f)),
-            Self::Parameterized(t, arg) => TypeClass::Parameterized(t, f(arg)),
+            Self::Concrete { id, params } => TypeClass::Concrete {
+                id,
+                params: params.into_iter().map(&mut f).collect(),
+            },
+            Self::Hkt { id, elems, params } => TypeClass::Hkt {
+                id,
+                elems: elems.into_iter().map(&mut f).collect(),
+                params: params.into_iter().map(&mut f).collect(),
+            },
         }
     }
 
@@ -641,13 +681,24 @@ impl<T> TypeClass<T> {
         mut f: impl FnMut(T) -> std::result::Result<U, E>,
     ) -> std::result::Result<TypeClass<U>, E> {
         match self {
-            Self::Simple(t) => Ok(TypeClass::Simple(t)),
-            Self::Hkt(t, opt) => {
-                Ok(TypeClass::Hkt(t, opt.map(&mut f).transpose()?))
-            }
-            Self::Parameterized(t, arg) => {
-                Ok(TypeClass::Parameterized(t, f(arg)?))
-            }
+            Self::Concrete { id, params } => Ok(TypeClass::Concrete {
+                id,
+                params: params
+                    .into_iter()
+                    .map(&mut f)
+                    .collect::<std::result::Result<_, _>>()?,
+            }),
+            Self::Hkt { id, elems, params } => Ok(TypeClass::Hkt {
+                id,
+                elems: elems
+                    .into_iter()
+                    .map(&mut f)
+                    .collect::<std::result::Result<_, _>>()?,
+                params: params
+                    .into_iter()
+                    .map(&mut f)
+                    .collect::<std::result::Result<_, _>>()?,
+            }),
         }
     }
 
@@ -657,32 +708,59 @@ impl<T> TypeClass<T> {
         mut f: impl FnMut(&T) -> U,
     ) -> TypeClass<U> {
         match self {
-            Self::Simple(t) => TypeClass::Simple(*t),
-            Self::Hkt(t, opt) => TypeClass::Hkt(*t, opt.as_ref().map(&mut f)),
-            Self::Parameterized(t, arg) => TypeClass::Parameterized(*t, f(arg)),
+            Self::Concrete { id, params } => TypeClass::Concrete {
+                id: *id,
+                params: params.iter().map(&mut f).collect(),
+            },
+            Self::Hkt { id, elems, params } => TypeClass::Hkt {
+                id: *id,
+                elems: elems.iter().map(&mut f).collect(),
+                params: params.iter().map(&mut f).collect(),
+            },
         }
     }
 
-    /// Construct from tag + shape + optional arg; validates shape.
+    /// Construct from `tag` + `shape` + `args`; validates shape.
     pub(crate) fn from_tag(
         tag: ClassId,
         shape: ClassShape,
-        arg: Option<T>,
+        args: SmallVec<[T; 1]>,
         span: Span,
     ) -> Result<Self, TypeError> {
         match shape {
             ClassShape::Concrete { params: 0 } => {
-                if arg.is_some() {
-                    Err(TypeError::ClassRejectsArg { class: tag, span })
+                if args.is_empty() {
+                    Ok(Self::Concrete {
+                        id: tag,
+                        params: smallvec![],
+                    })
                 } else {
-                    Ok(Self::Simple(tag))
+                    Err(TypeError::ClassRejectsArg { class: tag, span })
                 }
             }
-            ClassShape::Concrete { .. } => arg.map_or_else(
-                || Err(TypeError::ClassRequiresArg { class: tag, span }),
-                |a| Ok(Self::Parameterized(tag, a)),
-            ),
-            ClassShape::Hkt { .. } => Ok(Self::Hkt(tag, arg)),
+            ClassShape::Concrete { params: n } => {
+                if args.len() == n as usize {
+                    Ok(Self::Concrete {
+                        id: tag,
+                        params: args,
+                    })
+                } else {
+                    Err(TypeError::ClassRequiresArg { class: tag, span })
+                }
+            }
+            ClassShape::Hkt { params: n, .. } => {
+                if args.len() == n as usize {
+                    Ok(Self::Hkt {
+                        id: tag,
+                        elems: smallvec![],
+                        params: args,
+                    })
+                } else if n == 0 {
+                    Err(TypeError::ClassRejectsArg { class: tag, span })
+                } else {
+                    Err(TypeError::ClassRequiresArg { class: tag, span })
+                }
+            }
         }
     }
 }
@@ -690,14 +768,22 @@ impl<T> TypeClass<T> {
 impl TypeClass<TyId> {
     /// Apply a local rename to any inner types.
     pub(crate) fn apply(&self, rename: &Rename, arena: &mut TyArena) -> Self {
-        match *self {
-            Self::Simple(t) => Self::Simple(t),
-            Self::Hkt(t, opt) => {
-                Self::Hkt(t, opt.map(|id| arena.apply(id, rename)))
-            }
-            Self::Parameterized(t, id) => {
-                Self::Parameterized(t, arena.apply(id, rename))
-            }
+        match self {
+            Self::Concrete { id, params } => Self::Concrete {
+                id: *id,
+                params: params
+                    .iter()
+                    .map(|&p| arena.apply(p, rename))
+                    .collect(),
+            },
+            Self::Hkt { id, elems, params } => Self::Hkt {
+                id: *id,
+                elems: elems.iter().map(|&e| arena.apply(e, rename)).collect(),
+                params: params
+                    .iter()
+                    .map(|&p| arena.apply(p, rename))
+                    .collect(),
+            },
         }
     }
 
@@ -707,14 +793,16 @@ impl TypeClass<TyId> {
         uf: &mut UnionFind,
         arena: &mut TyArena,
     ) -> Self {
-        match *self {
-            Self::Simple(t) => Self::Simple(t),
-            Self::Hkt(t, opt) => {
-                Self::Hkt(t, opt.map(|id| uf.resolve(id, arena)))
-            }
-            Self::Parameterized(t, id) => {
-                Self::Parameterized(t, uf.resolve(id, arena))
-            }
+        match self {
+            Self::Concrete { id, params } => Self::Concrete {
+                id: *id,
+                params: params.iter().map(|&p| uf.resolve(p, arena)).collect(),
+            },
+            Self::Hkt { id, elems, params } => Self::Hkt {
+                id: *id,
+                elems: elems.iter().map(|&e| uf.resolve(e, arena)).collect(),
+                params: params.iter().map(|&p| uf.resolve(p, arena)).collect(),
+            },
         }
     }
 
@@ -726,21 +814,35 @@ impl TypeClass<TyId> {
         arena: &TyArena,
         uf: &mut UnionFind,
     ) -> HashSet<TyVar> {
-        match *self {
-            Self::Simple(_) | Self::Hkt(_, None) => HashSet::new(),
-            Self::Hkt(_, Some(id)) => uf.free_vars(id, arena),
-            Self::Parameterized(_, id) => uf.free_vars(id, arena),
+        match self {
+            Self::Concrete { params, .. } => params
+                .iter()
+                .flat_map(|&p| uf.free_vars(p, arena))
+                .collect(),
+            Self::Hkt { elems, params, .. } => elems
+                .iter()
+                .chain(params.iter())
+                .flat_map(|&t| uf.free_vars(t, arena))
+                .collect(),
         }
     }
 
     /// Create a placeholder constraint for error messages.
     pub(crate) fn placeholder(tag: ClassId, shape: ClassShape) -> Self {
         match shape {
-            ClassShape::Concrete { params: 0 } => Self::Simple(tag),
-            ClassShape::Concrete { .. } => {
-                Self::Parameterized(tag, TyArena::UNKNOWN)
-            }
-            ClassShape::Hkt { .. } => Self::Hkt(tag, None),
+            ClassShape::Concrete { params: 0 } => Self::Concrete {
+                id: tag,
+                params: smallvec![],
+            },
+            ClassShape::Concrete { params: n } => Self::Concrete {
+                id: tag,
+                params: smallvec![TyArena::UNKNOWN; n as usize],
+            },
+            ClassShape::Hkt { params: n, .. } => Self::Hkt {
+                id: tag,
+                elems: smallvec![],
+                params: smallvec![TyArena::UNKNOWN; n as usize],
+            },
         }
     }
 }
@@ -748,10 +850,38 @@ impl TypeClass<TyId> {
 impl<T: fmt::Display> fmt::Display for TypeClass<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Simple(tag) => write!(f, "{tag}"),
-            Self::Hkt(tag, None) => write!(f, "{tag}"),
-            Self::Hkt(tag, Some(elem)) => write!(f, "{tag}[{elem}]"),
-            Self::Parameterized(tag, arg) => write!(f, "{tag}[{arg}]"),
+            Self::Concrete { id, params } if params.is_empty() => {
+                write!(f, "{id}")
+            }
+            Self::Concrete { id, params } => {
+                write!(f, "{id}[")?;
+                params.iter().enumerate().try_for_each(|(i, p)| {
+                    if i > 0 {
+                        write!(f, ", {p}")
+                    } else {
+                        write!(f, "{p}")
+                    }
+                })?;
+                write!(f, "]")
+            }
+            Self::Hkt { id, elems, params }
+                if elems.is_empty() && params.is_empty() =>
+            {
+                write!(f, "{id}")
+            }
+            Self::Hkt { id, elems, params } => {
+                write!(f, "{id}[")?;
+                elems.iter().chain(params.iter()).enumerate().try_for_each(
+                    |(i, t)| {
+                        if i > 0 {
+                            write!(f, ", {t}")
+                        } else {
+                            write!(f, "{t}")
+                        }
+                    },
+                )?;
+                write!(f, "]")
+            }
         }
     }
 }
