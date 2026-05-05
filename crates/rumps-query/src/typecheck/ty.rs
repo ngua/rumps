@@ -4,7 +4,7 @@
 //! (polymorphic type schemes), and `Rename` (local type variable renames).
 
 use std::collections::{HashMap, HashSet};
-use std::fmt;
+use std::{fmt, result};
 
 use indexmap::IndexMap;
 use smallvec::{smallvec, SmallVec};
@@ -533,7 +533,7 @@ impl ClassRegistry {
     pub(crate) fn register(
         &mut self,
         def: ClassDef,
-    ) -> std::result::Result<ClassId, DuplicateClassError> {
+    ) -> result::Result<ClassId, DuplicateClassError> {
         if let Some(&existing) = self.by_name.get(&def.name) {
             Err(DuplicateClassError {
                 name: def.name,
@@ -678,26 +678,26 @@ impl<T> TypeClass<T> {
     /// Map over inner types fallibly (for layer conversion with `Result`).
     pub(crate) fn try_map<U, E>(
         self,
-        mut f: impl FnMut(T) -> std::result::Result<U, E>,
-    ) -> std::result::Result<TypeClass<U>, E> {
+        mut f: impl FnMut(T) -> result::Result<U, E>,
+    ) -> result::Result<TypeClass<U>, E> {
         match self {
             Self::Concrete { id, params } => Ok(TypeClass::Concrete {
                 id,
                 params: params
                     .into_iter()
                     .map(&mut f)
-                    .collect::<std::result::Result<_, _>>()?,
+                    .collect::<result::Result<_, _>>()?,
             }),
             Self::Hkt { id, elems, params } => Ok(TypeClass::Hkt {
                 id,
                 elems: elems
                     .into_iter()
                     .map(&mut f)
-                    .collect::<std::result::Result<_, _>>()?,
+                    .collect::<result::Result<_, _>>()?,
                 params: params
                     .into_iter()
                     .map(&mut f)
-                    .collect::<std::result::Result<_, _>>()?,
+                    .collect::<result::Result<_, _>>()?,
             }),
         }
     }

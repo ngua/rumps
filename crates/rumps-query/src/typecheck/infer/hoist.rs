@@ -609,13 +609,10 @@ impl InferCtx<'_> {
         });
 
         let shape = if is_param && is_hkt {
-            self.error(TypeError::Custom {
-                msg: "class cannot have both class-level type parameters \
-                      and use the self variable as a type constructor"
-                    .into(),
-                span,
-            });
-            ClassShape::Concrete { params: 0 }
+            ClassShape::Hkt {
+                kind: 1,
+                params: class_params.len() as u8,
+            }
         } else if is_param {
             ClassShape::Concrete {
                 params: class_params.len() as u8,
@@ -735,61 +732,60 @@ impl InferCtx<'_> {
         // (a) Allocate type variables and build substitution map
         let mut subst: IndexMap<StringId, TyId> = IndexMap::new();
         let (total_vars, self_var_idx, class_constraint) = match dc.shape {
-            ClassShape::Concrete { params: 0 } => {
-                // Self var -> TyVar(0), method-local params -> TyVar(1), ...
-                let sv_ty = self.ty_arena.var(0);
-                subst.insert(dc.self_var, sv_ty);
-                let mut next = 1u32;
-                method.type_params.iter().for_each(|tp| {
-                    subst.insert(tp.name, self.ty_arena.var(next));
-                    next += 1;
-                });
-                let total = next;
-                let constraint =
-                    (TyVar::new(0), TypeClass::Simple(dc.class_id));
-                (total, 0u32, constraint)
-            }
-            ClassShape::Concrete { .. } => {
+            ClassShape::Concrete { params } => {
                 // Self var -> TyVar(0), class params -> TyVar(1..n),
                 // method-local -> TyVar(n+1..)
+                let p_start = 1u32;
                 let sv_ty = self.ty_arena.var(0);
                 subst.insert(dc.self_var, sv_ty);
-                let mut next = 1u32;
-                dc.class_params.iter().for_each(|tp| {
-                    subst.insert(tp.name, self.ty_arena.var(next));
-                    next += 1;
-                });
-                // For constraint, use the first class param
-                let class_arg_ty = if dc.class_params.is_empty() {
-                    TyArena::UNKNOWN
-                } else {
-                    self.ty_arena.var(1)
-                };
-                method.type_params.iter().for_each(|tp| {
-                    subst.insert(tp.name, self.ty_arena.var(next));
-                    next += 1;
-                });
-                let total = next;
+                let total = dc
+                    .class_params
+                    .iter()
+                    .chain(method.type_params.iter())
+                    .fold(p_start, |i, tp| {
+                        subst.insert(tp.name, self.ty_arena.var(i));
+                        i + 1
+                    });
+                let cp: SmallVec<[TyId; 1]> = (p_start
+                    ..p_start + params as u32)
+                    .map(|i| self.ty_arena.var(i))
+                    .collect();
                 let constraint = (
                     TyVar::new(0),
-                    TypeClass::Parameterized(dc.class_id, class_arg_ty),
+                    TypeClass::Concrete {
+                        id: dc.class_id,
+                        params: cp,
+                    },
                 );
                 (total, 0u32, constraint)
             }
-            ClassShape::Hkt { .. } => {
-                // Method-local type params get lower indices;
-                // self var gets the highest index
-                let mut next = 0u32;
-                method.type_params.iter().for_each(|tp| {
-                    subst.insert(tp.name, self.ty_arena.var(next));
-                    next += 1;
+            ClassShape::Hkt { params, .. } => {
+                // Method-local type params -> TyVar(0..m-1),
+                // class (fixed) params -> TyVar(m..m+p-1),
+                // self var -> TyVar(m+p)
+                let p_start = method.type_params.iter().fold(0u32, |i, tp| {
+                    subst.insert(tp.name, self.ty_arena.var(i));
+                    i + 1
                 });
-                let sv_idx = next;
+                let sv_idx = dc.class_params.iter().fold(p_start, |i, tp| {
+                    subst.insert(tp.name, self.ty_arena.var(i));
+                    i + 1
+                });
                 let sv_ty = self.ty_arena.var(sv_idx);
                 subst.insert(dc.self_var, sv_ty);
                 let total = sv_idx + 1;
-                let constraint =
-                    (TyVar::new(sv_idx), TypeClass::Hkt(dc.class_id, None));
+                let cp: SmallVec<[TyId; 1]> = (p_start
+                    ..p_start + params as u32)
+                    .map(|i| self.ty_arena.var(i))
+                    .collect();
+                let constraint = (
+                    TyVar::new(sv_idx),
+                    TypeClass::Hkt {
+                        id: dc.class_id,
+                        elems: smallvec![],
+                        params: cp,
+                    },
+                );
                 (total, sv_idx, constraint)
             }
         };
