@@ -956,16 +956,25 @@ impl SolveCtx<'_> {
             }
             Constraint::Class { ty, class, span } => match class {
                 // Iterable (with element type) and Indexable: first pass
-                TypeClass::Hkt(ClassId::ITERABLE, Some(_))
-                | TypeClass::Parameterized(ClassId::INDEXABLE, _) => {
+                TypeClass::Hkt {
+                    id: ClassId::ITERABLE,
+                    ref elems,
+                    ..
+                } if !elems.is_empty() => {
                     let ty = self.uf.resolve(*ty, self.ty_arena);
                     let class = class.resolve_inner(self.uf, self.ty_arena);
                     self.satisfies_class(&class, ty, *span);
                 }
-                // HKT constraints deferred to third pass
-                TypeClass::Hkt(..) => {}
-                // Simple and remaining parameterized: second/third pass
-                TypeClass::Simple(_) | TypeClass::Parameterized(..) => {}
+                TypeClass::Concrete {
+                    id: ClassId::INDEXABLE,
+                    ..
+                } => {
+                    let ty = self.uf.resolve(*ty, self.ty_arena);
+                    let class = class.resolve_inner(self.uf, self.ty_arena);
+                    self.satisfies_class(&class, ty, *span);
+                }
+                TypeClass::Hkt { .. } => {}
+                TypeClass::Concrete { .. } => {}
             },
         });
 
@@ -988,11 +997,13 @@ impl SolveCtx<'_> {
         constraints.iter().for_each(|c| {
             if let Constraint::Class { ty, class, span } = c {
                 match class {
-                    TypeClass::Simple(_) => {
+                    TypeClass::Concrete { ref params, .. }
+                        if params.is_empty() =>
+                    {
                         let ty = self.uf.resolve(*ty, self.ty_arena);
                         self.satisfies_class(class, ty, *span);
                     }
-                    TypeClass::Hkt(..) | TypeClass::Parameterized(..) => {}
+                    TypeClass::Hkt { .. } | TypeClass::Concrete { .. } => {}
                 }
             }
         });
@@ -1003,12 +1014,11 @@ impl SolveCtx<'_> {
         constraints.iter().for_each(|c| {
             if let Constraint::Class { ty, class, span } = c {
                 match class {
-                    TypeClass::Hkt(..) | TypeClass::Parameterized(..) => {
+                    TypeClass::Hkt { .. } | TypeClass::Concrete { .. } => {
                         let ty = self.uf.resolve(*ty, self.ty_arena);
                         let class = class.resolve_inner(self.uf, self.ty_arena);
                         self.satisfies_class(&class, ty, *span);
                     }
-                    TypeClass::Simple(_) => {}
                 }
             }
         });
