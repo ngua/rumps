@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: Expression annotation type mismatch error\n; Annotating an Int as String should fail\n\nLET x = (42) : String\nWRITE x\n"
+description: "; Test: Expression annotation type mismatch error\n; Annotating an Int as String should fail\n\nfun main() {\n  let x = (42) : String\n  write x\n}\n"
 ---
 ERROR: type `String` does not satisfy `Numeric` class

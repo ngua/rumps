@@ -262,10 +262,7 @@ impl InferCtx<'_> {
                 // LHS must be convertible to String
                 self.constrain(Constraint::Class {
                     ty: lhs_ty,
-                    class: TypeClass::Parameterized(
-                        ClassId::INTO,
-                        TyArena::STRING,
-                    ),
+                    class: TypeClass::param(ClassId::INTO, TyArena::STRING),
                     span,
                 });
 
@@ -303,10 +300,7 @@ impl InferCtx<'_> {
                 // Error message must be convertible to String
                 self.constrain(Constraint::Class {
                     ty,
-                    class: TypeClass::Parameterized(
-                        ClassId::INTO,
-                        TyArena::STRING,
-                    ),
+                    class: TypeClass::param(ClassId::INTO, TyArena::STRING),
                     span,
                 });
                 self.fresh()
@@ -332,7 +326,7 @@ impl InferCtx<'_> {
                 let tv = self.fresh();
                 self.constrain(Constraint::Class {
                     ty: tv,
-                    class: TypeClass::Simple(ClassId::MONOID),
+                    class: TypeClass::simple(ClassId::MONOID),
                     span,
                 });
                 self.interp.mempty_types.insert(id, tv);
@@ -447,13 +441,16 @@ impl InferCtx<'_> {
                                         ) => {
                                             // For parameterized classes, the type arg
                                             // corresponds to the class param (inside the
-                                            // `Parameterized` constraint), not the
+                                            // `Concrete` constraint), not the
                                             // constraint's subject (the self var).
                                             let target_ty = match class {
-                                                TypeClass::Parameterized(
-                                                    _,
-                                                    p,
-                                                ) => *p,
+                                                TypeClass::Concrete {
+                                                    ref params,
+                                                    ..
+                                                } => params
+                                                    .first()
+                                                    .copied()
+                                                    .unwrap_or(var_id),
                                                 _ => var_id,
                                             };
                                             // Check the target is actually a `Ty::Var`
@@ -490,7 +487,7 @@ impl InferCtx<'_> {
                                                     // `arg_ty` is the concrete class arg.
                                                     if matches!(
                                                         class,
-                                                        TypeClass::Parameterized(_, _)
+                                                        TypeClass::Concrete { ref params, .. } if !params.is_empty()
                                                     ) && k.idx() >= ClassId::BUILTIN_COUNT
                                                     {
                                                         self.deferred_param_calls.push((
@@ -531,7 +528,7 @@ impl InferCtx<'_> {
                                     };
                                     self.constrain(Constraint::Class {
                                         ty: tv,
-                                        class: TypeClass::Simple(
+                                        class: TypeClass::simple(
                                             ClassId::MONOID,
                                         ),
                                         span,
@@ -565,9 +562,9 @@ impl InferCtx<'_> {
                                         (ClassId::WRAPPABLE, "wrap") => {
                                             self.constrain(Constraint::Class {
                                                 ty: target_ty,
-                                                class: TypeClass::Hkt(
+                                                class: TypeClass::hkt_elem(
                                                     ClassId::WRAPPABLE,
-                                                    Some(input_ty),
+                                                    input_ty,
                                                 ),
                                                 span,
                                             });
@@ -577,11 +574,10 @@ impl InferCtx<'_> {
                                             )
                                         }
                                         (ClassId::INTO, "into") => {
-                                            let class =
-                                                TypeClass::Parameterized(
-                                                    ClassId::INTO,
-                                                    target_ty,
-                                                );
+                                            let class = TypeClass::param(
+                                                ClassId::INTO,
+                                                target_ty,
+                                            );
                                             self.constrain(Constraint::Class {
                                                 ty: input_ty,
                                                 class: class.clone(),
@@ -631,7 +627,7 @@ impl InferCtx<'_> {
                                     let input_var = self.fresh_var();
                                     let input_ty =
                                         self.ty_arena.alloc(Ty::Var(input_var));
-                                    let class = TypeClass::Parameterized(
+                                    let class = TypeClass::param(
                                         ClassId::TRY_INTO,
                                         target_ty,
                                     );
@@ -924,7 +920,7 @@ impl InferCtx<'_> {
                 let ty = self.fresh_numeric();
                 self.constrain(Constraint::Class {
                     ty,
-                    class: TypeClass::Simple(ClassId::NUMERIC),
+                    class: TypeClass::simple(ClassId::NUMERIC),
                     span,
                 });
                 // Record for interpreter to convert to correct runtime type
@@ -960,7 +956,7 @@ impl InferCtx<'_> {
                 let ty = self.fresh_numeric();
                 self.constrain(Constraint::Class {
                     ty,
-                    class: TypeClass::Simple(ClassId::NUMERIC),
+                    class: TypeClass::simple(ClassId::NUMERIC),
                     span,
                 });
                 ty
@@ -985,10 +981,7 @@ impl InferCtx<'_> {
             if i % 2 == 1 {
                 self.constrain(Constraint::Class {
                     ty: part_ty,
-                    class: TypeClass::Parameterized(
-                        ClassId::INTO,
-                        TyArena::STRING,
-                    ),
+                    class: TypeClass::param(ClassId::INTO, TyArena::STRING),
                     span,
                 });
             }
@@ -1090,12 +1083,12 @@ impl InferCtx<'_> {
                     // Just require both satisfy Eq and return Bool.
                     self.constrain(Constraint::Class {
                         ty: lhs_ty,
-                        class: TypeClass::Simple(ClassId::EQ),
+                        class: TypeClass::simple(ClassId::EQ),
                         span,
                     });
                     self.constrain(Constraint::Class {
                         ty: rhs_ty,
-                        class: TypeClass::Simple(ClassId::EQ),
+                        class: TypeClass::simple(ClassId::EQ),
                         span,
                     });
                     TyArena::BOOL
@@ -1674,7 +1667,7 @@ impl InferCtx<'_> {
                 self.unify(idx_ty, expected_idx, span);
                 self.constrain(Constraint::Class {
                     ty: base_ty,
-                    class: TypeClass::Parameterized(ClassId::INDEXABLE, elem),
+                    class: TypeClass::param(ClassId::INDEXABLE, elem),
                     span,
                 });
                 elem
@@ -1722,7 +1715,7 @@ impl InferCtx<'_> {
                             .is_none()
                         {
                             self.error(TypeError::UnsatisfiedClass(
-                                TypeClass::Parameterized(
+                                TypeClass::param(
                                     ClassId::INDEXABLE,
                                     TyArena::ERROR,
                                 ),
@@ -1737,10 +1730,7 @@ impl InferCtx<'_> {
 
             _ => {
                 self.error(TypeError::UnsatisfiedClass(
-                    TypeClass::Parameterized(
-                        ClassId::INDEXABLE,
-                        TyArena::ERROR,
-                    ),
+                    TypeClass::param(ClassId::INDEXABLE, TyArena::ERROR),
                     base_ty,
                     span,
                 ));
@@ -1791,7 +1781,7 @@ impl InferCtx<'_> {
                 self.unify(idx_ty, expected_idx, span);
                 self.constrain(Constraint::Class {
                     ty: base_ty,
-                    class: TypeClass::Parameterized(ClassId::INDEXABLE, inner),
+                    class: TypeClass::param(ClassId::INDEXABLE, inner),
                     span,
                 });
                 self.ty_arena.option(inner)
@@ -1840,7 +1830,7 @@ impl InferCtx<'_> {
                             .is_none()
                         {
                             self.error(TypeError::UnsatisfiedClass(
-                                TypeClass::Parameterized(
+                                TypeClass::param(
                                     ClassId::INDEXABLE,
                                     TyArena::ERROR,
                                 ),
@@ -1855,10 +1845,7 @@ impl InferCtx<'_> {
 
             _ => {
                 self.error(TypeError::UnsatisfiedClass(
-                    TypeClass::Parameterized(
-                        ClassId::INDEXABLE,
-                        TyArena::ERROR,
-                    ),
+                    TypeClass::param(ClassId::INDEXABLE, TyArena::ERROR),
                     base_ty,
                     span,
                 ));
@@ -2939,7 +2926,7 @@ impl InferCtx<'_> {
         // Emit Into constraint for validation
         self.constrain(Constraint::Class {
             ty: inner_ty,
-            class: TypeClass::Parameterized(ClassId::INTO, target_ty),
+            class: TypeClass::param(ClassId::INTO, target_ty),
             span,
         });
 
@@ -2953,7 +2940,7 @@ impl InferCtx<'_> {
         if inner_is_var && target_is_numeric {
             self.constrain(Constraint::Class {
                 ty: inner_ty,
-                class: TypeClass::Simple(ClassId::NUMERIC),
+                class: TypeClass::simple(ClassId::NUMERIC),
                 span,
             });
         }
@@ -2985,7 +2972,7 @@ impl InferCtx<'_> {
         // Emit TryInto constraint for validation
         self.constrain(Constraint::Class {
             ty: inner_ty,
-            class: TypeClass::Parameterized(ClassId::TRY_INTO, target_ty),
+            class: TypeClass::param(ClassId::TRY_INTO, target_ty),
             span,
         });
 
@@ -3026,7 +3013,7 @@ impl InferCtx<'_> {
             let storable = self.ty_arena.storable();
             self.constrain(Constraint::Class {
                 ty: v_ty,
-                class: TypeClass::Parameterized(ClassId::INTO, storable),
+                class: TypeClass::param(ClassId::INTO, storable),
                 span,
             });
         }
@@ -3126,7 +3113,7 @@ impl InferCtx<'_> {
                 let subscript = self.ty_arena.subscript();
                 self.constrain(Constraint::Class {
                     ty,
-                    class: TypeClass::Parameterized(ClassId::INTO, subscript),
+                    class: TypeClass::param(ClassId::INTO, subscript),
                     span,
                 });
             }

@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: negating a Word is a type error (Word is unsigned)\n\nWRITE -(10: Word)\n"
+description: "; Test: negating a Word is a type error (Word is unsigned)\n\nfun main() {\n  write -(10: Word)\n}\n"
 ---
 ERROR: type `Word` does not satisfy `Negatable` class

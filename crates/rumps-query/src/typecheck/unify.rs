@@ -1014,6 +1014,8 @@ impl SolveCtx<'_> {
         constraints.iter().for_each(|c| {
             if let Constraint::Class { ty, class, span } = c {
                 match class {
+                    TypeClass::Concrete { ref params, .. }
+                        if params.is_empty() => {}
                     TypeClass::Hkt { .. } | TypeClass::Concrete { .. } => {
                         let ty = self.uf.resolve(*ty, self.ty_arena);
                         let class = class.resolve_inner(self.uf, self.ty_arena);
@@ -1066,24 +1068,36 @@ impl SolveCtx<'_> {
         span: Span,
     ) {
         match class {
-            TypeClass::Simple(id) => {
+            TypeClass::Concrete { id, ref params } if params.is_empty() => {
                 self.check_simple_class(*id, class, ty, span)
             }
-            TypeClass::Parameterized(ClassId::INTO, to) => {
-                self.check_into(ty, *to, span)
+            TypeClass::Concrete {
+                id: ClassId::INTO,
+                ref params,
+            } => {
+                let to = params.first().copied().unwrap_or(TyArena::UNKNOWN);
+                self.check_into(ty, to, span)
             }
-            TypeClass::Parameterized(ClassId::TRY_INTO, to) => {
-                self.check_try_into(ty, *to, span)
+            TypeClass::Concrete {
+                id: ClassId::TRY_INTO,
+                ref params,
+            } => {
+                let to = params.first().copied().unwrap_or(TyArena::UNKNOWN);
+                self.check_try_into(ty, to, span)
             }
-            TypeClass::Parameterized(ClassId::INDEXABLE, elem) => {
-                self.check_indexable(class, ty, *elem, span)
+            TypeClass::Concrete {
+                id: ClassId::INDEXABLE,
+                ref params,
+            } => {
+                let elem = params.first().copied().unwrap_or(TyArena::UNKNOWN);
+                self.check_indexable(class, ty, elem, span)
             }
-            TypeClass::Parameterized(id, arg)
-                if id.idx() >= ClassId::BUILTIN_COUNT =>
+            TypeClass::Concrete { id, ref params }
+                if id.idx() >= ClassId::BUILTIN_COUNT && !params.is_empty() =>
             {
-                self.check_user_parameterized(*id, *arg, class, ty, span)
+                self.check_user_parameterized(*id, params, class, ty, span)
             }
-            TypeClass::Hkt(id, opt_elem)
+            TypeClass::Hkt { id, ref elems, .. }
                 if matches!(
                     *id,
                     ClassId::ITERABLE
@@ -1092,17 +1106,15 @@ impl SolveCtx<'_> {
                         | ClassId::FOLDABLE
                 ) =>
             {
-                self.check_hkt_class(*id, *opt_elem, class, ty, span)
+                self.check_hkt_class(*id, elems, class, ty, span)
             }
-            // Builtin HKT (Fallible, Wrappable, Chainable)
-            TypeClass::Hkt(tag, opt_elem)
-                if tag.idx() < ClassId::BUILTIN_COUNT =>
+            TypeClass::Hkt { id, ref elems, .. }
+                if id.idx() < ClassId::BUILTIN_COUNT =>
             {
-                self.satisfies_hkt_class(*tag, *opt_elem, class, ty, span);
+                self.satisfies_hkt_class(*id, elems, class, ty, span);
             }
-            // User HKT classes: instance-only dispatch
-            TypeClass::Hkt(tag, opt_elem) => {
-                self.check_user_hkt(*tag, *opt_elem, class, ty, span);
+            TypeClass::Hkt { id, ref elems, .. } => {
+                self.check_user_hkt(*id, elems, class, ty, span);
             }
             _ => {}
         }
@@ -1337,17 +1349,16 @@ impl SolveCtx<'_> {
     }
 
     /// Check an HKT class (`Iterable`, `Mappable`, `Filterable`, `Foldable`)
-    /// against `ty`, optionally unifying the element type with `opt_elem`.
+    /// against `ty`, optionally unifying the element type with `elems`.
     fn check_hkt_class(
         &mut self,
         class_id: ClassId,
-        opt_elem: Option<TyId>,
+        elems: &[TyId],
         class: &TypeClass<TyId>,
         ty: TyId,
         span: Span,
     ) {
         let shape = self.ty_arena.get(ty).clone();
-        // Element type for builtin shapes that satisfy an HKT class.
         let builtin_elem = match (class_id, &shape) {
             (_, Ty::Array(e)) => Some(*e),
             (
@@ -1360,7 +1371,7 @@ impl SolveCtx<'_> {
         };
         match builtin_elem {
             Some(inner) => {
-                if let Some(elem) = opt_elem {
+                if let Some(&elem) = elems.first() {
                     if let Err(e) = self.unify_types(elem, inner, span) {
                         self.errors.push(e);
                     }
@@ -1378,7 +1389,7 @@ impl SolveCtx<'_> {
                         Some(inst) => {
                             let param_subst = self
                                 .build_instance_subst(&inst, &type_args, span);
-                            if let Some(elem) = opt_elem {
+                            if let Some(&elem) = elems.first() {
                                 if let Some(&inst_elem) =
                                     inst.class_args.first()
                                 {
@@ -1400,11 +1411,11 @@ impl SolveCtx<'_> {
                             );
                         }
                         None => {
-                            // `Iterable` historically reports a `Mismatch`
-                            // against `Array[expected]`; the other HKT
-                            // classes use `UnsatisfiedClass`.
                             if class_id == ClassId::ITERABLE {
-                                let exp = opt_elem.unwrap_or(TyArena::UNKNOWN);
+                                let exp = elems
+                                    .first()
+                                    .copied()
+                                    .unwrap_or(TyArena::UNKNOWN);
                                 let arr = self.ty_arena.array(exp);
                                 self.errors.push(TypeError::Mismatch {
                                     expected: arr,
@@ -1423,7 +1434,8 @@ impl SolveCtx<'_> {
                 }
                 _ => {
                     if class_id == ClassId::ITERABLE {
-                        let exp = opt_elem.unwrap_or(TyArena::UNKNOWN);
+                        let exp =
+                            elems.first().copied().unwrap_or(TyArena::UNKNOWN);
                         let arr = self.ty_arena.array(exp);
                         self.errors.push(TypeError::Mismatch {
                             expected: arr,
@@ -1462,7 +1474,7 @@ impl SolveCtx<'_> {
                 let ms: SmallVec<[TyId; 4]> = members.clone();
                 ms.iter().for_each(|m| {
                     self.satisfies_class(
-                        &TypeClass::Parameterized(ClassId::INTO, to),
+                        &TypeClass::param(ClassId::INTO, to),
                         *m,
                         span,
                     )
@@ -1479,24 +1491,24 @@ impl SolveCtx<'_> {
                     .push(TypeError::InvalidCast { from: ty, to, span });
             }
             (Ty::Array(elem), Ty::Json) => self.satisfies_class(
-                &TypeClass::Parameterized(ClassId::INTO, TyArena::JSON),
+                &TypeClass::param(ClassId::INTO, TyArena::JSON),
                 *elem,
                 span,
             ),
             (Ty::Option(inner), Ty::Json) => self.satisfies_class(
-                &TypeClass::Parameterized(ClassId::INTO, TyArena::JSON),
+                &TypeClass::param(ClassId::INTO, TyArena::JSON),
                 *inner,
                 span,
             ),
             (Ty::Result(ok, err), Ty::Json) => {
                 let (ok, err) = (*ok, *err);
                 self.satisfies_class(
-                    &TypeClass::Parameterized(ClassId::INTO, TyArena::JSON),
+                    &TypeClass::param(ClassId::INTO, TyArena::JSON),
                     ok,
                     span,
                 );
                 self.satisfies_class(
-                    &TypeClass::Parameterized(ClassId::INTO, TyArena::JSON),
+                    &TypeClass::param(ClassId::INTO, TyArena::JSON),
                     err,
                     span,
                 );
@@ -1504,12 +1516,12 @@ impl SolveCtx<'_> {
             (Ty::Map(k, v), Ty::Json) => {
                 let (k, v) = (*k, *v);
                 self.satisfies_class(
-                    &TypeClass::Parameterized(ClassId::INTO, TyArena::JSON),
+                    &TypeClass::param(ClassId::INTO, TyArena::JSON),
                     k,
                     span,
                 );
                 self.satisfies_class(
-                    &TypeClass::Parameterized(ClassId::INTO, TyArena::JSON),
+                    &TypeClass::param(ClassId::INTO, TyArena::JSON),
                     v,
                     span,
                 );
@@ -1518,7 +1530,7 @@ impl SolveCtx<'_> {
                 let es: SmallVec<[TyId; 4]> = elems.clone();
                 es.iter().for_each(|e| {
                     self.satisfies_class(
-                        &TypeClass::Parameterized(ClassId::INTO, TyArena::JSON),
+                        &TypeClass::param(ClassId::INTO, TyArena::JSON),
                         *e,
                         span,
                     )
@@ -1529,7 +1541,7 @@ impl SolveCtx<'_> {
                     fields.values().copied().collect();
                 vals.iter().for_each(|t| {
                     self.satisfies_class(
-                        &TypeClass::Parameterized(ClassId::INTO, TyArena::JSON),
+                        &TypeClass::param(ClassId::INTO, TyArena::JSON),
                         *t,
                         span,
                     )
@@ -1539,7 +1551,7 @@ impl SolveCtx<'_> {
                 let ms: SmallVec<[TyId; 4]> = members.clone();
                 ms.iter().for_each(|m| {
                     self.satisfies_class(
-                        &TypeClass::Parameterized(ClassId::INTO, TyArena::JSON),
+                        &TypeClass::param(ClassId::INTO, TyArena::JSON),
                         *m,
                         span,
                     )
@@ -1549,7 +1561,7 @@ impl SolveCtx<'_> {
                 let as_: SmallVec<[TyId; 4]> = args.clone();
                 as_.iter().for_each(|a| {
                     self.satisfies_class(
-                        &TypeClass::Parameterized(ClassId::INTO, TyArena::JSON),
+                        &TypeClass::param(ClassId::INTO, TyArena::JSON),
                         *a,
                         span,
                     )
@@ -1616,7 +1628,7 @@ impl SolveCtx<'_> {
                         let ms: SmallVec<[TyId; 4]> = members.clone();
                         ms.iter().for_each(|m| {
                             self.satisfies_class(
-                                &TypeClass::Parameterized(ClassId::INTO, to),
+                                &TypeClass::param(ClassId::INTO, to),
                                 *m,
                                 span,
                             )
@@ -1698,24 +1710,24 @@ impl SolveCtx<'_> {
                     .push(TypeError::InvalidRead { from: ty, to, span });
             }
             (Ty::Array(elem), Ty::Json) => self.satisfies_class(
-                &TypeClass::Parameterized(ClassId::TRY_INTO, TyArena::JSON),
+                &TypeClass::param(ClassId::TRY_INTO, TyArena::JSON),
                 *elem,
                 span,
             ),
             (Ty::Option(inner), Ty::Json) => self.satisfies_class(
-                &TypeClass::Parameterized(ClassId::TRY_INTO, TyArena::JSON),
+                &TypeClass::param(ClassId::TRY_INTO, TyArena::JSON),
                 *inner,
                 span,
             ),
             (Ty::Result(ok, err), Ty::Json) => {
                 let (ok, err) = (*ok, *err);
                 self.satisfies_class(
-                    &TypeClass::Parameterized(ClassId::TRY_INTO, TyArena::JSON),
+                    &TypeClass::param(ClassId::TRY_INTO, TyArena::JSON),
                     ok,
                     span,
                 );
                 self.satisfies_class(
-                    &TypeClass::Parameterized(ClassId::TRY_INTO, TyArena::JSON),
+                    &TypeClass::param(ClassId::TRY_INTO, TyArena::JSON),
                     err,
                     span,
                 );
@@ -1723,12 +1735,12 @@ impl SolveCtx<'_> {
             (Ty::Map(k, v), Ty::Json) => {
                 let (k, v) = (*k, *v);
                 self.satisfies_class(
-                    &TypeClass::Parameterized(ClassId::TRY_INTO, TyArena::JSON),
+                    &TypeClass::param(ClassId::TRY_INTO, TyArena::JSON),
                     k,
                     span,
                 );
                 self.satisfies_class(
-                    &TypeClass::Parameterized(ClassId::TRY_INTO, TyArena::JSON),
+                    &TypeClass::param(ClassId::TRY_INTO, TyArena::JSON),
                     v,
                     span,
                 );
@@ -1737,10 +1749,7 @@ impl SolveCtx<'_> {
                 let es: SmallVec<[TyId; 4]> = elems.clone();
                 es.iter().for_each(|e| {
                     self.satisfies_class(
-                        &TypeClass::Parameterized(
-                            ClassId::TRY_INTO,
-                            TyArena::JSON,
-                        ),
+                        &TypeClass::param(ClassId::TRY_INTO, TyArena::JSON),
                         *e,
                         span,
                     )
@@ -1751,10 +1760,7 @@ impl SolveCtx<'_> {
                     fields.values().copied().collect();
                 vals.iter().for_each(|t| {
                     self.satisfies_class(
-                        &TypeClass::Parameterized(
-                            ClassId::TRY_INTO,
-                            TyArena::JSON,
-                        ),
+                        &TypeClass::param(ClassId::TRY_INTO, TyArena::JSON),
                         *t,
                         span,
                     )
@@ -1764,10 +1770,7 @@ impl SolveCtx<'_> {
                 let as_: SmallVec<[TyId; 4]> = args.clone();
                 as_.iter().for_each(|a| {
                     self.satisfies_class(
-                        &TypeClass::Parameterized(
-                            ClassId::TRY_INTO,
-                            TyArena::JSON,
-                        ),
+                        &TypeClass::param(ClassId::TRY_INTO, TyArena::JSON),
                         *a,
                         span,
                     )
@@ -1801,10 +1804,7 @@ impl SolveCtx<'_> {
                         let ms: SmallVec<[TyId; 4]> = members.clone();
                         ms.iter().for_each(|m| {
                             self.satisfies_class(
-                                &TypeClass::Parameterized(
-                                    ClassId::TRY_INTO,
-                                    to,
-                                ),
+                                &TypeClass::param(ClassId::TRY_INTO, to),
                                 *m,
                                 span,
                             )
@@ -1924,7 +1924,7 @@ impl SolveCtx<'_> {
     fn satisfies_hkt_class(
         &mut self,
         tag: ClassId,
-        opt_inner: Option<TyId>,
+        elems: &[TyId],
         class: &TypeClass<TyId>,
         ty: TyId,
         span: Span,
@@ -1933,14 +1933,14 @@ impl SolveCtx<'_> {
 
         match self.ty_arena.get(ty).clone() {
             Ty::Option(opt_elem) => {
-                if let Some(inner) = opt_inner {
+                if let Some(&inner) = elems.first() {
                     if let Err(e) = self.unify_types(inner, opt_elem, span) {
                         self.errors.push(e);
                     }
                 }
             }
             Ty::Result(ok, _) => {
-                if let Some(inner) = opt_inner {
+                if let Some(&inner) = elems.first() {
                     if let Err(e) = self.unify_types(inner, ok, span) {
                         self.errors.push(e);
                     }
@@ -1952,8 +1952,7 @@ impl SolveCtx<'_> {
                     .for_each(|m| self.satisfies_class(class, *m, span));
             }
             Ty::Var(v) => {
-                // Default unresolved to `Option`
-                let elem = opt_inner.unwrap_or_else(|| {
+                let elem = elems.first().copied().unwrap_or_else(|| {
                     let fv = self.uf.fresh();
                     self.ty_arena.alloc(Ty::Var(fv))
                 });
@@ -1961,16 +1960,14 @@ impl SolveCtx<'_> {
                 let root = self.uf.find(v);
                 self.uf.bind(root, opt_id);
             }
-            Ty::Apply(_, _) => {
-                // HKT variable application; defer
-            }
+            Ty::Apply(_, _) => {}
             Ty::Error | Ty::Unknown => {}
             Ty::Named(id, type_args) => {
                 match self.instance_registry.lookup(tag, id).cloned() {
                     Some(inst) => {
                         let param_subst =
                             self.build_instance_subst(&inst, &type_args, span);
-                        if let Some(inner) = opt_inner {
+                        if let Some(&inner) = elems.first() {
                             if let Some(&inst_inner) = inst.class_args.first() {
                                 let resolved = self
                                     .ty_arena
@@ -2012,11 +2009,12 @@ impl SolveCtx<'_> {
     fn check_user_parameterized(
         &mut self,
         class_id: ClassId,
-        class_arg: TyId,
+        params: &[TyId],
         class: &TypeClass<TyId>,
         ty: TyId,
         span: Span,
     ) {
+        let class_arg = params.first().copied().unwrap_or(TyArena::UNKNOWN);
         let shape = self.ty_arena.get(ty).clone();
         match shape {
             Ty::Var(_) | Ty::Error | Ty::Unknown => {}
@@ -2029,7 +2027,6 @@ impl SolveCtx<'_> {
                         .iter()
                         .for_each(|&m| self.satisfies_class(class, m, span));
                 } else {
-                    // Find matching instance by class_arg
                     let matched =
                         self.find_matching_instance(insts, class_arg, &[]);
                     match matched {
@@ -2134,7 +2131,7 @@ impl SolveCtx<'_> {
     fn check_user_hkt(
         &mut self,
         class_id: ClassId,
-        opt_elem: Option<TyId>,
+        elems: &[TyId],
         class: &TypeClass<TyId>,
         ty: TyId,
         span: Span,
@@ -2154,7 +2151,7 @@ impl SolveCtx<'_> {
                         Some(inst) => {
                             let subst =
                                 self.build_instance_subst(&inst, &args, span);
-                            if let Some(elem) = opt_elem {
+                            if let Some(&elem) = elems.first() {
                                 if let Some(&inst_elem) =
                                     inst.class_args.first()
                                 {
@@ -2756,7 +2753,7 @@ mod tests {
         let mut a = TyArena::new();
         let t = TyVar::new(0);
         let t_id = a.var(0);
-        let constraint = (t, TypeClass::Simple(ClassId::DISPLAY));
+        let constraint = (t, TypeClass::simple(ClassId::DISPLAY));
 
         let inst = Instance {
             class: ClassId::ORD,
@@ -2774,7 +2771,7 @@ mod tests {
         assert_eq!(inst.constraints[0].0, t);
         assert!(matches!(
             inst.constraints[0].1,
-            TypeClass::Simple(ClassId::DISPLAY)
+            TypeClass::Concrete { id: ClassId::DISPLAY, ref params } if params.is_empty()
         ));
     }
 
@@ -2784,7 +2781,7 @@ mod tests {
         let mut a = TyArena::new();
         let t = TyVar::new(0);
         let var_id = a.var(0);
-        let constraint = TypeClass::Hkt(ClassId::ITERABLE, Some(var_id));
+        let constraint = TypeClass::hkt_elem(ClassId::ITERABLE, var_id);
 
         // Create rename: T -> Int
         let rename = Rename::singleton(t, TyArena::INT);
@@ -2792,13 +2789,13 @@ mod tests {
         // Apply rename to constraint
         let resolved = constraint.apply(&rename, &mut a);
 
-        // Should now be `Iterable(Some(Int))`
+        // Should now be `Iterable` with `elems: [Int]`
         assert!(
             matches!(
                 resolved,
-                TypeClass::Hkt(ClassId::ITERABLE, Some(TyArena::INT))
+                TypeClass::Hkt { id: ClassId::ITERABLE, ref elems, .. } if elems.first() == Some(&TyArena::INT)
             ),
-            "constraint should be Iterable(Some(Int)) after rename"
+            "constraint should be Iterable with elems=[Int] after rename"
         );
     }
 }

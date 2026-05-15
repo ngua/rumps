@@ -312,7 +312,7 @@ impl BinOp {
             Scheme {
                 vars: smallvec![TyVar::new(0)],
                 ty,
-                constraints: smallvec![(TyVar::new(0), TypeClass::Simple(tag))],
+                constraints: smallvec![(TyVar::new(0), TypeClass::simple(tag))],
             }
         };
 
@@ -322,7 +322,7 @@ impl BinOp {
             Scheme {
                 vars: smallvec![TyVar::new(0)],
                 ty,
-                constraints: smallvec![(TyVar::new(0), TypeClass::Simple(tag))],
+                constraints: smallvec![(TyVar::new(0), TypeClass::simple(tag))],
             }
         };
 
@@ -446,7 +446,7 @@ impl BinOp {
                         ty,
                         constraints: smallvec![(
                             TyVar::new(1),
-                            TypeClass::Hkt(ClassId::FALLIBLE, None,)
+                            TypeClass::hkt(ClassId::FALLIBLE)
                         )],
                     },
                 }
@@ -490,7 +490,7 @@ impl UnOp {
                         ty,
                         constraints: smallvec![(
                             TyVar::new(0),
-                            TypeClass::Simple(ClassId::NEGATABLE)
+                            TypeClass::simple(ClassId::NEGATABLE)
                         )],
                     },
                 }
@@ -513,7 +513,7 @@ impl UnOp {
                         ty,
                         constraints: smallvec![(
                             TyVar::new(1),
-                            TypeClass::Hkt(ClassId::WRAPPABLE, None,)
+                            TypeClass::hkt(ClassId::WRAPPABLE)
                         )],
                     },
                 }
@@ -543,7 +543,7 @@ impl PostfixOp {
                         ty,
                         constraints: smallvec![(
                             TyVar::new(1),
-                            TypeClass::Hkt(ClassId::FALLIBLE, None,)
+                            TypeClass::hkt(ClassId::FALLIBLE)
                         )],
                     },
                 }
@@ -1214,7 +1214,7 @@ impl Environment {
             ty,
             constraints: smallvec![(
                 TyVar::new(0),
-                TypeClass::Simple(ClassId::NUMERIC)
+                TypeClass::simple(ClassId::NUMERIC)
             )],
         };
         // `forall T: Numeric. (T, T) -> T`
@@ -1223,7 +1223,7 @@ impl Environment {
             ty,
             constraints: smallvec![(
                 TyVar::new(0),
-                TypeClass::Simple(ClassId::NUMERIC)
+                TypeClass::simple(ClassId::NUMERIC)
             )],
         };
 
@@ -1821,7 +1821,7 @@ impl Environment {
                             ty: foreach_ty,
                             constraints: smallvec![(
                                 TyVar::new(2),
-                                TypeClass::Hkt(ClassId::MAPPABLE, None)
+                                TypeClass::hkt(ClassId::MAPPABLE)
                             )],
                         },
                     },
@@ -1833,7 +1833,7 @@ impl Environment {
                             ty: contains_ty,
                             constraints: smallvec![(
                                 TyVar::new(1),
-                                TypeClass::Hkt(ClassId::ITERABLE, None)
+                                TypeClass::hkt(ClassId::ITERABLE)
                             )],
                         },
                     },

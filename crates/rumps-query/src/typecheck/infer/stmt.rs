@@ -956,10 +956,7 @@ impl InferCtx<'_> {
                 // Must be convertible to String
                 self.constrain(Constraint::Class {
                     ty: expr_ty,
-                    class: TypeClass::Parameterized(
-                        ClassId::INTO,
-                        TyArena::STRING,
-                    ),
+                    class: TypeClass::param(ClassId::INTO, TyArena::STRING),
                     span,
                 });
             }
@@ -967,10 +964,7 @@ impl InferCtx<'_> {
                 // Must be convertible to Json
                 self.constrain(Constraint::Class {
                     ty: expr_ty,
-                    class: TypeClass::Parameterized(
-                        ClassId::INTO,
-                        TyArena::JSON,
-                    ),
+                    class: TypeClass::param(ClassId::INTO, TyArena::JSON),
                     span,
                 });
             }

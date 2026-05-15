@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Unwrap on non-Option/Result should error\n\nFUN main() {\n  LET plain = 42\n  WRITE plain!\n}\n"
+description: "; Unwrap on non-Option/Result should error\n\nfun main() {\n  let plain = 42\n  write plain!\n}\n"
 ---
 ERROR: type `T[U]` does not satisfy `Numeric` class

@@ -1,6 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test CATCH type errors\n\n; Handler must return same type as expression\n; This should fail: expression is Int, handler returns String\nLET x: Int = 42 CATCH e => \"not an int\"\n"
+description: "; Test catch type errors\n\nfun main() {\n  ; Handler must return same type as expression\n  ; This should fail: expression is Int, handler returns String\n  let x: Int = 42 catch e => \"not an int\"\n}\n"
 ---
 ERROR: type mismatch: expected `Int`, got `String`
 type `String` does not satisfy `Numeric` class
