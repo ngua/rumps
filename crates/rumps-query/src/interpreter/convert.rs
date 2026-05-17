@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 
+use itertools::Itertools;
 use ordered_float::OrderedFloat;
 use rumps_types::Subscript;
 use smallvec::SmallVec;
@@ -115,11 +116,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .iter()
                     .filter_map(|id| self.arena.get(*id).cloned())
                     .collect();
-                let items = vals
-                    .iter()
-                    .map(|v| self.display_raw(v))
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                let items = vals.iter().map(|v| self.display_raw(v)).join(", ");
                 format!("[ {items} ]")
             }
             Value::Tuple(_, elems) => {
@@ -128,11 +125,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .iter()
                     .filter_map(|id| self.arena.get(*id).cloned())
                     .collect();
-                let items = vals
-                    .iter()
-                    .map(|v| self.display_raw(v))
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                let items = vals.iter().map(|v| self.display_raw(v)).join(", ");
                 let trail = if len == 1 { "," } else { "" };
                 format!("({items}{trail})")
             }
@@ -155,7 +148,6 @@ impl<I: IoContext> Interpreter<'_, I> {
                             .unwrap_or_else(|| "?".to_owned());
                         format!("{k}: {vs}")
                     })
-                    .collect::<Vec<_>>()
                     .join(", ");
                 format!("{{ {fields} }}")
             }
@@ -177,7 +169,6 @@ impl<I: IoContext> Interpreter<'_, I> {
                             .unwrap_or_else(|| "?".to_owned());
                         format!("{k} => {vs}")
                     })
-                    .collect::<Vec<_>>()
                     .join(", ");
                 format!("{{ {items} }}")
             }
@@ -200,11 +191,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                         .iter()
                         .filter_map(|id| self.arena.get(*id).cloned())
                         .collect();
-                    let args_str = args
-                        .iter()
-                        .map(|v| self.display_raw(v))
-                        .collect::<Vec<_>>()
-                        .join(", ");
+                    let args_str =
+                        args.iter().map(|v| self.display_raw(v)).join(", ");
                     format!("{ty_name}.{var_name}({args_str})")
                 }
             }
@@ -212,18 +200,15 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let prefix = if *is_global { "^" } else { "" };
                 let name =
                     self.arena.get_str(*name_id).unwrap_or("?").to_owned();
-                let subs: Vec<_> = sub_ids
-                    .iter()
-                    .filter_map(|id| self.arena.get(*id).cloned())
-                    .collect();
-                if subs.is_empty() {
+                if sub_ids.is_empty() {
                     format!("{prefix}{name}")
                 } else {
-                    let subs_str = subs
+                    let subs: Vec<_> = sub_ids
                         .iter()
-                        .map(|v| self.display_raw(v))
-                        .collect::<Vec<_>>()
-                        .join(", ");
+                        .filter_map(|id| self.arena.get(*id).cloned())
+                        .collect();
+                    let subs_str =
+                        subs.iter().map(|v| self.display_raw(v)).join(", ");
                     format!("{prefix}{name}{{ {subs_str} }}")
                 }
             }

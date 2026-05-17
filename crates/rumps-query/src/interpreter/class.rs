@@ -31,6 +31,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use indexmap::IndexMap;
+use itertools::Itertools;
 use ordered_float::OrderedFloat;
 use smallvec::{smallvec, SmallVec};
 
@@ -2090,7 +2091,6 @@ impl Display {
                     .iter()
                     .filter_map(|id| ctx.arena.get(*id))
                     .map(|v| Self::format(ctx, v))
-                    .collect::<Vec<_>>()
                     .join(", ");
                 format!("[ {items} ]")
             }
@@ -2099,7 +2099,6 @@ impl Display {
                     .iter()
                     .filter_map(|id| ctx.arena.get(*id))
                     .map(|v| Self::format(ctx, v))
-                    .collect::<Vec<_>>()
                     .join(", ");
                 let trail = if elems.len() == 1 { "," } else { "" };
                 format!("({items}{trail})")
@@ -2116,7 +2115,6 @@ impl Display {
                             .unwrap_or_else(|| "?".to_owned());
                         format!("{key}: {val}")
                     })
-                    .collect::<Vec<_>>()
                     .join(", ");
                 format!("{{ {fields} }}")
             }
@@ -2132,7 +2130,6 @@ impl Display {
                             .unwrap_or_else(|| "?".to_owned());
                         format!("{key} => {val}")
                     })
-                    .collect::<Vec<_>>()
                     .join(", ");
                 format!("{{ {items} }}")
             }
@@ -2156,7 +2153,6 @@ impl Display {
                         .iter()
                         .filter_map(|id| ctx.arena.get(*id))
                         .map(|v| Self::format(ctx, v))
-                        .collect::<Vec<_>>()
                         .join(", ");
                     format!("{ty_name}.{var_name}({args})")
                 }
@@ -2180,7 +2176,6 @@ impl Display {
                 let path_str: String = path
                     .iter()
                     .filter_map(|id| ctx.arena.get_str(*id))
-                    .collect::<Vec<_>>()
                     .join(".");
                 format!("<{path_str}>")
             }
@@ -2204,7 +2199,6 @@ impl Display {
                     .iter()
                     .filter_map(|id| ctx.arena.get(*id))
                     .map(|v| Self::format(ctx, v))
-                    .collect::<Vec<_>>()
                     .join(", ");
                 format!("{prefix}{name}{{{subs}}}")
             }

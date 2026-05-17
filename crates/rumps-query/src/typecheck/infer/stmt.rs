@@ -6,6 +6,7 @@
 use std::collections::{HashMap, HashSet};
 
 use indexmap::IndexMap;
+use itertools::Itertools;
 use smallvec::{smallvec, SmallVec};
 
 use super::{
@@ -1191,7 +1192,6 @@ impl InferCtx<'_> {
         let required_hint = required
             .iter()
             .map(|&s| self.env.resolve_str(s).to_owned())
-            .collect::<Vec<_>>()
             .join(", ");
         required.iter().for_each(|&req| {
             if !provided_methods.contains(&req) {

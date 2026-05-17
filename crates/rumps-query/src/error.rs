@@ -5,6 +5,7 @@
 use std::fmt;
 
 use chumsky::error::Simple;
+use itertools::Itertools;
 use miette::{Diagnostic, LabeledSpan};
 use nonempty::NonEmpty;
 use thiserror::Error;
@@ -73,11 +74,7 @@ fn fmt_span(span: &Option<Span>) -> String {
 }
 
 fn fmt_multiple(errors: &NonEmpty<Box<Error>>) -> String {
-    errors
-        .iter()
-        .map(|e| e.to_string())
-        .collect::<Vec<_>>()
-        .join("\n")
+    errors.iter().map(|e| e.to_string()).join("\n")
 }
 
 impl Error {
@@ -365,11 +362,11 @@ impl fmt::Display for ErrorDisplay<'_> {
                 write!(f, "type error at {}: {}", loc(e.span), e.message)
             }
             Error::Multiple { errors } => {
-                let formatted: Vec<_> = errors
+                let formatted = errors
                     .iter()
                     .map(|e| e.display_with_source(self.src).to_string())
-                    .collect();
-                write!(f, "{}", formatted.join("\n"))
+                    .join("\n");
+                write!(f, "{formatted}")
             }
         }
     }

@@ -5,6 +5,7 @@
 
 use std::fmt;
 
+use itertools::Itertools;
 use thiserror::Error;
 
 use super::ty::{ClassRegistry, Ty, TyArena, TyId, TyVar, TypeClass};
@@ -106,32 +107,28 @@ impl<'a> TyPrinter<'a> {
                 )
             }
             Ty::Tuple(ts) => {
-                let parts: Vec<_> =
-                    ts.iter().map(|&t| self.format_inner(t, namer)).collect();
-                // Single-element tuples need trailing comma: `(Int,)`
+                let parts =
+                    ts.iter().map(|&t| self.format_inner(t, namer)).join(", ");
                 let trail = if ts.len() == 1 { "," } else { "" };
-                format!("({}{})", parts.join(", "), trail)
+                format!("({parts}{trail})")
             }
             Ty::Fn(params, ret) => {
-                let ps: Vec<_> = params
+                let ps = params
                     .iter()
                     .map(|&t| self.format_inner(t, namer))
-                    .collect();
-                format!(
-                    "({}) -> {}",
-                    ps.join(", "),
-                    self.format_inner(*ret, namer)
-                )
+                    .join(", ");
+                let ret = self.format_inner(*ret, namer);
+                format!("({ps}) -> {ret}")
             }
             Ty::Object(fields) => {
-                let parts: Vec<_> = fields
+                let parts = fields
                     .iter()
                     .map(|(&k, &t)| {
                         let name = self.strings.get(k).unwrap_or("<unknown>");
                         format!("{}: {}", name, self.format_inner(t, namer))
                     })
-                    .collect();
-                format!("{{ {} }}", parts.join(", "))
+                    .join(", ");
+                format!("{{ {parts} }}")
             }
             Ty::Union(prov, members) => {
                 if let Some(id) = prov {
@@ -140,11 +137,10 @@ impl<'a> TyPrinter<'a> {
                         .unwrap_or("<unknown type>")
                         .to_owned()
                 } else {
-                    let parts: Vec<_> = members
+                    members
                         .iter()
                         .map(|&t| self.format_inner(t, namer))
-                        .collect();
-                    parts.join(" | ")
+                        .join(" | ")
                 }
             }
             Ty::Named(id, args) => {
@@ -155,20 +151,22 @@ impl<'a> TyPrinter<'a> {
                 if args.is_empty() {
                     name.to_owned()
                 } else {
-                    let ps: Vec<_> = args
+                    let ps = args
                         .iter()
                         .map(|&t| self.format_inner(t, namer))
-                        .collect();
-                    format!("{}[{}]", name, ps.join(", "))
+                        .join(", ");
+                    format!("{name}[{ps}]")
                 }
             }
             Ty::Local => "Local".to_owned(),
             Ty::Global => "Global".to_owned(),
             Ty::Apply(v, args) => {
                 let vname = namer.name(*v);
-                let ps: Vec<_> =
-                    args.iter().map(|&t| self.format_inner(t, namer)).collect();
-                format!("{}[{}]", vname, ps.join(", "))
+                let ps = args
+                    .iter()
+                    .map(|&t| self.format_inner(t, namer))
+                    .join(", ");
+                format!("{vname}[{ps}]")
             }
             Ty::AssocType(v, _class, name) => {
                 let vname = namer.name(*v);
@@ -936,7 +934,6 @@ impl TypeError {
                     classes
                         .iter()
                         .map(|c| format!("`{c}:{method}`"))
-                        .collect::<Vec<_>>()
                         .join(", ")
                 )),
             ),

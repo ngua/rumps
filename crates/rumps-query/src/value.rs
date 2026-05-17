@@ -32,6 +32,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
+use itertools::Itertools;
 use ordered_float::OrderedFloat;
 use smallvec::{smallvec, SmallVec};
 
@@ -823,7 +824,7 @@ impl Value {
             Self::Array(..) => Cow::Borrowed("Array"),
             Self::Object(fields) => {
                 // Build structural type: `{ field: Type, ... }`
-                let parts: Vec<_> = fields
+                let parts = fields
                     .iter()
                     .filter_map(|(name_id, val_id)| {
                         let name = arena.get_str(*name_id)?;
@@ -831,8 +832,8 @@ impl Value {
                         let ty = val.type_name(reg, type_exprs, arena);
                         Some(format!("{name}: {ty}"))
                     })
-                    .collect();
-                Cow::Owned(format!("{{ {} }}", parts.join(", ")))
+                    .join(", ");
+                Cow::Owned(format!("{{ {parts} }}"))
             }
             Self::Tuple(..) => Cow::Borrowed("Tuple"),
             Self::Map(..) => Cow::Borrowed("Map"),
@@ -1281,7 +1282,6 @@ impl TypeExprArena {
                 let args = params
                     .iter()
                     .filter_map(|p| self.format(*p, name_fn, str_fn))
-                    .collect::<Vec<_>>()
                     .join(", ");
                 format!("{name}[{args}]")
             }
@@ -1289,7 +1289,6 @@ impl TypeExprArena {
                 let args = params
                     .iter()
                     .filter_map(|p| self.format(*p, name_fn, str_fn))
-                    .collect::<Vec<_>>()
                     .join(", ");
                 let ret_str = self
                     .format(*ret, name_fn, str_fn)
@@ -1300,7 +1299,6 @@ impl TypeExprArena {
                 let parts = elems
                     .iter()
                     .filter_map(|p| self.format(*p, name_fn, str_fn))
-                    .collect::<Vec<_>>()
                     .join(", ");
                 // Single-element tuples need trailing comma: `(Int,)`
                 let trail = if elems.len() == 1 { "," } else { "" };
@@ -1310,7 +1308,6 @@ impl TypeExprArena {
                 let parts = members
                     .iter()
                     .filter_map(|p| self.format(*p, name_fn, str_fn))
-                    .collect::<Vec<_>>()
                     .join(" | ");
                 parts
             }
@@ -1324,7 +1321,6 @@ impl TypeExprArena {
                             .unwrap_or_else(|| "?".to_owned());
                         format!("{name}: {ty}")
                     })
-                    .collect::<Vec<_>>()
                     .join(", ");
                 format!("{{ {parts} }}")
             }

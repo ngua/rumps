@@ -602,17 +602,8 @@ impl Array {
                 .get_array(args[1])
                 .unwrap_or_else(|| typechecked!("Array.intersperse", "Array"));
 
-            let result: SmallVec<[ValueId; 4]> = elems
-                .iter()
-                .enumerate()
-                .flat_map(|(i, elem)| -> SmallVec<[ValueId; 2]> {
-                    if i == 0 {
-                        smallvec![*elem]
-                    } else {
-                        smallvec![sep, *elem]
-                    }
-                })
-                .collect();
+            let result: SmallVec<[ValueId; 4]> =
+                Itertools::intersperse(elems.iter().copied(), sep).collect();
 
             Ok(ctx.arena.add(Value::Array(ty, Arc::new(result)), ctx.span))
         })

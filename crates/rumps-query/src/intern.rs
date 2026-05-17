@@ -5,6 +5,7 @@
 //! (`ValueArena`) and type checker (`TypeEnv`, `Ty::Object`).
 
 use indexmap::IndexSet;
+use itertools::Itertools;
 use smallvec::SmallVec;
 
 /// Index into a string intern table.
@@ -146,7 +147,6 @@ impl QualifiedName {
         self.segs
             .iter()
             .filter_map(|id| interner.get(*id))
-            .collect::<Vec<_>>()
             .join(".")
     }
 
