@@ -1456,16 +1456,24 @@ impl InferCtx<'_> {
         // Typecheck method body
         self.env.push_scope();
 
-        // Bind parameters with user-provided types (or inferred)
-        let param_tys =
-            self.param_tys_with_subst(&method.params, type_param_subst);
-
-        // Unify user param types with expected param types
-        param_tys.iter().zip(expected_param_tys.iter()).for_each(
-            |(&user_ty, &exp_ty)| {
-                self.unify(user_ty, exp_ty, m_span);
-            },
-        );
+        // Bind parameters with user-provided types (or inferred).
+        // For unannotated params, use expected types directly so that
+        // the body can rely on concrete type info (e.g. for match
+        // exhaustiveness) without waiting for deferred constraint solving.
+        let param_tys: Vec<TyId> = method
+            .params
+            .iter()
+            .zip(expected_param_tys.iter())
+            .map(|((_, ann), &exp_ty)| match ann {
+                Some(id) => {
+                    let user_ty =
+                        self.convert().ast_type_to_ty(*id, type_param_subst);
+                    self.unify(user_ty, exp_ty, m_span);
+                    user_ty
+                }
+                None => exp_ty,
+            })
+            .collect();
 
         self.bind_params(&method.params, &param_tys);
 

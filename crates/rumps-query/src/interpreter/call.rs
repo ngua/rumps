@@ -524,10 +524,13 @@ impl<I: IoContext> Interpreter<'_, I> {
         } else {
             // No user type from instance_calls or Tagged.
             // For Union/Newtype, auto-derive (unwrap and dispatch to builtin).
-            let is_wrapped =
-                args.first().and_then(|id| self.arena.get(*id)).is_some_and(
-                    |v| matches!(v, Value::Union(..) | Value::Newtype(..)),
-                );
+            // Check *all* args, not just the first; the container may not be
+            // `args[0]` (e.g. `Foldable:reduce(f, init, container)`).
+            let is_wrapped = args.iter().any(|id| {
+                self.arena.get(*id).is_some_and(|v| {
+                    matches!(v, Value::Union(..) | Value::Newtype(..))
+                })
+            });
 
             if is_wrapped {
                 self.dispatch_with_auto_derive(

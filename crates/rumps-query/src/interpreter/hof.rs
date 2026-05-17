@@ -82,14 +82,6 @@ pub(crate) enum HofState {
         /// Last element tested (to add to `acc` if predicate was true).
         pending: ValueId,
     },
-    /// `Filterable:filter` over range.
-    FilterRange {
-        current: i64,
-        end: i64,
-        elem_ty: TypeExprId,
-        acc: SmallVec<[ValueId; 4]>,
-        pending: i64,
-    },
     /// `Foldable:reduce` over array.
     ReduceArray {
         source: ValueId,
@@ -254,36 +246,6 @@ pub(crate) fn resume(
                     }))
                 }
                 _ => invariant!("FilterArray source must be Array"),
-            }
-        }
-        HofState::FilterRange {
-            current,
-            end,
-            elem_ty,
-            mut acc,
-            pending,
-        } => {
-            let keep = matches!(ctx.arena.get(result), Some(Value::Bool(true)));
-            if keep {
-                let v = ctx.arena.add(Value::Int(pending), ctx.span);
-                acc.push(v);
-            }
-            // `current` is the next value to process.
-            if current >= end {
-                Ok(MethodResult::Done(Value::Array(elem_ty, Arc::new(acc))))
-            } else {
-                let int_id = ctx.arena.add(Value::Int(current), ctx.span);
-                Ok(MethodResult::Invoke(Continuation {
-                    callee: cont.callee,
-                    args: smallvec![int_id],
-                    state: HofState::FilterRange {
-                        current: current + 1,
-                        end,
-                        elem_ty,
-                        acc,
-                        pending: current,
-                    },
-                }))
             }
         }
         HofState::ReduceArray {

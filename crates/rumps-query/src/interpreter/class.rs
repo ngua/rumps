@@ -2383,74 +2383,29 @@ impl Filterable {
             .get(1)
             .unwrap_or_else(|| typechecked!("Filterable:filter", "2 args"));
 
-        enum Kind {
-            EmptyArray(TypeExprId),
-            Array(TypeExprId, ValueId),
-            EmptyRange,
-            Range(i64, i64),
-            Other,
-        }
-        let kind = match ctx.arena.get(src) {
+        match ctx.arena.get(src) {
             Some(Value::Array(ty, elems)) if elems.is_empty() => {
-                Kind::EmptyArray(*ty)
+                let ty = *ty;
+                Ok(MethodResult::Done(Value::Array(
+                    ty,
+                    Arc::new(SmallVec::new()),
+                )))
             }
-            Some(Value::Array(ty, elems)) => Kind::Array(*ty, elems[0]),
-            Some(Value::Range {
-                start,
-                end,
-                inclusive,
-            }) => {
-                let e = if *inclusive { *end + 1 } else { *end };
-                if *start >= e {
-                    Kind::EmptyRange
-                } else {
-                    Kind::Range(*start, e)
-                }
-            }
-            _ => Kind::Other,
-        };
-
-        match kind {
-            Kind::EmptyArray(ty) => Ok(MethodResult::Done(Value::Array(
-                ty,
-                Arc::new(SmallVec::new()),
-            ))),
-            Kind::Array(elem_ty, first) => {
+            Some(Value::Array(ty, elems)) => {
+                let (ty, first) = (*ty, elems[0]);
                 Ok(MethodResult::Invoke(Continuation {
                     callee: pred_id,
                     args: smallvec![first],
                     state: HofState::FilterArray {
                         source: src,
                         idx: 0,
-                        elem_ty,
+                        elem_ty: ty,
                         acc: SmallVec::new(),
                         pending: first,
                     },
                 }))
             }
-            Kind::EmptyRange => {
-                let int_ty = ctx.type_exprs.named(TypeId::INT);
-                Ok(MethodResult::Done(Value::Array(
-                    int_ty,
-                    Arc::new(SmallVec::new()),
-                )))
-            }
-            Kind::Range(start, end) => {
-                let int_ty = ctx.type_exprs.named(TypeId::INT);
-                let int_id = ctx.arena.add(Value::Int(start), ctx.span);
-                Ok(MethodResult::Invoke(Continuation {
-                    callee: pred_id,
-                    args: smallvec![int_id],
-                    state: HofState::FilterRange {
-                        current: start + 1,
-                        end,
-                        elem_ty: int_ty,
-                        acc: SmallVec::new(),
-                        pending: start,
-                    },
-                }))
-            }
-            Kind::Other => typechecked!("Filterable:filter", "Array or Range"),
+            _ => typechecked!("Filterable:filter", "Array"),
         }
     }
 }

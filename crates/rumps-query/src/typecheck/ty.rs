@@ -437,7 +437,7 @@ impl ClassRegistry {
                     MethodSpec::Standard({
                         let pred = arena.func(smallvec![v0], TyArena::BOOL);
                         hkt2(
-                            arena.func(smallvec![pred, tv1_of_v0], array_v0),
+                            arena.func(smallvec![pred, tv1_of_v0], tv1_of_v0),
                             ClassId::FILTERABLE,
                         )
                     }),

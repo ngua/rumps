@@ -1,0 +1,34 @@
+; User Filterable for type, newtype, and union
+
+type Box[T] = Full(T) | Empty
+newtype Bag[T] = Array[T]
+union Lists = Array[Int] | Array[String]
+
+class Filterable for Box {
+  fun filter(p, x) {
+    match x {
+      Box.Full(v) => {
+        if p(v) { Box.Full(v) } else { Box.Empty }
+      }
+      Box.Empty => { Box.Empty }
+    }
+  }
+}
+
+fun main() {
+  ; type with user instance
+  write Filterable:filter(x => x > 10, Box.Full(42))
+  write Filterable:filter(x => x > 10, Box.Full(5))
+  write Filterable:filter(x => x > 10, Box.Empty)
+
+  ; newtype auto-derive
+  let b: Bag[Int] = [1, 2, 3, 4, 5]
+  write Filterable:filter(x => x > 3, b)
+
+  ; union auto-derive
+  let a: Lists = [1, 2, 3, 4, 5]
+  write Filterable:filter(x => x > 3, a)
+
+  let s: Lists = ["hello", "hi", "hey", "howdy"]
+  write Filterable:filter(w => String.length(w) > 2, s)
+}

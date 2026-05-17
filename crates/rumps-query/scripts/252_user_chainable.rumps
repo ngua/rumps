@@ -1,0 +1,52 @@
+; User Chainable for type, newtype, and union (requires Wrappable)
+
+type Box[T] = Full(T) | Empty
+newtype Maybe[T] = Option[T]
+union Opt = Option[Int] | Option[String]
+
+class Wrappable for Box {
+  fun wrap(v) {
+    Box.Full(v)
+  }
+}
+
+class Fallible for Box {
+  fun unwrap(x) {
+    match x {
+      Box.Full(v) => { v }
+      Box.Empty => { raise "empty box" }
+    }
+  }
+}
+
+class Chainable for Box {
+  fun chain(x, f) {
+    match x {
+      Box.Full(v) => { f(v) }
+      Box.Empty => { Box.Empty }
+    }
+  }
+}
+
+fun main() {
+  ; type with user instance
+  write Chainable:chain(Box.Full(21), x => Box.Full(x * 2))
+  write Chainable:chain(Box.Empty, x => Box.Full(x * 2))
+
+  ; chained operations
+  let r = Chainable:chain(Box.Full(10), x => {
+    Chainable:chain(Box.Full(x + 5), y => Box.Full(y * 2))
+  })
+  write r
+
+  ; newtype auto-derive
+  let m: Maybe[Int] = Option.Some(5)
+  write Chainable:chain(m, x => Option.Some(x * 10))
+
+  ; union auto-derive
+  let a: Opt = Option.Some(5)
+  write Chainable:chain(a, x => Option.Some(x * 10))
+
+  let b: Opt = Option.None: Option[Int]
+  write Chainable:chain(b, x => Option.Some(x + 1))
+}

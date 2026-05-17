@@ -1,0 +1,12 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; User Mappable for type, newtype, and union\n\ntype Box[T] = Full(T) | Empty\nnewtype Bag[T] = Array[T]\nunion Flex = Option[Int] | Array[Int]\n\nclass Mappable for Box {\n  fun map(f, x) {\n    match x {\n      Box.Full(v) => { Box.Full(f(v)) }\n      Box.Empty => { Box.Empty }\n    }\n  }\n}\n\nfun main() {\n  ; type with user instance\n  write Mappable:map(x => x * 2, Box.Full(21))\n  write Mappable:map(x => x + 10, Box.Empty)\n\n  ; partial application\n  let double = Mappable:map(x => x * 2)\n  write double(Box.Full(5))\n  write double(Box.Empty)\n\n  ; type-changing map\n  write Mappable:map(x => \"{x}!\", Box.Full(99))\n\n  ; newtype auto-derive\n  let b: Bag[Int] = [1, 2, 3]\n  write Mappable:map(x => x * 10, b)\n\n  ; union auto-derive\n  let o: Flex = Option.Some(5)\n  write Mappable:map(x => x * 2, o)\n\n  let a: Flex = [1, 2, 3]\n  write Mappable:map(x => x + 10, a)\n}\n"
+---
+Box.Full(42)
+Box.Empty
+Box.Full(10)
+Box.Empty
+Box.Full("99!")
+[ 10, 20, 30 ]
+Option.Some(10)
+[ 11, 12, 13 ]

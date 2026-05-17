@@ -21,9 +21,9 @@ fun main() {
   write "Doubled array: {Mappable:map(x => x * 2, arr)}"
   write "Doubled range: {Mappable:map(x => x * 2, Iterable:collect(1 ..= 5))}"
 
-  ; Filterable:filter on Array and Range
+  ; Filterable:filter on Array
   write "Evens from array: {Filterable:filter(x => x % 2 == 0, arr)}"
-  write "Evens from range: {Filterable:filter(x => x % 2 == 0, 1 ..= 10)}"
+  write "Evens from range: {Filterable:filter(x => x % 2 == 0, Iterable:collect(1 ..= 10))}"
 
   ; Foldable:reduce on Array and Range
   write "Sum of array: {Foldable:reduce((a, x) => a + x, 0, arr)}"

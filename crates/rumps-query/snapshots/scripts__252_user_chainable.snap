@@ -1,0 +1,10 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; User Chainable for type, newtype, and union (requires Wrappable)\n\ntype Box[T] = Full(T) | Empty\nnewtype Maybe[T] = Option[T]\nunion Opt = Option[Int] | Option[String]\n\nclass Wrappable for Box {\n  fun wrap(v) {\n    Box.Full(v)\n  }\n}\n\nclass Fallible for Box {\n  fun unwrap(x) {\n    match x {\n      Box.Full(v) => { v }\n      Box.Empty => { raise \"empty box\" }\n    }\n  }\n}\n\nclass Chainable for Box {\n  fun chain(x, f) {\n    match x {\n      Box.Full(v) => { f(v) }\n      Box.Empty => { Box.Empty }\n    }\n  }\n}\n\nfun main() {\n  ; type with user instance\n  write Chainable:chain(Box.Full(21), x => Box.Full(x * 2))\n  write Chainable:chain(Box.Empty, x => Box.Full(x * 2))\n\n  ; chained operations\n  let r = Chainable:chain(Box.Full(10), x => {\n    Chainable:chain(Box.Full(x + 5), y => Box.Full(y * 2))\n  })\n  write r\n\n  ; newtype auto-derive\n  let m: Maybe[Int] = Option.Some(5)\n  write Chainable:chain(m, x => Option.Some(x * 10))\n\n  ; union auto-derive\n  let a: Opt = Option.Some(5)\n  write Chainable:chain(a, x => Option.Some(x * 10))\n\n  let b: Opt = Option.None: Option[Int]\n  write Chainable:chain(b, x => Option.Some(x + 1))\n}\n"
+---
+Box.Full(42)
+Box.Empty
+Box.Full(30)
+Option.Some(50)
+Option.Some(50)
+Option.None

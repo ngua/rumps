@@ -1,0 +1,31 @@
+; User Foldable for type, newtype, and union
+
+type Box[T] = Full(T) | Empty
+newtype Bag[T] = Array[T]
+union Flex = Array[Int] | Range
+
+class Foldable for Box {
+  fun reduce(f, init, x) {
+    match x {
+      Box.Full(v) => { f(init, v) }
+      Box.Empty => { init }
+    }
+  }
+}
+
+fun main() {
+  ; type with user instance
+  write Foldable:reduce((acc, x) => acc + x, 0, Box.Full(42))
+  write Foldable:reduce((acc, x) => acc + x, 100, Box.Empty)
+
+  ; newtype auto-derive
+  let b: Bag[Int] = [1, 2, 3, 4]
+  write Foldable:reduce((acc, x) => acc + x, 0, b)
+
+  ; union auto-derive
+  let a: Flex = [10, 20, 30]
+  write Foldable:reduce((acc, x) => acc + x, 0, a)
+
+  let r: Flex = 1 .. 5
+  write Foldable:reduce((acc, x) => acc + x, 0, r)
+}

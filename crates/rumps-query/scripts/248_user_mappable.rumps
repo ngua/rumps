@@ -1,0 +1,39 @@
+; User Mappable for type, newtype, and union
+
+type Box[T] = Full(T) | Empty
+newtype Bag[T] = Array[T]
+union Flex = Option[Int] | Array[Int]
+
+class Mappable for Box {
+  fun map(f, x) {
+    match x {
+      Box.Full(v) => { Box.Full(f(v)) }
+      Box.Empty => { Box.Empty }
+    }
+  }
+}
+
+fun main() {
+  ; type with user instance
+  write Mappable:map(x => x * 2, Box.Full(21))
+  write Mappable:map(x => x + 10, Box.Empty)
+
+  ; partial application
+  let double = Mappable:map(x => x * 2)
+  write double(Box.Full(5))
+  write double(Box.Empty)
+
+  ; type-changing map
+  write Mappable:map(x => "{x}!", Box.Full(99))
+
+  ; newtype auto-derive
+  let b: Bag[Int] = [1, 2, 3]
+  write Mappable:map(x => x * 10, b)
+
+  ; union auto-derive
+  let o: Flex = Option.Some(5)
+  write Mappable:map(x => x * 2, o)
+
+  let a: Flex = [1, 2, 3]
+  write Mappable:map(x => x + 10, a)
+}

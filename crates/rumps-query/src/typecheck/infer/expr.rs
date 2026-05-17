@@ -786,6 +786,26 @@ impl InferCtx<'_> {
                         })
                         .collect();
 
+                    // For HKT classes, extract the container type
+                    // variable from the constraint BEFORE consuming them.
+                    // The constraint `(ty, Hkt { id, .. })` where `id`
+                    // matches the current class has `ty` pointing to the
+                    // HKT constructor variable, which resolves to the
+                    // container type after constraint solving.
+                    let hkt_container_ty = if matches!(
+                        self.env.class_registry().shape(kind),
+                        ClassShape::Hkt { .. }
+                    ) {
+                        constraints.iter().find_map(|(ty, c)| match c {
+                            TypeClass::Hkt { id, .. } if *id == kind => {
+                                Some(*ty)
+                            }
+                            _ => None,
+                        })
+                    } else {
+                        None
+                    };
+
                     // Emit class constraints from scheme
                     constraints.into_iter().for_each(|(ty, class)| {
                         self.emit_class_constraint(ty, class, span);
@@ -793,19 +813,16 @@ impl InferCtx<'_> {
 
                     // Track user instance calls for dispatch.
                     //
-                    // For HKT classes (e.g. `Wrappable`), the instance is
-                    // keyed by the return type (the container), not the
-                    // first argument. For non-HKT classes, the first arg
-                    // determines the instance.
+                    // For HKT classes, the instance is keyed by the
+                    // container constructor variable from the class
+                    // constraint, not the return type. This is correct
+                    // for ALL HKT methods regardless of whether the
+                    // return type contains the container (`Mappable:map`
+                    // returns `F[B]`) or not (`Filterable:filter` returns
+                    // `Array[T]`, `Iterable:length` returns `Int`).
                     {
-                        let lookup_ty = if matches!(
-                            self.env.class_registry().shape(kind),
-                            ClassShape::Hkt { .. }
-                        ) {
-                            Some(ret)
-                        } else {
-                            arg_tys.first().copied()
-                        };
+                        let lookup_ty = hkt_container_ty
+                            .or_else(|| arg_tys.first().copied());
                         if let Some(ty) = lookup_ty {
                             let type_id = self.nominal_type_id(ty);
                             match type_id {

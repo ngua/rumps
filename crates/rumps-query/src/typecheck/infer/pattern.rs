@@ -44,7 +44,9 @@ impl InferCtx<'_> {
                 SmallVec::new()
             }
             Some((type_id, var_def)) => {
-                let s_ty = self.ty_arena.get(scrutinee_ty).clone();
+                let resolved =
+                    self.uf.resolve(scrutinee_ty, &mut self.ty_arena);
+                let s_ty = self.ty_arena.get(resolved).clone();
                 // Special handling for Option/Result builtins
                 if type_id == TypeId::OPTION {
                     if var_def.arity == 0 {
@@ -298,7 +300,8 @@ impl InferCtx<'_> {
             .any(|arm| self.is_irrefutable_pattern(arm.pattern));
 
         if !has_catch_all {
-            let s_ty = self.ty_arena.get(scrutinee_ty).clone();
+            let resolved = self.uf.resolve(scrutinee_ty, &mut self.ty_arena);
+            let s_ty = self.ty_arena.get(resolved).clone();
             match s_ty {
                 Ty::Named(type_id, _) => {
                     if let Some(TypeDef::Sum { variants, .. }) =

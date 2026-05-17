@@ -1,0 +1,12 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; User Iterable for type, newtype, and union\n\ntype Box[T] = Full(T) | Empty\nnewtype Bag[T] = Array[T]\nunion Flex = Array[Int] | Range\n\nclass Iterable for Box {\n  fun length(x) {\n    match x {\n      Box.Full(_) => { 1 }\n      Box.Empty => { 0 }\n    }\n  }\n\n  fun collect(x) {\n    match x {\n      Box.Full(v) => { [v] }\n      Box.Empty => { [] }\n    }\n  }\n}\n\nfun main() {\n  ; type with user instance\n  write Iterable:length(Box.Full(42))\n  write Iterable:length(Box.Empty)\n  write Iterable:collect(Box.Full(99))\n  write Iterable:collect(Box.Empty)\n\n  ; newtype auto-derive\n  let b: Bag[Int] = [10, 20, 30]\n  write Iterable:length(b)\n  write Iterable:collect(b)\n\n  ; union auto-derive\n  let a: Flex = [10, 20, 30]\n  write Iterable:length(a)\n\n  let r: Flex = 1 .. 4\n  write Iterable:length(r)\n}\n"
+---
+1
+0
+[ 99 ]
+[  ]
+3
+[ 10, 20, 30 ]
+3
+3

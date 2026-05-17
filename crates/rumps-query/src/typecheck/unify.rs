@@ -1361,10 +1361,9 @@ impl SolveCtx<'_> {
         let shape = self.ty_arena.get(ty).clone();
         let builtin_elem = match (class_id, &shape) {
             (_, Ty::Array(e)) => Some(*e),
-            (
-                ClassId::ITERABLE | ClassId::FILTERABLE | ClassId::FOLDABLE,
-                Ty::Range,
-            ) => Some(TyArena::INT),
+            (ClassId::ITERABLE | ClassId::FOLDABLE, Ty::Range) => {
+                Some(TyArena::INT)
+            }
             (ClassId::MAPPABLE, Ty::Option(e)) => Some(*e),
             (ClassId::MAPPABLE, Ty::Result(ok, _)) => Some(*ok),
             _ => None,
