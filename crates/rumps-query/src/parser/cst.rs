@@ -366,6 +366,17 @@ pub(crate) enum ExprKind {
     /// methods (`Wrappable:wrap`, `Into:into`, `TryInto:try-into`) when used as
     /// first-class values, to specify the target type.
     ClassMethodRef(StringId, Vec<TypeExpr>, StringId),
+
+    /// Naked class method call: `:method(args)`.
+    ///
+    /// Like `ClassMethod` but without the class name prefix. The class is
+    /// resolved during type checking; ambiguous names are errors.
+    NakedClassMethod(StringId, Vec<Expr>),
+
+    /// Naked class method reference: `:method`.
+    ///
+    /// Like `ClassMethodRef` but without the class name prefix.
+    NakedClassMethodRef(StringId),
 }
 
 /// The key specification for JSON access (CST form).

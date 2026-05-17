@@ -432,6 +432,18 @@ pub(crate) enum TypeError {
     #[error("unknown class `{0}`")]
     UnknownClass(String, Span),
 
+    /// Ambiguous naked class method; multiple classes define this method.
+    #[error("ambiguous method `:{method}`")]
+    AmbiguousNakedMethod {
+        method: String,
+        classes: Vec<String>,
+        span: Span,
+    },
+
+    /// No class defines the given method (naked `:method` syntax).
+    #[error("no class defines method `:{0}`")]
+    UnknownNakedMethod(String, Span),
+
     /// Unknown method name for a class (with `StringId`s).
     #[error("class has no such method")]
     UnknownMethodId {
@@ -668,6 +680,8 @@ impl TypeError {
             | Self::NotFoundInModule { span, .. }
             | Self::PrivateAccess { span, .. }
             | Self::UnknownClass(_, span)
+            | Self::AmbiguousNakedMethod { span, .. }
+            | Self::UnknownNakedMethod(_, span)
             | Self::UnknownMethodId { span, .. }
             | Self::ConvertMethodNeedsType { span, .. }
             | Self::DuplicateInstance { span, .. }
@@ -914,6 +928,21 @@ impl TypeError {
             Self::UnknownClass(name, _) => (
                 format!("unknown class `{name}`"),
                 Some("valid classes: Numeric, Monoid, Ord, Fallible, Indexable, etc.".to_owned()),
+            ),
+            Self::AmbiguousNakedMethod { method, classes, .. } => (
+                format!("ambiguous method `:{method}`; defined in multiple classes"),
+                Some(format!(
+                    "disambiguate with class prefix: {}",
+                    classes
+                        .iter()
+                        .map(|c| format!("`{c}:{method}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )),
+            ),
+            Self::UnknownNakedMethod(method, _) => (
+                format!("no class defines method `:{method}`"),
+                None,
             ),
             Self::UnknownMethodId { class, method, .. } => {
                 let cn = p.strings.get(*class).unwrap_or("<unknown>");

@@ -547,6 +547,19 @@ impl ClassRegistry {
         }
     }
 
+    /// Find all classes that define a method with the given name.
+    pub(crate) fn lookup_by_method(
+        &self,
+        method: StringId,
+    ) -> SmallVec<[ClassId; 2]> {
+        self.defs
+            .iter()
+            .enumerate()
+            .filter(|(_, def)| def.methods.iter().any(|(n, _)| *n == method))
+            .map(|(i, _)| ClassId::new(i as u32))
+            .collect()
+    }
+
     pub(crate) fn name(&self, id: ClassId) -> StringId {
         self.get(id).name
     }

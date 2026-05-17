@@ -1102,6 +1102,13 @@ impl<'a> LowerCtx<'a> {
                     .collect::<Result<SmallVec<_>>>()?;
                 Expr::ClassMethodRef(class, type_arg_ids, method)
             }
+            cst::ExprKind::NakedClassMethod(method, args) => {
+                let arg_ids = self.exprs(args)?;
+                Expr::NakedClassMethod(method, arg_ids)
+            }
+            cst::ExprKind::NakedClassMethodRef(method) => {
+                Expr::NakedClassMethodRef(method)
+            }
             cst::ExprKind::PipePlaceholder => {
                 Err(crate::Error::parse(
                     span,
@@ -2096,6 +2103,14 @@ impl<'a> MergeCtx<'a> {
                     .map(|&id| self.type_expr(id, span))
                     .collect();
                 Expr::ClassMethodRef(class, new_type_args?, method)
+            }
+            Expr::NakedClassMethod(method, args) => {
+                let new_args: Result<SmallVec<_>> =
+                    args.iter().map(|&id| self.expr(id, span)).collect();
+                Expr::NakedClassMethod(method, new_args?)
+            }
+            Expr::NakedClassMethodRef(method) => {
+                Expr::NakedClassMethodRef(method)
             }
             Expr::Is(expr, pat) => {
                 let new_expr = self.expr(expr, span)?;

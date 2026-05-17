@@ -65,4 +65,6 @@ pub(crate) struct TypecheckOutput {
     pub(crate) resolved_instance_fns: HashMap<ExprId, StringId>,
     /// Class registry; carries class definitions indexed by `ClassId`.
     pub(crate) class_registry: ClassRegistry,
+    /// Resolved class names for naked (`:method`) class method expressions.
+    pub(crate) naked_method_classes: HashMap<ExprId, StringId>,
 }

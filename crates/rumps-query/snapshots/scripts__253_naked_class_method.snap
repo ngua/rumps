@@ -1,0 +1,21 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Naked class method syntax: `:method` without class prefix\n\nfun main() {\n  ; Naked class method calls (unique method names resolve automatically)\n  write \"add: {:add(3, 4)}\"\n  write \"sub: {:sub(10, 3)}\"\n  write \"neg: {:neg(-5)}\"\n  write \"compare: {:compare(1, 2)}\"\n  write \"eq: {:eq(3, 3)}\"\n  write \"display: {:display(42)}\"\n  write \"concat: {:concat(\"hello\", \" world\")}\"\n\n  ; Naked class method references\n  let f = :add\n  write \"ref add: {f(10, 20)}\"\n\n  let g = :neg\n  write \"ref neg: {g(-42)}\"\n\n  let h = :compare\n  write \"ref compare: {h(5, 5)}\"\n\n  ; HoF with naked syntax\n  let nums = [1, 2, 3, 4, 5]\n  let doubled = :map(x => x * 2, nums)\n  write \"map: {doubled}\"\n\n  let evens = :filter(x => x % 2 == 0, nums)\n  write \"filter: {evens}\"\n\n  let sum = :reduce((acc, x) => acc + x, 0, nums)\n  write \"reduce: {sum}\"\n\n  ; Pipe with naked syntax\n  write \"length: {nums |> :length}\"\n  write \"unwrap: {Option.Some(99) |> :unwrap}\"\n\n  ; Method ref passed to HOF\n  let arrs = [[1, 2], [3], [4, 5, 6]]\n  let flat = :reduce(:concat, [], arrs)\n  write \"flatten: {flat}\"\n\n  ; Stored ref used later\n  let len = :length\n  write \"stored ref: {len([10, 20, 30])}\"\n}\n"
+---
+"add: 7"
+"sub: 7"
+"neg: 5"
+"compare: -1"
+"eq: true"
+"display: 42"
+"concat: hello world"
+"ref add: 30"
+"ref neg: 42"
+"ref compare: 0"
+"map: [ 2, 4, 6, 8, 10 ]"
+"filter: [ 2, 4 ]"
+"reduce: 15"
+"length: 5"
+"unwrap: 99"
+"flatten: [ 1, 2, 3, 4, 5, 6 ]"
+"stored ref: 3"

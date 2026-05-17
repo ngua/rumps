@@ -1,0 +1,15 @@
+; Naked class method with ambiguous method name (error test)
+
+class Foo a {
+  fun do-thing(x: a) -> String
+}
+
+class Bar a {
+  fun do-thing(x: a) -> String
+}
+
+fun main() {
+  ; Both Foo and Bar define `do-thing`; must disambiguate
+  let x = :do-thing(42)
+  write x
+}

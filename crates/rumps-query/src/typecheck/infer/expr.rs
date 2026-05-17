@@ -355,6 +355,16 @@ impl InferCtx<'_> {
             Expr::ClassMethodRef(class, type_args, method) => {
                 self.class_method_ref(id, *class, type_args, *method, span)
             }
+
+            // Naked class method call: `:method(args)`
+            Expr::NakedClassMethod(method, args) => {
+                self.naked_class_method(id, *method, args, span)
+            }
+
+            // Naked class method reference: `:method`
+            Expr::NakedClassMethodRef(method) => {
+                self.naked_class_method_ref(id, *method, span)
+            }
         }
     }
 
@@ -661,6 +671,82 @@ impl InferCtx<'_> {
                 let cn = self.env.resolve_str(class).to_owned();
                 self.error(TypeError::UnknownClass(cn, span));
                 TyArena::ERROR
+            }
+        }
+    }
+
+    /// Resolve a naked class method call (`:method(args)`).
+    ///
+    /// Searches all classes for a unique method match. If exactly one class
+    /// defines the method, delegates to `class_method`. Otherwise, emits an
+    /// ambiguity or unknown-method error.
+    fn naked_class_method(
+        &mut self,
+        id: ExprId,
+        method: StringId,
+        args: &SmallVec<[ExprId; 4]>,
+        span: Span,
+    ) -> TyId {
+        match self.resolve_naked_method(method, span) {
+            Some((k, class_name)) => {
+                self.interp.naked_method_classes.insert(id, class_name);
+                self.call_class_method_generic(id, k, method, args, span)
+            }
+            None => TyArena::ERROR,
+        }
+    }
+
+    /// Resolve a naked class method reference (`:method`).
+    fn naked_class_method_ref(
+        &mut self,
+        id: ExprId,
+        method: StringId,
+        span: Span,
+    ) -> TyId {
+        match self.resolve_naked_method(method, span) {
+            Some((_k, class_name)) => {
+                self.interp.naked_method_classes.insert(id, class_name);
+                let empty = SmallVec::new();
+                self.class_method_ref(id, class_name, &empty, method, span)
+            }
+            None => TyArena::ERROR,
+        }
+    }
+
+    /// Search all classes for a method name; returns `Some((ClassId, class StringId))`
+    /// if exactly one class defines it, or `None` after emitting an error.
+    fn resolve_naked_method(
+        &mut self,
+        method: StringId,
+        span: Span,
+    ) -> Option<(ClassId, StringId)> {
+        let matches = self.env.class_registry().lookup_by_method(method);
+        match matches.as_slice() {
+            [] => {
+                let mn = self.env.resolve_str(method).to_owned();
+                self.error(TypeError::UnknownNakedMethod(mn, span));
+                None
+            }
+            &[k] => {
+                let name = self.env.class_registry().name(k);
+                Some((k, name))
+            }
+            _ => {
+                let mn = self.env.resolve_str(method).to_owned();
+                let classes = matches
+                    .iter()
+                    .map(|&k| {
+                        self.env
+                            .resolve_str(self.env.class_registry().name(k))
+                            .to_owned()
+                    })
+                    .collect();
+                self.error(TypeError::AmbiguousNakedMethod {
+                    method: mn,
+                    classes,
+                    span,
+                });
+                None
             }
         }
     }

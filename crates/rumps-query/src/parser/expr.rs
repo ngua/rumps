@@ -960,7 +960,11 @@ impl Parser {
             .then(Self::ident())
             .then_ignore(just(Token::LParen))
             .then_ignore(Self::opt_newlines())
-            .then(expr.clone().separated_by(class_method_sep).allow_trailing())
+            .then(
+                expr.clone()
+                    .separated_by(class_method_sep.clone())
+                    .allow_trailing(),
+            )
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::RParen))
             .map_with_span(|((class, method), args), span| {
@@ -996,6 +1000,33 @@ impl Parser {
                     ),
                     span,
                 )
+            });
+
+        // Naked class method call: `:method(args)`.
+        //
+        // Like `class_method` but without the class name prefix. Resolved
+        // during type checking; ambiguous method names are errors.
+        let naked_class_method = just(Token::ColonNoSpace)
+            .ignore_then(Self::ident())
+            .then_ignore(just(Token::LParen))
+            .then_ignore(Self::opt_newlines())
+            .then(expr.clone().separated_by(class_method_sep).allow_trailing())
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RParen))
+            .map_with_span(|(method, args), span| {
+                cst::Expr::new(
+                    cst::ExprKind::NakedClassMethod(method, args),
+                    span,
+                )
+            });
+
+        // Naked class method reference: `:method`.
+        //
+        // Like `class_method_ref` but without the class name prefix.
+        let naked_class_method_ref = just(Token::ColonNoSpace)
+            .ignore_then(Self::ident())
+            .map_with_span(|method, span| {
+                cst::Expr::new(cst::ExprKind::NakedClassMethodRef(method), span)
             });
 
         // Lexical variable or mempty (`_`)
@@ -1329,6 +1360,8 @@ impl Parser {
             pipe_placeholder,
             class_method,
             class_method_ref,
+            naked_class_method,
+            naked_class_method_ref,
             var,
             paren,
             array,

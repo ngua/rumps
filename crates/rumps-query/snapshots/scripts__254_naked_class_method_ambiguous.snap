@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Naked class method with ambiguous method name (error test)\n\nclass Foo a {\n  fun do-thing(x: a) -> String\n}\n\nclass Bar a {\n  fun do-thing(x: a) -> String\n}\n\nfun main() {\n  ; Both Foo and Bar define `do-thing`; must disambiguate\n  let x = :do-thing(42)\n  write x\n}\n"
+---
+ERROR: ambiguous method `:do-thing`; defined in multiple classes

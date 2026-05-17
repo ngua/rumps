@@ -1,0 +1,46 @@
+; Naked class method syntax: `:method` without class prefix
+
+fun main() {
+  ; Naked class method calls (unique method names resolve automatically)
+  write "add: {:add(3, 4)}"
+  write "sub: {:sub(10, 3)}"
+  write "neg: {:neg(-5)}"
+  write "compare: {:compare(1, 2)}"
+  write "eq: {:eq(3, 3)}"
+  write "display: {:display(42)}"
+  write "concat: {:concat("hello", " world")}"
+
+  ; Naked class method references
+  let f = :add
+  write "ref add: {f(10, 20)}"
+
+  let g = :neg
+  write "ref neg: {g(-42)}"
+
+  let h = :compare
+  write "ref compare: {h(5, 5)}"
+
+  ; HoF with naked syntax
+  let nums = [1, 2, 3, 4, 5]
+  let doubled = :map(x => x * 2, nums)
+  write "map: {doubled}"
+
+  let evens = :filter(x => x % 2 == 0, nums)
+  write "filter: {evens}"
+
+  let sum = :reduce((acc, x) => acc + x, 0, nums)
+  write "reduce: {sum}"
+
+  ; Pipe with naked syntax
+  write "length: {nums |> :length}"
+  write "unwrap: {Option.Some(99) |> :unwrap}"
+
+  ; Method ref passed to HOF
+  let arrs = [[1, 2], [3], [4, 5, 6]]
+  let flat = :reduce(:concat, [], arrs)
+  write "flatten: {flat}"
+
+  ; Stored ref used later
+  let len = :length
+  write "stored ref: {len([10, 20, 30])}"
+}

@@ -180,7 +180,46 @@ impl Spanned<String> {
                     .map(|n| tokens[i].span.end == n.span.start)
                     .unwrap_or(false);
 
-                if adj_prev && adj_next {
+                // Naked class method: `:method` where the previous
+                // adjacent token is not something that could end an
+                // expression (that would be an inline type annotation
+                // like `1:Int` or `x:Type`)
+                let prev_ends_expr = prev
+                    .map(|p| {
+                        p.span.end == tokens[i].span.start
+                            && matches!(
+                                &p.tok,
+                                Token::Ident(_)
+                                    | Token::Int(_)
+                                    | Token::Float(_)
+                                    | Token::String(_)
+                                    | Token::Char(_)
+                                    | Token::True
+                                    | Token::False
+                                    | Token::Null
+                                    | Token::RParen
+                                    | Token::RBracket
+                                    | Token::RBrace
+                            )
+                    })
+                    .unwrap_or(false);
+                // Require lowercase ident after `:` to avoid
+                // treating `:Type` (inline type annotation) as a
+                // naked method; method names are always lowercase
+                let naked = !adj_prev
+                    && !prev_ends_expr
+                    && adj_next
+                    && next
+                        .map(|n| {
+                            matches!(
+                                &n.tok,
+                                Token::Ident(s)
+                                    if s.starts_with(char::is_lowercase)
+                            )
+                        })
+                        .unwrap_or(false);
+
+                if (adj_prev && adj_next) || naked {
                     tokens[i].tok = Token::ColonNoSpace;
                 }
             }

@@ -237,6 +237,9 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
     /// the runtime checks this map first to find the exact function to call.
     resolved_instance_fns: HashMap<ExprId, StringId>,
 
+    /// Resolved class names for naked (`:method`) class method expressions.
+    naked_method_classes: HashMap<ExprId, StringId>,
+
     /// Class registry; carries class definitions indexed by `ClassId`.
     class_registry: typecheck::ClassRegistry,
 
@@ -355,6 +358,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             user_instances: instance::RuntimeInstanceRegistry::new(),
             instance_calls: tc.instance_calls,
             resolved_instance_fns: tc.resolved_instance_fns,
+            naked_method_classes: tc.naked_method_classes,
             class_registry: tc.class_registry,
             resolved_instances,
         })
@@ -524,6 +528,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             user_instances: instance::RuntimeInstanceRegistry::new(),
             instance_calls: HashMap::new(),
             resolved_instance_fns: HashMap::new(),
+            naked_method_classes: HashMap::new(),
             resolved_instances: HashMap::new(),
             class_registry,
         }
@@ -662,6 +667,24 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::ClassMethodRef(ref class, _, ref method) => {
                 Ok(Value::ClassMethodFn {
                     class: *class,
+                    method: *method,
+                    expr_id: Some(id),
+                })
+            }
+            Expr::NakedClassMethod(ref method, ref args) => {
+                let class =
+                    *self.naked_method_classes.get(&id).unwrap_or_else(|| {
+                        typechecked!("naked class method", "resolved class")
+                    });
+                self.class_method_expr(id, class, *method, args, span).await
+            }
+            Expr::NakedClassMethodRef(ref method) => {
+                let class =
+                    *self.naked_method_classes.get(&id).unwrap_or_else(|| {
+                        typechecked!("naked class method ref", "resolved class")
+                    });
+                Ok(Value::ClassMethodFn {
+                    class,
                     method: *method,
                     expr_id: Some(id),
                 })

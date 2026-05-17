@@ -877,6 +877,17 @@ pub(crate) enum Expr {
     /// first-class values, to specify the target type.
     ClassMethodRef(StringId, SmallVec<[AstTypeExprId; 2]>, StringId),
 
+    /// Naked class method call: `:method(args)`.
+    ///
+    /// Class is resolved during type checking by searching all classes for a
+    /// unique match. Ambiguous method names produce a type error.
+    NakedClassMethod(StringId, SmallVec<[ExprId; 4]>),
+
+    /// Naked class method reference: `:method`.
+    ///
+    /// Like `NakedClassMethod` but as a first-class value.
+    NakedClassMethodRef(StringId),
+
     /// Type check: `expr is Pattern`.
     ///
     /// Returns `true` if the value matches the pattern. For `VariantBind`

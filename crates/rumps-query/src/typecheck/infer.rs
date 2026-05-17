@@ -113,6 +113,11 @@ pub(super) struct InterpreterOutput {
     /// `(ClassId, TypeId, method)` lookup is ambiguous. This map records
     /// the specific generated function name for each call site.
     pub(super) resolved_instance_fns: HashMap<ExprId, StringId>,
+    /// Resolved class names for naked class method calls/refs.
+    ///
+    /// Maps each `NakedClassMethod`/`NakedClassMethodRef` expression to the
+    /// `StringId` of the class that was resolved during type checking.
+    pub(super) naked_method_classes: HashMap<ExprId, StringId>,
 }
 
 impl InterpreterOutput {
@@ -126,6 +131,7 @@ impl InterpreterOutput {
             wrap_types: HashMap::new(),
             instance_calls: HashMap::new(),
             resolved_instance_fns: HashMap::new(),
+            naked_method_classes: HashMap::new(),
         }
     }
 
@@ -1429,6 +1435,7 @@ impl<'a> InferCtx<'a> {
                 instance_calls: self.interp.instance_calls,
                 resolved_instance_fns: self.interp.resolved_instance_fns,
                 class_registry: self.env.class_registry,
+                naked_method_classes: self.interp.naked_method_classes,
             })
         }
     }
