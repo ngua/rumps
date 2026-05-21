@@ -706,6 +706,7 @@ impl InferCtx<'_> {
                 .iter()
                 .map(|&(_, te)| self.ast_type_expr_hkt_arity(sv, te))
                 .fold(0, u8::max),
+            Some(AstTypeExpr::TupleConstructor { .. }) => 0,
             _ => 0,
         }
     }
@@ -1167,7 +1168,7 @@ impl InferCtx<'_> {
     ///
     /// Allows fewer type arguments than the type definition expects; the
     /// remaining positions become element type variables for the HKT class.
-    /// Returns `(type_id, for_ty, class_arg_tys)` on success.
+    /// Returns `(type_id, for_ty, elem_tys)` on success.
     pub(super) fn resolve_hkt_for_type(
         &mut self,
         class: ClassId,
@@ -1193,26 +1194,121 @@ impl InferCtx<'_> {
             });
         }
 
-        // Extract base type name and explicit args from AST
-        let (type_name, ast_args) = self
+        enum ForHead {
+            Named(QualifiedName, SmallVec<[AstTypeExprId; 2]>),
+            TupleCtor {
+                arity: u8,
+                fixed: SmallVec<[(u8, AstTypeExprId); 2]>,
+            },
+        }
+
+        let head = self
             .ast
             .get_type_expr(for_type)
             .cloned()
             .and_then(|te| match te {
                 AstTypeExpr::Named(name) => {
-                    Some((name, SmallVec::<[AstTypeExprId; 2]>::new()))
+                    Some(ForHead::Named(name, SmallVec::new()))
                 }
-                AstTypeExpr::App(name, args) => Some((name, args)),
+                AstTypeExpr::App(name, args) => {
+                    Some(ForHead::Named(name, args))
+                }
+                AstTypeExpr::TupleConstructor { arity, fixed } => {
+                    Some(ForHead::TupleCtor { arity, fixed })
+                }
                 _ => None,
             })
             .or_else(|| {
                 self.error(TypeError::Custom {
-                    msg: "expected a named type for HKT class instance".into(),
+                    msg: "expected a named type or tuple constructor \
+                          for HKT class instance"
+                        .into(),
                     span,
                 });
                 None
             })?;
 
+        match head {
+            ForHead::TupleCtor { arity, fixed } => self.resolve_hkt_tuple_ctor(
+                class, kind, arity, &fixed, subst, span,
+            ),
+            ForHead::Named(type_name, ast_args) => self.resolve_hkt_named(
+                class, kind, type_name, ast_args, subst, module, span,
+            ),
+        }
+    }
+
+    fn resolve_hkt_tuple_ctor(
+        &mut self,
+        class: ClassId,
+        kind: u8,
+        arity: u8,
+        fixed: &[(u8, AstTypeExprId)],
+        subst: &mut IndexMap<StringId, TyId>,
+        span: Span,
+    ) -> Option<(TypeId, TyId, SmallVec<[TyId; 2]>)> {
+        let elem_count = arity as usize - fixed.len();
+        let class_name =
+            self.env.resolve_str(self.env.class_registry().name(class));
+        if elem_count != kind as usize {
+            self.error(TypeError::Custom {
+                msg: format!(
+                    "tuple constructor has {} element position(s) \
+                     but class `{}` expects kind {}",
+                    elem_count, class_name, kind,
+                ),
+                span,
+            });
+            None?
+        }
+
+        // Convert fixed position types and validate they are type variables
+        let fixed_tys: SmallVec<[TyId; 2]> = fixed
+            .iter()
+            .map(|&(_, ast_te)| self.convert().ast_type_to_ty(ast_te, subst))
+            .collect();
+
+        // Safe to check raw `Ty::Var` here because types are freshly allocated
+        // and have not been unified yet; post-unification this would need normalization
+        let concrete = fixed_tys
+            .iter()
+            .any(|&t| !matches!(self.ty_arena.get(t), Ty::Var(_)));
+        if concrete {
+            self.error(TypeError::Custom {
+                msg: "tuple constructor instances must use type \
+                      variables for fixed positions"
+                    .into(),
+                span,
+            });
+            None?
+        }
+
+        // Fresh vars for element positions (the unfilled suffix)
+        let elem_tys: SmallVec<[TyId; 2]> = (0..elem_count)
+            .map(|_| {
+                let tv = self.fresh_var();
+                self.ty_arena.alloc(Ty::Var(tv))
+            })
+            .collect();
+
+        let full: SmallVec<[TyId; 4]> =
+            fixed_tys.iter().chain(elem_tys.iter()).copied().collect();
+
+        let for_ty = self.ty_arena.alloc(Ty::Tuple(full));
+        Some((TypeId::TUPLE, for_ty, elem_tys))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_hkt_named(
+        &mut self,
+        class: ClassId,
+        kind: u8,
+        type_name: QualifiedName,
+        ast_args: SmallVec<[AstTypeExprId; 2]>,
+        subst: &mut IndexMap<StringId, TyId>,
+        module: &Option<QualifiedName>,
+        span: Span,
+    ) -> Option<(TypeId, TyId, SmallVec<[TyId; 2]>)> {
         // Resolve type name (with module fallback)
         let (type_id, qn) = self
             .convert()

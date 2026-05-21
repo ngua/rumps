@@ -2476,5 +2476,11 @@ fn resolve_type_expr(
         AstTypeExpr::AssocType { .. } => {
             typechecked!("type resolution", "associated types resolved")
         }
+        AstTypeExpr::TupleConstructor { .. } => {
+            typechecked!(
+                "type resolution",
+                "tuple constructors resolved during hoisting"
+            )
+        }
     }
 }

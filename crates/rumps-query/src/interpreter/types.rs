@@ -219,6 +219,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             // The typechecker has already verified correctness; return `None`
             // to indicate the type annotation should be skipped at runtime.
             AstTypeExpr::AssocType { .. } => Ok(None),
+            AstTypeExpr::TupleConstructor { .. } => Ok(None),
         }
     }
 
@@ -897,6 +898,12 @@ impl<I: IoContext> Interpreter<'_, I> {
             // Associated types should be resolved by typechecker before runtime
             AstTypeExpr::AssocType { .. } => {
                 typechecked!("type resolution", "associated types resolved")
+            }
+            AstTypeExpr::TupleConstructor { .. } => {
+                typechecked!(
+                    "type resolution",
+                    "tuple constructors resolved during hoisting"
+                )
             }
         }
     }

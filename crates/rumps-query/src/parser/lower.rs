@@ -242,6 +242,7 @@ impl<'a> LowerCtx<'a> {
                 .iter()
                 .map(|(_, te)| Self::type_expr_hkt_arity(sv, te))
                 .fold(0, u8::max),
+            cst::TypeExprKind::TupleConstructor { .. } => 0,
         }
     }
 
@@ -504,6 +505,11 @@ impl<'a> LowerCtx<'a> {
             cst::TypeExprKind::Object(fs) => {
                 fs.iter()
                     .for_each(|(_, t)| Self::collect_type_vars(t, known, out));
+            }
+            cst::TypeExprKind::TupleConstructor { fixed, .. } => {
+                fixed.iter().for_each(|(_, t)| {
+                    Self::collect_type_vars(t, known, out);
+                });
             }
             cst::TypeExprKind::Wildcard
             | cst::TypeExprKind::AssocType { .. } => {}
@@ -1231,6 +1237,31 @@ impl<'a> LowerCtx<'a> {
             cst::TypeExprKind::AssocType { class, name } => {
                 AstTypeExpr::AssocType { class, name }
             }
+            cst::TypeExprKind::TupleConstructor { arity, fixed } => {
+                let max_fixed =
+                    fixed.iter().map(|(pos, _)| *pos).max().unwrap_or(0);
+                let min_empty =
+                    (0..arity).find(|i| !fixed.iter().any(|(p, _)| *p == *i));
+                if let Some(me) = min_empty {
+                    if max_fixed > me {
+                        Err(crate::Error::parse(
+                            span,
+                            "fixed positions in tuple constructors \
+                             must precede element positions \
+                             (e.g., `(T,)` not `(,T)`)",
+                            vec![],
+                        ))?;
+                    }
+                }
+                let lowered = fixed
+                    .into_iter()
+                    .map(|(pos, ty)| self.type_expr(ty).map(|id| (pos, id)))
+                    .collect::<Result<SmallVec<_>>>()?;
+                AstTypeExpr::TupleConstructor {
+                    arity,
+                    fixed: lowered,
+                }
+            }
         };
         self.ast.add_type_expr(te, span)
     }
@@ -1658,6 +1689,18 @@ impl<'a> MergeCtx<'a> {
             }
             AstTypeExpr::AssocType { class, name } => {
                 AstTypeExpr::AssocType { class, name }
+            }
+            AstTypeExpr::TupleConstructor { arity, fixed } => {
+                let new_fixed: Result<SmallVec<_>> = fixed
+                    .iter()
+                    .map(|&(pos, te)| {
+                        self.type_expr(te, span).map(|id| (pos, id))
+                    })
+                    .collect();
+                AstTypeExpr::TupleConstructor {
+                    arity,
+                    fixed: new_fixed?,
+                }
             }
         };
         self.target.add_type_expr(new_te, span)

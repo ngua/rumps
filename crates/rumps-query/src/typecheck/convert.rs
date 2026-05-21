@@ -507,6 +507,16 @@ impl ConvertCtx<'_> {
                         }
                     }
                 }
+                AstTypeExpr::TupleConstructor { .. } => {
+                    let span = self.ast.type_expr_span(id).unwrap_or_default();
+                    self.errors.push(TypeError::Custom {
+                        msg: "tuple constructors (`(,)`) can only appear \
+                              in the `for` clause of a class instance"
+                            .into(),
+                        span,
+                    });
+                    TyArena::ERROR
+                }
                 AstTypeExpr::AssocType { class, name } => {
                     let span = self.ast.type_expr_span(id).unwrap_or_default();
                     match class {
@@ -602,6 +612,11 @@ impl ConvertCtx<'_> {
                 AstTypeExpr::Object(fs) => {
                     fs.iter().for_each(|(_, t)| {
                         self.collect_type_vars_rec(*t, out);
+                    });
+                }
+                AstTypeExpr::TupleConstructor { fixed, .. } => {
+                    fixed.iter().for_each(|(_, te)| {
+                        self.collect_type_vars_rec(*te, out);
                     });
                 }
                 AstTypeExpr::Wildcard | AstTypeExpr::AssocType { .. } => {}

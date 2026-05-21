@@ -339,6 +339,15 @@ pub(crate) enum AstTypeExpr {
         class: Option<StringId>,
         name: StringId,
     },
+
+    /// Tuple constructor: `(,)`, `(T,)`, `(T,,)`, etc.
+    ///
+    /// Only valid in the `for` clause of a class instance; all other match
+    /// sites emit a type error.
+    TupleConstructor {
+        arity: u8,
+        fixed: SmallVec<[(u8, AstTypeExprId); 2]>,
+    },
 }
 
 /// Binary operators.

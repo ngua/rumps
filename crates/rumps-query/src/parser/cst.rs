@@ -714,6 +714,16 @@ pub(crate) enum TypeExprKind {
         class: Option<StringId>,
         name: StringId,
     },
+
+    /// Tuple constructor: `(,)`, `(T,)`, `(T,,)`, etc.
+    ///
+    /// Used in the `for` clause of class instances to declare a tuple as an
+    /// HKT type constructor. Empty positions are element slots (determined by
+    /// class kind); filled positions are fixed params.
+    TupleConstructor {
+        arity: u8,
+        fixed: Vec<(u8, TypeExpr)>,
+    },
 }
 
 /// A variant definition in a user-defined sum type (CST form).

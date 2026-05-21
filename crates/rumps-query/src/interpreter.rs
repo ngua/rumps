@@ -1376,6 +1376,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             // Associated types: class name is just a string, nothing to validate
             AstTypeExpr::AssocType { .. } => Ok(()),
+            AstTypeExpr::TupleConstructor { .. } => Ok(()),
         })
     }
 

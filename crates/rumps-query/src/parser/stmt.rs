@@ -628,7 +628,7 @@ impl Parser {
             .then_ignore(Self::opt_newlines())
             .then_ignore(Self::ctx_ident(for_))
             .then_ignore(Self::opt_newlines())
-            .then(Self::type_expr(interner))
+            .then(Self::for_type_expr(interner))
             .then_ignore(Self::opt_newlines())
             .then(where_clause)
             .then_ignore(Self::opt_newlines())

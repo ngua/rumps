@@ -1,6 +1,6 @@
 //! Type expression parsing for RUMPS.
 
-use chumsky::prelude::{choice, just, recursive, select};
+use chumsky::prelude::{choice, empty, just, recursive, select};
 use chumsky::Parser as _;
 use smallvec::SmallVec;
 
@@ -157,6 +157,45 @@ impl Parser {
                     }
                 })
         })
+    }
+
+    /// Parse a type expression in the `for` clause of a class instance.
+    ///
+    /// Handles tuple constructors (`(,)`, `(T,)`, etc.) in addition to all
+    /// regular type expressions. Positional restriction (fixed positions must
+    /// precede element positions) is validated during lowering.
+    pub(super) fn for_type_expr(
+        interner: &mut StringInterner,
+    ) -> impl chumsky::Parser<Token, cst::TypeExpr, Error = ParseErr> + Clone
+    {
+        let ty = Self::type_expr(interner);
+        let comma = just(Token::Comma).then_ignore(Self::opt_newlines());
+        let opt_pos = ty.clone().map(Some).or(empty().to(None));
+        let tuple_ctor = just(Token::LParen)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(opt_pos.separated_by(comma).at_least(2))
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RParen))
+            .try_map(|positions: Vec<Option<cst::TypeExpr>>, span| {
+                if !positions.iter().any(|p| p.is_none()) {
+                    Err(chumsky::error::Simple::custom(
+                        span,
+                        "not a tuple constructor",
+                    ))
+                } else {
+                    let arity = positions.len() as u8;
+                    let fixed = positions
+                        .into_iter()
+                        .enumerate()
+                        .filter_map(|(i, pos)| pos.map(|t| (i as u8, t)))
+                        .collect();
+                    Ok(cst::TypeExpr::new(
+                        cst::TypeExprKind::TupleConstructor { arity, fixed },
+                        span,
+                    ))
+                }
+            });
+        tuple_ctor.or(ty)
     }
 
     /// Parse a type expression atom (named type with optional params).
