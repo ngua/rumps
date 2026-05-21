@@ -120,8 +120,12 @@ impl<'a> LowerCtx<'a> {
                 ..
             } = &s.kind
             {
-                let shape =
-                    Self::detect_class_shape(class_params, *self_var, methods);
+                let shape = Self::detect_class_shape(
+                    class_params,
+                    *self_var,
+                    methods,
+                    s.span,
+                )?;
                 let assoc_names = assoc_types.iter().map(|a| a.name).collect();
                 let stub = crate::typecheck::ClassDef {
                     name: *name,
@@ -146,65 +150,98 @@ impl<'a> LowerCtx<'a> {
 
     /// Detect the `ClassShape` from a class definition's CST.
     ///
-    /// - Both class params and HKT self var -> `Hkt { kind: 1, params: n }`
+    /// - Both class params and HKT self var -> `Hkt { kind, params: n }`
     /// - Non-empty `class_params` only -> `Concrete { params: n }`
-    /// - Self var used as type constructor (`C[T]` in method sigs) -> `Hkt`
+    /// - Kind is inferred from self-var arity
     /// - Otherwise -> `Concrete { params: 0 }`
     fn detect_class_shape(
         class_params: &[cst::TypeParam],
         sv: StringId,
         methods: &[cst::ClassMethodSig],
-    ) -> ClassShape {
+        span: crate::Span,
+    ) -> Result<ClassShape> {
         let is_param = !class_params.is_empty();
-        let is_hkt = Self::self_var_is_hkt(sv, methods);
-        if is_param && is_hkt {
-            ClassShape::Hkt {
-                kind: 1,
+        let kind = Self::self_var_hkt_kind(sv, methods, span)?;
+        if is_param && kind > 0 {
+            Ok(ClassShape::Hkt {
+                kind,
                 params: class_params.len() as u8,
-            }
+            })
         } else if is_param {
-            ClassShape::Concrete {
+            Ok(ClassShape::Concrete {
                 params: class_params.len() as u8,
-            }
-        } else if is_hkt {
-            ClassShape::Hkt { kind: 1, params: 0 }
+            })
+        } else if kind > 0 {
+            Ok(ClassShape::Hkt { kind, params: 0 })
         } else {
-            ClassShape::Concrete { params: 0 }
+            Ok(ClassShape::Concrete { params: 0 })
         }
     }
 
-    /// Check whether `sv` appears as a type constructor (head of `App`)
-    /// in any method signature.
-    fn self_var_is_hkt(sv: StringId, methods: &[cst::ClassMethodSig]) -> bool {
-        methods.iter().any(|m| {
-            m.params
-                .iter()
-                .filter_map(|(_, ty)| ty.as_ref())
-                .chain(m.ret.as_ref())
-                .any(|te| Self::type_expr_has_hkt_usage(sv, te))
-        })
+    /// Compute the HKT kind of `sv` from method signatures.
+    ///
+    /// Returns `0` if `sv` is never used as a type constructor, or
+    /// `n` if it is consistently applied to `n` type arguments.
+    /// Errors if different methods use inconsistent arities.
+    fn self_var_hkt_kind(
+        sv: StringId,
+        methods: &[cst::ClassMethodSig],
+        span: crate::Span,
+    ) -> Result<u8> {
+        let kind = methods
+            .iter()
+            .flat_map(|m| {
+                m.params
+                    .iter()
+                    .filter_map(|(_, ty)| ty.as_ref())
+                    .chain(m.ret.as_ref())
+                    .map(|te| Self::type_expr_hkt_arity(sv, te))
+            })
+            .filter(|&a| a > 0)
+            .try_fold(None::<u8>, |acc, arity| match acc {
+                None => Ok(Some(arity)),
+                Some(prev) if prev == arity => Ok(Some(arity)),
+                Some(prev) => Err(Error::static_err(
+                    span,
+                    format!(
+                        "inconsistent HKT arity for self type: \
+                         used as kind-{prev} and kind-{arity}"
+                    ),
+                )),
+            })?;
+        Ok(kind.unwrap_or(0))
     }
 
-    /// Recursively check whether `sv` appears in `App` head position.
-    fn type_expr_has_hkt_usage(sv: StringId, te: &cst::TypeExpr) -> bool {
+    /// Return the arity of `sv` when used as a type constructor in `te`,
+    /// or `0` if it does not appear in head position.
+    /// Propagates the max across children.
+    fn type_expr_hkt_arity(sv: StringId, te: &cst::TypeExpr) -> u8 {
         match &te.kind {
             cst::TypeExprKind::App(path, args) => {
-                (path.len() == 1 && path.first() == Some(&sv))
-                    || args.iter().any(|a| Self::type_expr_has_hkt_usage(sv, a))
+                let head = if path.len() == 1 && path.first() == Some(&sv) {
+                    args.len() as u8
+                } else {
+                    0
+                };
+                args.iter()
+                    .map(|a| Self::type_expr_hkt_arity(sv, a))
+                    .fold(head, u8::max)
             }
-            cst::TypeExprKind::Named(_) | cst::TypeExprKind::Wildcard => false,
-            cst::TypeExprKind::AssocType { .. } => false,
-            cst::TypeExprKind::Fn(params, ret) => {
-                params.iter().any(|p| Self::type_expr_has_hkt_usage(sv, p))
-                    || Self::type_expr_has_hkt_usage(sv, ret)
-            }
+            cst::TypeExprKind::Named(_) | cst::TypeExprKind::Wildcard => 0,
+            cst::TypeExprKind::AssocType { .. } => 0,
+            cst::TypeExprKind::Fn(params, ret) => params
+                .iter()
+                .map(|p| Self::type_expr_hkt_arity(sv, p))
+                .fold(Self::type_expr_hkt_arity(sv, ret), u8::max),
             cst::TypeExprKind::Tuple(elems)
-            | cst::TypeExprKind::Union(elems) => {
-                elems.iter().any(|e| Self::type_expr_has_hkt_usage(sv, e))
-            }
+            | cst::TypeExprKind::Union(elems) => elems
+                .iter()
+                .map(|e| Self::type_expr_hkt_arity(sv, e))
+                .fold(0, u8::max),
             cst::TypeExprKind::Object(fields) => fields
                 .iter()
-                .any(|(_, te)| Self::type_expr_has_hkt_usage(sv, te)),
+                .map(|(_, te)| Self::type_expr_hkt_arity(sv, te))
+                .fold(0, u8::max),
         }
     }
 

@@ -598,27 +598,20 @@ impl InferCtx<'_> {
         methods: &[AstClassMethodSig],
         span: Span,
     ) {
-        // Detect shape from AST method signatures
         let is_param = !class_params.is_empty();
-        let is_hkt = methods.iter().any(|m| {
-            m.params
-                .iter()
-                .filter_map(|(_, ty)| ty.as_ref())
-                .chain(m.ret.as_ref())
-                .any(|&te| self.ast_type_expr_has_hkt_usage(self_var, te))
-        });
+        let kind = self.self_var_hkt_kind(self_var, methods, span);
 
-        let shape = if is_param && is_hkt {
+        let shape = if is_param && kind > 0 {
             ClassShape::Hkt {
-                kind: 1,
+                kind,
                 params: class_params.len() as u8,
             }
         } else if is_param {
             ClassShape::Concrete {
                 params: class_params.len() as u8,
             }
-        } else if is_hkt {
-            ClassShape::Hkt { kind: 1, params: 0 }
+        } else if kind > 0 {
+            ClassShape::Hkt { kind, params: 0 }
         } else {
             ClassShape::Concrete { params: 0 }
         };
@@ -641,38 +634,79 @@ impl InferCtx<'_> {
         }
     }
 
-    /// Check whether `sv` appears as a type constructor (head of `VarApp`)
-    /// in an AST type expression.
-    fn ast_type_expr_has_hkt_usage(
-        &self,
+    /// Compute the HKT kind of `sv` from AST method signatures.
+    ///
+    /// Returns `0` if `sv` is never used as a type constructor, or
+    /// `n` if it is consistently applied to `n` type arguments.
+    /// Emits an error if different methods use inconsistent arities.
+    fn self_var_hkt_kind(
+        &mut self,
         sv: StringId,
-        te: AstTypeExprId,
-    ) -> bool {
+        methods: &[AstClassMethodSig],
+        span: Span,
+    ) -> u8 {
+        let arities: SmallVec<[u8; 4]> = methods
+            .iter()
+            .flat_map(|m| {
+                m.params
+                    .iter()
+                    .filter_map(|(_, ty)| ty.as_ref())
+                    .chain(m.ret.as_ref())
+                    .map(|&te| self.ast_type_expr_hkt_arity(sv, te))
+            })
+            .filter(|&a| a > 0)
+            .collect();
+
+        let first = arities.first().copied();
+        let mismatch = arities.iter().find(|&&a| first.is_some_and(|f| a != f));
+
+        if let (Some(f), Some(&m)) = (first, mismatch) {
+            self.error(TypeError::Custom {
+                msg: format!(
+                    "inconsistent HKT arity for self type: \
+                     used as kind-{f} and kind-{m}"
+                ),
+                span,
+            });
+        }
+
+        first.unwrap_or(0)
+    }
+
+    /// Return the arity of `sv` when used as a type constructor in `te`,
+    /// or `0` if it does not appear in head position.
+    /// Propagates the max across children.
+    fn ast_type_expr_hkt_arity(&self, sv: StringId, te: AstTypeExprId) -> u8 {
         match self.ast.get_type_expr(te).cloned() {
             Some(AstTypeExpr::VarApp(name, args)) => {
-                (!name.is_qualified() && name.local_name() == sv)
-                    || args
-                        .iter()
-                        .any(|&a| self.ast_type_expr_has_hkt_usage(sv, a))
+                let head = if !name.is_qualified() && name.local_name() == sv {
+                    args.len() as u8
+                } else {
+                    0
+                };
+                args.iter()
+                    .map(|&a| self.ast_type_expr_hkt_arity(sv, a))
+                    .fold(head, u8::max)
             }
             Some(AstTypeExpr::App(_, args)) => args
                 .iter()
-                .any(|&a| self.ast_type_expr_has_hkt_usage(sv, a)),
-            Some(AstTypeExpr::Fn(params, ret)) => {
-                params
-                    .iter()
-                    .any(|&p| self.ast_type_expr_has_hkt_usage(sv, p))
-                    || self.ast_type_expr_has_hkt_usage(sv, ret)
-            }
+                .map(|&a| self.ast_type_expr_hkt_arity(sv, a))
+                .fold(0, u8::max),
+            Some(AstTypeExpr::Fn(params, ret)) => params
+                .iter()
+                .map(|&p| self.ast_type_expr_hkt_arity(sv, p))
+                .fold(self.ast_type_expr_hkt_arity(sv, ret), u8::max),
             Some(AstTypeExpr::Tuple(elems) | AstTypeExpr::Union(elems)) => {
                 elems
                     .iter()
-                    .any(|&e| self.ast_type_expr_has_hkt_usage(sv, e))
+                    .map(|&e| self.ast_type_expr_hkt_arity(sv, e))
+                    .fold(0, u8::max)
             }
             Some(AstTypeExpr::Object(fields)) => fields
                 .iter()
-                .any(|&(_, te)| self.ast_type_expr_has_hkt_usage(sv, te)),
-            _ => false,
+                .map(|&(_, te)| self.ast_type_expr_hkt_arity(sv, te))
+                .fold(0, u8::max),
+            _ => 0,
         }
     }
 
