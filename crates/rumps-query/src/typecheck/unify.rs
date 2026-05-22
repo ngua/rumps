@@ -90,6 +90,7 @@ impl SolveCtx<'_> {
             Ty::Option(_) => Some(TypeId::OPTION),
             Ty::Result(_, _) => Some(TypeId::RESULT),
             Ty::Map(_, _) => Some(TypeId::MAP),
+            Ty::Tuple(_) => Some(TypeId::TUPLE),
             _ => None,
         }
     }
@@ -109,6 +110,7 @@ impl SolveCtx<'_> {
             Ty::Option(e) => Some((TypeId::OPTION, smallvec![e])),
             Ty::Result(ok, err) => Some((TypeId::RESULT, smallvec![ok, err])),
             Ty::Map(k, v) => Some((TypeId::MAP, smallvec![k, v])),
+            Ty::Tuple(ts) => Some((TypeId::TUPLE, ts)),
             ref shape => {
                 Self::primitive_type_id(shape).map(|id| (id, smallvec![]))
             }
@@ -563,53 +565,65 @@ impl SolveCtx<'_> {
             // Parameterized builtins: decompose into constructor + element
             Ty::Option(inner) => {
                 let ctor = self.ty_arena.option(TyArena::ERROR);
-                self.unify_apply_inner(tv, args, ctor, inner, span)
+                self.unify_apply_inner(tv, args, ctor, &[inner], span)
             }
             Ty::Result(ok, err) => {
-                let ctor = self.ty_arena.result(TyArena::ERROR, err);
-                self.unify_apply_inner(tv, args, ctor, ok, span)
+                if args.len() >= 2 {
+                    let ctor =
+                        self.ty_arena.result(TyArena::ERROR, TyArena::ERROR);
+                    self.unify_apply_inner(tv, args, ctor, &[ok, err], span)
+                } else {
+                    let ctor = self.ty_arena.result(TyArena::ERROR, err);
+                    self.unify_apply_inner(tv, args, ctor, &[ok], span)
+                }
             }
             Ty::Array(inner) => {
                 let ctor = self.ty_arena.array(TyArena::ERROR);
-                self.unify_apply_inner(tv, args, ctor, inner, span)
+                self.unify_apply_inner(tv, args, ctor, &[inner], span)
             }
             Ty::Map(k, v) => {
-                let ctor = self.ty_arena.map_ty(TyArena::ERROR, v);
-                self.unify_apply_inner(tv, args, ctor, k, span)
+                if args.len() >= 2 {
+                    let ctor =
+                        self.ty_arena.map_ty(TyArena::ERROR, TyArena::ERROR);
+                    self.unify_apply_inner(tv, args, ctor, &[k, v], span)
+                } else {
+                    let ctor = self.ty_arena.map_ty(TyArena::ERROR, v);
+                    self.unify_apply_inner(tv, args, ctor, &[k], span)
+                }
             }
 
-            // Non-parameterized types with known element types
-            Ty::Range => {
-                self.unify_var(tv, TyArena::RANGE, span)?;
-                args.first().map_or_else(
-                    || {
-                        Err(TypeError::Mismatch {
-                            expected: TyArena::INT,
-                            got: TyArena::UNIT,
-                            span,
-                        })
-                    },
-                    |&arg| self.unify_inner(arg, TyArena::INT, span),
-                )
-            }
+            Ty::Range => self.unify_apply_inner(
+                tv,
+                args,
+                TyArena::RANGE,
+                &[TyArena::INT],
+                span,
+            ),
 
             // User-defined named types: decompose into constructor + element
             // Element type is the LAST type arg (Haskell curried convention).
             // Non-element (fixed) args are preserved in the constructor placeholder.
             Ty::Named(id, ref type_args) => {
-                if let Some(&last_arg) = type_args.last() {
-                    let mut placeholder: SmallVec<[TyId; 4]> =
-                        type_args.clone();
-                    let start = placeholder.len().saturating_sub(args.len());
-                    placeholder
-                        .iter_mut()
-                        .skip(start)
-                        .for_each(|p| *p = TyArena::ERROR);
-                    let ctor = self.ty_arena.named(id, placeholder);
-                    self.unify_apply_inner(tv, args, ctor, last_arg, span)
-                } else {
-                    // Named type with no params; just bind tv
+                if type_args.is_empty() {
                     self.unify_var(tv, other, span)
+                } else {
+                    let start = type_args.len().saturating_sub(args.len());
+                    let elems: SmallVec<[TyId; 4]> = type_args[start..].into();
+                    let placeholder: SmallVec<[TyId; 4]> = type_args
+                        .iter()
+                        .enumerate()
+                        .map(
+                            |(i, &t)| {
+                                if i >= start {
+                                    TyArena::ERROR
+                                } else {
+                                    t
+                                }
+                            },
+                        )
+                        .collect();
+                    let ctor = self.ty_arena.named(id, placeholder);
+                    self.unify_apply_inner(tv, args, ctor, &elems, span)
                 }
             }
 
@@ -637,6 +651,18 @@ impl SolveCtx<'_> {
                 }
             }
 
+            Ty::Tuple(ref ts) => {
+                let start = ts.len().saturating_sub(args.len());
+                let elems: SmallVec<[TyId; 4]> = ts[start..].into();
+                let placeholder: SmallVec<[TyId; 4]> = ts
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &t)| if i >= start { TyArena::ERROR } else { t })
+                    .collect();
+                let ctor = self.ty_arena.alloc(Ty::Tuple(placeholder));
+                self.unify_apply_inner(tv, args, ctor, &elems, span)
+            }
+
             _ => {
                 let got_args: SmallVec<[TyId; 4]> =
                     args.iter().copied().collect();
@@ -650,27 +676,18 @@ impl SolveCtx<'_> {
         }
     }
 
-    /// Bind `tv` to a constructor shape and unify the first `Apply` arg with
-    /// the element type.
+    /// Bind `tv` to a constructor shape and unify `Apply` args with
+    /// the element types pairwise.
     fn unify_apply_inner(
         &mut self,
         tv: TyVar,
         args: &[TyId],
         ctor: TyId,
-        elem: TyId,
+        elems: &[TyId],
         span: Span,
     ) -> UnifyResult {
         self.unify_var(tv, ctor, span)?;
-        args.first().map_or_else(
-            || {
-                Err(TypeError::Mismatch {
-                    expected: elem,
-                    got: TyArena::UNIT,
-                    span,
-                })
-            },
-            |&arg| self.unify_inner(arg, elem, span),
-        )
+        self.unify_sequence(args.iter().copied(), elems.iter().copied(), span)
     }
 
     /// Unify two sequences of types element-wise.
