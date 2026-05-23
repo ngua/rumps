@@ -21,6 +21,7 @@
 //! - `Filterable`: `filter`
 //! - `Foldable`: `reduce`
 //! - `Iterable`: `length`, `collect`
+//! - `Bimappable`: `bimap`
 //!
 //! Higher-order class methods use a continuation/trampoline pattern defined in
 //! the [`hof`](super::hof) module.
@@ -53,6 +54,8 @@ pub(crate) struct ClassCtx<'a> {
     pub(crate) registry: &'a TypeRegistry,
     pub(crate) regex_cache: &'a [regex::Regex],
     pub(crate) span: Span,
+    /// Resolved output type for the current HOF call (if available).
+    pub(crate) output_ty: Option<TypeExprId>,
 }
 
 /// Binary class method signature.
@@ -376,6 +379,11 @@ impl ClassMethods {
             ClassId::CHAINABLE,
             i.intern("chain"),
             MethodFn::Hof(Chainable::chain),
+        );
+        self.register(
+            ClassId::BIMAPPABLE,
+            i.intern("bimap"),
+            MethodFn::Hof(Bimappable::bimap),
         );
     }
 }
@@ -2615,6 +2623,98 @@ impl Chainable {
                 Ok(MethodResult::Done(Value::Tagged(*ty, 1, smallvec![err])))
             }
             _ => typechecked!("Chainable:chain", "Option or Result"),
+        }
+    }
+}
+
+/// `Bimappable` class: `bimap` method.
+pub(crate) struct Bimappable;
+
+impl Bimappable {
+    pub(crate) fn bimap(
+        ctx: &mut ClassCtx<'_>,
+        args: &[ValueId],
+    ) -> Result<MethodResult> {
+        let f = *args
+            .first()
+            .unwrap_or_else(|| typechecked!("Bimappable:bimap", "3 args"));
+        let g = *args
+            .get(1)
+            .unwrap_or_else(|| typechecked!("Bimappable:bimap", "3 args"));
+        let src = *args
+            .get(2)
+            .unwrap_or_else(|| typechecked!("Bimappable:bimap", "3 args"));
+
+        let output_ty = ctx.output_ty.unwrap_or_else(|| {
+            typechecked!("Bimappable:bimap", "resolved output type")
+        });
+
+        enum Kind {
+            ResultOk(ValueId),
+            ResultErr(ValueId),
+            Tuple(ValueId, ValueId),
+            Other,
+        }
+
+        let kind = match ctx.arena.get(src) {
+            Some(Value::Tagged(ty, 0, payloads))
+                if ctx
+                    .type_exprs
+                    .base_type(*ty)
+                    .is_some_and(|t| t == TypeId::RESULT) =>
+            {
+                Kind::ResultOk(
+                    *payloads
+                        .first()
+                        .unwrap_or_else(|| invariant!("Ok has payload")),
+                )
+            }
+            Some(Value::Tagged(ty, 1, payloads))
+                if ctx
+                    .type_exprs
+                    .base_type(*ty)
+                    .is_some_and(|t| t == TypeId::RESULT) =>
+            {
+                Kind::ResultErr(
+                    *payloads
+                        .first()
+                        .unwrap_or_else(|| invariant!("Err has payload")),
+                )
+            }
+            Some(Value::Tuple(_, elems)) => {
+                let a = *elems
+                    .first()
+                    .unwrap_or_else(|| invariant!("bimap tuple has 2 elems"));
+                let b = *elems
+                    .get(1)
+                    .unwrap_or_else(|| invariant!("bimap tuple has 2 elems"));
+                Kind::Tuple(a, b)
+            }
+            _ => Kind::Other,
+        };
+
+        match kind {
+            Kind::ResultOk(inner) => Ok(MethodResult::Invoke(Continuation {
+                callee: f,
+                args: smallvec![inner],
+                state: HofState::BimapResult { tag: 0, output_ty },
+            })),
+            Kind::ResultErr(inner) => Ok(MethodResult::Invoke(Continuation {
+                callee: g,
+                args: smallvec![inner],
+                state: HofState::BimapResult { tag: 1, output_ty },
+            })),
+            Kind::Tuple(a, b) => Ok(MethodResult::Invoke(Continuation {
+                callee: f,
+                args: smallvec![a],
+                state: HofState::BimapTuple {
+                    second_fn: g,
+                    second_elem: b,
+                    output_ty,
+                    first_result: None,
+                },
+            })),
+            Kind::Other => typechecked!("Bimappable:bimap", "Bimappable"),
         }
     }
 }

@@ -943,6 +943,11 @@ impl InferCtx<'_> {
                         }
                     }
 
+                    // Track output type for `bimap` calls
+                    if kind == ClassId::BIMAPPABLE {
+                        self.interp.bimap_output_types.insert(id, ret);
+                    }
+
                     // Handle tracking for runtime dispatch
                     match spec {
                         MethodSpec::Standard(_) => {}

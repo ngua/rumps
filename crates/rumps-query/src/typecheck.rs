@@ -57,6 +57,8 @@ pub(crate) struct TypecheckOutput {
     pub(crate) convert_targets: HashMap<ExprId, TyId>,
     /// Target types for `?` (wrap) operators on `Wrappable` types.
     pub(crate) wrap_types: HashMap<ExprId, TyId>,
+    /// Resolved output types for `Bimappable:bimap` calls.
+    pub(crate) bimap_output_types: HashMap<ExprId, TyId>,
     /// Type IDs for class method calls on user-defined types.
     ///
     /// Used to dispatch to user-defined class instances at runtime.

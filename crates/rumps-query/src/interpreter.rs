@@ -208,6 +208,12 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
     /// produce `Option.Some` or `Result.Ok` depending on context.
     wrap_types: HashMap<ExprId, typecheck::TyId>,
 
+    /// Resolved output types for `Bimappable:bimap` calls.
+    ///
+    /// Populated during typechecking; used by the HOF trampoline to construct
+    /// the correct output container type.
+    bimap_output_types: HashMap<ExprId, typecheck::TyId>,
+
     /// Registry of class methods for dispatch.
     class_methods: class::ClassMethods,
 
@@ -350,6 +356,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             numeric_types: tc.numeric_types,
             convert_targets: tc.convert_targets,
             wrap_types: tc.wrap_types,
+            bimap_output_types: tc.bimap_output_types,
             type_exprs,
             functions: HashMap::new(),
             io,
@@ -520,6 +527,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             numeric_types: HashMap::new(),
             convert_targets: HashMap::new(),
             wrap_types: HashMap::new(),
+            bimap_output_types: HashMap::new(),
             type_exprs,
             functions: HashMap::new(),
             io,

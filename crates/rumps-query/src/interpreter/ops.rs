@@ -179,6 +179,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             registry: &self.registry,
             regex_cache: &self.regex_cache,
             span,
+            output_ty: None,
         };
         self.class_methods
             .dispatch_binary(kind, mid, &mut ctx, l, r)
@@ -301,6 +302,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             registry: &self.registry,
             regex_cache: &self.regex_cache,
             span,
+            output_ty: None,
         };
         self.class_methods.dispatch_unary(kind, mid, &mut ctx, val)
     }
@@ -327,6 +329,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             registry: &self.registry,
             regex_cache: &self.regex_cache,
             span,
+            output_ty: None,
         };
         self.class_methods
             .dispatch_convert(kind, mid, &mut ctx, val, target)

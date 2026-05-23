@@ -259,6 +259,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             registry: &self.registry,
             regex_cache: &self.regex_cache,
             span: Span::default(),
+            output_ty: None,
         };
         super::class::Display::format(&ctx, v)
     }
@@ -278,6 +279,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             registry: &self.registry,
             regex_cache: &self.regex_cache,
             span: Span::default(),
+            output_ty: None,
         };
         super::class::Into::jsonify(&ctx, v)
     }

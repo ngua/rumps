@@ -1,0 +1,8 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; User-defined type implementing Bimappable\n\ntype Either[A, B] = Left(A) | Right(B)\n\nclass Bimappable for Either {\n  fun bimap(f, g, x) {\n    match x {\n      Either.Left(a) => { Either.Left(f(a)) }\n      Either.Right(b) => { Either.Right(g(b)) }\n    }\n  }\n}\n\nfun main() {\n  let l: Either[Int, String] = Either.Left(10)\n  write Bimappable:bimap(x => x + 5, s => String.upper(s), l)\n\n  let r: Either[Int, String] = Either.Right(\"hello\")\n  write Bimappable:bimap(x => x + 5, s => String.upper(s), r)\n\n  ; type-changing bimap\n  let l2: Either[Int, Bool] = Either.Left(42)\n  write Bimappable:bimap(x => \"{x}!\", b => !b, l2)\n\n  let r2: Either[Int, Bool] = Either.Right(true)\n  write Bimappable:bimap(x => \"{x}!\", b => !b, r2)\n}\n"
+---
+Either.Left(15)
+Either.Right("HELLO")
+Either.Left("42!")
+Either.Right(false)

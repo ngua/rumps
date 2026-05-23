@@ -297,7 +297,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         // closure invocation machinery (`invoke_callable`). See `primitives.rs`
         // module docs for details.
         if let Some((hof, result)) = self.module_hofs.lookup(path) {
-            let v = self.run_hof_trampoline(hof, args, span).await?;
+            let v = self.run_hof_trampoline(None, hof, args, span).await?;
             // Some HoFs (e.g. `foreach`) delegate to another HoF but discard
             // the produced value, evaluating to `Unit` instead.
             Ok(match result {
@@ -598,7 +598,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         if let Some(super::class::MethodFn::Hof(f)) =
             self.class_methods.lookup(class, method)
         {
-            self.run_hof_trampoline(f, args, span).await
+            self.run_hof_trampoline(expr_id, f, args, span).await
         } else {
             self.dispatch_builtin_class_method(
                 expr_id, class, method, args, span,
@@ -638,6 +638,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     registry: &self.registry,
                     regex_cache: &self.regex_cache,
                     span,
+                    output_ty: None,
                 };
                 self.class_methods
                     .dispatch_binary(class, method, &mut ctx, &left, &right)
@@ -651,6 +652,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     registry: &self.registry,
                     regex_cache: &self.regex_cache,
                     span,
+                    output_ty: None,
                 };
                 self.class_methods
                     .dispatch_unary(class, method, &mut ctx, &v)
@@ -671,6 +673,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     registry: &self.registry,
                     regex_cache: &self.regex_cache,
                     span,
+                    output_ty: None,
                 };
                 self.class_methods
                     .dispatch_nullary(class, method, &mut ctx, &ty)
@@ -697,6 +700,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     registry: &self.registry,
                     regex_cache: &self.regex_cache,
                     span,
+                    output_ty: None,
                 };
                 self.class_methods
                     .dispatch_convert(class, method, &mut ctx, &v, &ty)
@@ -716,6 +720,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// The trampoline keeps stack depth O(1) regardless of input size.
     async fn run_hof_trampoline(
         &mut self,
+        expr_id: Option<ExprId>,
         starter: super::hof::HofMethodFn,
         args: &[ValueId],
         span: Span,
@@ -723,6 +728,11 @@ impl<I: IoContext> Interpreter<'_, I> {
         use super::class::ClassCtx;
         use super::hof::MethodResult;
 
+        let output_ty = expr_id.and_then(|id| {
+            self.bimap_output_types.get(&id).copied().map(|ty_id| {
+                self.type_exprs.intern_ty_lenient(ty_id, &self.ty_arena)
+            })
+        });
         let mut ctx = ClassCtx {
             arena: &mut self.arena,
             type_exprs: &mut self.type_exprs,
@@ -730,6 +740,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             registry: &self.registry,
             regex_cache: &self.regex_cache,
             span,
+            output_ty,
         };
         let mut result = starter(&mut ctx, args)?;
 
@@ -748,6 +759,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                         registry: &self.registry,
                         regex_cache: &self.regex_cache,
                         span,
+                        output_ty: None,
                     };
                     result = super::hof::resume(&mut ctx, cont, call_result)?;
                 }

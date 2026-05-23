@@ -1,0 +1,8 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Bimappable:bimap on tuples; both f and g are called\n\nfun main() {\n  ; basic bimap on tuple\n  let t = (10, \"hello\")\n  write Bimappable:bimap(x => x * 2, s => \"{s} world\", t)\n\n  ; type-changing bimap\n  let t2 = (true, 99)\n  fun show-bool(b: Bool) -> String {\n    match b {\n      true => { \"yes\" }\n      false => { \"no\" }\n    }\n  }\n  write Bimappable:bimap(show-bool, x => x + 1, t2)\n\n  ; partial application\n  let bm = Bimappable:bimap(x => x * x, x => x * x)\n  write bm((3, 4))\n\n  ; pipe syntax\n  write (5, 6) |> Bimappable:bimap(x => x - 1, x => x + 1)\n}\n"
+---
+(20, "hello world")
+("yes", 100)
+(9, 16)
+(4, 7)

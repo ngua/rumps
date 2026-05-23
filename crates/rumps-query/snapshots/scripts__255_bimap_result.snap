@@ -1,0 +1,10 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Bimappable:bimap on Result; Ok invokes f, Err invokes g\n\nfun main() {\n  ; bimap on Ok (only f called)\n  let ok: Result[Int, String] = Result.Ok(42)\n  write Bimappable:bimap(x => x + 1, s => \"{s}!\", ok)\n\n  ; bimap on Err (only g called)\n  let err: Result[Int, String] = Result.Err(\"oops\")\n  write Bimappable:bimap(x => x + 1, s => \"{s}!\", err)\n\n  ; type-changing bimap\n  let r: Result[Int, Int] = Result.Ok(5)\n  write Bimappable:bimap(x => \"{x}\", x => x > 0, r)\n\n  let r2: Result[Int, Int] = Result.Err(0)\n  write Bimappable:bimap(x => \"{x}\", x => x > 0, r2)\n\n  ; partial application\n  let bm = Bimappable:bimap(x => x * 2, s => String.upper(s))\n  write bm(Result.Ok(10))\n  write bm(Result.Err(\"hello\"))\n}\n"
+---
+Result.Ok(43)
+Result.Err("oops!")
+Result.Ok("5")
+Result.Err(false)
+Result.Ok(20)
+Result.Err("HELLO")

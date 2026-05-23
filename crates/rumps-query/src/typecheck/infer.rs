@@ -99,6 +99,11 @@ pub(super) struct InterpreterOutput {
     ///
     /// The interpreter uses this to produce the correct wrapper type.
     pub(super) wrap_types: HashMap<ExprId, TyId>,
+    /// Resolved output types for `Bimappable:bimap` calls.
+    ///
+    /// The interpreter uses this to construct the correct output container
+    /// type (e.g., `Result[C, D]` or `(C, D)`) after applying both functions.
+    pub(super) bimap_output_types: HashMap<ExprId, TyId>,
     /// Mapping from class method call expression IDs to their receiver's `TypeId`.
     ///
     /// Populated when a class method is called on a newtype or union type.
@@ -129,6 +134,7 @@ impl InterpreterOutput {
             numeric_types: HashMap::new(),
             convert_targets: HashMap::new(),
             wrap_types: HashMap::new(),
+            bimap_output_types: HashMap::new(),
             instance_calls: HashMap::new(),
             resolved_instance_fns: HashMap::new(),
             naked_method_classes: HashMap::new(),
@@ -141,6 +147,7 @@ impl InterpreterOutput {
         resolve_map(&mut self.numeric_types, uf, arena);
         resolve_map(&mut self.convert_targets, uf, arena);
         resolve_map(&mut self.wrap_types, uf, arena);
+        resolve_map(&mut self.bimap_output_types, uf, arena);
     }
 }
 
@@ -1432,6 +1439,7 @@ impl<'a> InferCtx<'a> {
                 numeric_types: self.interp.numeric_types,
                 convert_targets: self.interp.convert_targets,
                 wrap_types: self.interp.wrap_types,
+                bimap_output_types: self.interp.bimap_output_types,
                 instance_calls: self.interp.instance_calls,
                 resolved_instance_fns: self.interp.resolved_instance_fns,
                 class_registry: self.env.class_registry,

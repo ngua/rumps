@@ -112,6 +112,24 @@ pub(crate) enum HofState {
     },
     /// `Result.map-err`; stores Ok type to reconstruct Result type.
     ResultMapErr { ok_ty: TypeExprId },
+    /// `Bimappable:bimap` over a 2-element container (tuple).
+    BimapTuple {
+        /// Second function to apply (`g`).
+        second_fn: ValueId,
+        /// Second element to transform (`b`).
+        second_elem: ValueId,
+        /// Resolved output type from typechecker.
+        output_ty: TypeExprId,
+        /// First result (after `f(a)` completes); `None` = awaiting first call.
+        first_result: Option<ValueId>,
+    },
+    /// `Bimappable:bimap` over `Result` (single invocation).
+    BimapResult {
+        /// Which variant: `0` = Ok, `1` = Err.
+        tag: u8,
+        /// Resolved output type from typechecker (`Result[C, D]`).
+        output_ty: TypeExprId,
+    },
 }
 
 /// Wrapper kind for `Chainable:chain` result.
@@ -397,6 +415,32 @@ pub(crate) fn resume(
                 ctx.type_exprs.app(TypeId::RESULT, smallvec![ok_ty, err_ty]);
             Ok(MethodResult::Done(Value::err(res_ty, result)))
         }
+        HofState::BimapResult { tag, output_ty } => Ok(MethodResult::Done(
+            Value::Tagged(output_ty, tag, smallvec![result]),
+        )),
+        HofState::BimapTuple {
+            second_fn,
+            second_elem,
+            output_ty,
+            first_result: None,
+        } => Ok(MethodResult::Invoke(Continuation {
+            callee: second_fn,
+            args: smallvec![second_elem],
+            state: HofState::BimapTuple {
+                second_fn,
+                second_elem,
+                output_ty,
+                first_result: Some(result),
+            },
+        })),
+        HofState::BimapTuple {
+            output_ty,
+            first_result: Some(fst),
+            ..
+        } => Ok(MethodResult::Done(Value::Tuple(
+            output_ty,
+            Arc::new(smallvec![fst, result]),
+        ))),
     }
 }
 

@@ -1,0 +1,24 @@
+; Bimappable:bimap on tuples; both f and g are called
+
+fun main() {
+  ; basic bimap on tuple
+  let t = (10, "hello")
+  write Bimappable:bimap(x => x * 2, s => "{s} world", t)
+
+  ; type-changing bimap
+  let t2 = (true, 99)
+  fun show-bool(b: Bool) -> String {
+    match b {
+      true => { "yes" }
+      false => { "no" }
+    }
+  }
+  write Bimappable:bimap(show-bool, x => x + 1, t2)
+
+  ; partial application
+  let bm = Bimappable:bimap(x => x * x, x => x * x)
+  write bm((3, 4))
+
+  ; pipe syntax
+  write (5, 6) |> Bimappable:bimap(x => x - 1, x => x + 1)
+}

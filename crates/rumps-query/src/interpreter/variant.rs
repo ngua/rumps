@@ -209,6 +209,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             registry: &self.registry,
             regex_cache: &self.regex_cache,
             span,
+            output_ty: None,
         };
         self.class_methods
             .dispatch_nullary(ClassId::MONOID, mid, &mut ctx, &ty)
