@@ -1121,6 +1121,7 @@ impl SolveCtx<'_> {
                         | ClassId::MAPPABLE
                         | ClassId::FILTERABLE
                         | ClassId::FOLDABLE
+                        | ClassId::BIMAPPABLE
                 ) =>
             {
                 self.check_hkt_class(*id, elems, class, ty, span)
@@ -1365,7 +1366,7 @@ impl SolveCtx<'_> {
         }
     }
 
-    /// Check an HKT class (`Iterable`, `Mappable`, `Filterable`, `Foldable`)
+    /// Check an HKT class (`Iterable`, `Mappable`, `Filterable`, `Foldable`, `Bimappable`)
     /// against `ty`, optionally unifying element types with `elems`.
     fn check_hkt_class(
         &mut self,
@@ -1385,6 +1386,12 @@ impl SolveCtx<'_> {
                 ) => Some(smallvec![TyArena::INT]),
                 (ClassId::MAPPABLE, Ty::Option(e)) => Some(smallvec![*e]),
                 (ClassId::MAPPABLE, Ty::Result(ok, _)) => Some(smallvec![*ok]),
+                (ClassId::BIMAPPABLE, Ty::Result(ok, err)) => {
+                    Some(smallvec![*ok, *err])
+                }
+                (ClassId::BIMAPPABLE, Ty::Tuple(ts)) if ts.len() == 2 => {
+                    Some(ts.iter().copied().collect())
+                }
                 _ => None,
             };
         match builtin_elems {

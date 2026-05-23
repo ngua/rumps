@@ -298,8 +298,9 @@ impl ClassId {
     pub(crate) const EQ: Self = Self(14);
     pub(crate) const WRAPPABLE: Self = Self(15);
     pub(crate) const CHAINABLE: Self = Self(16);
+    pub(crate) const BIMAPPABLE: Self = Self(17);
 
-    pub(crate) const BUILTIN_COUNT: usize = 17;
+    pub(crate) const BUILTIN_COUNT: usize = 18;
 
     pub(crate) const fn idx(self) -> usize {
         self.0 as usize
@@ -328,6 +329,7 @@ impl ClassId {
             14 => "Eq",
             15 => "Wrappable",
             16 => "Chainable",
+            17 => "Bimappable",
             _ => "<user class>",
         }
     }

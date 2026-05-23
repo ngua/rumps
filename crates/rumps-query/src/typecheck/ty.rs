@@ -505,6 +505,40 @@ impl ClassRegistry {
                     }),
                 )],
             },
+            // 17: Bimappable
+            ClassDef {
+                name: s("Bimappable"),
+                shape: ClassShape::Hkt { kind: 2, params: 0 },
+                assoc_types: smallvec![],
+                supers: smallvec![],
+                methods: vec![(
+                    s("bimap"),
+                    MethodSpec::Standard({
+                        let v2 = arena.var(2);
+                        let v3 = arena.var(3);
+                        let tv4_ab =
+                            arena.hkt(TyVar::new(4), smallvec![v0, v1]);
+                        let tv4_cd =
+                            arena.hkt(TyVar::new(4), smallvec![v2, v3]);
+                        let f = arena.func(smallvec![v0], v2);
+                        let g = arena.func(smallvec![v1], v3);
+                        Scheme {
+                            vars: smallvec![
+                                TyVar::new(0),
+                                TyVar::new(1),
+                                TyVar::new(2),
+                                TyVar::new(3),
+                                TyVar::new(4),
+                            ],
+                            ty: arena.func(smallvec![f, g, tv4_ab], tv4_cd),
+                            constraints: smallvec![(
+                                TyVar::new(4),
+                                TypeClass::hkt(ClassId::BIMAPPABLE),
+                            )],
+                        }
+                    }),
+                )],
+            },
         ];
 
         let by_name = defs
