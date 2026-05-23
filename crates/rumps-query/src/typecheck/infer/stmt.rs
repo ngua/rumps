@@ -1519,6 +1519,9 @@ impl InferCtx<'_> {
                 AstTypeExpr::Named(name) | AstTypeExpr::App(name, _) => {
                     Some(name.display(&self.env.strings))
                 }
+                AstTypeExpr::TupleConstructor { .. } => {
+                    Some("Tuple".to_string())
+                }
                 _ => None,
             })
             .unwrap_or_else(|| "Unknown".to_string())

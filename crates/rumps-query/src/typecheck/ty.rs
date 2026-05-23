@@ -1665,21 +1665,35 @@ impl TyArena {
                                     self.alloc(Ty::Option(a))
                                 })
                             }
-                            Ty::Result(_, e) => {
-                                na.first().map_or(Self::ERROR, |&a| {
+                            Ty::Result(_, e) => match na.len() {
+                                1 => na.first().map_or(Self::ERROR, |&a| {
                                     self.alloc(Ty::Result(a, e))
-                                })
-                            }
+                                }),
+                                _ => match (na.first(), na.get(1)) {
+                                    (Some(&a), Some(&b)) => {
+                                        self.alloc(Ty::Result(a, b))
+                                    }
+                                    _ => Self::ERROR,
+                                },
+                            },
                             Ty::Array(_) => {
                                 na.first().map_or(Self::ERROR, |&a| {
                                     self.alloc(Ty::Array(a))
                                 })
                             }
-                            Ty::Map(_, mv) => {
-                                na.first().map_or(Self::ERROR, |&a| {
+                            Ty::Map(_, mv) => match na.len() {
+                                1 => na.first().map_or(Self::ERROR, |&a| {
                                     self.alloc(Ty::Map(a, mv))
-                                })
-                            }
+                                }),
+                                _ => match (na.first(), na.get(1)) {
+                                    (Some(&a), Some(&b)) => {
+                                        self.alloc(Ty::Map(a, b))
+                                    }
+                                    _ => Self::ERROR,
+                                },
+                            },
+                            // `Named`: element positions are always a suffix;
+                            // preserve the fixed prefix and replace the tail
                             Ty::Named(tid, orig) => {
                                 let keep = orig.len().saturating_sub(na.len());
                                 let new_args: SmallVec<[TyId; 4]> = orig
@@ -1689,6 +1703,19 @@ impl TyArena {
                                     .copied()
                                     .collect();
                                 self.alloc(Ty::Named(tid, new_args))
+                            }
+                            // `Tuple`: element positions are always a suffix
+                            // (positional restriction), so use the same
+                            // prefix-preserve + tail-replace as `Named`
+                            Ty::Tuple(ts) => {
+                                let keep = ts.len().saturating_sub(na.len());
+                                let filled: SmallVec<[TyId; 4]> = ts
+                                    .iter()
+                                    .take(keep)
+                                    .chain(na.iter())
+                                    .copied()
+                                    .collect();
+                                self.alloc(Ty::Tuple(filled))
                             }
                             _ if na.is_empty() => cid,
                             _ => Self::ERROR,
