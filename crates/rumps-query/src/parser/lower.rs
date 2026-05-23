@@ -5,12 +5,12 @@
 //! no `Rc` or `RefCell` required.
 
 use std::collections::HashSet;
-use std::fs;
 use std::path::{Path, PathBuf};
+use std::{fs, iter};
 
 use smallvec::{smallvec, SmallVec};
 
-use super::cst;
+use super::{cst, Parser};
 use crate::ast::{
     self, ArrayElem, AssocTypeDef, Ast, AstTypeExpr, AstTypeExprId,
     BindingPattern, DbRef, Expr, ExprId, Import, ImportItem, JsonAccessKey,
@@ -20,9 +20,11 @@ use crate::ast::{
     VariantAst, Visibility, WriteExpr,
 };
 use crate::intern::{QualifiedName, StringId, StringInterner};
-use crate::typecheck::{ClassRegistry, ClassShape, TyArena, TypeClass};
+use crate::typecheck::{
+    ClassDef, ClassRegistry, ClassShape, TyArena, TypeClass,
+};
 use crate::value::TypeId;
-use crate::{Error, Result};
+use crate::{Error, Lexer, Result, Span};
 
 /// Context for lowering; owns the AST being built, tracks base directory,
 /// files being parsed, and type parameters in scope (for distinguishing
@@ -127,7 +129,7 @@ impl<'a> LowerCtx<'a> {
                     s.span,
                 )?;
                 let assoc_names = assoc_types.iter().map(|a| a.name).collect();
-                let stub = crate::typecheck::ClassDef {
+                let stub = ClassDef {
                     name: *name,
                     shape,
                     assoc_types: assoc_names,
@@ -158,7 +160,7 @@ impl<'a> LowerCtx<'a> {
         class_params: &[cst::TypeParam],
         sv: StringId,
         methods: &[cst::ClassMethodSig],
-        span: crate::Span,
+        span: Span,
     ) -> Result<ClassShape> {
         let is_param = !class_params.is_empty();
         let kind = Self::self_var_hkt_kind(sv, methods, span)?;
@@ -186,7 +188,7 @@ impl<'a> LowerCtx<'a> {
     fn self_var_hkt_kind(
         sv: StringId,
         methods: &[cst::ClassMethodSig],
-        span: crate::Span,
+        span: Span,
     ) -> Result<u8> {
         let kind = methods
             .iter()
@@ -360,10 +362,8 @@ impl<'a> LowerCtx<'a> {
     fn module_from_file(
         &mut self,
         path: &str,
-        span: crate::Span,
+        span: Span,
     ) -> Result<Vec<StmtId>> {
-        use crate::Lexer;
-
         // Resolve path: if relative, resolve against base_dir; otherwise use as-is
         let p = Path::new(path);
         let resolved = if p.is_absolute() {
@@ -417,8 +417,8 @@ impl<'a> LowerCtx<'a> {
             )
         })?;
 
-        let cst_stmts = super::Parser::parse_to_cst(tokens, self.interner)
-            .map_err(|e| {
+        let cst_stmts =
+            Parser::parse_to_cst(tokens, self.interner).map_err(|e| {
                 Error::parse(
                     span,
                     format!(
@@ -689,7 +689,7 @@ impl<'a> LowerCtx<'a> {
                     class_params
                         .iter()
                         .map(|tp| tp.name)
-                        .chain(std::iter::once(self_var)),
+                        .chain(iter::once(self_var)),
                 );
 
                 // Push method-local type params for each method
@@ -1153,14 +1153,14 @@ impl<'a> LowerCtx<'a> {
                 Expr::NakedClassMethodRef(method)
             }
             cst::ExprKind::PipePlaceholder => {
-                Err(crate::Error::parse(
+                Err(Error::parse(
                     span,
                     "pipe placeholder `.` can only appear in call arguments on RHS of `|>`",
                     vec![],
                 ))?
             }
             cst::ExprKind::Error(msg) => {
-                Err(crate::Error::parse(span, msg, vec![]))?
+                Err(Error::parse(span, msg, vec![]))?
             }
         };
         self.ast.add_expr(e, span)
@@ -1238,21 +1238,6 @@ impl<'a> LowerCtx<'a> {
                 AstTypeExpr::AssocType { class, name }
             }
             cst::TypeExprKind::TupleConstructor { arity, fixed } => {
-                let max_fixed =
-                    fixed.iter().map(|(pos, _)| *pos).max().unwrap_or(0);
-                let min_empty =
-                    (0..arity).find(|i| !fixed.iter().any(|(p, _)| *p == *i));
-                if let Some(me) = min_empty {
-                    if max_fixed > me {
-                        Err(crate::Error::parse(
-                            span,
-                            "fixed positions in tuple constructors \
-                             must precede element positions \
-                             (e.g., `(T,)` not `(,T)`)",
-                            vec![],
-                        ))?;
-                    }
-                }
                 let lowered = fixed
                     .into_iter()
                     .map(|(pos, ty)| self.type_expr(ty).map(|id| (pos, id)))
@@ -1511,11 +1496,9 @@ impl<'a> LowerCtx<'a> {
     fn interpolation(
         &mut self,
         parts: Vec<String>,
-        span: crate::Span,
+        span: Span,
     ) -> Result<Expr> {
-        use crate::{Lexer, Parser};
-
-        let ids: Result<SmallVec<[crate::ast::ExprId; 4]>> = parts
+        let ids: Result<SmallVec<[ExprId; 4]>> = parts
             .into_iter()
             .enumerate()
             .map(|(i, part)| {
@@ -1527,7 +1510,7 @@ impl<'a> LowerCtx<'a> {
                     // Odd indices: expression source code; parse and merge
                     let tokens =
                         Lexer::new(&part).lex().map_err(|e| {
-                            crate::Error::parse(
+                            Error::parse(
                                 span,
                                 e.to_string(),
                                 vec![],
@@ -1539,7 +1522,7 @@ impl<'a> LowerCtx<'a> {
                         self.interner,
                     )
                     .map_err(|e| {
-                            crate::Error::parse(
+                            Error::parse(
                                 span,
                                 e.to_string(),
                                 vec![],
@@ -1569,7 +1552,7 @@ impl<'a> LowerCtx<'a> {
                                     part
                                 )
                             };
-                            crate::Error::parse(span, msg, vec![])
+                            Error::parse(span, msg, vec![])
                         })?;
 
                     // Copy the expression from the parsed AST into our AST
@@ -1600,11 +1583,7 @@ impl<'a> MergeCtx<'a> {
     }
 
     /// Merge a `RefTarget` from source AST into target AST.
-    fn ref_target(
-        &mut self,
-        rt: &RefTarget,
-        span: crate::Span,
-    ) -> Result<RefTarget> {
+    fn ref_target(&mut self, rt: &RefTarget, span: Span) -> Result<RefTarget> {
         match rt {
             RefTarget::Inline(dbref) => {
                 self.dbref(dbref, span).map(RefTarget::Inline)
@@ -1616,7 +1595,7 @@ impl<'a> MergeCtx<'a> {
     /// Merge a `DbRef` from source AST into target AST.
     ///
     /// Recursively copies subscript expressions.
-    fn dbref(&mut self, dbref: &DbRef, span: crate::Span) -> Result<DbRef> {
+    fn dbref(&mut self, dbref: &DbRef, span: Span) -> Result<DbRef> {
         let mut merge =
             |subs: &SmallVec<[SubscriptElem; 4]>| -> Result<SmallVec<_>> {
                 subs.iter()
@@ -1640,14 +1619,12 @@ impl<'a> MergeCtx<'a> {
     fn type_expr(
         &mut self,
         id: AstTypeExprId,
-        span: crate::Span,
+        span: Span,
     ) -> Result<AstTypeExprId> {
         let te = self
             .source
             .get_type_expr(id)
-            .ok_or_else(|| {
-                crate::Error::parse(span, "invalid type expr id", vec![])
-            })?
+            .ok_or_else(|| Error::parse(span, "invalid type expr id", vec![]))?
             .clone();
         let new_te = match te {
             AstTypeExpr::Wildcard => AstTypeExpr::Wildcard,
@@ -1710,14 +1687,12 @@ impl<'a> MergeCtx<'a> {
     fn pattern(
         &mut self,
         id: MatchPatternId,
-        span: crate::Span,
+        span: Span,
     ) -> Result<MatchPatternId> {
         let pat = self
             .source
             .get_pattern(id)
-            .ok_or_else(|| {
-                crate::Error::parse(span, "invalid pattern id", vec![])
-            })?
+            .ok_or_else(|| Error::parse(span, "invalid pattern id", vec![]))?
             .clone();
         let new_pat = match pat {
             MatchPattern::Wildcard => MatchPattern::Wildcard,
@@ -1756,11 +1731,7 @@ impl<'a> MergeCtx<'a> {
     }
 
     /// Merge a `WriteExpr` from source AST into target AST.
-    fn write_expr(
-        &mut self,
-        w: &WriteExpr,
-        span: crate::Span,
-    ) -> Result<WriteExpr> {
+    fn write_expr(&mut self, w: &WriteExpr, span: Span) -> Result<WriteExpr> {
         let new_expr = self.expr(w.expr, span)?;
         let new_target = match w.target {
             OutputTarget::Stdout => OutputTarget::Stdout,
@@ -1778,7 +1749,7 @@ impl<'a> MergeCtx<'a> {
     fn type_pattern(
         &mut self,
         pat: &TypePattern,
-        span: crate::Span,
+        span: Span,
     ) -> Result<TypePattern> {
         match pat {
             TypePattern::Type(ty_id) => {
@@ -1808,13 +1779,11 @@ impl<'a> MergeCtx<'a> {
     }
 
     /// Merge a statement from source AST into target AST.
-    fn stmt(&mut self, stmt_id: StmtId, span: crate::Span) -> Result<StmtId> {
+    fn stmt(&mut self, stmt_id: StmtId, span: Span) -> Result<StmtId> {
         let stmt = self
             .source
             .get_stmt(stmt_id)
-            .ok_or_else(|| {
-                crate::Error::parse(span, "invalid stmt id", vec![])
-            })?
+            .ok_or_else(|| Error::parse(span, "invalid stmt id", vec![]))?
             .clone();
         let new_stmt = match stmt {
             Stmt::Let(pat, ty_ann, expr, vis) => {
@@ -2063,13 +2032,11 @@ impl<'a> MergeCtx<'a> {
     ///
     /// Recursively copies the expression and all its sub-expressions,
     /// statements, type expressions, and patterns.
-    fn expr(&mut self, expr_id: ExprId, span: crate::Span) -> Result<ExprId> {
+    fn expr(&mut self, expr_id: ExprId, span: Span) -> Result<ExprId> {
         let expr = self
             .source
             .get_expr(expr_id)
-            .ok_or_else(|| {
-                crate::Error::parse(span, "invalid expression id", vec![])
-            })?
+            .ok_or_else(|| Error::parse(span, "invalid expression id", vec![]))?
             .clone();
 
         let new_expr = match expr {

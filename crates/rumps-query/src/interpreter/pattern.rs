@@ -6,11 +6,12 @@ use smallvec::SmallVec;
 
 use super::Interpreter;
 use crate::ast::{
-    BindingPattern, MatchPattern, MatchPatternId, RestPattern, TypePattern,
+    AstTypeExprId, BindingPattern, MatchPattern, MatchPatternId, RestPattern,
+    TypePattern,
 };
 use crate::intern::{QualifiedName, StringId};
 use crate::io::IoContext;
-use crate::value::{TypeId, Value, ValueId};
+use crate::value::{TypeId, Value, ValueId, VariantDef};
 use crate::{Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
@@ -148,7 +149,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         ty_name: &QualifiedName,
         var_name: StringId,
         _span: Span,
-    ) -> Result<(TypeId, crate::value::VariantDef)> {
+    ) -> Result<(TypeId, VariantDef)> {
         let type_id = self
             .registry
             .lookup(ty_name)
@@ -237,7 +238,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     fn try_match_is(
         &mut self,
         name: StringId,
-        ast_ty_id: crate::ast::AstTypeExprId,
+        ast_ty_id: AstTypeExprId,
         val: &Value,
         span: Span,
     ) -> Result<Option<Vec<(StringId, ValueId)>>> {
@@ -346,7 +347,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     fn try_match_array(
         &mut self,
         pats: &[MatchPatternId],
-        rest: Option<&crate::ast::RestPattern>,
+        rest: Option<&RestPattern>,
         val: &Value,
         span: Span,
     ) -> Result<Option<Vec<(StringId, ValueId)>>> {

@@ -31,12 +31,13 @@ use std::collections::{HashMap, HashSet};
 
 use smallvec::{smallvec, SmallVec};
 
-use crate::ast::{Ast, AstTypeExpr, Expr, ExprId, Stmt, StmtId};
+use crate::ast::{Ast, AstTypeExpr, AstTypeExprId, Expr, ExprId, Stmt, StmtId};
 use crate::env::BUILTIN_MODULE_NAMES;
 use crate::intern::{QualifiedName, StringId};
+use crate::interpreter::instance::instance_fn_name_owned;
 use crate::typecheck::ClassRegistry;
 use crate::value::{TypeRegistry, ValueArena};
-use crate::ClassId;
+use crate::{ClassId, StringInterner};
 
 /// Resolved class instance info.
 ///
@@ -357,7 +358,11 @@ impl<'a> ResolveCtx<'a> {
                 ..
             } => {
                 let class = self.class_registry.lookup_by_name(*class_name)?;
-                let raw_qn = Self::extract_type_qn(self.ast, *for_type)?;
+                let raw_qn = Self::extract_type_qn(
+                    self.ast,
+                    &mut self.arena.strings,
+                    *for_type,
+                )?;
 
                 let type_qn = match module {
                     Some(m) if !raw_qn.is_qualified() => {
@@ -365,7 +370,12 @@ impl<'a> ResolveCtx<'a> {
                     }
                     _ => raw_qn,
                 };
-                let type_disp = type_qn.display(&self.arena.strings);
+                let fn_type_name = match self.ast.get_type_expr(*for_type) {
+                    Some(AstTypeExpr::TupleConstructor { arity, .. }) => {
+                        format!("Tuple{arity}")
+                    }
+                    _ => type_qn.display(&self.arena.strings),
+                };
                 let class_name_str = self
                     .arena
                     .strings
@@ -374,7 +384,7 @@ impl<'a> ResolveCtx<'a> {
                     .to_owned();
                 let ca_names: Vec<String> = class_args
                     .iter()
-                    .filter_map(|id| Self::extract_type_qn(self.ast, *id))
+                    .filter_map(|id| Self::extract_type_qn_named(self.ast, *id))
                     .map(|qn| qn.display(&self.arena.strings))
                     .collect();
                 let methods = methods.clone();
@@ -383,13 +393,12 @@ impl<'a> ResolveCtx<'a> {
                     .map(|m| {
                         let mn =
                             self.arena.strings.get(m.name).unwrap_or_default();
-                        let fn_name =
-                            crate::interpreter::instance::instance_fn_name_owned(
-                                &class_name_str,
-                                &type_disp,
-                                mn,
-                                &ca_names,
-                            );
+                        let fn_name = instance_fn_name_owned(
+                            &class_name_str,
+                            &fn_type_name,
+                            mn,
+                            &ca_names,
+                        );
                         let fn_id = self.arena.strings.intern(&fn_name);
                         (m.name, fn_id)
                     })
@@ -405,10 +414,26 @@ impl<'a> ResolveCtx<'a> {
         }
     }
 
-    /// Extract the type name `QualifiedName` from an `AstTypeExpr`.
+    /// Extract the type name from an `AstTypeExpr`, including tuple ctors.
     fn extract_type_qn(
         ast: &Ast,
-        id: crate::ast::AstTypeExprId,
+        strings: &mut StringInterner,
+        id: AstTypeExprId,
+    ) -> Option<QualifiedName> {
+        ast.get_type_expr(id).and_then(|te| match te {
+            AstTypeExpr::Named(name) | AstTypeExpr::App(name, _) => {
+                Some(name.clone())
+            }
+            AstTypeExpr::TupleConstructor { .. } => {
+                Some(QualifiedName::local(strings.intern("Tuple")))
+            }
+            _ => None,
+        })
+    }
+
+    fn extract_type_qn_named(
+        ast: &Ast,
+        id: AstTypeExprId,
     ) -> Option<QualifiedName> {
         ast.get_type_expr(id).and_then(|te| match te {
             AstTypeExpr::Named(name) | AstTypeExpr::App(name, _) => {
@@ -423,21 +448,19 @@ impl<'a> ResolveCtx<'a> {
 mod tests {
     use super::*;
     use crate::parser::Parser;
+    use crate::typecheck::TyArena;
     use crate::value::TypeExprArena;
 
     fn parse_and_resolve(src: &str) -> (Ast, ValueArena) {
-        let mut interner = crate::StringInterner::new();
+        let mut interner = StringInterner::new();
         let mut result =
             Parser::parse(src, &mut interner).expect("parse failed");
         let mut arena = ValueArena::with_interner(interner);
         let mut type_exprs = TypeExprArena::new();
         let registry = TypeRegistry::new(&mut arena, &mut type_exprs);
         let class_registry = {
-            let mut tmp = crate::typecheck::TyArena::new();
-            crate::typecheck::ClassRegistry::builtins(
-                &mut |s| arena.strings.intern(s),
-                &mut tmp,
-            )
+            let mut tmp = TyArena::new();
+            ClassRegistry::builtins(&mut |s| arena.strings.intern(s), &mut tmp)
         };
         let _ = ResolveCtx::new(
             &mut result.ast,

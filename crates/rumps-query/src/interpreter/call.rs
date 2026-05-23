@@ -3,6 +3,8 @@
 use async_recursion::async_recursion;
 use smallvec::SmallVec;
 
+use super::class::{ClassCtx, MethodFn};
+use super::hof::{self, HofMethodFn, HofResult, MethodResult};
 use super::Interpreter;
 use crate::ast::{Expr, ExprId};
 use crate::env::{PrimCtx, PrimFn};
@@ -301,8 +303,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             // Some HoFs (e.g. `foreach`) delegate to another HoF but discard
             // the produced value, evaluating to `Unit` instead.
             Ok(match result {
-                super::hof::HofResult::Keep => v,
-                super::hof::HofResult::Discard => Value::Unit,
+                HofResult::Keep => v,
+                HofResult::Discard => Value::Unit,
             })
         } else if let Some(fn_def) = self.env.get_user_module_fn(path).cloned()
         {
@@ -595,8 +597,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<Value> {
         // Check for HOF first (requires async)
-        if let Some(super::class::MethodFn::Hof(f)) =
-            self.class_methods.lookup(class, method)
+        if let Some(MethodFn::Hof(f)) = self.class_methods.lookup(class, method)
         {
             self.run_hof_trampoline(expr_id, f, args, span).await
         } else {
@@ -618,8 +619,6 @@ impl<I: IoContext> Interpreter<'_, I> {
         args: &[ValueId],
         span: Span,
     ) -> Result<Value> {
-        use super::class::ClassCtx;
-
         let val = |i: usize| {
             self.arena
                 .get(args[i])
@@ -628,7 +627,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         };
 
         match self.class_methods.lookup(class, method) {
-            Some(super::class::MethodFn::Binary(_)) => {
+            Some(MethodFn::Binary(_)) => {
                 let left = val(0);
                 let right = val(1);
                 let mut ctx = ClassCtx {
@@ -643,7 +642,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 self.class_methods
                     .dispatch_binary(class, method, &mut ctx, &left, &right)
             }
-            Some(super::class::MethodFn::Unary(_)) => {
+            Some(MethodFn::Unary(_)) => {
                 let v = val(0);
                 let mut ctx = ClassCtx {
                     arena: &mut self.arena,
@@ -657,7 +656,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 self.class_methods
                     .dispatch_unary(class, method, &mut ctx, &v)
             }
-            Some(super::class::MethodFn::Nullary(_)) => {
+            Some(MethodFn::Nullary(_)) => {
                 let id = expr_id.unwrap_or_else(|| {
                     typechecked!("nullary class method", "expression id")
                 });
@@ -678,7 +677,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 self.class_methods
                     .dispatch_nullary(class, method, &mut ctx, &ty)
             }
-            Some(super::class::MethodFn::Convert(_)) => {
+            Some(MethodFn::Convert(_)) => {
                 let v = val(0);
                 let id = expr_id.unwrap_or_else(|| {
                     typechecked!("convert class method", "expression id")
@@ -705,7 +704,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 self.class_methods
                     .dispatch_convert(class, method, &mut ctx, &v, &ty)
             }
-            Some(super::class::MethodFn::Hof(_)) => {
+            Some(MethodFn::Hof(_)) => {
                 // HOFs need async; caller should use dispatch_class_method
                 typechecked!("builtin Hof", "async context")
             }
@@ -721,13 +720,10 @@ impl<I: IoContext> Interpreter<'_, I> {
     async fn run_hof_trampoline(
         &mut self,
         expr_id: Option<ExprId>,
-        starter: super::hof::HofMethodFn,
+        starter: HofMethodFn,
         args: &[ValueId],
         span: Span,
     ) -> Result<Value> {
-        use super::class::ClassCtx;
-        use super::hof::MethodResult;
-
         let output_ty = expr_id.and_then(|id| {
             self.bimap_output_types.get(&id).copied().map(|ty_id| {
                 self.type_exprs.intern_ty_lenient(ty_id, &self.ty_arena)
@@ -761,7 +757,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                         span,
                         output_ty: None,
                     };
-                    result = super::hof::resume(&mut ctx, cont, call_result)?;
+                    result = hof::resume(&mut ctx, cont, call_result)?;
                 }
             }
         }

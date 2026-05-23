@@ -58,6 +58,8 @@
 // `Box`ing would add allocation overhead
 #![allow(clippy::result_large_err)]
 
+use std::path::Path;
+
 use chumsky::prelude::{end, Simple};
 use chumsky::Parser as _;
 use nonempty::NonEmpty;
@@ -101,7 +103,7 @@ impl Parser {
     /// Parse source code with a source file path for resolving relative imports.
     pub(crate) fn parse_with_path(
         src: &str,
-        src_path: &std::path::Path,
+        src_path: &Path,
         interner: &mut StringInterner,
     ) -> Result<ParseResult> {
         let raw = Lexer::new(src).lex()?;
@@ -121,7 +123,7 @@ impl Parser {
     /// Core parse function: takes interned tokens, produces a `ParseResult`.
     fn parse_interned(
         tokens: &[Spanned],
-        src_path: Option<&std::path::Path>,
+        src_path: Option<&Path>,
         interner: &mut StringInterner,
     ) -> Result<ParseResult> {
         let parser = Self::program(interner);

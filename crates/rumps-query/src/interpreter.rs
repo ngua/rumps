@@ -125,10 +125,10 @@ use crate::ast::{
 };
 use crate::intern::{QualifiedName, StringId, StringInterner};
 use crate::io::IoContext;
-use crate::resolve::ResolveCtx;
+use crate::resolve::{InstanceMap, ResolveCtx};
 use crate::value::{
     CapturedEnv, FunctionDef, TypeDef, TypeExprArena, TypeExprId, TypeId,
-    TypeRegistry, Value, ValueArena, ValueId,
+    TypeRegistry, Value, ValueArena, ValueId, VariantDef,
 };
 use crate::{env, typecheck, ClassId, Error, Result, Span};
 
@@ -254,7 +254,7 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
     /// Used during hoisting to register instance methods as functions and
     /// populate `user_instances`. Keyed by `StmtId` so hoisting can look up
     /// the resolved info when processing `Stmt::ClassInstance`.
-    resolved_instances: crate::resolve::InstanceMap,
+    resolved_instances: InstanceMap,
 }
 
 // Public API
@@ -1216,17 +1216,16 @@ impl<I: IoContext> Interpreter<'_, I> {
             })?;
 
             // Build VariantDef entries
-            let variant_defs: SmallVec<[crate::value::VariantDef; 4]> =
-                variants
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, v)| crate::value::VariantDef {
-                        name: v.name,
-                        idx: idx as u8,
-                        arity: v.payloads.len() as u8,
-                        payloads: v.payloads.clone(),
-                    })
-                    .collect();
+            let variant_defs: SmallVec<[VariantDef; 4]> = variants
+                .iter()
+                .enumerate()
+                .map(|(idx, v)| VariantDef {
+                    name: v.name,
+                    idx: idx as u8,
+                    arity: v.payloads.len() as u8,
+                    payloads: v.payloads.clone(),
+                })
+                .collect();
 
             // Type parameters already have `StringId` names
             let type_param_ids: SmallVec<[StringId; 2]> =

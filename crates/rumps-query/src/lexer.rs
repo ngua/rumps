@@ -8,6 +8,7 @@
 
 #![allow(dead_code)]
 
+use std::iter;
 use std::ops::Range;
 
 use chumsky::prelude::*;
@@ -368,7 +369,7 @@ impl Lexer<'_> {
                 let eof_pos = span.end as u32;
                 opts.into_iter()
                     .flatten()
-                    .chain(std::iter::once(Spanned::new(
+                    .chain(iter::once(Spanned::new(
                         Token::Eof,
                         Span::new(eof_pos, eof_pos),
                     )))
@@ -465,8 +466,7 @@ impl Lexer<'_> {
             .then(content_char.repeated().collect::<Vec<_>>())
             .then_ignore(just('/'))
             .map_with_span(|(first, rest), span| {
-                let pattern =
-                    std::iter::once(first).chain(rest).collect::<String>();
+                let pattern = iter::once(first).chain(rest).collect::<String>();
                 Spanned::from_range(Token::Regex(pattern), span)
             })
     }

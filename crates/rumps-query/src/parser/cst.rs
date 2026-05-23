@@ -752,7 +752,7 @@ pub(crate) enum MatchPattern {
     Var(StringId),
 
     /// Literal: `0`, `"hello"`, `true`
-    Literal(crate::ast::Literal),
+    Literal(Literal),
 
     /// Variant with sub-patterns: `Option.Some(x)`, `Result.Err(e)`
     Variant(Vec<StringId>, StringId, Vec<Self>),

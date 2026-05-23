@@ -4,7 +4,9 @@ use async_recursion::async_recursion;
 use smallvec::SmallVec;
 
 use super::Interpreter;
-use crate::ast::{Expr, ExprId, MatchArm, PostfixOp, StmtId, TypePattern};
+use crate::ast::{
+    AstTypeExprId, Expr, ExprId, MatchArm, PostfixOp, StmtId, TypePattern,
+};
 use crate::intern::{QualifiedName, StringId};
 use crate::io::IoContext;
 use crate::value::{TypeId, Value};
@@ -481,8 +483,8 @@ impl<I: IoContext> Interpreter<'_, I> {
     pub(super) async fn forever(
         &mut self,
         seed: ExprId,
-        state_param: (StringId, Option<crate::ast::AstTypeExprId>),
-        cont_param: (StringId, Option<crate::ast::AstTypeExprId>),
+        state_param: (StringId, Option<AstTypeExprId>),
+        cont_param: (StringId, Option<AstTypeExprId>),
         body: ExprId,
         span: Span,
     ) -> Result<Value> {

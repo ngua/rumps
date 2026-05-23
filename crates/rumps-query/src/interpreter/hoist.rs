@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use async_recursion::async_recursion;
 
-use crate::ast::{InstanceMethodDef, Stmt, StmtId};
+use crate::ast::{AstTypeExprId, ExprId, InstanceMethodDef, Stmt, StmtId};
 use crate::intern::StringId;
 use crate::interpreter::instance::RuntimeInstance;
 use crate::interpreter::Interpreter;
@@ -80,9 +80,9 @@ impl<I: IoContext> Interpreter<'_, I> {
     fn hoist_fun(
         &mut self,
         name: StringId,
-        params: &[(StringId, Option<crate::ast::AstTypeExprId>)],
-        ret: Option<crate::ast::AstTypeExprId>,
-        body: crate::ast::ExprId,
+        params: &[(StringId, Option<AstTypeExprId>)],
+        ret: Option<AstTypeExprId>,
+        body: ExprId,
         span: Span,
     ) -> Result<()> {
         // Delegate to the existing `fun` method which handles registration
@@ -107,7 +107,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     pub(crate) fn hoist_class_instance(
         &mut self,
         id: StmtId,
-        _for_type: crate::ast::AstTypeExprId,
+        _for_type: AstTypeExprId,
         methods: &[InstanceMethodDef],
         span: Span,
     ) -> Result<()> {

@@ -11,7 +11,7 @@ use crate::ast::{ArrayElem, Expr, ExprId, ObjectEntry};
 use crate::intern::{QualifiedName, StringId};
 use crate::io::IoContext;
 use crate::value::{MapKey, TypeExprId, TypeId, Value, ValueId};
-use crate::{Error, Result, Span};
+use crate::{ClassId, Error, Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
     /// Evaluate an object literal with potential spread entries.
@@ -567,7 +567,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let mid = self.arena.intern("index");
                 self.dispatch_class_method(
                     Some(base),
-                    crate::ClassId::INDEXABLE,
+                    ClassId::INDEXABLE,
                     mid,
                     &[base_id, idx_id],
                     span,
@@ -652,7 +652,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let mid = self.arena.intern("get");
                 self.dispatch_class_method(
                     Some(base),
-                    crate::ClassId::INDEXABLE,
+                    ClassId::INDEXABLE,
                     mid,
                     &[base_id, idx_id],
                     span,

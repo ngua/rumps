@@ -42,6 +42,8 @@
 //! [`Interpreter::invoke_callable`]: crate::interpreter::Interpreter::invoke_callable
 //! [`Interpreter::invoke_module_fn`]: crate::interpreter::Interpreter::invoke_module_fn
 
+use std::env;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use chrono::{DateTime, Datelike, TimeZone, Timelike, Utc};
@@ -54,7 +56,11 @@ use smallvec::{smallvec, SmallVec};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::env::{PrimCtx, PrimResult};
-use crate::value::{MapKey, TypeExprArena, TypeId, Value, ValueArena, ValueId};
+use crate::interpreter::convert::escape_str;
+use crate::value::{
+    MapKey, TypeExprArena, TypeExprId, TypeId, Value, ValueArena, ValueId,
+};
+use crate::{Result, StringId};
 
 /// Shared utilities for primitive function implementations.
 ///
@@ -96,7 +102,7 @@ pub(crate) trait Prim {
     ///
     /// Since the `StringId` is already validated (via `get_string_id` +
     /// `typechecked!`), the lookup should always succeed.
-    fn valid_str(arena: &ValueArena, sid: crate::StringId) -> &str {
+    fn valid_str(arena: &ValueArena, sid: StringId) -> &str {
         arena
             .get_str(sid)
             .unwrap_or_else(|| invariant!("StringId lookup"))
@@ -359,7 +365,7 @@ impl Array {
             /// semantically. Declaration order is `None, Some` and `Ok, Err`,
             /// so Option already sorts correctly but Result needs inversion.
             fn sort_priority(
-                ty_expr: &crate::value::TypeExprId,
+                ty_expr: &TypeExprId,
                 idx: u8,
                 type_exprs: &TypeExprArena,
             ) -> u8 {
@@ -399,7 +405,7 @@ impl Array {
                             (*vid, k)
                         })
                 })
-                .collect::<crate::Result<Vec<_>>>()?;
+                .collect::<Result<Vec<_>>>()?;
 
             pairs.sort_by(|(_, a), (_, b)| a.cmp(b));
 
@@ -909,7 +915,7 @@ impl Str {
                 .unwrap_or_else(|| typechecked!("String.escape", "String"));
 
             let s = Self::valid_str(ctx.arena, sid);
-            let escaped = crate::interpreter::convert::escape_str(s);
+            let escaped = escape_str(s);
             let new_sid = ctx.arena.intern(&escaped);
             Ok(ctx.arena.add(Value::String(new_sid), ctx.span))
         })
@@ -2744,7 +2750,7 @@ impl Directory {
         _args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let cwd = std::env::current_dir().map_err(|e| {
+            let cwd = env::current_dir().map_err(|e| {
                 ctx.runtime_error(format!("Io.Directory.pwd: {e}"))
             })?;
             let path_str = cwd.to_string_lossy();
@@ -2762,7 +2768,7 @@ impl Directory {
     ) -> PrimResult<'a> {
         Box::pin(async move {
             let path_str = Self::get_path_str(ctx, args[0]);
-            std::env::set_current_dir(&path_str).map_err(|e| {
+            env::set_current_dir(&path_str).map_err(|e| {
                 ctx.runtime_error(format!("Io.Directory.set-pwd: {e}"))
             })?;
             Ok(ctx.arena.add(Value::Unit, ctx.span))
@@ -2786,7 +2792,7 @@ impl Directory {
             let str_ty = ctx.type_exprs.named(TypeId::STRING);
             let opt_ty = ctx.type_exprs.app(TypeId::OPTION, smallvec![str_ty]);
 
-            match std::env::var(name) {
+            match env::var(name) {
                 Ok(val) => {
                     let sid = ctx.arena.intern(&val);
                     let val_id = ctx.arena.add(Value::String(sid), ctx.span);
@@ -2847,7 +2853,7 @@ impl Directory {
                 ),
             };
 
-            std::env::set_var(&name, &value);
+            env::set_var(&name, &value);
             Ok(ctx.arena.add(Value::Unit, ctx.span))
         })
     }
@@ -2879,7 +2885,7 @@ impl Directory {
     ) -> PrimResult<'a> {
         Box::pin(async move {
             let path_str = Self::get_path_str(ctx, args[0]);
-            let path = std::path::Path::new(&path_str);
+            let path = Path::new(&path_str);
 
             let fp_ty = ctx.type_exprs.named(TypeId::FILEPATH);
             let opt_ty = ctx.type_exprs.app(TypeId::OPTION, smallvec![fp_ty]);
@@ -2904,7 +2910,7 @@ impl Directory {
     ) -> PrimResult<'a> {
         Box::pin(async move {
             let path_str = Self::get_path_str(ctx, args[0]);
-            let path = std::path::Path::new(&path_str);
+            let path = Path::new(&path_str);
             let name_opt =
                 path.file_name().map(|n| n.to_string_lossy().to_string());
 
@@ -2931,7 +2937,7 @@ impl Directory {
     ) -> PrimResult<'a> {
         Box::pin(async move {
             let path_str = Self::get_path_str(ctx, args[0]);
-            let path = std::path::Path::new(&path_str);
+            let path = Path::new(&path_str);
             let ext_opt =
                 path.extension().map(|e| e.to_string_lossy().to_string());
 
@@ -2983,7 +2989,7 @@ impl Directory {
                 _ => typechecked!("Io.Directory.join", "Array[String]"),
             };
 
-            let mut path = std::path::PathBuf::from(&base_str);
+            let mut path = PathBuf::from(&base_str);
             part_strs.iter().for_each(|p| path.push(p));
 
             let sid = ctx.arena.intern(&path.to_string_lossy());
@@ -2999,7 +3005,7 @@ impl Directory {
         _args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let tmp = std::env::temp_dir();
+            let tmp = env::temp_dir();
             let sid = ctx.arena.intern(&tmp.to_string_lossy());
             Ok(ctx.arena.add(Value::FilePath(sid), ctx.span))
         })
@@ -3025,7 +3031,7 @@ impl Directory {
                     )
                 })?;
 
-            let mut path = std::path::PathBuf::from(&path_str);
+            let mut path = PathBuf::from(&path_str);
             path.set_extension(&ext);
 
             let sid = ctx.arena.intern(&path.to_string_lossy());
@@ -3036,13 +3042,22 @@ impl Directory {
 
 /// Primitives for the `Prelude` module.
 ///
-/// `foreach` is a HoF intercepted in `invoke_module_fn`; only a placeholder
-/// is registered here. `contains` and `reverse` are real primitives.
+/// `foreach`, `first`, and `second` are HoFs intercepted in
+/// `invoke_module_fn`; only placeholders are registered here. `identity`,
+/// `contains`, and `reverse` are real primitives.
 pub(crate) struct Prelude;
 
 impl Prim for Prelude {}
 
 impl Prelude {
+    /// `forall A. (A) -> A`
+    pub(crate) fn identity<'a>(
+        _ctx: &'a mut PrimCtx<'a>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> PrimResult<'a> {
+        Box::pin(async move { Ok(args[0]) })
+    }
+
     /// `forall T, F: Iterable. (F[T], T) -> Bool`
     ///
     /// Checks if `needle` is contained in the iterable.

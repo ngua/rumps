@@ -101,7 +101,7 @@ impl Parser {
     pub(super) fn build_array_pattern(
         elems: Vec<ArrayPatElem>,
         span: Span,
-    ) -> std::result::Result<cst::BindingPattern, ParseErr> {
+    ) -> Result<cst::BindingPattern, ParseErr> {
         let mut pats = Vec::new();
         let mut rest: Option<cst::RestPattern> = None;
 
@@ -314,7 +314,7 @@ impl Parser {
     pub(super) fn build_match_array_pattern(
         elems: Vec<MatchArrayPatElem>,
         span: Span,
-    ) -> std::result::Result<cst::MatchPattern, ParseErr> {
+    ) -> Result<cst::MatchPattern, ParseErr> {
         let mut pats = Vec::new();
         let mut rest: Option<cst::RestPattern> = None;
 

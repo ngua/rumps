@@ -4,7 +4,8 @@
 //! (polymorphic type schemes), and `Rename` (local type variable renames).
 
 use std::collections::{HashMap, HashSet};
-use std::{fmt, result};
+use std::hash::{Hash, Hasher};
+use std::{fmt, iter, mem, result};
 
 use indexmap::IndexMap;
 use smallvec::{smallvec, SmallVec};
@@ -1075,9 +1076,9 @@ pub(crate) enum Ty {
     Error,
 }
 
-impl std::hash::Hash for Ty {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        std::mem::discriminant(self).hash(state);
+impl Hash for Ty {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        mem::discriminant(self).hash(state);
         match self {
             Self::Var(v) => v.hash(state),
             Self::Array(id) => id.hash(state),
@@ -1738,16 +1739,19 @@ impl TyArena {
                                     .collect();
                                 self.alloc(Ty::Named(tid, new_args))
                             }
-                            // `Tuple`: element positions are always a suffix
-                            // (positional restriction), so use the same
-                            // prefix-preserve + tail-replace as `Named`
                             Ty::Tuple(ts) => {
-                                let keep = ts.len().saturating_sub(na.len());
+                                let mut na_iter = na.iter().copied();
                                 let filled: SmallVec<[TyId; 4]> = ts
                                     .iter()
-                                    .take(keep)
-                                    .chain(na.iter())
-                                    .copied()
+                                    .map(|&t| {
+                                        if t == Self::ERROR {
+                                            na_iter
+                                                .next()
+                                                .unwrap_or(Self::ERROR)
+                                        } else {
+                                            t
+                                        }
+                                    })
                                     .collect();
                                 self.alloc(Ty::Tuple(filled))
                             }
@@ -1955,7 +1959,7 @@ pub(crate) struct Rename(pub(crate) HashMap<TyVar, TyId>);
 impl Rename {
     /// Rename mapping a single variable.
     pub(crate) fn singleton(v: TyVar, ty: TyId) -> Self {
-        Self(std::iter::once((v, ty)).collect())
+        Self(iter::once((v, ty)).collect())
     }
 
     /// Check if this rename is empty.

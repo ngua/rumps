@@ -5,6 +5,7 @@
 //! output to buffers.
 
 use std::path::Path;
+use std::{io, str};
 
 use async_trait::async_trait;
 use tokio::io::{stderr, stdout, AsyncWriteExt};
@@ -44,18 +45,16 @@ pub(crate) struct Io;
 impl IoContext for Io {
     async fn stdout(&mut self, s: &str, span: Span) -> Result<()> {
         let mut out = stdout();
-        let map_err = |e: std::io::Error| {
-            Error::runtime(span, format!("output error: {e}"))
-        };
+        let map_err =
+            |e: io::Error| Error::runtime(span, format!("output error: {e}"));
         out.write_all(s.as_bytes()).await.map_err(map_err)?;
         out.flush().await.map_err(map_err)
     }
 
     async fn stdoutline(&mut self, s: &str, span: Span) -> Result<()> {
         let mut out = stdout();
-        let map_err = |e: std::io::Error| {
-            Error::runtime(span, format!("output error: {e}"))
-        };
+        let map_err =
+            |e: io::Error| Error::runtime(span, format!("output error: {e}"));
         out.write_all(s.as_bytes()).await.map_err(map_err)?;
         out.write_all(b"\n").await.map_err(map_err)?;
         out.flush().await.map_err(map_err)
@@ -63,7 +62,7 @@ impl IoContext for Io {
 
     async fn stderr(&mut self, s: &str, span: Span) -> Result<()> {
         let mut err = stderr();
-        let map_err = |e: std::io::Error| {
+        let map_err = |e: io::Error| {
             Error::runtime(span, format!("stderr output error: {e}"))
         };
         err.write_all(s.as_bytes()).await.map_err(map_err)?;
@@ -72,7 +71,7 @@ impl IoContext for Io {
 
     async fn stderrline(&mut self, s: &str, span: Span) -> Result<()> {
         let mut err = stderr();
-        let map_err = |e: std::io::Error| {
+        let map_err = |e: io::Error| {
             Error::runtime(span, format!("stderr output error: {e}"))
         };
         err.write_all(s.as_bytes()).await.map_err(map_err)?;
@@ -111,7 +110,7 @@ impl TestIo {
 
     /// Get captured stdout as a string.
     pub(crate) fn stdout_str(&self) -> &str {
-        std::str::from_utf8(&self.stdout_buf).unwrap_or("<invalid utf8>")
+        str::from_utf8(&self.stdout_buf).unwrap_or("<invalid utf8>")
     }
 }
 

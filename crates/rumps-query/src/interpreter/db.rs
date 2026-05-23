@@ -9,7 +9,7 @@ use smallvec::SmallVec;
 use super::Interpreter;
 use crate::ast::{DbRef, ExprId, Intrinsic, RefTarget, SubscriptElem, TxnId};
 use crate::io::IoContext;
-use crate::value::{TypeId, Value};
+use crate::value::{TypeId, Value, ValueId};
 use crate::{Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
@@ -63,7 +63,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         subs: &[SubscriptElem],
         span: Span,
-    ) -> Result<SmallVec<[crate::value::ValueId; 4]>> {
+    ) -> Result<SmallVec<[ValueId; 4]>> {
         let mut acc = SmallVec::with_capacity(subs.len());
         self.eval_subscripts_acc(subs, &mut acc, span).await?;
         Ok(acc)
@@ -74,7 +74,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     async fn eval_subscripts_acc(
         &mut self,
         subs: &[SubscriptElem],
-        acc: &mut SmallVec<[crate::value::ValueId; 4]>,
+        acc: &mut SmallVec<[ValueId; 4]>,
         span: Span,
     ) -> Result<()> {
         match subs.split_first() {

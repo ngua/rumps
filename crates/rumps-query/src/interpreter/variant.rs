@@ -189,11 +189,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     ///
     /// Dispatches to `Monoid:identity` with the inferred type to produce
     /// the appropriate empty value.
-    pub(super) fn mempty(
-        &mut self,
-        id: crate::ast::ExprId,
-        span: Span,
-    ) -> crate::Result<Value> {
+    pub(super) fn mempty(&mut self, id: ExprId, span: Span) -> Result<Value> {
         let ty_id = self
             .mempty_types
             .get(&id)

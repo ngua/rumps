@@ -2,7 +2,7 @@
 
 #![allow(dead_code)]
 
-use std::fmt;
+use std::{fmt, iter, result};
 
 use chumsky::error::Simple;
 use itertools::Itertools;
@@ -15,7 +15,7 @@ use crate::typecheck::{FormattedTypeError, TypeError};
 use crate::{Span, Token};
 
 /// Crate-wide result type.
-pub(crate) type Result<T> = std::result::Result<T, Error>;
+pub(crate) type Result<T> = result::Result<T, Error>;
 
 /// Errors produced during lexing, parsing, or interpretation.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -242,26 +242,26 @@ impl Diagnostic for Error {
 
         match self {
             Self::Lex { span, .. } => {
-                Some(Box::new(std::iter::once(span_to_label(*span, "here"))))
+                Some(Box::new(iter::once(span_to_label(*span, "here"))))
             }
             Self::Parse { span, .. } | Self::Static { span, .. } => {
-                Some(Box::new(std::iter::once(span_to_label(*span, "here"))))
+                Some(Box::new(iter::once(span_to_label(*span, "here"))))
             }
             Self::RuntimeType { span, .. } => {
-                Some(Box::new(std::iter::once(span_to_label(*span, "here"))))
+                Some(Box::new(iter::once(span_to_label(*span, "here"))))
             }
             Self::Raise { span, .. } => {
-                Some(Box::new(std::iter::once(span_to_label(*span, "raise"))))
+                Some(Box::new(iter::once(span_to_label(*span, "raise"))))
             }
             Self::Runtime { span: Some(s), .. } => {
-                Some(Box::new(std::iter::once(span_to_label(*s, "here"))))
+                Some(Box::new(iter::once(span_to_label(*s, "here"))))
             }
             Self::Runtime { span: None, .. } | Self::Coercion { .. } => None,
             Self::Type(e) => {
-                Some(Box::new(std::iter::once(span_to_label(e.span(), "here"))))
+                Some(Box::new(iter::once(span_to_label(e.span(), "here"))))
             }
             Self::FormattedType(e) => {
-                Some(Box::new(std::iter::once(span_to_label(e.span, "error"))))
+                Some(Box::new(iter::once(span_to_label(e.span, "error"))))
             }
             Self::Multiple { errors } => {
                 // Collect labels with individual error messages

@@ -6,7 +6,12 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
+use std::{f64, mem};
 
+use crate::primitives::{
+    Array, Directory, Io, Map, Math, Opt, Prelude, Prim, Random, Res, Str,
+    Time, Trig,
+};
 use crate::typecheck::{Scheme, Ty, TyArena, TyId, TyVar, TypeClass};
 use crate::ClassId;
 
@@ -28,7 +33,9 @@ use smallvec::{smallvec, SmallVec};
 use crate::ast::{BinOp, Intrinsic, PostfixOp, UnOp};
 use crate::intern::{StringId, StringInterner};
 use crate::io::IoContext;
-use crate::value::{FunctionDef, TypeId, Value, ValueArena, ValueId};
+use crate::value::{
+    CapturedEnv, FunctionDef, TypeExprArena, TypeId, Value, ValueArena, ValueId,
+};
 use crate::{Error, Result, Span};
 
 /// Stack of lexical scopes for `let` bindings.
@@ -97,7 +104,7 @@ impl Scopes {
     ///
     /// Returns the saved stack, leaving the current stack with a single empty frame.
     pub(crate) fn save(&mut self) -> Vec<HashMap<StringId, ValueId>> {
-        std::mem::replace(&mut self.stack, vec![HashMap::new()])
+        mem::replace(&mut self.stack, vec![HashMap::new()])
     }
 
     /// Restore a previously saved scope stack.
@@ -108,10 +115,7 @@ impl Scopes {
     /// Restore scope from a captured environment (for closure calls).
     ///
     /// Creates a fresh scope stack with the captured bindings.
-    pub(crate) fn restore_from_captured(
-        &mut self,
-        env: &crate::value::CapturedEnv,
-    ) {
+    pub(crate) fn restore_from_captured(&mut self, env: &CapturedEnv) {
         let frame = env.bindings().iter().map(|(k, v)| (*k, *v)).collect();
         self.stack = vec![frame];
     }
@@ -127,7 +131,7 @@ pub(crate) type PrimResult<'a> = BoxFuture<'a, Result<ValueId>>;
 /// context for output operations, and the call-site span for error reporting.
 pub(crate) struct PrimCtx<'a> {
     pub(crate) arena: &'a mut ValueArena,
-    pub(crate) type_exprs: &'a mut crate::value::TypeExprArena,
+    pub(crate) type_exprs: &'a mut TypeExprArena,
     // Required for `Io.* operations to work correctly, i.e. use the I/O`
     // abstraction used elsewhere
     pub(crate) io: &'a mut dyn IoContext,
@@ -981,11 +985,6 @@ impl Environment {
     /// are handled specially by the interpreter. We register placeholders here
     /// so that `module_fn_exists` returns true for name resolution.
     fn register_builtins(&mut self) {
-        use crate::primitives::{
-            Array, Io, Map, Math, Opt, Prelude, Prim, Random, Res, Str, Time,
-            Trig,
-        };
-
         let a = &mut self.ty_arena;
 
         // Pre-allocate common type variables and compound types
@@ -1281,9 +1280,9 @@ impl Environment {
         // Math constants (intern into `consts` arena)
         use ordered_float::OrderedFloat;
         [
-            ("pi", std::f64::consts::PI),
-            ("e", std::f64::consts::E),
-            ("tau", std::f64::consts::TAU),
+            ("pi", f64::consts::PI),
+            ("e", f64::consts::E),
+            ("tau", f64::consts::TAU),
             ("inf", f64::INFINITY),
             ("neg-inf", f64::NEG_INFINITY),
         ]
@@ -1804,6 +1803,9 @@ impl Environment {
             a.alloc(Ty::Union(None, smallvec![arr_v0, TyArena::RANGE]));
         let reverse_ty = a.func(smallvec![rev_union], rev_union);
 
+        // `identity: forall A. (A) -> A`
+        let identity_ty = a.func(smallvec![v0], v0);
+
         let prelude_id = self.consts.strings.intern("Prelude");
         self.modules.insert(
             prelude_id,
@@ -1846,6 +1848,15 @@ impl Environment {
                             constraints: smallvec![],
                         },
                     },
+                    PrimDef {
+                        name: "identity",
+                        f: Prelude::identity,
+                        ty: Scheme {
+                            vars: smallvec![TyVar::new(0)],
+                            ty: identity_ty,
+                            constraints: smallvec![],
+                        },
+                    },
                 ],
                 &mut self.consts.strings,
             ),
@@ -1854,8 +1865,6 @@ impl Environment {
 
     /// Build the `Io.Directory` submodule.
     fn build_directory_module(&mut self) -> Module {
-        use crate::primitives::Directory;
-
         let a = &mut self.ty_arena;
         let consts = &mut self.consts;
 

@@ -9,7 +9,9 @@ use indexmap::IndexMap;
 use smallvec::{smallvec, SmallVec};
 
 use super::InferCtx;
-use crate::ast::{Literal, MatchArm, MatchPattern, MatchPatternId};
+use crate::ast::{
+    Literal, MatchArm, MatchPattern, MatchPatternId, RestPattern,
+};
 use crate::intern::{QualifiedName, StringId};
 use crate::typecheck::error::TypeError;
 use crate::typecheck::ty::{Scheme, Ty, TyArena, TyId};
@@ -234,7 +236,7 @@ impl InferCtx<'_> {
                     });
 
                     // Bind rest pattern if present
-                    if let Some(crate::ast::RestPattern::Bind(name)) = rest {
+                    if let Some(RestPattern::Bind(name)) = rest {
                         // Rest has type `Array[T]` where `T` is the element type
                         let rest_ty = self.ty_arena.array(elem_ty);
                         self.env.bind(*name, Scheme::mono(rest_ty));

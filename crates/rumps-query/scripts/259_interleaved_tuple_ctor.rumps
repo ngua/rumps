@@ -1,0 +1,49 @@
+; Interleaved tuple constructor positions in HKT class instances.
+;
+; Tuple constructors may have fixed (non-element) positions
+; freely interleaved with element positions, not just as a
+; prefix. E.g. `(,T,)` fixes middle of a triple; `(T,)` fixes
+; first of a pair; `(T, U,)` fixes first two of a triple.
+
+class MyBimap F {
+  fun my-bimap[A, B, C, D](f: (A) -> C, g: (B) -> D, x: F[A, B]) -> F[C, D]
+}
+
+; Fix middle of triple: (,T,)
+class MyBimap for (,T,) {
+  fun my-bimap(f, g, x) {
+    (f(x.0), x.1, g(x.2))
+  }
+}
+
+class MyMap F {
+  fun my-map[A, B](f: (A) -> B, x: F[A]) -> F[B]
+}
+
+; Prefix: (T,)
+class MyMap for (T,) {
+  fun my-map(f, x) {
+    (x.0, f(x.1))
+  }
+}
+
+; Two fixed prefix: (T, U,)
+class MyMap for (T, U,) {
+  fun my-map(f, x) {
+    (x.0, x.1, f(x.2))
+  }
+}
+
+fun main() {
+  ; Interleaved: (,T,)
+  let t = (1, "fixed", true)
+  write MyBimap:my-bimap(x => x * 2, b => !b, t)
+
+  ; Prefix: (T,)
+  let p = ("hello", 42)
+  write MyMap:my-map(x => x + 1, p)
+
+  ; Two fixed prefix: (T, U,)
+  let q = (1, "two", 3)
+  write MyMap:my-map(x => x * 10, q)
+}

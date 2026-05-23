@@ -11,14 +11,17 @@ use smallvec::{smallvec, SmallVec};
 
 use super::{ClassInstanceInput, InferCtx};
 use crate::ast::{
-    AstClassMethodSig, AstTypeExpr, AstTypeExprId, BindingPattern, Expr,
-    Import, Stmt, StmtId, TypeParam,
+    AstClassAssocTypeDecl, AstClassMethodSig, AstTypeExpr, AstTypeExprId,
+    BindingPattern, Expr, Import, Stmt, StmtId, TypeParam,
 };
+use crate::env::PRELUDE_MODULE;
 use crate::intern::{QualifiedName, StringId};
+use crate::interpreter::instance::instance_fn_name_owned;
 use crate::typecheck::error::TypeError;
 use crate::typecheck::instance::Instance;
 use crate::typecheck::ty::{
-    ClassShape, MethodSpec, Scheme, Ty, TyArena, TyId, TyVar, TypeClass,
+    ClassDef, ClassShape, MethodSpec, Scheme, Ty, TyArena, TyId, TyVar,
+    TypeClass,
 };
 use crate::value::{TypeDef, TypeId};
 use crate::{ClassId, Span};
@@ -29,7 +32,7 @@ struct ClassDefInput<'a> {
     class_params: &'a [TypeParam],
     self_var: StringId,
     supers: &'a SmallVec<[TypeClass<AstTypeExprId>; 2]>,
-    assoc_types: &'a [crate::ast::AstClassAssocTypeDecl],
+    assoc_types: &'a [AstClassAssocTypeDecl],
     methods: &'a [AstClassMethodSig],
     span: Span,
 }
@@ -42,7 +45,7 @@ struct ClassDefCtx<'a> {
     shape: ClassShape,
     self_var: StringId,
     class_params: &'a [TypeParam],
-    assoc_types: &'a [crate::ast::AstClassAssocTypeDecl],
+    assoc_types: &'a [AstClassAssocTypeDecl],
 }
 
 /// Per-method context for resolving types in a user class definition.
@@ -109,7 +112,7 @@ impl InferCtx<'_> {
         // Auto-import the `Prelude` module first so its members are always
         // in scope, then process user imports (which may shadow them).
         {
-            let pid = self.env.intern(crate::env::PRELUDE_MODULE);
+            let pid = self.env.intern(PRELUDE_MODULE);
             self.import(&Import::wildcard(pid), Span::default());
         }
         stmts.iter().for_each(|&id| {
@@ -594,7 +597,7 @@ impl InferCtx<'_> {
         name: StringId,
         class_params: &[TypeParam],
         self_var: StringId,
-        assoc_types: &[crate::ast::AstClassAssocTypeDecl],
+        assoc_types: &[AstClassAssocTypeDecl],
         methods: &[AstClassMethodSig],
         span: Span,
     ) {
@@ -617,7 +620,7 @@ impl InferCtx<'_> {
         };
 
         let assoc_names = assoc_types.iter().map(|a| a.name).collect();
-        let stub = crate::typecheck::ty::ClassDef {
+        let stub = ClassDef {
             name,
             shape,
             assoc_types: assoc_names,
@@ -1126,22 +1129,31 @@ impl InferCtx<'_> {
                         .iter()
                         .map(|m| {
                             let mn = self.env.resolve_str(m.name);
-                            let fn_name =
-                                crate::interpreter::instance::instance_fn_name_owned(
-                                    &class_name_str,
-                                    &type_name_for_fn,
-                                    mn,
-                                    &ca_names,
-                                );
+                            let fn_name = instance_fn_name_owned(
+                                &class_name_str,
+                                &type_name_for_fn,
+                                mn,
+                                &ca_names,
+                            );
                             let fn_name_id = self.env.intern(&fn_name);
                             (m.name, fn_name_id)
                         })
                         .collect();
 
-                    // Collect all type params (both `Ty::Var` and concrete)
-                    // in positional order for 1:1 zip with `type_args`
-                    let type_all_params: SmallVec<[TyId; 2]> =
-                        type_param_subst.values().copied().collect();
+                    // Collect all type params in positional order for 1:1
+                    // zip with `type_args`. For tuple constructors, use
+                    // the full positional list from `for_ty` so that
+                    // element vars at interleaved positions are included.
+                    let type_all_params: SmallVec<[TyId; 2]> = if type_id
+                        == TypeId::TUPLE
+                    {
+                        match self.ty_arena.get(for_ty).clone() {
+                            Ty::Tuple(ts) => ts.iter().copied().collect(),
+                            _ => type_param_subst.values().copied().collect(),
+                        }
+                    } else {
+                        type_param_subst.values().copied().collect()
+                    };
 
                     // Register instance (ignore duplicate errors; caught in Pass 2)
                     let inst = Instance {
@@ -1283,7 +1295,7 @@ impl InferCtx<'_> {
             None?
         }
 
-        // Fresh vars for element positions (the unfilled suffix)
+        // Fresh vars for element positions (unfilled slots)
         let elem_tys: SmallVec<[TyId; 2]> = (0..elem_count)
             .map(|_| {
                 let tv = self.fresh_var();
@@ -1291,8 +1303,21 @@ impl InferCtx<'_> {
             })
             .collect();
 
-        let full: SmallVec<[TyId; 4]> =
-            fixed_tys.iter().chain(elem_tys.iter()).copied().collect();
+        // Build tuple with types at their actual positions; fixed types
+        // go at their declared positions, element vars fill the rest
+        let mut elem_iter = elem_tys.iter().copied();
+        let full: SmallVec<[TyId; 4]> = (0..arity)
+            .map(|i| {
+                fixed
+                    .iter()
+                    .zip(fixed_tys.iter())
+                    .find(|(&(pos, _), _)| pos == i)
+                    .map_or_else(
+                        || elem_iter.next().unwrap_or(TyArena::ERROR),
+                        |(_, &ty)| ty,
+                    )
+            })
+            .collect();
 
         let for_ty = self.ty_arena.alloc(Ty::Tuple(full));
         Some((TypeId::TUPLE, for_ty, elem_tys))

@@ -3,7 +3,8 @@
 //! These errors are produced during the type checking phase (compile-time),
 //! distinct from `Error::RuntimeType` which occurs during interpretation.
 
-use std::fmt;
+use std::collections::HashMap;
+use std::{error, fmt};
 
 use itertools::Itertools;
 use thiserror::Error;
@@ -191,7 +192,7 @@ impl<'a> TyPrinter<'a> {
 /// for large indices.
 struct TyVarNamer {
     /// Maps type variable indices to assigned names.
-    names: std::collections::HashMap<u32, String>,
+    names: HashMap<u32, String>,
     /// Next letter to assign (starts at 'T').
     next: u8,
 }
@@ -201,7 +202,7 @@ impl TyVarNamer {
 
     fn new() -> Self {
         Self {
-            names: std::collections::HashMap::new(),
+            names: HashMap::new(),
             next: 0,
         }
     }
@@ -1152,7 +1153,7 @@ impl fmt::Display for FormattedTypeError {
     }
 }
 
-impl std::error::Error for FormattedTypeError {}
+impl error::Error for FormattedTypeError {}
 
 /// Debug display for `Ty` (inner types shown as `TyId` handles).
 ///

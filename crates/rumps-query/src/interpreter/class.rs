@@ -28,7 +28,9 @@
 //!
 //! [`Interpreter`]: super::Interpreter
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::mem;
 use std::sync::Arc;
 
 use indexmap::IndexMap;
@@ -42,7 +44,8 @@ use super::hof::{
 use crate::intern::{StringId, StringInterner};
 use crate::typecheck::{Ty, TyArena};
 use crate::value::{
-    TypeExprArena, TypeExprId, TypeId, TypeRegistry, Value, ValueArena, ValueId,
+    MapKey, TypeDef, TypeExprArena, TypeExprId, TypeId, TypeRegistry, Value,
+    ValueArena, ValueId,
 };
 use crate::{ClassId, Error, Result, Span};
 
@@ -396,8 +399,8 @@ impl Default for ClassMethods {
 
 /// Shared utilities for class method implementations.
 pub(crate) trait Class {
-    fn map_key(v: &Value) -> crate::value::MapKey {
-        crate::value::MapKey::from_value(v)
+    fn map_key(v: &Value) -> MapKey {
+        MapKey::from_value(v)
             .unwrap_or_else(|| typechecked!("map key", "valid key type"))
     }
 }
@@ -736,7 +739,6 @@ impl Ord {
         l: &Value,
         r: &Value,
     ) -> Result<Value> {
-        use std::cmp::Ordering;
         let ord = Self::cmp_values(ctx, l, r);
         Ok(Value::Int(match ord {
             Ordering::Less => -1,
@@ -745,13 +747,8 @@ impl Ord {
         }))
     }
 
-    /// Recursive comparison helper returning `std::cmp::Ordering`.
-    fn cmp_values(
-        ctx: &mut ClassCtx<'_>,
-        l: &Value,
-        r: &Value,
-    ) -> std::cmp::Ordering {
-        use std::cmp::Ordering;
+    /// Recursive comparison helper returning `Ordering`.
+    fn cmp_values(ctx: &mut ClassCtx<'_>, l: &Value, r: &Value) -> Ordering {
         match (l, r) {
             (Value::Int(a), Value::Int(b)) => a.cmp(b),
             (Value::Word(a), Value::Word(b)) => a.cmp(b),
@@ -801,12 +798,10 @@ impl Ord {
                     .cloned()
                     .zip(ctx.arena.get(*id2).cloned())
                     .map(|(a, b)| {
-                        if std::mem::discriminant(&a)
-                            == std::mem::discriminant(&b)
-                        {
+                        if mem::discriminant(&a) == mem::discriminant(&b) {
                             Self::cmp_values(ctx, &a, &b)
                         } else {
-                            std::cmp::Ordering::Equal
+                            Ordering::Equal
                         }
                     })
                     .unwrap_or_else(|| {
@@ -836,7 +831,7 @@ impl Ord {
         ctx: &mut ClassCtx<'_>,
         a: &[ValueId],
         b: &[ValueId],
-    ) -> std::cmp::Ordering {
+    ) -> Ordering {
         a.iter()
             .zip(b.iter())
             .map(|(ai, bi)| {
@@ -844,19 +839,19 @@ impl Ord {
                 let bv = ctx.arena.get(*bi).cloned();
                 match (av, bv) {
                     (Some(av), Some(bv)) => Self::cmp_values(ctx, &av, &bv),
-                    _ => std::cmp::Ordering::Equal,
+                    _ => Ordering::Equal,
                 }
             })
-            .find(|o| *o != std::cmp::Ordering::Equal)
+            .find(|o| *o != Ordering::Equal)
             .unwrap_or_else(|| a.len().cmp(&b.len()))
     }
 
     /// Compare two maps by sorting entries by key, then comparing lexicographically.
     fn cmp_maps(
         ctx: &mut ClassCtx<'_>,
-        a: &IndexMap<crate::value::MapKey, ValueId>,
-        b: &IndexMap<crate::value::MapKey, ValueId>,
-    ) -> std::cmp::Ordering {
+        a: &IndexMap<MapKey, ValueId>,
+        b: &IndexMap<MapKey, ValueId>,
+    ) -> Ordering {
         // Collect and sort entries by key (convert MapKey to Value for comparison)
         let mut a_entries: Vec<_> =
             a.iter().map(|(k, v)| (k.to_value(), *v)).collect();
@@ -870,18 +865,18 @@ impl Ord {
             .zip(b_entries.iter())
             .map(|((k1, v1), (k2, v2))| {
                 let key_ord = Self::cmp_values(ctx, k1, k2);
-                if key_ord != std::cmp::Ordering::Equal {
+                if key_ord != Ordering::Equal {
                     key_ord
                 } else {
                     let v1 = ctx.arena.get(*v1).cloned();
                     let v2 = ctx.arena.get(*v2).cloned();
                     match (v1, v2) {
                         (Some(v1), Some(v2)) => Self::cmp_values(ctx, &v1, &v2),
-                        _ => std::cmp::Ordering::Equal,
+                        _ => Ordering::Equal,
                     }
                 }
             })
-            .find(|o| *o != std::cmp::Ordering::Equal)
+            .find(|o| *o != Ordering::Equal)
             .unwrap_or_else(|| a.len().cmp(&b.len()))
     }
 }
@@ -957,8 +952,7 @@ impl Eq {
                         .cloned()
                         .zip(ctx.arena.get(*id2).cloned())
                         .is_some_and(|(a, b)| {
-                            std::mem::discriminant(&a)
-                                == std::mem::discriminant(&b)
+                            mem::discriminant(&a) == mem::discriminant(&b)
                                 && Self::values_equal(ctx, &a, &b)
                         })
             }
@@ -1017,8 +1011,8 @@ impl Eq {
     /// Equality for maps (order-independent, compare entries).
     fn maps_equal(
         ctx: &mut ClassCtx<'_>,
-        a: &IndexMap<crate::value::MapKey, ValueId>,
-        b: &IndexMap<crate::value::MapKey, ValueId>,
+        a: &IndexMap<MapKey, ValueId>,
+        b: &IndexMap<MapKey, ValueId>,
     ) -> bool {
         if !a.keys().all(|k| b.contains_key(k)) {
             false
@@ -1126,11 +1120,11 @@ impl Fallible {
                 .base_type(ty)
                 .and_then(|type_id| {
                     ctx.registry.get_def(type_id).and_then(|def| match def {
-                        crate::value::TypeDef::Union { .. } => {
+                        TypeDef::Union { .. } => {
                             let inner_id = ctx.arena.add(val.clone(), ctx.span);
                             Some(Value::Union(ty, inner_id))
                         }
-                        crate::value::TypeDef::Alias { .. } => {
+                        TypeDef::Alias { .. } => {
                             let inner_id = ctx.arena.add(val.clone(), ctx.span);
                             Some(Value::Newtype(ty, inner_id))
                         }
@@ -1786,8 +1780,7 @@ impl Into {
     }
 
     /// Convert a map key to a JSON-compatible string key.
-    fn jsonify_map_key(ctx: &ClassCtx<'_>, k: &crate::value::MapKey) -> String {
-        use crate::value::MapKey;
+    fn jsonify_map_key(ctx: &ClassCtx<'_>, k: &MapKey) -> String {
         match k {
             MapKey::Bool(b) => b.to_string(),
             MapKey::Int(n) => n.to_string(),
@@ -2221,8 +2214,7 @@ impl Display {
     }
 
     /// Format a map key for display.
-    fn format_map_key(ctx: &ClassCtx<'_>, k: &crate::value::MapKey) -> String {
-        use crate::value::MapKey;
+    fn format_map_key(ctx: &ClassCtx<'_>, k: &MapKey) -> String {
         match k {
             MapKey::Bool(b) => b.to_string(),
             MapKey::Int(n) => n.to_string(),

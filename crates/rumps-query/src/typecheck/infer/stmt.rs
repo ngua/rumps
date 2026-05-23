@@ -19,6 +19,7 @@ use crate::ast::{
     StmtId, TypeDefAst, TypeParam, UnOp, Visibility, WriteExpr,
 };
 use crate::intern::{QualifiedName, StringId};
+use crate::interpreter::instance::instance_fn_name_owned;
 use crate::typecheck::error::TypeError;
 use crate::typecheck::instance::{self, Instance};
 use crate::typecheck::ty::{
@@ -1234,13 +1235,12 @@ impl InferCtx<'_> {
                 .iter()
                 .map(|m| {
                     let mn = self.env.resolve_str(m.name);
-                    let fn_name =
-                        crate::interpreter::instance::instance_fn_name_owned(
-                            &class_name_str,
-                            &type_name,
-                            mn,
-                            &ca_names,
-                        );
+                    let fn_name = instance_fn_name_owned(
+                        &class_name_str,
+                        &type_name,
+                        mn,
+                        &ca_names,
+                    );
                     let fn_name_id = self.env.intern(&fn_name);
                     (m.name, fn_name_id)
                 })
@@ -1519,8 +1519,8 @@ impl InferCtx<'_> {
                 AstTypeExpr::Named(name) | AstTypeExpr::App(name, _) => {
                     Some(name.display(&self.env.strings))
                 }
-                AstTypeExpr::TupleConstructor { .. } => {
-                    Some("Tuple".to_string())
+                AstTypeExpr::TupleConstructor { arity, .. } => {
+                    Some(format!("Tuple{arity}"))
                 }
                 _ => None,
             })
@@ -1605,6 +1605,7 @@ impl InferCtx<'_> {
             Ty::Option(_) => Some(TypeId::OPTION),
             Ty::Result(_, _) => Some(TypeId::RESULT),
             Ty::Map(_, _) => Some(TypeId::MAP),
+            Ty::Tuple(_) => Some(TypeId::TUPLE),
             _ => None,
         }
     }

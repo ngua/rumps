@@ -13,6 +13,7 @@ use ordered_float::OrderedFloat;
 use rumps_types::Subscript;
 use smallvec::SmallVec;
 
+use super::class::{self, ClassCtx};
 use super::Interpreter;
 use crate::io::IoContext;
 use crate::value::{MapKey, TypeExprArena, TypeExprId, TypeId, Value};
@@ -252,7 +253,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// method is used so frequently that constructing a `ClassCtx` at every
     /// call site would be overly verbose.
     pub(crate) fn stringify(&mut self, v: &Value) -> String {
-        let ctx = super::class::ClassCtx {
+        let ctx = ClassCtx {
             arena: &mut self.arena,
             type_exprs: &mut self.type_exprs,
             ty_arena: &self.ty_arena,
@@ -261,7 +262,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             span: Span::default(),
             output_ty: None,
         };
-        super::class::Display::format(&ctx, v)
+        class::Display::format(&ctx, v)
     }
 
     /// Convert a value to JSON via `Into[Json]`.
@@ -272,7 +273,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// method is used so frequently that constructing a `ClassCtx` at every
     /// call site would be overly verbose.
     pub(crate) fn jsonify(&mut self, v: &Value) -> serde_json::Value {
-        let ctx = super::class::ClassCtx {
+        let ctx = ClassCtx {
             arena: &mut self.arena,
             type_exprs: &mut self.type_exprs,
             ty_arena: &self.ty_arena,
@@ -281,7 +282,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             span: Span::default(),
             output_ty: None,
         };
-        super::class::Into::jsonify(&ctx, v)
+        class::Into::jsonify(&ctx, v)
     }
 
     /// Convert a JSON value to a runtime value.

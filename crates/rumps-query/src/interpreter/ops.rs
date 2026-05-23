@@ -8,6 +8,7 @@ use super::Interpreter;
 use crate::ast::{BinOp, ExprId, UnOp};
 use crate::intern::StringId;
 use crate::io::IoContext;
+use crate::typecheck::Ty;
 use crate::value::Value;
 use crate::{ClassId, Error, Result, Span};
 
@@ -315,7 +316,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         kind: ClassId,
         mid: StringId,
         v: &Value,
-        target: &crate::typecheck::Ty,
+        target: &Ty,
         span: Span,
     ) -> Result<Value> {
         // Unwrap Union/Newtype to auto-derive conversions
@@ -391,8 +392,8 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Type checker guarantees RHS is a `Regex` value.
     pub(super) async fn matches(
         &mut self,
-        lhs: crate::ast::ExprId,
-        rhs: crate::ast::ExprId,
+        lhs: ExprId,
+        rhs: ExprId,
     ) -> Result<Value> {
         let lhs_val = self.eval(lhs).await?;
         let rhs_val = self.eval(rhs).await?;

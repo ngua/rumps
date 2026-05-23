@@ -123,6 +123,21 @@ impl InstanceRegistry {
             .unwrap_or(&[])
     }
 
+    /// Look up a tuple instance by class and arity.
+    ///
+    /// Tuple types may have multiple instances for the same class (one per
+    /// arity), so this finds the instance whose `type_params` length matches
+    /// the given `arity`.
+    pub(crate) fn lookup_tuple(
+        &self,
+        class: ClassId,
+        arity: usize,
+    ) -> Option<&Instance> {
+        self.lookup_all(class, TypeId::TUPLE)
+            .iter()
+            .find(|i| i.type_params.len() == arity)
+    }
+
     /// Check whether an instance with the given `class_args` already exists.
     pub(crate) fn has_with_args(
         &self,

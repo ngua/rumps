@@ -4,6 +4,7 @@ use chumsky::prelude::{choice, just, select};
 use chumsky::Parser as _;
 
 use super::{ParseErr, Parser};
+use crate::ast::JsonAccessKind;
 use crate::intern::StringId;
 use crate::parser::cst;
 use crate::{Span, Token};
@@ -172,7 +173,7 @@ impl Parser {
                 PostfixOp::JsonScalarField(name, _) => Some(cst::Expr::new(
                     cst::ExprKind::JsonAccess(
                         Box::new(acc),
-                        crate::ast::JsonAccessKind::Scalar,
+                        JsonAccessKind::Scalar,
                         cst::JsonAccessKey::Field(name),
                     ),
                     span,
@@ -180,7 +181,7 @@ impl Parser {
                 PostfixOp::JsonArrow(key, _) => Some(cst::Expr::new(
                     cst::ExprKind::JsonAccess(
                         Box::new(acc),
-                        crate::ast::JsonAccessKind::Json,
+                        JsonAccessKind::Json,
                         cst::JsonAccessKey::Expr(key),
                     ),
                     span,
@@ -188,7 +189,7 @@ impl Parser {
                 PostfixOp::JsonArrowArrow(key, _) => Some(cst::Expr::new(
                     cst::ExprKind::JsonAccess(
                         Box::new(acc),
-                        crate::ast::JsonAccessKind::Scalar,
+                        JsonAccessKind::Scalar,
                         cst::JsonAccessKey::Expr(key),
                     ),
                     span,

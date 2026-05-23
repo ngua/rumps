@@ -4,6 +4,8 @@
 //! expressions to `TyId`s. Both `InferCtx` (inference phase) and `SolveCtx`
 //! (solve phase) construct a `ConvertCtx` on demand to perform conversions.
 
+use std::iter;
+
 use indexmap::IndexMap;
 use smallvec::{smallvec, SmallVec};
 
@@ -66,7 +68,7 @@ impl ConvertCtx<'_> {
                 } else {
                     let eff_local = eff_qn.local_name();
                     self.current_module.as_ref().and_then(|mod_qn| {
-                        std::iter::once(mod_qn.clone())
+                        iter::once(mod_qn.clone())
                             .chain(mod_qn.ancestors())
                             .find_map(|prefix| {
                                 let qn = prefix.child(eff_local);

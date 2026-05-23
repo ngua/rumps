@@ -5,6 +5,7 @@
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::iter;
 
 use indexmap::IndexMap;
 use smallvec::{smallvec, SmallVec};
@@ -19,6 +20,7 @@ use crate::ast::{
 use crate::env::TxnReq;
 use crate::intern::{QualifiedName, StringId};
 use crate::typecheck::error::TypeError;
+use crate::typecheck::instance::Instance;
 use crate::typecheck::ty::{
     ClassShape, MethodSpec, Rename, Scheme, TrackKind, Ty, TyArena, TyId,
     TyVar, TypeClass,
@@ -480,10 +482,8 @@ impl InferCtx<'_> {
                                                             &empty_subst,
                                                         );
                                                     let rename = Rename(
-                                                        std::iter::once((
-                                                            v, arg_ty,
-                                                        ))
-                                                        .collect(),
+                                                        iter::once((v, arg_ty))
+                                                            .collect(),
                                                     );
                                                     let result = self
                                                         .ty_arena
@@ -774,7 +774,7 @@ impl InferCtx<'_> {
         class: ClassId,
         type_id: TypeId,
         span: Span,
-    ) -> Option<super::super::instance::Instance> {
+    ) -> Option<Instance> {
         let inst = self.instance_registry.lookup(class, type_id)?.clone();
         match inst.module {
             None => Some(inst),
@@ -939,6 +939,20 @@ impl InferCtx<'_> {
                             if let Some(ty) = arg_tys.first().copied() {
                                 self.deferred_param_calls
                                     .push((id, kind, method, ty, ret));
+                            }
+                        }
+
+                        // For user HKT classes, record for tuple arity
+                        // disambiguation after constraint solving.
+                        let is_hkt_user = matches!(
+                            self.env.class_registry().shape(kind),
+                            ClassShape::Hkt { .. }
+                        ) && kind.idx()
+                            >= ClassId::BUILTIN_COUNT;
+                        if is_hkt_user {
+                            if let Some(ty) = lookup_ty {
+                                self.deferred_hkt_user_calls
+                                    .push((id, kind, method, ty));
                             }
                         }
                     }
@@ -2722,7 +2736,7 @@ impl InferCtx<'_> {
         // Handle builtin types
         if type_id == TypeId::OPTION {
             let inner = self.fresh();
-            let map = std::iter::once((self.env.intern("T"), inner)).collect();
+            let map = iter::once((self.env.intern("T"), inner)).collect();
             (self.ty_arena.option(inner), map)
         } else if type_id == TypeId::RESULT {
             let ok = self.fresh();

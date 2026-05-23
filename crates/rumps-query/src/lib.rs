@@ -73,6 +73,8 @@ mod token;
 mod typecheck;
 mod value;
 
+use std::path::Path;
+
 #[allow(unused_imports)]
 pub(crate) use ast::{
     Ast, BinOp, Expr, ExprId, Literal, Stmt, StmtId, TypePattern, UnOp,
@@ -105,11 +107,7 @@ pub(crate) use value::{
 /// Run a RUMPS script, outputting to stdout.
 ///
 /// The `src_path` is used to resolve relative module imports.
-pub async fn run(
-    src: &str,
-    src_path: &std::path::Path,
-    db: Database,
-) -> Result<()> {
+pub async fn run(src: &str, src_path: &Path, db: Database) -> Result<()> {
     run_with_io(src, src_path, db, Io).await.map(|_| ())
 }
 
@@ -121,7 +119,7 @@ pub async fn run(
 #[allow(unused_variables)]
 pub async fn run_interactive(
     src: &str,
-    src_path: &std::path::Path,
+    src_path: &Path,
     db: Database,
 ) -> Result<()> {
     todo!("REPL/interactive mode is not yet supported")
@@ -132,7 +130,7 @@ pub async fn run_interactive(
 /// The `src_path` is used to resolve relative module imports.
 pub async fn run_capturing(
     src: &str,
-    src_path: &std::path::Path,
+    src_path: &Path,
     db: Database,
 ) -> Result<String> {
     let io = run_with_io(src, src_path, db, TestIo::new()).await?;
@@ -142,7 +140,7 @@ pub async fn run_capturing(
 /// Run a RUMPS script with a custom I/O context.
 async fn run_with_io<I: IoContext>(
     src: &str,
-    src_path: &std::path::Path,
+    src_path: &Path,
     db: Database,
     io: I,
 ) -> Result<I> {

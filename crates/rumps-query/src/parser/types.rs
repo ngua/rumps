@@ -161,9 +161,9 @@ impl Parser {
 
     /// Parse a type expression in the `for` clause of a class instance.
     ///
-    /// Handles tuple constructors (`(,)`, `(T,)`, etc.) in addition to all
-    /// regular type expressions. Positional restriction (fixed positions must
-    /// precede element positions) is validated during lowering.
+    /// Handles tuple constructors (`(,)`, `(T,)`, `(,T,)`, etc.) in addition
+    /// to all regular type expressions. Fixed and element positions may be
+    /// freely interleaved.
     pub(super) fn for_type_expr(
         interner: &mut StringInterner,
     ) -> impl chumsky::Parser<Token, cst::TypeExpr, Error = ParseErr> + Clone
@@ -468,7 +468,7 @@ impl Parser {
         left: TypeAtomOrParams,
         arrow_ret: Option<cst::TypeExpr>,
         span: Span,
-    ) -> std::result::Result<cst::TypeExpr, ParseErr> {
+    ) -> Result<cst::TypeExpr, ParseErr> {
         match (left, arrow_ret) {
             // `T -> R`: single param function
             (TypeAtomOrParams::Single(param), Some(ret)) => {

@@ -37,9 +37,10 @@ use smallvec::SmallVec;
 
 use super::env::TypeEnv;
 use super::error::{TyPrinter, TypeError};
-use super::instance::InstanceRegistry;
-use super::ty::{Scheme, Ty, TyArena, TyId, TyVar, TypeClass};
+use super::instance::{Instance, InstanceRegistry};
+use super::ty::{Rename, Scheme, Ty, TyArena, TyId, TyVar, TypeClass};
 use super::uf::UnionFind;
+use super::unify::SolveCtx;
 use super::TypecheckOutput;
 use crate::ast::{
     self, AssocTypeDef, AstClassConstraints, AstTypeExprId, ExprId,
@@ -866,6 +867,12 @@ pub(crate) struct InferCtx<'a> {
     /// solving, the class_arg_ty resolves to a concrete type; we look up the
     /// matching instance and record its function name in `resolved_instance_fns`.
     deferred_param_calls: Vec<(ExprId, ClassId, StringId, TyId, TyId)>,
+    /// Deferred user HKT class method calls.
+    ///
+    /// When multiple tuple instances exist for the same HKT class (e.g.,
+    /// `MyMap for (T,)` and `MyMap for (T,U,)`), `resolved_instance_fns`
+    /// must map each call site to the correct arity-specific function.
+    deferred_hkt_user_calls: Vec<(ExprId, ClassId, StringId, TyId)>,
     /// Type variables created for integer literals, for defaulting to `Int`.
     ///
     /// Integer literals are polymorphic (no constraint) so they can unify with
@@ -964,6 +971,7 @@ impl<'a> InferCtx<'a> {
             interp: InterpreterOutput::new(),
             deferred_instance_calls: Vec::new(),
             deferred_param_calls: Vec::new(),
+            deferred_hkt_user_calls: Vec::new(),
             numeric_vars: Vec::new(),
             closure_schemes: HashMap::new(),
             closure_tv_names: HashMap::new(),
@@ -1119,10 +1127,10 @@ impl<'a> InferCtx<'a> {
     /// are unified via deferred constraints.
     pub(super) fn build_instance_subst(
         &mut self,
-        inst: &super::instance::Instance,
+        inst: &Instance,
         type_args: &[TyId],
         span: Span,
-    ) -> super::ty::Rename {
+    ) -> Rename {
         let (vars, concretes): (
             SmallVec<[(TyVar, TyId); 2]>,
             SmallVec<[(TyId, TyId); 2]>,
@@ -1139,7 +1147,7 @@ impl<'a> InferCtx<'a> {
         concretes.into_iter().for_each(|(p, a)| {
             self.unify(p, a, span);
         });
-        super::ty::Rename(vars.into_iter().collect())
+        Rename(vars.into_iter().collect())
     }
 
     /// Create a `SolveCtx` and run constraint solving.
@@ -1148,7 +1156,7 @@ impl<'a> InferCtx<'a> {
     /// `SolveCtx::solve_constraints`.
     fn solve(&mut self) {
         let constraints = mem::take(&mut self.constraints);
-        super::unify::SolveCtx {
+        SolveCtx {
             ty_arena: &mut self.ty_arena,
             uf: &mut self.uf,
             registry: self.registry,
@@ -1159,6 +1167,7 @@ impl<'a> InferCtx<'a> {
             type_exprs: self.type_exprs,
             current_module: &self.current_module,
             class_context: &self.class_context,
+            hkt_var_classes: HashMap::new(),
         }
         .solve_constraints(constraints, &self.numeric_vars);
     }
@@ -1203,6 +1212,7 @@ impl<'a> InferCtx<'a> {
                 Ty::Regex => Some(TypeId::REGEX),
                 Ty::Local => Some(TypeId::LOCAL),
                 Ty::Global => Some(TypeId::GLOBAL),
+                Ty::Tuple(_) => Some(TypeId::TUPLE),
                 _ => None,
             };
 
@@ -1250,6 +1260,32 @@ impl<'a> InferCtx<'a> {
                     }
                 }
             });
+    }
+
+    /// Resolve deferred user HKT class calls.
+    ///
+    /// When multiple tuple instances exist for the same class, each
+    /// call site must be pre-resolved to the arity-specific function.
+    pub(crate) fn resolve_deferred_hkt_user_calls(&mut self) {
+        let deferred = mem::take(&mut self.deferred_hkt_user_calls);
+        deferred.into_iter().for_each(|(eid, cid, method, ty)| {
+            let resolved = self.uf.resolve(ty, &mut self.ty_arena);
+            if let Ty::Tuple(ts) = self.ty_arena.get(resolved).clone() {
+                let insts =
+                    self.instance_registry.lookup_all(cid, TypeId::TUPLE);
+                if insts.len() > 1 {
+                    self.instance_registry
+                        .lookup_tuple(cid, ts.len())
+                        .and_then(|i| i.methods.get(&method).copied())
+                        .into_iter()
+                        .for_each(|fn_id| {
+                            self.interp
+                                .resolved_instance_fns
+                                .insert(eid, fn_id);
+                        });
+                }
+            }
+        });
     }
 
     /// Check for illegal union narrowing in `let` annotations.
@@ -1396,6 +1432,9 @@ impl<'a> InferCtx<'a> {
 
         // Resolve parameterized user class method call function names
         self.resolve_deferred_param_calls();
+
+        // Resolve deferred user HKT class calls (arity-based disambiguation)
+        self.resolve_deferred_hkt_user_calls();
 
         self.uf.disable_zonk_cache();
 

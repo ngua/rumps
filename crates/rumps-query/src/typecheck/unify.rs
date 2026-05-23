@@ -16,6 +16,8 @@
 //!
 //! See `infer.rs` for the full rationale on our testing approach.
 
+use std::collections::{HashMap, HashSet};
+
 use indexmap::IndexMap;
 use smallvec::{smallvec, SmallVec};
 
@@ -55,6 +57,10 @@ pub(super) struct SolveCtx<'a> {
     pub(super) current_module: &'a Option<QualifiedName>,
     /// Current class context (for associated type resolution).
     pub(super) class_context: &'a Option<ClassContext>,
+    /// Maps HKT class-constrained type variables to their `ClassId`, so
+    /// `unify_apply` can look up tuple constructor instances for
+    /// position-aware decomposition.
+    pub(super) hkt_var_classes: HashMap<TyVar, ClassId>,
 }
 
 /// How a specific `Ty` shape satisfies a class.
@@ -652,13 +658,67 @@ impl SolveCtx<'_> {
             }
 
             Ty::Tuple(ref ts) => {
-                let start = ts.len().saturating_sub(args.len());
-                let elems: SmallVec<[TyId; 4]> = ts[start..].into();
-                let placeholder: SmallVec<[TyId; 4]> = ts
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &t)| if i >= start { TyArena::ERROR } else { t })
-                    .collect();
+                // Try to find element positions from an HKT class
+                // constraint on `tv`; this handles tuple constructors
+                // with interleaved fixed/element positions like `(,T,)`
+                let root = self.uf.find(tv);
+                let positions = self
+                    .hkt_var_classes
+                    .get(&root)
+                    .and_then(|&cid| {
+                        self.instance_registry
+                            .lookup_tuple(cid, ts.len())
+                            .cloned()
+                    })
+                    .and_then(|inst| {
+                        let ca: SmallVec<[usize; 4]> = inst
+                            .type_params
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, &p)| inst.class_args.contains(&p))
+                            .map(|(i, _)| i)
+                            .collect();
+                        (ca.len() == args.len()).then_some(ca)
+                    });
+
+                let (elems, placeholder) = match positions {
+                    Some(ref pos) => {
+                        let e: SmallVec<[TyId; 4]> = pos
+                            .iter()
+                            .filter_map(|&i| ts.get(i).copied())
+                            .collect();
+                        let p: SmallVec<[TyId; 4]> = ts
+                            .iter()
+                            .enumerate()
+                            .map(|(i, &t)| {
+                                if pos.contains(&i) {
+                                    TyArena::ERROR
+                                } else {
+                                    t
+                                }
+                            })
+                            .collect();
+                        (e, p)
+                    }
+                    None => {
+                        let start = ts.len().saturating_sub(args.len());
+                        let e: SmallVec<[TyId; 4]> =
+                            ts.iter().skip(start).copied().collect();
+                        let p: SmallVec<[TyId; 4]> =
+                            ts.iter()
+                                .enumerate()
+                                .map(|(i, &t)| {
+                                    if i >= start {
+                                        TyArena::ERROR
+                                    } else {
+                                        t
+                                    }
+                                })
+                                .collect();
+                        (e, p)
+                    }
+                };
+
                 let ctor = self.ty_arena.alloc(Ty::Tuple(placeholder));
                 self.unify_apply_inner(tv, args, ctor, &elems, span)
             }
@@ -798,7 +858,7 @@ impl SolveCtx<'_> {
             .keys()
             .chain(fields2.keys())
             .copied()
-            .collect::<std::collections::HashSet<_>>()
+            .collect::<HashSet<_>>()
             .into_iter()
             .collect();
 
@@ -818,7 +878,7 @@ impl SolveCtx<'_> {
     /// Extra fields in the object are allowed (extensible record semantics).
     fn unify_named_with_object(
         &mut self,
-        type_id: crate::TypeId,
+        type_id: TypeId,
         type_args: &[TyId],
         obj_fields: &IndexMap<StringId, TyId>,
         span: Span,
@@ -930,6 +990,22 @@ impl SolveCtx<'_> {
         constraints: Vec<Constraint>,
         numeric_vars: &[TyVar],
     ) {
+        // Pre-build a map from HKT-constrained type variables to their
+        // class ID so `unify_apply` can look up tuple constructor instances
+        // for position-aware element decomposition.
+        constraints.iter().for_each(|c| {
+            if let Constraint::Class {
+                ty,
+                class: TypeClass::Hkt { id, .. },
+                ..
+            } = c
+            {
+                if let Ty::Var(v) = self.ty_arena.get(*ty) {
+                    self.hkt_var_classes.insert(*v, *id);
+                }
+            }
+        });
+
         // First pass: process Unify, Callable, HasField, Iterable, Indexable.
         // These constraints generate type bindings (via union-find) that
         // other constraints (Numeric, Into[String], etc.) depend on.
@@ -1455,6 +1531,40 @@ impl SolveCtx<'_> {
                         }
                     }
                 }
+                Ty::Tuple(ts) => {
+                    match self
+                        .instance_registry
+                        .lookup_tuple(class_id, ts.len())
+                        .cloned()
+                    {
+                        Some(inst) => {
+                            let subst =
+                                self.build_instance_subst(&inst, &ts, span);
+                            elems.iter().zip(inst.class_args.iter()).for_each(
+                                |(&elem, &ie)| {
+                                    let resolved =
+                                        self.ty_arena.apply(ie, &subst);
+                                    if let Err(e) =
+                                        self.unify_types(elem, resolved, span)
+                                    {
+                                        self.errors.push(e);
+                                    }
+                                },
+                            );
+                            self.check_instance_constraints(
+                                &inst,
+                                &ts,
+                                span,
+                                Some(&subst),
+                            );
+                        }
+                        None => self.errors.push(TypeError::UnsatisfiedClass(
+                            class.clone(),
+                            ty,
+                            span,
+                        )),
+                    }
+                }
                 _ => {
                     if class_id == ClassId::ITERABLE {
                         let exp =
@@ -1601,13 +1711,13 @@ impl SolveCtx<'_> {
             (Ty::DataStatus, Ty::Int) => {}
             (Ty::String, Ty::FilePath) => {}
             (Ty::Path, Ty::FilePath) => {}
-            (Ty::Named(id, _), Ty::FilePath) if *id == crate::TypeId::PATH => {}
+            (Ty::Named(id, _), Ty::FilePath) if *id == TypeId::PATH => {}
 
             // `Range -> Array[Int]`
             (Ty::Range, Ty::Array(elem)) if *elem == TyArena::INT => {}
 
             // `Storable` to member type
-            (Ty::Union(Some(id), _), _) if *id == crate::TypeId::STORABLE => {
+            (Ty::Union(Some(id), _), _) if *id == TypeId::STORABLE => {
                 if !TyArena::STORABLE_MEMBERS.contains(&to) {
                     self.errors.push(TypeError::InvalidCast {
                         from: ty,
@@ -1619,14 +1729,14 @@ impl SolveCtx<'_> {
 
             // Member to union type
             (_, Ty::Union(Some(id), _))
-                if *id == crate::TypeId::STORABLE
-                    || *id == crate::TypeId::SCALAR
-                    || *id == crate::TypeId::SUBSCRIPT =>
+                if *id == TypeId::STORABLE
+                    || *id == TypeId::SCALAR
+                    || *id == TypeId::SUBSCRIPT =>
             {
                 let uid = *id;
-                let is_member = if uid == crate::TypeId::STORABLE {
+                let is_member = if uid == TypeId::STORABLE {
                     TyArena::STORABLE_MEMBERS.contains(&ty)
-                } else if uid == crate::TypeId::SCALAR {
+                } else if uid == TypeId::SCALAR {
                     TyArena::SCALAR_MEMBERS.contains(&ty)
                 } else {
                     TyArena::SUBSCRIPT_MEMBERS.contains(&ty)
@@ -1978,11 +2088,39 @@ impl SolveCtx<'_> {
                 });
             }
             Ty::Tuple(ts) => {
-                elems.iter().zip(ts.iter()).for_each(|(&inner, &b)| {
-                    if let Err(e) = self.unify_types(inner, b, span) {
-                        self.errors.push(e);
+                match self
+                    .instance_registry
+                    .lookup_tuple(tag, ts.len())
+                    .cloned()
+                {
+                    Some(inst) => {
+                        let subst = self.build_instance_subst(&inst, &ts, span);
+                        elems.iter().zip(inst.class_args.iter()).for_each(
+                            |(&inner, &ie)| {
+                                let resolved = self.ty_arena.apply(ie, &subst);
+                                if let Err(e) =
+                                    self.unify_types(inner, resolved, span)
+                                {
+                                    self.errors.push(e);
+                                }
+                            },
+                        );
+                        self.check_instance_constraints(
+                            &inst,
+                            &ts,
+                            span,
+                            Some(&subst),
+                        );
                     }
-                });
+                    None => {
+                        // Fallback: direct zip (fully-unapplied tuples)
+                        elems.iter().zip(ts.iter()).for_each(|(&inner, &b)| {
+                            if let Err(e) = self.unify_types(inner, b, span) {
+                                self.errors.push(e);
+                            }
+                        });
+                    }
+                }
             }
             Ty::Union(_, members) => {
                 members
@@ -2186,8 +2324,14 @@ impl SolveCtx<'_> {
             }
             _ => match self.ty_to_type_id_and_args(ty) {
                 Some((tid, args)) => {
-                    match self.instance_registry.lookup(class_id, tid).cloned()
-                    {
+                    let found = if tid == TypeId::TUPLE {
+                        self.instance_registry
+                            .lookup_tuple(class_id, args.len())
+                            .cloned()
+                    } else {
+                        self.instance_registry.lookup(class_id, tid).cloned()
+                    };
+                    match found {
                         Some(inst) => {
                             let subst =
                                 self.build_instance_subst(&inst, &args, span);
@@ -2231,7 +2375,7 @@ impl SolveCtx<'_> {
     /// `type_arg` to verify they match.
     pub(super) fn build_instance_subst(
         &mut self,
-        inst: &super::instance::Instance,
+        inst: &Instance,
         type_args: &[TyId],
         span: Span,
     ) -> Rename {
@@ -2263,7 +2407,7 @@ impl SolveCtx<'_> {
     /// probing for a matching instance among several candidates.
     fn build_instance_subst_readonly(
         &self,
-        inst: &super::instance::Instance,
+        inst: &Instance,
         type_args: &[TyId],
     ) -> Rename {
         let vars: SmallVec<[(TyVar, TyId); 2]> = inst
@@ -2283,7 +2427,7 @@ impl SolveCtx<'_> {
     /// `build_instance_subst` calls at sites that already have one.
     fn check_instance_constraints(
         &mut self,
-        inst: &super::instance::Instance,
+        inst: &Instance,
         type_args: &[TyId],
         span: Span,
         subst: Option<&Rename>,
@@ -2760,7 +2904,7 @@ mod tests {
             class_args: SmallVec::new(),
             type_params: SmallVec::new(),
             constraints: SmallVec::new(),
-            methods: std::collections::HashMap::new(),
+            methods: HashMap::new(),
             assoc_types: SmallVec::new(),
             module: None,
             span: Span::new(0, 1),
@@ -2798,7 +2942,7 @@ mod tests {
             class_args: SmallVec::new(),
             type_params: smallvec::smallvec![t_id],
             constraints: smallvec::smallvec![constraint],
-            methods: std::collections::HashMap::new(),
+            methods: HashMap::new(),
             assoc_types: SmallVec::new(),
             module: None,
             span: Span::new(0, 1),

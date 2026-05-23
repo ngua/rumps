@@ -1,5 +1,6 @@
 //! Type checking, matching, and validation.
 
+use std::result;
 use std::sync::Arc;
 
 use indexmap::IndexMap;
@@ -10,7 +11,7 @@ use crate::ast::{AstTypeExpr, AstTypeExprId};
 use crate::intern::StringId;
 use crate::io::IoContext;
 use crate::typecheck::{Ty, TyArena, TyId};
-use crate::value::{TypeExprId, TypeId, Value, ValueId};
+use crate::value::{TypeDef, TypeExprId, TypeId, Value, ValueId};
 use crate::{ClassId, Error, Result, Span};
 
 /// Helper enum for `coerce()` to avoid borrow checker issues.
@@ -235,8 +236,8 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<Value> {
         // Check if target is a union or alias type; copy the kind to avoid borrow issues
         let def_kind = self.registry.get_def(target).map(|def| match def {
-            crate::value::TypeDef::Union { .. } => DefKind::Union,
-            crate::value::TypeDef::Alias { .. } => DefKind::Alias,
+            TypeDef::Union { .. } => DefKind::Union,
+            TypeDef::Alias { .. } => DefKind::Alias,
             _ => DefKind::Other,
         });
 
@@ -394,7 +395,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 }
 
                 // Process each required field
-                let result: std::result::Result<
+                let result: result::Result<
                     IndexMap<StringId, ValueId>,
                     FieldErr,
                 > = fields.iter().try_fold(
@@ -511,7 +512,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let result = arr.into_iter().enumerate().try_fold(
                     Acc::Elems(SmallVec::new()),
                     |acc, (i, json_val)| match acc {
-                        Acc::SoftErr(_) => Ok::<_, crate::Error>(acc),
+                        Acc::SoftErr(_) => Ok::<_, Error>(acc),
                         Acc::Elems(mut elems) => {
                             let elem_result = self.read_value_expr(
                                 &Value::Json(Arc::new(json_val)),
@@ -660,9 +661,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .type_exprs
                 .base_type(ty)
                 .and_then(|id| self.registry.get_def(id))
-                .is_some_and(|def| {
-                    matches!(def, crate::value::TypeDef::Union { .. })
-                })
+                .is_some_and(|def| matches!(def, TypeDef::Union { .. }))
     }
 
     /// Direct type match (non-union types).
@@ -728,7 +727,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         type_args: Option<SmallVec<[TypeExprId; 2]>>,
     ) -> bool {
         match self.registry.get_def(type_id) {
-            Some(crate::value::TypeDef::Alias {
+            Some(TypeDef::Alias {
                 type_params,
                 target,
                 ..
@@ -741,7 +740,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .ok()
                     .is_some_and(|ty| self.value_matches_type_expr(val, ty))
             }
-            Some(crate::value::TypeDef::Union { members, .. }) => {
+            Some(TypeDef::Union { members, .. }) => {
                 let members = members.clone();
                 members
                     .iter()
@@ -1225,7 +1224,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         let base_ty = self.type_exprs.base_type(ty)?;
         let type_args = self.type_exprs.type_args(ty).cloned();
         self.registry.get_def(base_ty).and_then(|def| match def {
-            crate::value::TypeDef::Alias {
+            TypeDef::Alias {
                 target,
                 type_params,
                 ..
@@ -1233,7 +1232,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 // Check if the target is an object type
                 let target_expr = self.ast.get_type_expr(*target)?;
                 match target_expr {
-                    crate::ast::AstTypeExpr::Object(fields) => {
+                    AstTypeExpr::Object(fields) => {
                         Some((fields.clone(), type_params.clone(), type_args))
                     }
                     _ => None,
