@@ -7,7 +7,7 @@
 //! # Pattern
 //!
 //! HoF methods return [`MethodResult`] which is either:
-//! - `Done(Value)`: the method completed synchronously
+//! - `Done(Payload)`: the method completed synchronously
 //! - `Invoke(Continuation)`: the method needs to call a closure and resume
 //!
 //! The trampoline loop in `call.rs` handles the async closure invocation:
@@ -30,13 +30,13 @@ use smallvec::{smallvec, SmallVec};
 
 use super::class::{ClassCtx, Mappable};
 use crate::intern::{StringId, StringInterner};
-use crate::value::{TypeExprId, TypeId, Value, ValueArena, ValueId};
+use crate::value::{Payload, TypeId, ValueId};
 use crate::Result;
 
 /// Result from a HoF method that may need closure invocation.
 pub(crate) enum MethodResult {
     /// Method completed synchronously with a value.
-    Done(Value),
+    Done(Payload),
     /// Method needs to invoke a callable and continue.
     Invoke(Continuation),
 }
@@ -62,7 +62,6 @@ pub(crate) enum HofState {
     MapIter {
         kind: IterKind,
         acc: SmallVec<[ValueId; 4]>,
-        elem_ty: Option<TypeId>,
     },
     /// `Mappable:map` over single-value containers (Option.Some, Result.Ok).
     MapContainer {
@@ -70,14 +69,11 @@ pub(crate) enum HofState {
         ctor_ty: TypeId,
         /// Variant tag (`1` for Some, `0` for Ok).
         tag: u8,
-        /// Extra type arg (error type for Result; `None` for Option).
-        extra_ty: Option<TypeExprId>,
     },
     /// `Filterable:filter` over array.
     FilterArray {
         source: ValueId,
         idx: usize,
-        elem_ty: TypeExprId,
         acc: SmallVec<[ValueId; 4]>,
         /// Last element tested (to add to `acc` if predicate was true).
         pending: ValueId,
@@ -102,24 +98,20 @@ pub(crate) enum HofState {
         arr_b: ValueId,
         idx: usize,
         acc: SmallVec<[ValueId; 4]>,
-        elem_ty: Option<TypeId>,
     },
     /// `Array.sort-by` merge sort; stack-based to avoid recursion.
     SortBy {
         source: ValueId,
-        elem_ty: TypeExprId,
         stack: Vec<SortFrame>,
     },
-    /// `Result.map-err`; stores Ok type to reconstruct Result type.
-    ResultMapErr { ok_ty: TypeExprId },
+    /// `Result.map-err`; wraps mapped error back into `Result.Err`.
+    ResultMapErr,
     /// `Bimappable:bimap` over a 2-element container (tuple).
     BimapTuple {
         /// Second function to apply (`g`).
         second_fn: ValueId,
         /// Second element to transform (`b`).
         second_elem: ValueId,
-        /// Resolved output type from typechecker.
-        output_ty: TypeExprId,
         /// First result (after `f(a)` completes); `None` = awaiting first call.
         first_result: Option<ValueId>,
     },
@@ -127,8 +119,6 @@ pub(crate) enum HofState {
     BimapResult {
         /// Which variant: `0` = Ok, `1` = Err.
         tag: u8,
-        /// Resolved output type from typechecker (`Result[C, D]`).
-        output_ty: TypeExprId,
     },
 }
 
@@ -175,25 +165,15 @@ pub(crate) fn resume(
     result: ValueId,
 ) -> Result<MethodResult> {
     match cont.state {
-        HofState::MapIter {
-            kind,
-            mut acc,
-            elem_ty,
-        } => {
-            let ty = elem_ty
-                .or_else(|| ctx.arena.base_type_of(result, ctx.type_exprs));
+        HofState::MapIter { kind, mut acc, .. } => {
             acc.push(result);
             let IterKind::Array { source, idx } = kind;
             let next_idx = idx + 1;
             match ctx.arena.get(source) {
-                Some(Value::Array(_, elems)) if next_idx >= elems.len() => {
-                    let arr_ty =
-                        ty.map(|t| ctx.type_exprs.named(t)).unwrap_or_else(
-                            || ctx.type_exprs.named(TypeId::UNKNOWN),
-                        );
-                    Ok(MethodResult::Done(Value::Array(arr_ty, Arc::new(acc))))
+                Some(Payload::Array(elems)) if next_idx >= elems.len() => {
+                    Ok(MethodResult::Done(Payload::Array(Arc::new(acc))))
                 }
-                Some(Value::Array(_, elems)) => {
+                Some(Payload::Array(elems)) => {
                     Ok(MethodResult::Invoke(Continuation {
                         callee: cont.callee,
                         args: smallvec![elems[next_idx]],
@@ -203,53 +183,33 @@ pub(crate) fn resume(
                                 idx: next_idx,
                             },
                             acc,
-                            elem_ty: ty,
                         },
                     }))
                 }
                 _ => invariant!("MapIter Array source must be Array"),
             }
         }
-        HofState::MapContainer {
-            ctor_ty,
-            tag,
-            extra_ty,
-        } => {
-            let result_base = ctx
-                .arena
-                .base_type_of(result, ctx.type_exprs)
-                .unwrap_or(TypeId::UNKNOWN);
-            let result_ty_expr = ctx.type_exprs.named(result_base);
-            let container_ty = match extra_ty {
-                Some(e) => {
-                    ctx.type_exprs.app(ctor_ty, smallvec![result_ty_expr, e])
-                }
-                None => ctx.type_exprs.app(ctor_ty, smallvec![result_ty_expr]),
-            };
-            Ok(MethodResult::Done(Value::Tagged(
-                container_ty,
-                tag,
-                smallvec![result],
-            )))
-        }
+        HofState::MapContainer { ctor_ty, tag } => Ok(MethodResult::Done(
+            Payload::Tagged(ctor_ty, tag, smallvec![result]),
+        )),
         HofState::FilterArray {
             source,
             idx,
-            elem_ty,
             mut acc,
             pending,
         } => {
             // Check if predicate returned true
-            let keep = matches!(ctx.arena.get(result), Some(Value::Bool(true)));
+            let keep =
+                matches!(ctx.arena.get(result), Some(Payload::Bool(true)));
             if keep {
                 acc.push(pending);
             }
             let next_idx = idx + 1;
             match ctx.arena.get(source) {
-                Some(Value::Array(_, elems)) if next_idx >= elems.len() => {
-                    Ok(MethodResult::Done(Value::Array(elem_ty, Arc::new(acc))))
+                Some(Payload::Array(elems)) if next_idx >= elems.len() => {
+                    Ok(MethodResult::Done(Payload::Array(Arc::new(acc))))
                 }
-                Some(Value::Array(_, elems)) => {
+                Some(Payload::Array(elems)) => {
                     let next_elem = elems[next_idx];
                     Ok(MethodResult::Invoke(Continuation {
                         callee: cont.callee,
@@ -257,7 +217,6 @@ pub(crate) fn resume(
                         state: HofState::FilterArray {
                             source,
                             idx: next_idx,
-                            elem_ty,
                             acc,
                             pending: next_elem,
                         },
@@ -272,21 +231,8 @@ pub(crate) fn resume(
             acc: _,
         } => {
             let next_idx = idx + 1;
-            // Helper to unwrap Union/Newtype to get inner value
-            fn unwrap_array(
-                arena: &ValueArena,
-                id: ValueId,
-            ) -> Option<&SmallVec<[ValueId; 4]>> {
-                arena.get(id).and_then(|v| match v {
-                    Value::Array(_, elems) => Some(elems.as_ref()),
-                    Value::Union(_, inner) | Value::Newtype(_, inner) => {
-                        unwrap_array(arena, *inner)
-                    }
-                    _ => None,
-                })
-            }
-            match unwrap_array(ctx.arena, source) {
-                Some(elems) if next_idx >= elems.len() => {
+            match ctx.arena.get(source) {
+                Some(Payload::Array(elems)) if next_idx >= elems.len() => {
                     let v = ctx
                         .arena
                         .get(result)
@@ -294,16 +240,18 @@ pub(crate) fn resume(
                         .unwrap_or_else(|| invariant!("result in arena"));
                     Ok(MethodResult::Done(v))
                 }
-                Some(elems) => Ok(MethodResult::Invoke(Continuation {
-                    callee: cont.callee,
-                    args: smallvec![result, elems[next_idx]],
-                    state: HofState::ReduceArray {
-                        source,
-                        idx: next_idx,
-                        acc: result,
-                    },
-                })),
-                None => invariant!("ReduceArray source must be Array"),
+                Some(Payload::Array(elems)) => {
+                    Ok(MethodResult::Invoke(Continuation {
+                        callee: cont.callee,
+                        args: smallvec![result, elems[next_idx]],
+                        state: HofState::ReduceArray {
+                            source,
+                            idx: next_idx,
+                            acc: result,
+                        },
+                    }))
+                }
+                _ => invariant!("ReduceArray source must be Array"),
             }
         }
         HofState::ReduceRange { current, end, acc } => {
@@ -317,7 +265,11 @@ pub(crate) fn resume(
                     .unwrap_or_else(|| invariant!("result in arena"));
                 Ok(MethodResult::Done(v))
             } else {
-                let int_id = ctx.arena.add(Value::Int(current), ctx.span);
+                let int_id = ctx.arena.add_typed(
+                    Payload::Int(current),
+                    ctx.runtime_types.meta_int(),
+                    ctx.span,
+                );
                 Ok(MethodResult::Invoke(Continuation {
                     callee: cont.callee,
                     args: smallvec![result, int_id],
@@ -336,12 +288,16 @@ pub(crate) fn resume(
                 .cloned()
                 .unwrap_or_else(|| invariant!("result in arena"));
             let v = match (wrapper, &inner) {
-                // If result is already None/Err, propagate it
-                (ChainWrapper::OptionSome, Value::Tagged(ty, 0, _)) => {
-                    Value::none(*ty)
+                // If result is already None, propagate it
+                (ChainWrapper::OptionSome, Payload::Tagged(ty, 0, _))
+                    if *ty == TypeId::OPTION =>
+                {
+                    Payload::none()
                 }
                 (ChainWrapper::OptionSome, _) => inner,
-                (ChainWrapper::ResultOk, Value::Tagged(_ty, 1, _)) => {
+                (ChainWrapper::ResultOk, Payload::Tagged(ty, 1, _))
+                    if *ty == TypeId::RESULT =>
+                {
                     inner // Already Err, propagate
                 }
                 (ChainWrapper::ResultOk, _) => inner,
@@ -360,24 +316,19 @@ pub(crate) fn resume(
             arr_b,
             idx,
             mut acc,
-            elem_ty,
+            ..
         } => {
-            let ty = elem_ty
-                .or_else(|| ctx.arena.base_type_of(result, ctx.type_exprs));
             acc.push(result);
             let next_idx = idx + 1;
             let (elems_a, elems_b) =
                 match (ctx.arena.get(arr_a), ctx.arena.get(arr_b)) {
-                    (Some(Value::Array(_, a)), Some(Value::Array(_, b))) => {
+                    (Some(Payload::Array(a)), Some(Payload::Array(b))) => {
                         (a.clone(), b.clone())
                     }
                     _ => invariant!("ZipWith sources must be Arrays"),
                 };
             if next_idx >= elems_a.len() || next_idx >= elems_b.len() {
-                let arr_ty = ty
-                    .map(|t| ctx.type_exprs.named(t))
-                    .unwrap_or_else(|| ctx.type_exprs.named(TypeId::UNKNOWN));
-                Ok(MethodResult::Done(Value::Array(arr_ty, Arc::new(acc))))
+                Ok(MethodResult::Done(Payload::Array(Arc::new(acc))))
             } else {
                 Ok(MethodResult::Invoke(Continuation {
                     callee: cont.callee,
@@ -387,41 +338,20 @@ pub(crate) fn resume(
                         arr_b,
                         idx: next_idx,
                         acc,
-                        elem_ty: ty,
                     },
                 }))
             }
         }
-        HofState::SortBy {
-            source,
-            elem_ty,
-            stack,
-        } => resume_sort_by(
-            ctx,
-            cont.callee,
-            source,
-            elem_ty,
-            stack,
-            Some(result),
-        ),
-        HofState::ResultMapErr { ok_ty } => {
-            // The original was Err; wrap mapped error in Result
-            let err_base = ctx
-                .arena
-                .base_type_of(result, ctx.type_exprs)
-                .unwrap_or(TypeId::UNKNOWN);
-            let err_ty = ctx.type_exprs.named(err_base);
-            let res_ty =
-                ctx.type_exprs.app(TypeId::RESULT, smallvec![ok_ty, err_ty]);
-            Ok(MethodResult::Done(Value::err(res_ty, result)))
+        HofState::SortBy { source, stack } => {
+            resume_sort_by(ctx, cont.callee, source, stack, Some(result))
         }
-        HofState::BimapResult { tag, output_ty } => Ok(MethodResult::Done(
-            Value::Tagged(output_ty, tag, smallvec![result]),
+        HofState::ResultMapErr => Ok(MethodResult::Done(Payload::err(result))),
+        HofState::BimapResult { tag } => Ok(MethodResult::Done(
+            Payload::Tagged(TypeId::RESULT, tag, smallvec![result]),
         )),
         HofState::BimapTuple {
             second_fn,
             second_elem,
-            output_ty,
             first_result: None,
         } => Ok(MethodResult::Invoke(Continuation {
             callee: second_fn,
@@ -429,18 +359,15 @@ pub(crate) fn resume(
             state: HofState::BimapTuple {
                 second_fn,
                 second_elem,
-                output_ty,
                 first_result: Some(result),
             },
         })),
         HofState::BimapTuple {
-            output_ty,
             first_result: Some(fst),
             ..
-        } => Ok(MethodResult::Done(Value::Tuple(
-            output_ty,
-            Arc::new(smallvec![fst, result]),
-        ))),
+        } => Ok(MethodResult::Done(Payload::Tuple(Arc::new(smallvec![
+            fst, result
+        ])))),
     }
 }
 
@@ -452,13 +379,12 @@ pub(crate) fn resume_sort_by(
     ctx: &mut ClassCtx<'_>,
     cmp_fn: ValueId,
     source: ValueId,
-    elem_ty: TypeExprId,
     mut stack: Vec<SortFrame>,
     cmp_result: Option<ValueId>,
 ) -> Result<MethodResult> {
     // Get source array elements
     let elems = match ctx.arena.get(source) {
-        Some(Value::Array(_, e)) => e.clone(),
+        Some(Payload::Array(e)) => e.clone(),
         _ => invariant!("SortBy source must be Array"),
     };
 
@@ -476,7 +402,7 @@ pub(crate) fn resume_sort_by(
             }) => {
                 // Check comparison result (expecting Ordering value)
                 let take_left = match ctx.arena.get(result) {
-                    Some(Value::Tagged(_, tag, _)) => *tag <= 1, // Less or Equal
+                    Some(Payload::Tagged(_, tag, _)) => *tag <= 1, // Less or Equal
                     _ => true, // Default to left on unexpected
                 };
                 if take_left {
@@ -529,10 +455,9 @@ pub(crate) fn resume_sort_by(
             match stack.pop() {
                 None => {
                     // Done! Return sorted array
-                    break Ok(MethodResult::Done(Value::Array(
-                        elem_ty,
-                        Arc::new(sorted),
-                    )));
+                    break Ok(MethodResult::Done(Payload::Array(Arc::new(
+                        sorted,
+                    ))));
                 }
                 Some(SortFrame::MergeAfterRight { left, lo, hi }) => {
                     if left.is_empty() {
@@ -605,7 +530,6 @@ pub(crate) fn resume_sort_by(
                     args: smallvec![a, b],
                     state: HofState::SortBy {
                         source,
-                        elem_ty,
                         stack: {
                             stack.push(SortFrame::Merge {
                                 left,
@@ -746,47 +670,31 @@ impl ResultHof {
             .unwrap_or_else(|| typechecked!("Result.map-err", "2 args"));
 
         enum Kind {
-            Ok(Value),
-            Err(ValueId, TypeExprId), // inner, ok_ty
+            Ok(Payload),
+            Err(ValueId),
             Other,
         }
         let kind = match ctx.arena.get(res) {
             // Result.Ok(v) -> return unchanged
-            Some(v @ Value::Tagged(ty, 0, _))
-                if ctx
-                    .type_exprs
-                    .base_type(*ty)
-                    .is_some_and(|t| t == TypeId::RESULT) =>
-            {
+            Some(v @ Payload::Tagged(ty, 0, _)) if *ty == TypeId::RESULT => {
                 Kind::Ok(v.clone())
             }
             // Result.Err(e) -> map error
-            Some(Value::Tagged(ty, 1, payloads))
-                if ctx
-                    .type_exprs
-                    .base_type(*ty)
-                    .is_some_and(|t| t == TypeId::RESULT) =>
-            {
+            Some(Payload::Tagged(ty, 1, payloads)) if *ty == TypeId::RESULT => {
                 let inner = *payloads
                     .first()
                     .unwrap_or_else(|| invariant!("Err has payload"));
-                // Extract ok type from Result[T, E] for result type
-                let ok_ty = ctx
-                    .type_exprs
-                    .type_args(*ty)
-                    .and_then(|args| args.first().copied())
-                    .unwrap_or_else(|| ctx.type_exprs.named(TypeId::UNKNOWN));
-                Kind::Err(inner, ok_ty)
+                Kind::Err(inner)
             }
             _ => Kind::Other,
         };
 
         match kind {
             Kind::Ok(v) => Ok(MethodResult::Done(v)),
-            Kind::Err(inner, ok_ty) => Ok(MethodResult::Invoke(Continuation {
+            Kind::Err(inner) => Ok(MethodResult::Invoke(Continuation {
                 callee: fn_id,
                 args: smallvec![inner],
-                state: HofState::ResultMapErr { ok_ty },
+                state: HofState::ResultMapErr,
             })),
             Kind::Other => typechecked!("Result.map-err", "Result"),
         }
@@ -818,7 +726,7 @@ impl ArrayHof {
             Other,
         }
         let kind = match (ctx.arena.get(arr_a), ctx.arena.get(arr_b)) {
-            (Some(Value::Array(_, a)), Some(Value::Array(_, b))) => {
+            (Some(Payload::Array(a)), Some(Payload::Array(b))) => {
                 match (a.first(), b.first()) {
                     (Some(&first_a), Some(&first_b)) => {
                         Kind::NonEmpty(first_a, first_b)
@@ -830,13 +738,9 @@ impl ArrayHof {
         };
 
         match kind {
-            Kind::Empty => {
-                let ty = ctx.type_exprs.named(TypeId::UNKNOWN);
-                Ok(MethodResult::Done(Value::Array(
-                    ty,
-                    Arc::new(SmallVec::new()),
-                )))
-            }
+            Kind::Empty => Ok(MethodResult::Done(Payload::Array(Arc::new(
+                SmallVec::new(),
+            )))),
             Kind::NonEmpty(first_a, first_b) => {
                 Ok(MethodResult::Invoke(Continuation {
                     callee: fn_id,
@@ -846,7 +750,6 @@ impl ArrayHof {
                         arr_b,
                         idx: 0,
                         acc: SmallVec::new(),
-                        elem_ty: None,
                     },
                 }))
             }
@@ -869,18 +772,17 @@ impl ArrayHof {
             .unwrap_or_else(|| typechecked!("Array.sort-by", "2 args"));
 
         match ctx.arena.get(arr) {
-            Some(Value::Array(elem_ty, elems)) if elems.len() <= 1 => {
+            Some(Payload::Array(elems)) if elems.len() <= 1 => {
                 // Already sorted
-                Ok(MethodResult::Done(Value::Array(*elem_ty, elems.clone())))
+                Ok(MethodResult::Done(Payload::Array(elems.clone())))
             }
-            Some(Value::Array(elem_ty, elems)) => {
+            Some(Payload::Array(elems)) => {
                 let len = elems.len();
                 // Kick off merge sort via resume_sort_by with no comparison result
                 resume_sort_by(
                     ctx,
                     cmp_fn,
                     arr,
-                    *elem_ty,
                     vec![SortFrame::Sort { lo: 0, hi: len }],
                     None,
                 )

@@ -57,9 +57,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::env::{PrimCtx, PrimResult};
 use crate::interpreter::convert::escape_str;
-use crate::value::{
-    MapKey, TypeExprArena, TypeExprId, TypeId, Value, ValueArena, ValueId,
-};
+use crate::value::{MapKey, Payload, TypeId, ValueArena, ValueId, ValueMeta};
 use crate::{Result, StringId};
 
 /// Shared utilities for primitive function implementations.
@@ -115,8 +113,8 @@ pub(crate) trait Prim {
         ctx.arena.get(id).map_or_else(
             || typechecked!("to_float", "ValueId"),
             |v| match v {
-                Value::Int(n) => *n as f64,
-                Value::Float(f) => f.0,
+                Payload::Int(n) => *n as f64,
+                Payload::Float(f) => f.0,
                 _ => typechecked!("to_float", "Numeric"),
             },
         )
@@ -129,7 +127,7 @@ pub(crate) trait Prim {
         ctx.arena.get(id).map_or_else(
             || typechecked!("to_int", "ValueId"),
             |v| match v {
-                Value::Int(n) => *n,
+                Payload::Int(n) => *n,
                 _ => typechecked!("to_int", "Int"),
             },
         )
@@ -157,13 +155,17 @@ impl Array {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let (ty, mut e) = ctx
+            let mut e = ctx
                 .arena
                 .take_array(args[0])
                 .unwrap_or_else(|| typechecked!("Array.push", "Array"));
 
             e.push(args[1]);
-            Ok(ctx.arena.add(Value::Array(ty, Arc::new(e)), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Array(Arc::new(e)),
+                ValueMeta::untyped(),
+                ctx.span,
+            ))
         })
     }
 
@@ -176,13 +178,17 @@ impl Array {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let (ty, mut e) = ctx
+            let mut e = ctx
                 .arena
                 .take_array(args[0])
                 .unwrap_or_else(|| typechecked!("Array.pop", "Array"));
 
             e.pop();
-            Ok(ctx.arena.add(Value::Array(ty, Arc::new(e)), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Array(Arc::new(e)),
+                ValueMeta::untyped(),
+                ctx.span,
+            ))
         })
     }
 
@@ -195,7 +201,7 @@ impl Array {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let (_, elems) = ctx
+            let elems = ctx
                 .arena
                 .get_array(args[0])
                 .unwrap_or_else(|| typechecked!("Array.head", "Array"));
@@ -216,14 +222,18 @@ impl Array {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let (ty, elems) = ctx
+            let elems = ctx
                 .arena
                 .get_array(args[0])
                 .unwrap_or_else(|| typechecked!("Array.tail", "Array"));
 
             let tail: SmallVec<[ValueId; 4]> =
                 elems.get(1..).map(SmallVec::from_slice).unwrap_or_default();
-            Ok(ctx.arena.add(Value::Array(ty, Arc::new(tail)), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Array(Arc::new(tail)),
+                ValueMeta::untyped(),
+                ctx.span,
+            ))
         })
     }
 
@@ -265,65 +275,65 @@ impl Array {
         }
 
         impl<'a> SortKey<'a> {
-            fn from_value(
-                v: &Value,
+            fn from_payload(
+                v: &Payload,
                 arena: &'a ValueArena,
-                type_exprs: &TypeExprArena,
             ) -> Option<Self> {
                 match v {
-                    Value::Bool(b) => Some(Self::Bool(*b)),
-                    Value::Int(n) => Some(Self::Int(*n)),
+                    Payload::Bool(b) => Some(Self::Bool(*b)),
+                    Payload::Int(n) => Some(Self::Int(*n)),
                     // Word sorts as Int (coerced)
-                    Value::Word(n) => Some(Self::Int(*n as i64)),
-                    Value::Float(f) => Some(Self::Float(*f)),
-                    Value::Char(c) => Some(Self::Char(*c)),
-                    Value::String(sid) => arena.get_str(*sid).map(Self::String),
+                    Payload::Word(n) => Some(Self::Int(*n as i64)),
+                    Payload::Float(f) => Some(Self::Float(*f)),
+                    Payload::Char(c) => Some(Self::Char(*c)),
+                    Payload::String(sid) => {
+                        arena.get_str(*sid).map(Self::String)
+                    }
 
-                    Value::Tagged(ty_expr, idx, payloads) => {
-                        let priority =
-                            Self::sort_priority(ty_expr, *idx, type_exprs);
+                    Payload::Tagged(ty, idx, payloads) => {
+                        let priority = Self::sort_priority(ty, *idx);
                         let sub_keys: Option<Vec<SortKey<'a>>> = payloads
                             .iter()
                             .map(|vid| {
                                 arena.get(*vid).and_then(|pv| {
-                                    Self::from_value(pv, arena, type_exprs)
+                                    Self::from_payload(pv, arena)
                                 })
                             })
                             .collect();
                         sub_keys.map(|keys| Self::Tagged(priority, keys))
                     }
 
-                    Value::Tuple(_, elems) => {
+                    Payload::Tuple(elems) => {
                         let sub_keys: Option<Vec<SortKey<'a>>> = elems
                             .iter()
                             .map(|vid| {
                                 arena.get(*vid).and_then(|ev| {
-                                    Self::from_value(ev, arena, type_exprs)
+                                    Self::from_payload(ev, arena)
                                 })
                             })
                             .collect();
                         sub_keys.map(Self::Tuple)
                     }
 
-                    Value::Array(_, elems) => {
+                    Payload::Array(elems) => {
                         let sub_keys: Option<Vec<SortKey<'a>>> = elems
                             .iter()
                             .map(|vid| {
                                 arena.get(*vid).and_then(|ev| {
-                                    Self::from_value(ev, arena, type_exprs)
+                                    Self::from_payload(ev, arena)
                                 })
                             })
                             .collect();
                         sub_keys.map(Self::Array)
                     }
 
-                    Value::Object(map) => {
+                    Payload::Object(map) => {
                         let sub_keys: Option<Vec<(&'a str, SortKey<'a>)>> = map
                             .iter()
                             .map(|(k, vid)| {
                                 arena.get_str(*k).and_then(|key_str| {
                                     arena.get(*vid).and_then(|val| {
-                                        Self::from_value(val, arena, type_exprs)
+                                        Self::from_payload(val, arena)
                                             .map(|sk| (key_str, sk))
                                     })
                                 })
@@ -333,29 +343,25 @@ impl Array {
                     }
 
                     // Maps, times, and JSON are not directly comparable for sorting
-                    Value::Map(_, _, _) | Value::Time(_) | Value::Json(_) => {
+                    Payload::Map(_) | Payload::Time(_) | Payload::Json(_) => {
                         None
                     }
 
                     // Unit, closures, functions, module fns/consts, ranges, paths, regex,
                     // refs, and loop continuations are not comparable
-                    Value::Unit
-                    | Value::FilePath(_)
-                    | Value::Regex(_)
-                    | Value::Closure { .. }
-                    | Value::Function { .. }
-                    | Value::ModuleFn { .. }
-                    | Value::ModuleConst { .. }
-                    | Value::Range { .. }
-                    | Value::ForeverContinuation
-                    | Value::LoopContinue(_)
-                    | Value::Ref(..)
-                    | Value::ClassMethodFn { .. }
-                    | Value::PartialApp { .. } => None,
-                    // TODO(Phase 6): unwrap and build SortKey from inner value
-                    Value::Union(_, _) | Value::Newtype(_, _) => {
-                        todo!("Phase 6: SortKey::from_value Union/Newtype")
-                    }
+                    Payload::Unit
+                    | Payload::FilePath(_)
+                    | Payload::Regex(_)
+                    | Payload::Closure { .. }
+                    | Payload::Function { .. }
+                    | Payload::ModuleFn { .. }
+                    | Payload::ModuleConst { .. }
+                    | Payload::Range { .. }
+                    | Payload::ForeverContinuation
+                    | Payload::LoopContinue(_)
+                    | Payload::Ref(..)
+                    | Payload::ClassMethodFn { .. }
+                    | Payload::PartialApp { .. } => None,
                 }
             }
 
@@ -364,21 +370,17 @@ impl Array {
             /// For Option and Result, we want `Some > None` and `Ok > Err`
             /// semantically. Declaration order is `None, Some` and `Ok, Err`,
             /// so Option already sorts correctly but Result needs inversion.
-            fn sort_priority(
-                ty_expr: &TypeExprId,
-                idx: u8,
-                type_exprs: &TypeExprArena,
-            ) -> u8 {
-                match type_exprs.base_type(*ty_expr) {
-                    Some(TypeId::OPTION) => idx,
-                    Some(TypeId::RESULT) => 1 - idx,
-                    _ => idx,
+            fn sort_priority(ty: &TypeId, idx: u8) -> u8 {
+                if *ty == TypeId::RESULT {
+                    1 - idx
+                } else {
+                    idx
                 }
             }
         }
 
         Box::pin(async move {
-            let (ty, elems) = ctx
+            let elems = ctx
                 .arena
                 .get_array(args[0])
                 .unwrap_or_else(|| typechecked!("Array.sort", "Array"));
@@ -394,14 +396,10 @@ impl Array {
                             ctx.runtime_error("Array.sort: invalid element")
                         })
                         .map(|v| {
-                            let k = SortKey::from_value(
-                                v,
-                                ctx.arena,
-                                ctx.type_exprs,
-                            )
-                            .unwrap_or_else(|| {
-                                typechecked!("Array.sort", "Comparable")
-                            });
+                            let k = SortKey::from_payload(v, ctx.arena)
+                                .unwrap_or_else(|| {
+                                    typechecked!("Array.sort", "Comparable")
+                                });
                             (*vid, k)
                         })
                 })
@@ -411,7 +409,11 @@ impl Array {
 
             let sorted: SmallVec<[ValueId; 4]> =
                 pairs.into_iter().map(|(vid, _)| vid).collect();
-            Ok(ctx.arena.add(Value::Array(ty, Arc::new(sorted)), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Array(Arc::new(sorted)),
+                ValueMeta::untyped(),
+                ctx.span,
+            ))
         })
     }
 
@@ -424,7 +426,7 @@ impl Array {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let (ty, elems) = ctx
+            let elems = ctx
                 .arena
                 .get_array(args[0])
                 .unwrap_or_else(|| typechecked!("Array.slice", "Array"));
@@ -433,7 +435,7 @@ impl Array {
                 .arena
                 .get(args[1])
                 .and_then(|v| match v {
-                    Value::Int(n) => Some(*n),
+                    Payload::Int(n) => Some(*n),
                     _ => None,
                 })
                 .unwrap_or_else(|| {
@@ -444,7 +446,7 @@ impl Array {
                 .arena
                 .get(args[2])
                 .and_then(|v| match v {
-                    Value::Int(n) => Some(*n),
+                    Payload::Int(n) => Some(*n),
                     _ => None,
                 })
                 .unwrap_or_else(|| typechecked!("Array.slice", "Int"));
@@ -458,7 +460,11 @@ impl Array {
                 .map(SmallVec::from_slice)
                 .unwrap_or_default();
 
-            Ok(ctx.arena.add(Value::Array(ty, Arc::new(sliced)), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Array(Arc::new(sliced)),
+                ValueMeta::untyped(),
+                ctx.span,
+            ))
         })
     }
 
@@ -471,21 +477,23 @@ impl Array {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let (ty_a, mut combined) = ctx
+            let mut combined = ctx
                 .arena
                 .take_array(args[0])
                 .unwrap_or_else(|| typechecked!("Array.concat", "Array"));
 
-            let (_, elems_b) = ctx
+            let elems_b = ctx
                 .arena
                 .get_array(args[1])
                 .unwrap_or_else(|| typechecked!("Array.concat", "Array"));
 
             // Type checker guarantees both arrays have matching element types
             combined.extend(elems_b.iter().copied());
-            Ok(ctx
-                .arena
-                .add(Value::Array(ty_a, Arc::new(combined)), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Array(Arc::new(combined)),
+                ValueMeta::untyped(),
+                ctx.span,
+            ))
         })
     }
 
@@ -497,12 +505,12 @@ impl Array {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let (ty_a, elems_a) = ctx
+            let elems_a = ctx
                 .arena
                 .get_array(args[0])
                 .unwrap_or_else(|| typechecked!("Array.zip", "Array"));
 
-            let (ty_b, elems_b) = ctx
+            let elems_b = ctx
                 .arena
                 .get_array(args[1])
                 .unwrap_or_else(|| typechecked!("Array.zip", "Array"));
@@ -516,16 +524,16 @@ impl Array {
             let pairs: SmallVec<[ValueId; 4]> = zipped
                 .iter()
                 .map(|(a, b)| {
-                    let tup_ty = ctx.type_exprs.tuple(smallvec![ty_a, ty_b]);
-                    let tup = Value::Tuple(tup_ty, Arc::new(smallvec![*a, *b]));
-                    ctx.arena.add(tup, ctx.span)
+                    let tup = Payload::Tuple(Arc::new(smallvec![*a, *b]));
+                    ctx.arena.add_typed(tup, ValueMeta::untyped(), ctx.span)
                 })
                 .collect();
 
-            let elem_ty = ctx.type_exprs.tuple(smallvec![ty_a, ty_b]);
-            Ok(ctx
-                .arena
-                .add(Value::Array(elem_ty, Arc::new(pairs)), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Array(Arc::new(pairs)),
+                ValueMeta::untyped(),
+                ctx.span,
+            ))
         })
     }
 
@@ -537,27 +545,10 @@ impl Array {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let (_, pairs) = ctx
+            let pairs = ctx
                 .arena
                 .get_array(args[0])
                 .unwrap_or_else(|| typechecked!("Array.unzip", "Array"));
-
-            // Extract element types from first pair
-            let (ty_a, ty_b) = pairs
-                .first()
-                .and_then(|id| ctx.arena.get(*id))
-                .and_then(|v| match v {
-                    Value::Tuple(tup_ty, _) => {
-                        ctx.type_exprs.tuple_elems(*tup_ty)
-                    }
-                    _ => None,
-                })
-                .and_then(|tys| Some((*tys.first()?, *tys.get(1)?)))
-                .unwrap_or_else(|| {
-                    // Empty array; types don't matter
-                    let unk = ctx.type_exprs.named(TypeId::UNKNOWN);
-                    (unk, unk)
-                });
 
             // Map pairs to (a, b) and unzip
             let (firsts, seconds): (
@@ -571,24 +562,25 @@ impl Array {
                     })
                 })
                 .map(|v| match v {
-                    Value::Tuple(_, elems) => (elems[0], elems[1]),
+                    Payload::Tuple(elems) => (elems[0], elems[1]),
                     _ => typechecked!("Array.unzip", "(T, U)"),
                 })
                 .unzip();
 
-            let arr_a_id = ctx
-                .arena
-                .add(Value::Array(ty_a, Arc::new(firsts)), ctx.span);
-            let arr_b_id = ctx
-                .arena
-                .add(Value::Array(ty_b, Arc::new(seconds)), ctx.span);
+            let arr_a_id = ctx.arena.add_typed(
+                Payload::Array(Arc::new(firsts)),
+                ValueMeta::untyped(),
+                ctx.span,
+            );
+            let arr_b_id = ctx.arena.add_typed(
+                Payload::Array(Arc::new(seconds)),
+                ValueMeta::untyped(),
+                ctx.span,
+            );
 
-            let arr_ty_a = ctx.type_exprs.app(TypeId::ARRAY, smallvec![ty_a]);
-            let arr_ty_b = ctx.type_exprs.app(TypeId::ARRAY, smallvec![ty_b]);
-            let tup_ty = ctx.type_exprs.tuple(smallvec![arr_ty_a, arr_ty_b]);
-
-            Ok(ctx.arena.add(
-                Value::Tuple(tup_ty, Arc::new(smallvec![arr_a_id, arr_b_id])),
+            Ok(ctx.arena.add_typed(
+                Payload::Tuple(Arc::new(smallvec![arr_a_id, arr_b_id])),
+                ValueMeta::untyped(),
                 ctx.span,
             ))
         })
@@ -603,7 +595,7 @@ impl Array {
     ) -> PrimResult<'a> {
         Box::pin(async move {
             let sep = args[0];
-            let (ty, elems) = ctx
+            let elems = ctx
                 .arena
                 .get_array(args[1])
                 .unwrap_or_else(|| typechecked!("Array.intersperse", "Array"));
@@ -611,7 +603,11 @@ impl Array {
             let result: SmallVec<[ValueId; 4]> =
                 Itertools::intersperse(elems.iter().copied(), sep).collect();
 
-            Ok(ctx.arena.add(Value::Array(ty, Arc::new(result)), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Array(Arc::new(result)),
+                ValueMeta::untyped(),
+                ctx.span,
+            ))
         })
     }
 }
@@ -640,7 +636,11 @@ impl Str {
             let s = Self::valid_str(ctx.arena, sid);
 
             let len = s.graphemes(true).count() as i64;
-            Ok(ctx.arena.add(Value::Int(len), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Int(len),
+                ctx.runtime_types.meta_int(),
+                ctx.span,
+            ))
         })
     }
 
@@ -661,7 +661,11 @@ impl Str {
 
             let upper = s.to_uppercase();
             let new_sid = ctx.arena.intern(&upper);
-            Ok(ctx.arena.add(Value::String(new_sid), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::String(new_sid),
+                ctx.runtime_types.meta_string(),
+                ctx.span,
+            ))
         })
     }
 
@@ -682,7 +686,11 @@ impl Str {
 
             let lower = s.to_lowercase();
             let new_sid = ctx.arena.intern(&lower);
-            Ok(ctx.arena.add(Value::String(new_sid), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::String(new_sid),
+                ctx.runtime_types.meta_string(),
+                ctx.span,
+            ))
         })
     }
 
@@ -703,7 +711,11 @@ impl Str {
             let trimmed = Self::valid_str(ctx.arena, sid).trim().to_owned();
 
             let new_sid = ctx.arena.intern(&trimmed);
-            Ok(ctx.arena.add(Value::String(new_sid), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::String(new_sid),
+                ctx.runtime_types.meta_string(),
+                ctx.span,
+            ))
         })
     }
 
@@ -733,14 +745,19 @@ impl Str {
                 .split(&d)
                 .map(|part| {
                     let part_sid = ctx.arena.intern(part);
-                    ctx.arena.add(Value::String(part_sid), ctx.span)
+                    ctx.arena.add_typed(
+                        Payload::String(part_sid),
+                        ctx.runtime_types.meta_string(),
+                        ctx.span,
+                    )
                 })
                 .collect();
 
-            let str_ty = ctx.type_exprs.named(TypeId::STRING);
-            Ok(ctx
-                .arena
-                .add(Value::Array(str_ty, Arc::new(parts)), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Array(Arc::new(parts)),
+                ValueMeta::untyped(),
+                ctx.span,
+            ))
         })
     }
 
@@ -752,7 +769,7 @@ impl Str {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let (_, elems) = ctx
+            let elems = ctx
                 .arena
                 .take_array(args[0])
                 .unwrap_or_else(|| typechecked!("String.join", "Array"));
@@ -781,7 +798,11 @@ impl Str {
 
             let joined = parts.into_iter().join(d);
             let new_sid = ctx.arena.intern(&joined);
-            Ok(ctx.arena.add(Value::String(new_sid), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::String(new_sid),
+                ctx.runtime_types.meta_string(),
+                ctx.span,
+            ))
         })
     }
 
@@ -803,7 +824,7 @@ impl Str {
                 .arena
                 .get(args[1])
                 .and_then(|v| match v {
-                    Value::Int(n) => Some(*n),
+                    Payload::Int(n) => Some(*n),
                     _ => None,
                 })
                 .unwrap_or_else(|| {
@@ -814,7 +835,7 @@ impl Str {
                 .arena
                 .get(args[2])
                 .and_then(|v| match v {
-                    Value::Int(n) => Some(*n),
+                    Payload::Int(n) => Some(*n),
                     _ => None,
                 })
                 .unwrap_or_else(|| {
@@ -833,7 +854,11 @@ impl Str {
                 .collect();
 
             let new_sid = ctx.arena.intern(&sliced);
-            Ok(ctx.arena.add(Value::String(new_sid), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::String(new_sid),
+                ctx.runtime_types.meta_string(),
+                ctx.span,
+            ))
         })
     }
 
@@ -858,7 +883,11 @@ impl Str {
             let s = Self::valid_str(ctx.arena, s_sid);
             let sub = Self::valid_str(ctx.arena, sub_sid);
 
-            Ok(ctx.arena.add(Value::Bool(s.contains(sub)), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Bool(s.contains(sub)),
+                ctx.runtime_types.meta_bool(),
+                ctx.span,
+            ))
         })
     }
 
@@ -891,7 +920,11 @@ impl Str {
 
             let replaced = s.replace(old, new);
             let result_sid = ctx.arena.intern(&replaced);
-            Ok(ctx.arena.add(Value::String(result_sid), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::String(result_sid),
+                ctx.runtime_types.meta_string(),
+                ctx.span,
+            ))
         })
     }
 
@@ -917,7 +950,11 @@ impl Str {
             let s = Self::valid_str(ctx.arena, sid);
             let escaped = escape_str(s);
             let new_sid = ctx.arena.intern(&escaped);
-            Ok(ctx.arena.add(Value::String(new_sid), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::String(new_sid),
+                ctx.runtime_types.meta_string(),
+                ctx.span,
+            ))
         })
     }
 }
@@ -942,13 +979,13 @@ impl Math {
                 .ok_or_else(|| ctx.runtime_error("Math.abs: invalid value"))?;
 
             let result = match v {
-                Value::Int(n) => Value::Int(n.abs()),
-                Value::Word(n) => Value::Word(*n), // Word is unsigned; abs is identity
-                Value::Float(f) => Value::Float(OrderedFloat(f.0.abs())),
+                Payload::Int(n) => Payload::Int(n.abs()),
+                Payload::Word(n) => Payload::Word(*n), // Word is unsigned; abs is identity
+                Payload::Float(f) => Payload::Float(OrderedFloat(f.0.abs())),
                 _ => typechecked!("Math.abs", "Numeric"),
             };
 
-            Ok(ctx.arena.add(result, ctx.span))
+            Ok(ctx.arena.add_typed(result, ValueMeta::untyped(), ctx.span))
         })
     }
 
@@ -962,19 +999,19 @@ impl Math {
         Box::pin(async move {
             let result = match (ctx.arena.get(args[0]), ctx.arena.get(args[1]))
             {
-                (Some(Value::Int(x)), Some(Value::Int(y))) => {
-                    Value::Int((*x).min(*y))
+                (Some(Payload::Int(x)), Some(Payload::Int(y))) => {
+                    Payload::Int((*x).min(*y))
                 }
-                (Some(Value::Word(x)), Some(Value::Word(y))) => {
-                    Value::Word((*x).min(*y))
+                (Some(Payload::Word(x)), Some(Payload::Word(y))) => {
+                    Payload::Word((*x).min(*y))
                 }
-                (Some(Value::Float(x)), Some(Value::Float(y))) => {
-                    Value::Float(OrderedFloat(x.0.min(y.0)))
+                (Some(Payload::Float(x)), Some(Payload::Float(y))) => {
+                    Payload::Float(OrderedFloat(x.0.min(y.0)))
                 }
                 _ => typechecked!("Math.min", "same Numeric type"),
             };
 
-            Ok(ctx.arena.add(result, ctx.span))
+            Ok(ctx.arena.add_typed(result, ValueMeta::untyped(), ctx.span))
         })
     }
 
@@ -988,19 +1025,19 @@ impl Math {
         Box::pin(async move {
             let result = match (ctx.arena.get(args[0]), ctx.arena.get(args[1]))
             {
-                (Some(Value::Int(x)), Some(Value::Int(y))) => {
-                    Value::Int((*x).max(*y))
+                (Some(Payload::Int(x)), Some(Payload::Int(y))) => {
+                    Payload::Int((*x).max(*y))
                 }
-                (Some(Value::Word(x)), Some(Value::Word(y))) => {
-                    Value::Word((*x).max(*y))
+                (Some(Payload::Word(x)), Some(Payload::Word(y))) => {
+                    Payload::Word((*x).max(*y))
                 }
-                (Some(Value::Float(x)), Some(Value::Float(y))) => {
-                    Value::Float(OrderedFloat(x.0.max(y.0)))
+                (Some(Payload::Float(x)), Some(Payload::Float(y))) => {
+                    Payload::Float(OrderedFloat(x.0.max(y.0)))
                 }
                 _ => typechecked!("Math.max", "same Numeric type"),
             };
 
-            Ok(ctx.arena.add(result, ctx.span))
+            Ok(ctx.arena.add_typed(result, ValueMeta::untyped(), ctx.span))
         })
     }
 
@@ -1013,7 +1050,11 @@ impl Math {
     ) -> PrimResult<'a> {
         Box::pin(async move {
             let n = Self::to_float(ctx, args[0]);
-            Ok(ctx.arena.add(Value::Int(n.floor() as i64), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Int(n.floor() as i64),
+                ctx.runtime_types.meta_int(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1026,7 +1067,11 @@ impl Math {
     ) -> PrimResult<'a> {
         Box::pin(async move {
             let n = Self::to_float(ctx, args[0]);
-            Ok(ctx.arena.add(Value::Int(n.ceil() as i64), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Int(n.ceil() as i64),
+                ctx.runtime_types.meta_int(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1039,7 +1084,11 @@ impl Math {
     ) -> PrimResult<'a> {
         Box::pin(async move {
             let n = Self::to_float(ctx, args[0]);
-            Ok(ctx.arena.add(Value::Int(n.round() as i64), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Int(n.round() as i64),
+                ctx.runtime_types.meta_int(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1052,9 +1101,11 @@ impl Math {
     ) -> PrimResult<'a> {
         Box::pin(async move {
             let n = Self::to_float(ctx, args[0]);
-            Ok(ctx
-                .arena
-                .add(Value::Float(OrderedFloat(n.sqrt())), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Float(OrderedFloat(n.sqrt())),
+                ctx.runtime_types.meta_float(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1067,7 +1118,11 @@ impl Math {
     ) -> PrimResult<'a> {
         Box::pin(async move {
             let n = Self::to_float(ctx, args[0]);
-            Ok(ctx.arena.add(Value::Float(OrderedFloat(n.ln())), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Float(OrderedFloat(n.ln())),
+                ctx.runtime_types.meta_float(),
+                ctx.span,
+            ))
         })
     }
 }
@@ -1087,7 +1142,11 @@ impl Trig {
     ) -> PrimResult<'a> {
         Box::pin(async move {
             let n = Math::to_float(ctx, args[0]);
-            Ok(ctx.arena.add(Value::Float(OrderedFloat(n.sin())), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Float(OrderedFloat(n.sin())),
+                ctx.runtime_types.meta_float(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1100,7 +1159,11 @@ impl Trig {
     ) -> PrimResult<'a> {
         Box::pin(async move {
             let n = Math::to_float(ctx, args[0]);
-            Ok(ctx.arena.add(Value::Float(OrderedFloat(n.cos())), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Float(OrderedFloat(n.cos())),
+                ctx.runtime_types.meta_float(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1113,7 +1176,11 @@ impl Trig {
     ) -> PrimResult<'a> {
         Box::pin(async move {
             let n = Math::to_float(ctx, args[0]);
-            Ok(ctx.arena.add(Value::Float(OrderedFloat(n.tan())), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Float(OrderedFloat(n.tan())),
+                ctx.runtime_types.meta_float(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1126,9 +1193,11 @@ impl Trig {
     ) -> PrimResult<'a> {
         Box::pin(async move {
             let n = Math::to_float(ctx, args[0]);
-            Ok(ctx
-                .arena
-                .add(Value::Float(OrderedFloat(n.asin())), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Float(OrderedFloat(n.asin())),
+                ctx.runtime_types.meta_float(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1141,9 +1210,11 @@ impl Trig {
     ) -> PrimResult<'a> {
         Box::pin(async move {
             let n = Math::to_float(ctx, args[0]);
-            Ok(ctx
-                .arena
-                .add(Value::Float(OrderedFloat(n.acos())), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Float(OrderedFloat(n.acos())),
+                ctx.runtime_types.meta_float(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1156,9 +1227,11 @@ impl Trig {
     ) -> PrimResult<'a> {
         Box::pin(async move {
             let n = Math::to_float(ctx, args[0]);
-            Ok(ctx
-                .arena
-                .add(Value::Float(OrderedFloat(n.atan())), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Float(OrderedFloat(n.atan())),
+                ctx.runtime_types.meta_float(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1173,9 +1246,11 @@ impl Trig {
         Box::pin(async move {
             let y = Math::to_float(ctx, args[0]);
             let x = Math::to_float(ctx, args[1]);
-            Ok(ctx
-                .arena
-                .add(Value::Float(OrderedFloat(y.atan2(x))), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Float(OrderedFloat(y.atan2(x))),
+                ctx.runtime_types.meta_float(),
+                ctx.span,
+            ))
         })
     }
 }
@@ -1195,7 +1270,11 @@ impl Random {
     ) -> PrimResult<'a> {
         Box::pin(async move {
             let n: f64 = rand::thread_rng().gen();
-            Ok(ctx.arena.add(Value::Float(OrderedFloat(n)), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Float(OrderedFloat(n)),
+                ctx.runtime_types.meta_float(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1211,7 +1290,11 @@ impl Random {
             let max = Self::to_float(ctx, args[1]);
 
             let n: f64 = rand::thread_rng().gen_range(min..max);
-            Ok(ctx.arena.add(Value::Float(OrderedFloat(n)), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Float(OrderedFloat(n)),
+                ctx.runtime_types.meta_float(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1227,7 +1310,11 @@ impl Random {
             let max = Self::to_int(ctx, args[1]);
 
             let n: i64 = rand::thread_rng().gen_range(min..=max);
-            Ok(ctx.arena.add(Value::Int(n), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Int(n),
+                ctx.runtime_types.meta_int(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1240,7 +1327,11 @@ impl Random {
     ) -> PrimResult<'a> {
         Box::pin(async move {
             let b: bool = rand::thread_rng().gen();
-            Ok(ctx.arena.add(Value::Bool(b), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Bool(b),
+                ctx.runtime_types.meta_bool(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1252,7 +1343,7 @@ impl Random {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let (_, elems) = ctx
+            let elems = ctx
                 .arena
                 .get_array(args[0])
                 .unwrap_or_else(|| typechecked!("Random.choice", "Array"));
@@ -1275,13 +1366,17 @@ impl Random {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let (ty, mut e) = ctx
+            let mut e = ctx
                 .arena
                 .take_array(args[0])
                 .unwrap_or_else(|| typechecked!("Random.shuffle", "Array"));
 
             e.shuffle(&mut rand::thread_rng());
-            Ok(ctx.arena.add(Value::Array(ty, Arc::new(e)), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Array(Arc::new(e)),
+                ValueMeta::untyped(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1294,7 +1389,7 @@ impl Random {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let (ty, elems) = ctx
+            let elems = ctx
                 .arena
                 .get_array(args[0])
                 .unwrap_or_else(|| typechecked!("Random.sample", "Array"));
@@ -1307,16 +1402,22 @@ impl Random {
                     elems.len()
                 );
                 let msg = ctx.arena.intern(&msg_str);
-                let msg_val = ctx.arena.add(Value::String(msg), ctx.span);
+                let msg_val = ctx.arena.add_typed(
+                    Payload::String(msg),
+                    ctx.runtime_types.meta_string(),
+                    ctx.span,
+                );
                 Ok(ctx.result_err(msg_val))
             } else {
                 let sampled: SmallVec<[ValueId; 4]> = elems
                     .choose_multiple(&mut rand::thread_rng(), n)
                     .copied()
                     .collect();
-                let arr = ctx
-                    .arena
-                    .add(Value::Array(ty, Arc::new(sampled)), ctx.span);
+                let arr = ctx.arena.add_typed(
+                    Payload::Array(Arc::new(sampled)),
+                    ValueMeta::untyped(),
+                    ctx.span,
+                );
                 Ok(ctx.result_ok(arr))
             }
         })
@@ -1332,7 +1433,11 @@ impl Random {
         Box::pin(async move {
             let id = uuid::Uuid::new_v4().to_string();
             let sid = ctx.arena.intern(&id);
-            Ok(ctx.arena.add(Value::String(sid), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::String(sid),
+                ctx.runtime_types.meta_string(),
+                ctx.span,
+            ))
         })
     }
 }
@@ -1351,10 +1456,8 @@ impl Map {
         _: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let k_ty = ctx.type_exprs.named(TypeId::UNKNOWN);
-            let v_ty = ctx.type_exprs.named(TypeId::UNKNOWN);
-            let map = Value::Map(k_ty, v_ty, Arc::new(IndexMap::new()));
-            Ok(ctx.arena.add(map, ctx.span))
+            let map = Payload::Map(Arc::new(IndexMap::new()));
+            Ok(ctx.arena.add_typed(map, ValueMeta::untyped(), ctx.span))
         })
     }
 
@@ -1366,12 +1469,16 @@ impl Map {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let (_, _, entries) = ctx
+            let entries = ctx
                 .arena
                 .get_map(args[0])
                 .unwrap_or_else(|| typechecked!("Map.length", "Map"));
 
-            Ok(ctx.arena.add(Value::Int(entries.len() as i64), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Int(entries.len() as i64),
+                ctx.runtime_types.meta_int(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1383,7 +1490,7 @@ impl Map {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let (k_ty, _, entries) = ctx
+            let entries = ctx
                 .arena
                 .get_map(args[0])
                 .unwrap_or_else(|| typechecked!("Map.keys", "Map"));
@@ -1394,10 +1501,20 @@ impl Map {
 
             let keys: SmallVec<[ValueId; 4]> = key_vals
                 .iter()
-                .map(|k| ctx.arena.add(k.to_value(), ctx.span))
+                .map(|k| {
+                    ctx.arena.add_typed(
+                        k.to_payload(),
+                        ValueMeta::untyped(),
+                        ctx.span,
+                    )
+                })
                 .collect();
 
-            Ok(ctx.arena.add(Value::Array(k_ty, Arc::new(keys)), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Array(Arc::new(keys)),
+                ValueMeta::untyped(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1409,14 +1526,18 @@ impl Map {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let (_, v_ty, entries) = ctx
+            let entries = ctx
                 .arena
                 .get_map(args[0])
                 .unwrap_or_else(|| typechecked!("Map.values", "Map"));
 
             let vals: SmallVec<[ValueId; 4]> =
                 entries.values().copied().collect();
-            Ok(ctx.arena.add(Value::Array(v_ty, Arc::new(vals)), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Array(Arc::new(vals)),
+                ValueMeta::untyped(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1428,7 +1549,7 @@ impl Map {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let (k_ty, v_ty, entries) = ctx
+            let entries = ctx
                 .arena
                 .get_map(args[0])
                 .unwrap_or_else(|| typechecked!("Map.entries", "Map"));
@@ -1436,24 +1557,26 @@ impl Map {
             // Collect entries before mutating arena
             let entry_pairs: SmallVec<[(MapKey, ValueId); 8]> =
                 entries.iter().map(|(k, v)| (k.clone(), *v)).collect();
-            let tuple_ty = ctx.type_exprs.tuple(smallvec![k_ty, v_ty]);
 
             let tuples: SmallVec<[ValueId; 4]> = entry_pairs
                 .iter()
                 .map(|(k, v_id)| {
-                    let k_id = ctx.arena.add(k.to_value(), ctx.span);
-                    let tuple = Value::Tuple(
-                        tuple_ty,
-                        Arc::new(smallvec![k_id, *v_id]),
+                    let k_id = ctx.arena.add_typed(
+                        k.to_payload(),
+                        ValueMeta::untyped(),
+                        ctx.span,
                     );
-                    ctx.arena.add(tuple, ctx.span)
+                    let tuple =
+                        Payload::Tuple(Arc::new(smallvec![k_id, *v_id]));
+                    ctx.arena.add_typed(tuple, ValueMeta::untyped(), ctx.span)
                 })
                 .collect();
 
-            let arr_ty = ctx.type_exprs.app(TypeId::ARRAY, smallvec![tuple_ty]);
-            Ok(ctx
-                .arena
-                .add(Value::Array(arr_ty, Arc::new(tuples)), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Array(Arc::new(tuples)),
+                ValueMeta::untyped(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1470,20 +1593,24 @@ impl Map {
                 .get(args[1])
                 .ok_or_else(|| ctx.runtime_error("invalid key value id"))?;
 
-            let map_key = MapKey::from_value(key).unwrap_or_else(|| {
+            let map_key = MapKey::from_payload(key).unwrap_or_else(|| {
                 typechecked!(
                     "Map.has",
                     "key must be scalar (Bool, Int, Float, Char, String)"
                 )
             });
 
-            let (_, _, entries) = ctx
+            let entries = ctx
                 .arena
                 .get_map(args[0])
                 .unwrap_or_else(|| typechecked!("Map.has", "Map"));
 
             let exists = entries.contains_key(&map_key);
-            Ok(ctx.arena.add(Value::Bool(exists), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Bool(exists),
+                ctx.runtime_types.meta_bool(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1500,14 +1627,14 @@ impl Map {
                 .get(args[1])
                 .ok_or_else(|| ctx.runtime_error("invalid key value id"))?;
 
-            let map_key = MapKey::from_value(key).unwrap_or_else(|| {
+            let map_key = MapKey::from_payload(key).unwrap_or_else(|| {
                 typechecked!(
                     "Map.lookup",
                     "key must be scalar (Bool, Int, Float, Char, String)"
                 )
             });
 
-            let (_, _, entries) = ctx
+            let entries = ctx
                 .arena
                 .get_map(args[0])
                 .unwrap_or_else(|| typechecked!("Map.lookup", "Map"));
@@ -1534,7 +1661,7 @@ impl Map {
                 .get(args[1])
                 .ok_or_else(|| ctx.runtime_error("invalid key value id"))?;
 
-            let map_key = MapKey::from_value(key).unwrap_or_else(|| {
+            let map_key = MapKey::from_payload(key).unwrap_or_else(|| {
                 typechecked!(
                     "Map.insert",
                     "key must be scalar (Bool, Int, Float, Char, String)"
@@ -1542,14 +1669,18 @@ impl Map {
             });
 
             // Type checker guarantees key/value types match the map type
-            let (k_ty, v_ty, mut e) = ctx
+            let mut e = ctx
                 .arena
                 .take_map(args[0])
                 .unwrap_or_else(|| typechecked!("Map.insert", "Map"));
 
             e.insert(map_key, args[2]);
 
-            Ok(ctx.arena.add(Value::Map(k_ty, v_ty, Arc::new(e)), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Map(Arc::new(e)),
+                ValueMeta::untyped(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1566,21 +1697,25 @@ impl Map {
                 .get(args[1])
                 .ok_or_else(|| ctx.runtime_error("invalid key value id"))?;
 
-            let map_key = MapKey::from_value(key).unwrap_or_else(|| {
+            let map_key = MapKey::from_payload(key).unwrap_or_else(|| {
                 typechecked!(
                     "Map.remove",
                     "key must be scalar (Bool, Int, Float, Char, String)"
                 )
             });
 
-            let (k_ty, v_ty, mut e) = ctx
+            let mut e = ctx
                 .arena
                 .take_map(args[0])
                 .unwrap_or_else(|| typechecked!("Map.remove", "Map"));
 
             e.shift_remove(&map_key);
 
-            Ok(ctx.arena.add(Value::Map(k_ty, v_ty, Arc::new(e)), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Map(Arc::new(e)),
+                ValueMeta::untyped(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1594,22 +1729,22 @@ impl Map {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let (k_ty, v_ty, mut merged) =
-                ctx.arena.take_map(args[0]).unwrap_or_else(|| {
-                    typechecked!("Map.merge", "Map (first arg)")
-                });
+            let mut merged = ctx.arena.take_map(args[0]).unwrap_or_else(|| {
+                typechecked!("Map.merge", "Map (first arg)")
+            });
 
-            let (_, _, entries_b) =
-                ctx.arena.get_map(args[1]).unwrap_or_else(|| {
-                    typechecked!("Map.merge", "Map (second arg)")
-                });
+            let entries_b = ctx.arena.get_map(args[1]).unwrap_or_else(|| {
+                typechecked!("Map.merge", "Map (second arg)")
+            });
 
             // Type checker guarantees compatible map types
             merged.extend(entries_b.iter().map(|(k, v)| (k.clone(), *v)));
 
-            Ok(ctx
-                .arena
-                .add(Value::Map(k_ty, v_ty, Arc::new(merged)), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Map(Arc::new(merged)),
+                ValueMeta::untyped(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1621,41 +1756,10 @@ impl Map {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let (_, arr) = ctx
+            let arr = ctx
                 .arena
                 .get_array(args[0])
                 .unwrap_or_else(|| typechecked!("Map.from-entries", "Array"));
-
-            // Infer types from first entry
-            let first_entry = arr.first().and_then(|id| ctx.arena.get(*id));
-            let (k_ty, v_ty) = match first_entry {
-                Some(Value::Tuple(_, elems)) if elems.len() == 2 => {
-                    let k_ty = elems
-                        .first()
-                        .and_then(|id| {
-                            ctx.arena.base_type_of(*id, ctx.type_exprs)
-                        })
-                        .map(|ty| ctx.type_exprs.named(ty))
-                        .unwrap_or_else(|| {
-                            ctx.type_exprs.named(TypeId::UNKNOWN)
-                        });
-                    let v_ty = elems
-                        .get(1)
-                        .and_then(|id| {
-                            ctx.arena.base_type_of(*id, ctx.type_exprs)
-                        })
-                        .map(|ty| ctx.type_exprs.named(ty))
-                        .unwrap_or_else(|| {
-                            ctx.type_exprs.named(TypeId::UNKNOWN)
-                        });
-                    (k_ty, v_ty)
-                }
-                _ => {
-                    let k_ty = ctx.type_exprs.named(TypeId::UNKNOWN);
-                    let v_ty = ctx.type_exprs.named(TypeId::UNKNOWN);
-                    (k_ty, v_ty)
-                }
-            };
 
             let mut entries = IndexMap::new();
 
@@ -1666,13 +1770,13 @@ impl Map {
                 });
 
                 match val {
-                    Value::Tuple(_, elems) if elems.len() == 2 => {
+                    Payload::Tuple(elems) if elems.len() == 2 => {
                         let k_val =
                             ctx.arena.get(elems[0]).unwrap_or_else(|| {
                                 typechecked!("Map.from-entries", "key ValueId")
                             });
-                        let map_key =
-                            MapKey::from_value(k_val).unwrap_or_else(|| {
+                        let map_key = MapKey::from_payload(k_val)
+                            .unwrap_or_else(|| {
                                 typechecked!(
                                     "Map.from-entries",
                                     "key must be scalar"
@@ -1684,9 +1788,11 @@ impl Map {
                 }
             });
 
-            Ok(ctx
-                .arena
-                .add(Value::Map(k_ty, v_ty, Arc::new(entries)), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Map(Arc::new(entries)),
+                ValueMeta::untyped(),
+                ctx.span,
+            ))
         })
     }
 }
@@ -1706,7 +1812,11 @@ impl Time {
     ) -> PrimResult<'a> {
         Box::pin(async move {
             let now = Utc::now();
-            Ok(ctx.arena.add(Value::Time(now), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Time(now),
+                ctx.runtime_types.meta_time(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1722,7 +1832,11 @@ impl Time {
                 .with_ymd_and_hms(1970, 1, 1, 0, 0, 0)
                 .single()
                 .ok_or_else(|| ctx.runtime_error("failed to create epoch"))?;
-            Ok(ctx.arena.add(Value::Time(epoch), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Time(epoch),
+                ctx.runtime_types.meta_time(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1754,13 +1868,21 @@ impl Time {
             match DateTime::parse_from_str(s, fmt) {
                 Ok(dt) => {
                     let utc = dt.with_timezone(&Utc);
-                    let time_id = ctx.arena.add(Value::Time(utc), ctx.span);
+                    let time_id = ctx.arena.add_typed(
+                        Payload::Time(utc),
+                        ctx.runtime_types.meta_time(),
+                        ctx.span,
+                    );
                     Ok(ctx.result_ok(time_id))
                 }
                 Err(e) => {
                     let msg = format!("parse error: {e}");
                     let msg_id = ctx.arena.intern(&msg);
-                    let err_id = ctx.arena.add(Value::String(msg_id), ctx.span);
+                    let err_id = ctx.arena.add_typed(
+                        Payload::String(msg_id),
+                        ctx.runtime_types.meta_string(),
+                        ctx.span,
+                    );
                     Ok(ctx.result_err(err_id))
                 }
             }
@@ -1788,7 +1910,11 @@ impl Time {
 
             let formatted = t.format(fmt).to_string();
             let sid = ctx.arena.intern(&formatted);
-            Ok(ctx.arena.add(Value::String(sid), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::String(sid),
+                ctx.runtime_types.meta_string(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1807,7 +1933,11 @@ impl Time {
                 chrono::Duration::milliseconds((secs * 1000.0) as i64);
             let new_time = t + duration;
 
-            Ok(ctx.arena.add(Value::Time(new_time), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Time(new_time),
+                ctx.runtime_types.meta_time(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1823,7 +1953,11 @@ impl Time {
             let b = Self::get_time(ctx, args[1], "Time");
 
             let diff = (a - b).num_milliseconds() as f64 / 1000.0;
-            Ok(ctx.arena.add(Value::Float(OrderedFloat(diff)), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Float(OrderedFloat(diff)),
+                ctx.runtime_types.meta_float(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1834,7 +1968,11 @@ impl Time {
     ) -> PrimResult<'a> {
         Box::pin(async move {
             let t = Self::get_time(ctx, args[0], "Time");
-            Ok(ctx.arena.add(Value::Int(t.year() as i64), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Int(t.year() as i64),
+                ctx.runtime_types.meta_int(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1845,7 +1983,11 @@ impl Time {
     ) -> PrimResult<'a> {
         Box::pin(async move {
             let t = Self::get_time(ctx, args[0], "Time");
-            Ok(ctx.arena.add(Value::Int(t.month() as i64), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Int(t.month() as i64),
+                ctx.runtime_types.meta_int(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1856,7 +1998,11 @@ impl Time {
     ) -> PrimResult<'a> {
         Box::pin(async move {
             let t = Self::get_time(ctx, args[0], "Time");
-            Ok(ctx.arena.add(Value::Int(t.day() as i64), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Int(t.day() as i64),
+                ctx.runtime_types.meta_int(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1867,7 +2013,11 @@ impl Time {
     ) -> PrimResult<'a> {
         Box::pin(async move {
             let t = Self::get_time(ctx, args[0], "Time");
-            Ok(ctx.arena.add(Value::Int(t.hour() as i64), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Int(t.hour() as i64),
+                ctx.runtime_types.meta_int(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1878,7 +2028,11 @@ impl Time {
     ) -> PrimResult<'a> {
         Box::pin(async move {
             let t = Self::get_time(ctx, args[0], "Time");
-            Ok(ctx.arena.add(Value::Int(t.minute() as i64), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Int(t.minute() as i64),
+                ctx.runtime_types.meta_int(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1889,7 +2043,11 @@ impl Time {
     ) -> PrimResult<'a> {
         Box::pin(async move {
             let t = Self::get_time(ctx, args[0], "Time");
-            Ok(ctx.arena.add(Value::Int(t.second() as i64), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Int(t.second() as i64),
+                ctx.runtime_types.meta_int(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1905,7 +2063,7 @@ impl Time {
                 .arena
                 .get(args[0])
                 .and_then(|v| match v {
-                    Value::Int(n) => Some(*n),
+                    Payload::Int(n) => Some(*n),
                     _ => None,
                 })
                 .unwrap_or_else(|| typechecked!("Time.sleep", "Int"));
@@ -1913,7 +2071,11 @@ impl Time {
             let dur = tokio::time::Duration::from_micros(us.max(0) as u64);
             tokio::time::sleep(dur).await;
 
-            Ok(ctx.arena.add(Value::Unit, ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Unit,
+                ctx.runtime_types.meta_unit(),
+                ctx.span,
+            ))
         })
     }
 
@@ -1927,7 +2089,7 @@ impl Time {
         ctx.arena
             .get(id)
             .and_then(|v| match v {
-                Value::Time(t) => Some(*t),
+                Payload::Time(t) => Some(*t),
                 _ => None,
             })
             .unwrap_or_else(|| typechecked!(fn_name, "Time"))
@@ -1940,8 +2102,8 @@ impl Time {
         ctx.arena
             .get(id)
             .and_then(|v| match v {
-                Value::Float(f) => Some(f.0),
-                Value::Int(n) => Some(*n as f64),
+                Payload::Float(f) => Some(f.0),
+                Payload::Int(n) => Some(*n as f64),
                 _ => None,
             })
             .unwrap_or_else(|| typechecked!("get_float", "Numeric"))
@@ -1969,14 +2131,14 @@ impl Opt {
                 ctx.runtime_error("Option.unwrap-or: invalid value")
             })?;
 
-            let is_some = opt.is_some(ctx.type_exprs);
-            let is_none = opt.is_none(ctx.type_exprs);
+            let is_some = opt.is_some();
+            let is_none = opt.is_none();
 
             match (is_some, is_none) {
                 (true, false) => {
                     // Option.Some(v) - return the inner value
                     match opt {
-                        Value::Tagged(_, _, ref payloads) => {
+                        Payload::Tagged(_, _, ref payloads) => {
                             payloads.first().copied().ok_or_else(|| {
                                 ctx.runtime_error(
                                     "Option.unwrap-or: Some has no payload",
@@ -2011,14 +2173,14 @@ impl Opt {
                     typechecked!("Option.flatten", "valid arg")
                 });
 
-            let is_some = opt.is_some(ctx.type_exprs);
-            let is_none = opt.is_none(ctx.type_exprs);
+            let is_some = opt.is_some();
+            let is_none = opt.is_none();
 
             match (is_some, is_none) {
                 (true, false) => {
                     // Option.Some(inner) - return the inner Option
                     match opt {
-                        Value::Tagged(_, _, ref payloads) => {
+                        Payload::Tagged(_, _, ref payloads) => {
                             Ok(*payloads.first().unwrap_or_else(|| {
                                 typechecked!("Option.flatten", "Some payload")
                             }))
@@ -2045,14 +2207,14 @@ impl Opt {
                     typechecked!("Option.note", "valid arg")
                 });
 
-            let is_some = opt.is_some(ctx.type_exprs);
-            let is_none = opt.is_none(ctx.type_exprs);
+            let is_some = opt.is_some();
+            let is_none = opt.is_none();
 
             match (is_some, is_none) {
                 (true, false) => {
                     // Option.Some(v) -> Result.Ok(v)
                     match opt {
-                        Value::Tagged(_, _, ref payloads) => {
+                        Payload::Tagged(_, _, ref payloads) => {
                             let inner =
                                 *payloads.first().unwrap_or_else(|| {
                                     typechecked!("Option.note", "Some payload")
@@ -2093,14 +2255,14 @@ impl Res {
                 ctx.runtime_error("Result.unwrap-or: invalid value")
             })?;
 
-            let is_ok = res.is_ok(ctx.type_exprs);
-            let is_err = res.is_err(ctx.type_exprs);
+            let is_ok = res.is_ok();
+            let is_err = res.is_err();
 
             match (is_ok, is_err) {
                 (true, false) => {
                     // Result.Ok(v) - return the inner value
                     match res {
-                        Value::Tagged(_, _, ref payloads) => {
+                        Payload::Tagged(_, _, ref payloads) => {
                             payloads.first().copied().ok_or_else(|| {
                                 ctx.runtime_error(
                                     "Result.unwrap-or: Ok has no payload",
@@ -2135,14 +2297,14 @@ impl Res {
                     typechecked!("Result.flatten", "valid arg")
                 });
 
-            let is_ok = res.is_ok(ctx.type_exprs);
-            let is_err = res.is_err(ctx.type_exprs);
+            let is_ok = res.is_ok();
+            let is_err = res.is_err();
 
             match (is_ok, is_err) {
                 (true, false) => {
                     // Result.Ok(inner) - return the inner Result
                     match res {
-                        Value::Tagged(_, _, ref payloads) => {
+                        Payload::Tagged(_, _, ref payloads) => {
                             Ok(*payloads.first().unwrap_or_else(|| {
                                 typechecked!("Result.flatten", "Ok payload")
                             }))
@@ -2169,14 +2331,14 @@ impl Res {
                     typechecked!("Result.hush", "valid arg")
                 });
 
-            let is_ok = res.is_ok(ctx.type_exprs);
-            let is_err = res.is_err(ctx.type_exprs);
+            let is_ok = res.is_ok();
+            let is_err = res.is_err();
 
             match (is_ok, is_err) {
                 (true, false) => {
                     // Result.Ok(v) -> Option.Some(v)
                     match res {
-                        Value::Tagged(_, _, ref payloads) => {
+                        Payload::Tagged(_, _, ref payloads) => {
                             let inner =
                                 *payloads.first().unwrap_or_else(|| {
                                     typechecked!("Result.hush", "Ok payload")
@@ -2228,7 +2390,11 @@ impl Io {
             line.truncate(line.trim_end_matches(['\n', '\r']).len());
 
             let sid = ctx.arena.intern(&line);
-            Ok(ctx.arena.add(Value::String(sid), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::String(sid),
+                ctx.runtime_types.meta_string(),
+                ctx.span,
+            ))
         })
     }
 
@@ -2247,7 +2413,11 @@ impl Io {
             let s = Self::valid_str(ctx.arena, sid).to_owned();
 
             ctx.io.stdout(&s, ctx.span).await?;
-            Ok(ctx.arena.add(Value::Unit, ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Unit,
+                ctx.runtime_types.meta_unit(),
+                ctx.span,
+            ))
         })
     }
 
@@ -2266,7 +2436,11 @@ impl Io {
             let s = Self::valid_str(ctx.arena, sid).to_owned();
 
             ctx.io.stdoutline(&s, ctx.span).await?;
-            Ok(ctx.arena.add(Value::Unit, ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Unit,
+                ctx.runtime_types.meta_unit(),
+                ctx.span,
+            ))
         })
     }
 
@@ -2285,7 +2459,11 @@ impl Io {
             let s = Self::valid_str(ctx.arena, sid).to_owned();
 
             ctx.io.stderr(&s, ctx.span).await?;
-            Ok(ctx.arena.add(Value::Unit, ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Unit,
+                ctx.runtime_types.meta_unit(),
+                ctx.span,
+            ))
         })
     }
 
@@ -2304,7 +2482,11 @@ impl Io {
             let s = Self::valid_str(ctx.arena, sid).to_owned();
 
             ctx.io.stderrline(&s, ctx.span).await?;
-            Ok(ctx.arena.add(Value::Unit, ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Unit,
+                ctx.runtime_types.meta_unit(),
+                ctx.span,
+            ))
         })
     }
 }
@@ -2317,12 +2499,12 @@ pub(crate) struct Directory;
 impl Prim for Directory {}
 
 impl Directory {
-    /// Helper: extract path string from a `Value::FilePath`.
+    /// Helper: extract path string from a `Payload::FilePath`.
     fn get_path_str(ctx: &PrimCtx<'_>, id: ValueId) -> String {
         ctx.arena
             .get(id)
             .and_then(|v| match v {
-                Value::FilePath(sid) => ctx.arena.get_str(*sid),
+                Payload::FilePath(sid) => ctx.arena.get_str(*sid),
                 _ => None,
             })
             .unwrap_or_else(|| typechecked!("Io.Directory", "FilePath"))
@@ -2332,19 +2514,31 @@ impl Directory {
     /// Helper: create a `Path.File(filepath)` value.
     fn make_path_file(ctx: &mut PrimCtx<'_>, path_str: &str) -> ValueId {
         let sid = ctx.arena.intern(path_str);
-        let fp_id = ctx.arena.add(Value::FilePath(sid), ctx.span);
-        let path_ty = ctx.type_exprs.named(TypeId::PATH);
-        ctx.arena
-            .add(Value::Tagged(path_ty, 0, smallvec![fp_id]), ctx.span)
+        let fp_id = ctx.arena.add_typed(
+            Payload::FilePath(sid),
+            ctx.runtime_types.meta_filepath(),
+            ctx.span,
+        );
+        ctx.arena.add_typed(
+            Payload::Tagged(TypeId::PATH, 0, smallvec![fp_id]),
+            ValueMeta::untyped(),
+            ctx.span,
+        )
     }
 
     /// Helper: create a `Path.Dir(filepath)` value.
     fn make_path_dir(ctx: &mut PrimCtx<'_>, path_str: &str) -> ValueId {
         let sid = ctx.arena.intern(path_str);
-        let fp_id = ctx.arena.add(Value::FilePath(sid), ctx.span);
-        let path_ty = ctx.type_exprs.named(TypeId::PATH);
-        ctx.arena
-            .add(Value::Tagged(path_ty, 1, smallvec![fp_id]), ctx.span)
+        let fp_id = ctx.arena.add_typed(
+            Payload::FilePath(sid),
+            ctx.runtime_types.meta_filepath(),
+            ctx.span,
+        );
+        ctx.arena.add_typed(
+            Payload::Tagged(TypeId::PATH, 1, smallvec![fp_id]),
+            ValueMeta::untyped(),
+            ctx.span,
+        )
     }
 
     /// `(FilePath) -> Array[Path]`
@@ -2381,10 +2575,11 @@ impl Directory {
                 }
             }
 
-            let path_ty = ctx.type_exprs.named(TypeId::PATH);
-            Ok(ctx
-                .arena
-                .add(Value::Array(path_ty, Arc::new(paths)), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Array(Arc::new(paths)),
+                ValueMeta::untyped(),
+                ctx.span,
+            ))
         })
     }
 
@@ -2401,7 +2596,7 @@ impl Directory {
             })?;
 
             let (src, dest) = match obj {
-                Value::Object(fields) => {
+                Payload::Object(fields) => {
                     let src_id =
                         fields.values().next().copied().ok_or_else(|| {
                             ctx.runtime_error(
@@ -2429,7 +2624,11 @@ impl Directory {
                 ctx.runtime_error(format!("Io.Directory.move-path: {e}"))
             })?;
 
-            Ok(ctx.arena.add(Value::Unit, ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Unit,
+                ctx.runtime_types.meta_unit(),
+                ctx.span,
+            ))
         })
     }
 
@@ -2446,7 +2645,7 @@ impl Directory {
             })?;
 
             let (src, dest) = match obj {
-                Value::Object(fields) => {
+                Payload::Object(fields) => {
                     let src_id =
                         fields.values().next().copied().ok_or_else(|| {
                             ctx.runtime_error(
@@ -2474,7 +2673,11 @@ impl Directory {
                 ctx.runtime_error(format!("Io.Directory.copy-path: {e}"))
             })?;
 
-            Ok(ctx.arena.add(Value::Unit, ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Unit,
+                ctx.runtime_types.meta_unit(),
+                ctx.span,
+            ))
         })
     }
 
@@ -2491,12 +2694,20 @@ impl Directory {
             // Try removing as file first, then as directory
             let result = tokio::fs::remove_file(&path_str).await;
             match result {
-                Ok(()) => Ok(ctx.arena.add(Value::Unit, ctx.span)),
+                Ok(()) => Ok(ctx.arena.add_typed(
+                    Payload::Unit,
+                    ctx.runtime_types.meta_unit(),
+                    ctx.span,
+                )),
                 Err(_) => {
                     tokio::fs::remove_dir(&path_str).await.map_err(|e| {
                         ctx.runtime_error(format!("Io.Directory.remove: {e}"))
                     })?;
-                    Ok(ctx.arena.add(Value::Unit, ctx.span))
+                    Ok(ctx.arena.add_typed(
+                        Payload::Unit,
+                        ctx.runtime_types.meta_unit(),
+                        ctx.span,
+                    ))
                 }
             }
         })
@@ -2515,7 +2726,11 @@ impl Directory {
             // Try removing as file first
             let result = tokio::fs::remove_file(&path_str).await;
             match result {
-                Ok(()) => Ok(ctx.arena.add(Value::Unit, ctx.span)),
+                Ok(()) => Ok(ctx.arena.add_typed(
+                    Payload::Unit,
+                    ctx.runtime_types.meta_unit(),
+                    ctx.span,
+                )),
                 Err(_) => {
                     tokio::fs::remove_dir_all(&path_str).await.map_err(
                         |e| {
@@ -2524,7 +2739,11 @@ impl Directory {
                             ))
                         },
                     )?;
-                    Ok(ctx.arena.add(Value::Unit, ctx.span))
+                    Ok(ctx.arena.add_typed(
+                        Payload::Unit,
+                        ctx.runtime_types.meta_unit(),
+                        ctx.span,
+                    ))
                 }
             }
         })
@@ -2541,7 +2760,11 @@ impl Directory {
             let path_str = Self::get_path_str(ctx, args[0]);
             let exists =
                 tokio::fs::try_exists(&path_str).await.unwrap_or(false);
-            Ok(ctx.arena.add(Value::Bool(exists), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Bool(exists),
+                ctx.runtime_types.meta_bool(),
+                ctx.span,
+            ))
         })
     }
 
@@ -2558,7 +2781,11 @@ impl Directory {
                 .await
                 .map(|m| m.is_file())
                 .unwrap_or(false);
-            Ok(ctx.arena.add(Value::Bool(is_file), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Bool(is_file),
+                ctx.runtime_types.meta_bool(),
+                ctx.span,
+            ))
         })
     }
 
@@ -2575,7 +2802,11 @@ impl Directory {
                 .await
                 .map(|m| m.is_dir())
                 .unwrap_or(false);
-            Ok(ctx.arena.add(Value::Bool(is_dir), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Bool(is_dir),
+                ctx.runtime_types.meta_bool(),
+                ctx.span,
+            ))
         })
     }
 
@@ -2593,7 +2824,11 @@ impl Directory {
                     ctx.runtime_error(format!("Io.Directory.read-file: {e}"))
                 })?;
             let sid = ctx.arena.intern(&contents);
-            Ok(ctx.arena.add(Value::String(sid), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::String(sid),
+                ctx.runtime_types.meta_string(),
+                ctx.span,
+            ))
         })
     }
 
@@ -2610,7 +2845,7 @@ impl Directory {
             })?;
 
             let (path, contents) = match obj {
-                Value::Object(fields) => {
+                Payload::Object(fields) => {
                     let path_id =
                         fields.values().next().copied().ok_or_else(|| {
                             ctx.runtime_error(
@@ -2644,7 +2879,11 @@ impl Directory {
                 ctx.runtime_error(format!("Io.Directory.write-file: {e}"))
             })?;
 
-            Ok(ctx.arena.add(Value::Unit, ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Unit,
+                ctx.runtime_types.meta_unit(),
+                ctx.span,
+            ))
         })
     }
 
@@ -2663,7 +2902,7 @@ impl Directory {
             })?;
 
             let (path, contents) = match obj {
-                Value::Object(fields) => {
+                Payload::Object(fields) => {
                     let path_id =
                         fields.values().next().copied().ok_or_else(|| {
                             ctx.runtime_error(
@@ -2706,7 +2945,11 @@ impl Directory {
                 ctx.runtime_error(format!("Io.Directory.append-file: {e}"))
             })?;
 
-            Ok(ctx.arena.add(Value::Unit, ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Unit,
+                ctx.runtime_types.meta_unit(),
+                ctx.span,
+            ))
         })
     }
 
@@ -2722,7 +2965,11 @@ impl Directory {
             tokio::fs::create_dir(&path_str).await.map_err(|e| {
                 ctx.runtime_error(format!("Io.Directory.create-dir: {e}"))
             })?;
-            Ok(ctx.arena.add(Value::Unit, ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Unit,
+                ctx.runtime_types.meta_unit(),
+                ctx.span,
+            ))
         })
     }
 
@@ -2738,7 +2985,11 @@ impl Directory {
             tokio::fs::create_dir_all(&path_str).await.map_err(|e| {
                 ctx.runtime_error(format!("Io.Directory.create-dir-all: {e}"))
             })?;
-            Ok(ctx.arena.add(Value::Unit, ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Unit,
+                ctx.runtime_types.meta_unit(),
+                ctx.span,
+            ))
         })
     }
 
@@ -2755,7 +3006,11 @@ impl Directory {
             })?;
             let path_str = cwd.to_string_lossy();
             let sid = ctx.arena.intern(&path_str);
-            Ok(ctx.arena.add(Value::FilePath(sid), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::FilePath(sid),
+                ctx.runtime_types.meta_filepath(),
+                ctx.span,
+            ))
         })
     }
 
@@ -2771,7 +3026,11 @@ impl Directory {
             env::set_current_dir(&path_str).map_err(|e| {
                 ctx.runtime_error(format!("Io.Directory.set-pwd: {e}"))
             })?;
-            Ok(ctx.arena.add(Value::Unit, ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Unit,
+                ctx.runtime_types.meta_unit(),
+                ctx.span,
+            ))
         })
     }
 
@@ -2789,16 +3048,17 @@ impl Directory {
                 });
             let name = Self::valid_str(ctx.arena, name_sid);
 
-            let str_ty = ctx.type_exprs.named(TypeId::STRING);
-            let opt_ty = ctx.type_exprs.app(TypeId::OPTION, smallvec![str_ty]);
-
             match env::var(name) {
                 Ok(val) => {
                     let sid = ctx.arena.intern(&val);
-                    let val_id = ctx.arena.add(Value::String(sid), ctx.span);
-                    Ok(ctx.arena.add(Value::some(opt_ty, val_id), ctx.span))
+                    let val_id = ctx.arena.add_typed(
+                        Payload::String(sid),
+                        ctx.runtime_types.meta_string(),
+                        ctx.span,
+                    );
+                    Ok(ctx.option_some(val_id))
                 }
-                Err(_) => Ok(ctx.arena.add(Value::none(opt_ty), ctx.span)),
+                Err(_) => Ok(ctx.option_none()),
             }
         })
     }
@@ -2816,7 +3076,7 @@ impl Directory {
             })?;
 
             let (name, value) = match obj {
-                Value::Object(fields) => {
+                Payload::Object(fields) => {
                     let name_id =
                         fields.values().next().copied().ok_or_else(|| {
                             ctx.runtime_error(
@@ -2854,7 +3114,11 @@ impl Directory {
             };
 
             env::set_var(&name, &value);
-            Ok(ctx.arena.add(Value::Unit, ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Unit,
+                ctx.runtime_types.meta_unit(),
+                ctx.span,
+            ))
         })
     }
 
@@ -2872,7 +3136,11 @@ impl Directory {
                     ctx.runtime_error(format!("Io.Directory.canonicalize: {e}"))
                 })?;
             let sid = ctx.arena.intern(&canonical.to_string_lossy());
-            Ok(ctx.arena.add(Value::FilePath(sid), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::FilePath(sid),
+                ctx.runtime_types.meta_filepath(),
+                ctx.span,
+            ))
         })
     }
 
@@ -2887,16 +3155,17 @@ impl Directory {
             let path_str = Self::get_path_str(ctx, args[0]);
             let path = Path::new(&path_str);
 
-            let fp_ty = ctx.type_exprs.named(TypeId::FILEPATH);
-            let opt_ty = ctx.type_exprs.app(TypeId::OPTION, smallvec![fp_ty]);
-
             match path.parent() {
                 Some(p) if !p.as_os_str().is_empty() => {
                     let sid = ctx.arena.intern(&p.to_string_lossy());
-                    let fp = ctx.arena.add(Value::FilePath(sid), ctx.span);
-                    Ok(ctx.arena.add(Value::some(opt_ty, fp), ctx.span))
+                    let fp = ctx.arena.add_typed(
+                        Payload::FilePath(sid),
+                        ctx.runtime_types.meta_filepath(),
+                        ctx.span,
+                    );
+                    Ok(ctx.option_some(fp))
                 }
-                _ => Ok(ctx.arena.add(Value::none(opt_ty), ctx.span)),
+                _ => Ok(ctx.option_none()),
             }
         })
     }
@@ -2914,16 +3183,17 @@ impl Directory {
             let name_opt =
                 path.file_name().map(|n| n.to_string_lossy().to_string());
 
-            let str_ty = ctx.type_exprs.named(TypeId::STRING);
-            let opt_ty = ctx.type_exprs.app(TypeId::OPTION, smallvec![str_ty]);
-
             match name_opt {
                 Some(name) => {
                     let sid = ctx.arena.intern(&name);
-                    let s = ctx.arena.add(Value::String(sid), ctx.span);
-                    Ok(ctx.arena.add(Value::some(opt_ty, s), ctx.span))
+                    let s = ctx.arena.add_typed(
+                        Payload::String(sid),
+                        ctx.runtime_types.meta_string(),
+                        ctx.span,
+                    );
+                    Ok(ctx.option_some(s))
                 }
-                None => Ok(ctx.arena.add(Value::none(opt_ty), ctx.span)),
+                None => Ok(ctx.option_none()),
             }
         })
     }
@@ -2941,16 +3211,17 @@ impl Directory {
             let ext_opt =
                 path.extension().map(|e| e.to_string_lossy().to_string());
 
-            let str_ty = ctx.type_exprs.named(TypeId::STRING);
-            let opt_ty = ctx.type_exprs.app(TypeId::OPTION, smallvec![str_ty]);
-
             match ext_opt {
                 Some(ext) => {
                     let sid = ctx.arena.intern(&ext);
-                    let s = ctx.arena.add(Value::String(sid), ctx.span);
-                    Ok(ctx.arena.add(Value::some(opt_ty, s), ctx.span))
+                    let s = ctx.arena.add_typed(
+                        Payload::String(sid),
+                        ctx.runtime_types.meta_string(),
+                        ctx.span,
+                    );
+                    Ok(ctx.option_some(s))
                 }
-                None => Ok(ctx.arena.add(Value::none(opt_ty), ctx.span)),
+                None => Ok(ctx.option_none()),
             }
         })
     }
@@ -2971,7 +3242,7 @@ impl Directory {
 
             // Collect all parts as owned strings first
             let part_strs: Vec<String> = match parts {
-                Value::Array(_, elems) => elems
+                Payload::Array(elems) => elems
                     .iter()
                     .map(|elem_id| {
                         let sid = ctx
@@ -2993,7 +3264,11 @@ impl Directory {
             part_strs.iter().for_each(|p| path.push(p));
 
             let sid = ctx.arena.intern(&path.to_string_lossy());
-            Ok(ctx.arena.add(Value::FilePath(sid), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::FilePath(sid),
+                ctx.runtime_types.meta_filepath(),
+                ctx.span,
+            ))
         })
     }
 
@@ -3007,7 +3282,11 @@ impl Directory {
         Box::pin(async move {
             let tmp = env::temp_dir();
             let sid = ctx.arena.intern(&tmp.to_string_lossy());
-            Ok(ctx.arena.add(Value::FilePath(sid), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::FilePath(sid),
+                ctx.runtime_types.meta_filepath(),
+                ctx.span,
+            ))
         })
     }
 
@@ -3035,7 +3314,11 @@ impl Directory {
             path.set_extension(&ext);
 
             let sid = ctx.arena.intern(&path.to_string_lossy());
-            Ok(ctx.arena.add(Value::FilePath(sid), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::FilePath(sid),
+                ctx.runtime_types.meta_filepath(),
+                ctx.span,
+            ))
         })
     }
 }
@@ -3077,15 +3360,15 @@ impl Prelude {
                 .cloned()
                 .unwrap_or_else(|| typechecked!("contains", "needle"));
             let found = match &haystack {
-                Value::Array(_, elems) => elems.iter().any(|eid| {
+                Payload::Array(elems) => elems.iter().any(|eid| {
                     ctx.arena.get(*eid).is_some_and(|v| *v == needle)
                 }),
-                Value::Range {
+                Payload::Range {
                     start,
                     end,
                     inclusive,
                 } => match &needle {
-                    Value::Int(n) => {
+                    Payload::Int(n) => {
                         if *inclusive {
                             *n >= *start && *n <= *end
                         } else {
@@ -3096,7 +3379,11 @@ impl Prelude {
                 },
                 _ => typechecked!("contains", "Iterable"),
             };
-            Ok(ctx.arena.add(Value::Bool(found), ctx.span))
+            Ok(ctx.arena.add_typed(
+                Payload::Bool(found),
+                ctx.runtime_types.meta_bool(),
+                ctx.span,
+            ))
         })
     }
 
@@ -3115,25 +3402,25 @@ impl Prelude {
                 .cloned()
                 .unwrap_or_else(|| typechecked!("reverse", "value"));
             let res = match v {
-                Value::Array(ty, elems) => {
+                Payload::Array(elems) => {
                     let reversed: SmallVec<[ValueId; 4]> =
                         elems.iter().rev().copied().collect();
-                    Value::Array(ty, Arc::new(reversed))
+                    Payload::Array(Arc::new(reversed))
                 }
-                Value::Range {
+                Payload::Range {
                     start,
                     end,
                     inclusive,
                 } => {
                     if inclusive {
-                        Value::Range {
+                        Payload::Range {
                             start: end,
                             end: start,
                             inclusive: true,
                         }
                     } else {
                         // `start .. end` reversed is `end - 1 ..= start`
-                        Value::Range {
+                        Payload::Range {
                             start: end - 1,
                             end: start,
                             inclusive: true,
@@ -3142,7 +3429,7 @@ impl Prelude {
                 }
                 _ => typechecked!("reverse", "Array or Range"),
             };
-            Ok(ctx.arena.add(res, ctx.span))
+            Ok(ctx.arena.add_typed(res, ValueMeta::untyped(), ctx.span))
         })
     }
 }

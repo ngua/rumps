@@ -393,6 +393,20 @@ impl SolveCtx<'_> {
                 }
             }
 
+            // HKT application against a union must keep the union as the
+            // constructor. The generic union matcher below would pick one
+            // member and collapse `Flex` to `Option`/`Array`.
+            (Ty::Apply(tv, args), Ty::Union(..)) => {
+                let tv = *tv;
+                let args: SmallVec<[TyId; 4]> = args.clone();
+                self.unify_apply(tv, &args, t2, span)
+            }
+            (Ty::Union(..), Ty::Apply(tv, args)) => {
+                let tv = *tv;
+                let args: SmallVec<[TyId; 4]> = args.clone();
+                self.unify_apply(tv, &args, t1, span)
+            }
+
             // Union types: structural equality (same members, order-independent)
             (Ty::Union(_, members1), Ty::Union(_, members2)) => {
                 if members1.len() != members2.len() {
@@ -595,6 +609,151 @@ impl SolveCtx<'_> {
                 } else {
                     let ctor = self.ty_arena.map_ty(TyArena::ERROR, v);
                     self.unify_apply_inner(tv, args, ctor, &[k], span)
+                }
+            }
+
+            Ty::Union(prov, ref members) => {
+                let parts: Option<SmallVec<[(TyId, SmallVec<[TyId; 4]>); 4]>> =
+                    members
+                        .iter()
+                        .map(|&m| match self.ty_arena.get(m).clone() {
+                            Ty::Option(inner) => Some((
+                                self.ty_arena.option(TyArena::ERROR),
+                                smallvec![inner],
+                            )),
+                            Ty::Result(ok, err) => {
+                                if args.len() >= 2 {
+                                    Some((
+                                        self.ty_arena.result(
+                                            TyArena::ERROR,
+                                            TyArena::ERROR,
+                                        ),
+                                        smallvec![ok, err],
+                                    ))
+                                } else {
+                                    Some((
+                                        self.ty_arena
+                                            .result(TyArena::ERROR, err),
+                                        smallvec![ok],
+                                    ))
+                                }
+                            }
+                            Ty::Array(inner) => Some((
+                                self.ty_arena.array(TyArena::ERROR),
+                                smallvec![inner],
+                            )),
+                            Ty::Map(k, v) => {
+                                if args.len() >= 2 {
+                                    Some((
+                                        self.ty_arena.map_ty(
+                                            TyArena::ERROR,
+                                            TyArena::ERROR,
+                                        ),
+                                        smallvec![k, v],
+                                    ))
+                                } else {
+                                    Some((
+                                        self.ty_arena.map_ty(TyArena::ERROR, v),
+                                        smallvec![k],
+                                    ))
+                                }
+                            }
+                            Ty::Range => {
+                                Some((TyArena::RANGE, smallvec![TyArena::INT]))
+                            }
+                            Ty::Named(id, ref type_args) => {
+                                if type_args.is_empty() {
+                                    None
+                                } else {
+                                    let start = type_args
+                                        .len()
+                                        .saturating_sub(args.len());
+                                    let elems = type_args
+                                        .iter()
+                                        .skip(start)
+                                        .copied()
+                                        .collect();
+                                    let placeholder = type_args
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(i, &t)| {
+                                            if i >= start {
+                                                TyArena::ERROR
+                                            } else {
+                                                t
+                                            }
+                                        })
+                                        .collect();
+                                    Some((
+                                        self.ty_arena.named(id, placeholder),
+                                        elems,
+                                    ))
+                                }
+                            }
+                            Ty::Tuple(ref ts) => {
+                                let start = ts.len().saturating_sub(args.len());
+                                let elems =
+                                    ts.iter().skip(start).copied().collect();
+                                let placeholder = ts
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, &t)| {
+                                        if i >= start {
+                                            TyArena::ERROR
+                                        } else {
+                                            t
+                                        }
+                                    })
+                                    .collect();
+                                Some((
+                                    self.ty_arena.alloc(Ty::Tuple(placeholder)),
+                                    elems,
+                                ))
+                            }
+                            _ => None,
+                        })
+                        .collect();
+
+                match parts {
+                    Some(parts) => {
+                        let ctors =
+                            parts.iter().map(|(ctor, _)| *ctor).collect();
+                        let ctor = self.ty_arena.alloc(Ty::Union(prov, ctors));
+                        parts
+                            .iter()
+                            .find_map(|(_, elems)| {
+                                let snap = self.uf.snapshot();
+                                match self.unify_apply_inner(
+                                    tv, args, ctor, elems, span,
+                                ) {
+                                    Ok(()) => Some(Ok(())),
+                                    Err(_) => {
+                                        self.uf.rollback(snap);
+                                        None
+                                    }
+                                }
+                            })
+                            .unwrap_or_else(|| {
+                                let got_args: SmallVec<[TyId; 4]> =
+                                    args.iter().copied().collect();
+                                let got = self.ty_arena.hkt(tv, got_args);
+                                Err(TypeError::Mismatch {
+                                    expected: other,
+                                    got,
+                                    span,
+                                })
+                            })
+                    }
+                    None => {
+                        let got_args: SmallVec<[TyId; 4]> =
+                            args.iter().copied().collect();
+                        let got = self.ty_arena.hkt(tv, got_args);
+                        Err(TypeError::Mismatch {
+                            expected: other,
+                            got,
+                            span,
+                        })
+                    }
                 }
             }
 

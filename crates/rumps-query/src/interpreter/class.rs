@@ -30,7 +30,6 @@
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::mem;
 use std::sync::Arc;
 
 use indexmap::IndexMap;
@@ -42,42 +41,40 @@ use super::hof::{
     ChainWrapper, Continuation, HofMethodFn, HofState, IterKind, MethodResult,
 };
 use crate::intern::{StringId, StringInterner};
-use crate::typecheck::{Ty, TyArena};
+use crate::typecheck::{RuntimeTypes, Ty, TyArena};
 use crate::value::{
-    MapKey, TypeDef, TypeExprArena, TypeExprId, TypeId, TypeRegistry, Value,
-    ValueArena, ValueId,
+    MapKey, Payload, TypeId, TypeRegistry, ValueArena, ValueId, ValueMeta,
 };
 use crate::{ClassId, Error, Result, Span};
 
 /// Context for class method dispatch.
 pub(crate) struct ClassCtx<'a> {
     pub(crate) arena: &'a mut ValueArena,
-    pub(crate) type_exprs: &'a mut TypeExprArena,
     pub(crate) ty_arena: &'a TyArena,
+    pub(crate) runtime_types: &'a RuntimeTypes,
     pub(crate) registry: &'a TypeRegistry,
     pub(crate) regex_cache: &'a [regex::Regex],
     pub(crate) span: Span,
-    /// Resolved output type for the current HOF call (if available).
-    pub(crate) output_ty: Option<TypeExprId>,
 }
 
 /// Binary class method signature.
 pub(crate) type BinMethodFn =
-    fn(&mut ClassCtx<'_>, &Value, &Value) -> Result<Value>;
+    fn(&mut ClassCtx<'_>, &Payload, &Payload) -> Result<Payload>;
 
 /// Unary class method signature.
-pub(crate) type UnaryMethodFn = fn(&mut ClassCtx<'_>, &Value) -> Result<Value>;
+pub(crate) type UnaryMethodFn =
+    fn(&mut ClassCtx<'_>, &Payload) -> Result<Payload>;
 
 /// Nullary class method signature (e.g., `Monoid::identity`).
 ///
 /// Takes the statically-inferred type to produce the appropriate value.
-pub(crate) type NullaryMethodFn = fn(&mut ClassCtx<'_>, &Ty) -> Result<Value>;
+pub(crate) type NullaryMethodFn = fn(&mut ClassCtx<'_>, &Ty) -> Result<Payload>;
 
 /// Conversion method signature (e.g., `Into::into`, `TryInto::try_into`).
 ///
 /// Takes a value and the target type to convert to.
 pub(crate) type ConvertMethodFn =
-    fn(&mut ClassCtx<'_>, &Value, &Ty) -> Result<Value>;
+    fn(&mut ClassCtx<'_>, &Payload, &Ty) -> Result<Payload>;
 
 /// Method dispatch function: binary, unary, nullary, convert, or hof.
 #[derive(Clone, Copy)]
@@ -152,9 +149,9 @@ impl ClassMethods {
         kind: ClassId,
         method: StringId,
         ctx: &mut ClassCtx<'_>,
-        recv: &Value,
-        arg: &Value,
-    ) -> Result<Value> {
+        recv: &Payload,
+        arg: &Payload,
+    ) -> Result<Payload> {
         match self.lookup(kind, method) {
             Some(MethodFn::Binary(f)) => f(ctx, recv, arg),
             Some(
@@ -174,8 +171,8 @@ impl ClassMethods {
         kind: ClassId,
         method: StringId,
         ctx: &mut ClassCtx<'_>,
-        recv: &Value,
-    ) -> Result<Value> {
+        recv: &Payload,
+    ) -> Result<Payload> {
         match self.lookup(kind, method) {
             Some(MethodFn::Unary(f)) => f(ctx, recv),
             Some(
@@ -196,7 +193,7 @@ impl ClassMethods {
         method: StringId,
         ctx: &mut ClassCtx<'_>,
         ty: &Ty,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         match self.lookup(kind, method) {
             Some(MethodFn::Nullary(f)) => f(ctx, ty),
             Some(
@@ -216,9 +213,9 @@ impl ClassMethods {
         kind: ClassId,
         method: StringId,
         ctx: &mut ClassCtx<'_>,
-        val: &Value,
+        val: &Payload,
         target: &Ty,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         match self.lookup(kind, method) {
             Some(MethodFn::Convert(f)) => f(ctx, val, target),
             Some(
@@ -399,8 +396,8 @@ impl Default for ClassMethods {
 
 /// Shared utilities for class method implementations.
 pub(crate) trait Class {
-    fn map_key(v: &Value) -> MapKey {
-        MapKey::from_value(v)
+    fn map_key(v: &Payload) -> MapKey {
+        MapKey::from_payload(v)
             .unwrap_or_else(|| typechecked!("map key", "valid key type"))
     }
 }
@@ -413,16 +410,18 @@ impl Class for Numeric {}
 impl Numeric {
     pub(crate) fn add(
         _: &mut ClassCtx<'_>,
-        l: &Value,
-        r: &Value,
-    ) -> Result<Value> {
+        l: &Payload,
+        r: &Payload,
+    ) -> Result<Payload> {
         Ok(match (l, r) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a.wrapping_add(*b)),
-            (Value::Word(a), Value::Word(b)) => {
-                Value::Word(a.saturating_add(*b))
+            (Payload::Int(a), Payload::Int(b)) => {
+                Payload::Int(a.wrapping_add(*b))
             }
-            (Value::Float(a), Value::Float(b)) => {
-                Value::Float(OrderedFloat(a.0 + b.0))
+            (Payload::Word(a), Payload::Word(b)) => {
+                Payload::Word(a.saturating_add(*b))
+            }
+            (Payload::Float(a), Payload::Float(b)) => {
+                Payload::Float(OrderedFloat(a.0 + b.0))
             }
             _ => typechecked!("+", "same Numeric type"),
         })
@@ -430,16 +429,18 @@ impl Numeric {
 
     pub(crate) fn sub(
         _: &mut ClassCtx<'_>,
-        l: &Value,
-        r: &Value,
-    ) -> Result<Value> {
+        l: &Payload,
+        r: &Payload,
+    ) -> Result<Payload> {
         Ok(match (l, r) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a.wrapping_sub(*b)),
-            (Value::Word(a), Value::Word(b)) => {
-                Value::Word(a.saturating_sub(*b))
+            (Payload::Int(a), Payload::Int(b)) => {
+                Payload::Int(a.wrapping_sub(*b))
             }
-            (Value::Float(a), Value::Float(b)) => {
-                Value::Float(OrderedFloat(a.0 - b.0))
+            (Payload::Word(a), Payload::Word(b)) => {
+                Payload::Word(a.saturating_sub(*b))
+            }
+            (Payload::Float(a), Payload::Float(b)) => {
+                Payload::Float(OrderedFloat(a.0 - b.0))
             }
             _ => typechecked!("-", "same Numeric type"),
         })
@@ -447,16 +448,18 @@ impl Numeric {
 
     pub(crate) fn mul(
         _: &mut ClassCtx<'_>,
-        l: &Value,
-        r: &Value,
-    ) -> Result<Value> {
+        l: &Payload,
+        r: &Payload,
+    ) -> Result<Payload> {
         Ok(match (l, r) {
-            (Value::Int(a), Value::Int(b)) => Value::Int(a.wrapping_mul(*b)),
-            (Value::Word(a), Value::Word(b)) => {
-                Value::Word(a.saturating_mul(*b))
+            (Payload::Int(a), Payload::Int(b)) => {
+                Payload::Int(a.wrapping_mul(*b))
             }
-            (Value::Float(a), Value::Float(b)) => {
-                Value::Float(OrderedFloat(a.0 * b.0))
+            (Payload::Word(a), Payload::Word(b)) => {
+                Payload::Word(a.saturating_mul(*b))
+            }
+            (Payload::Float(a), Payload::Float(b)) => {
+                Payload::Float(OrderedFloat(a.0 * b.0))
             }
             _ => typechecked!("*", "same Numeric type"),
         })
@@ -464,29 +467,29 @@ impl Numeric {
 
     pub(crate) fn floor_div(
         ctx: &mut ClassCtx<'_>,
-        l: &Value,
-        r: &Value,
-    ) -> Result<Value> {
+        l: &Payload,
+        r: &Payload,
+    ) -> Result<Payload> {
         match (l, r) {
-            (Value::Int(a), Value::Int(b)) => {
+            (Payload::Int(a), Payload::Int(b)) => {
                 if *b == 0 {
                     Err(Error::runtime(ctx.span, "division by zero"))
                 } else {
-                    Ok(Value::Int(a.div_euclid(*b)))
+                    Ok(Payload::Int(a.div_euclid(*b)))
                 }
             }
-            (Value::Word(a), Value::Word(b)) => {
+            (Payload::Word(a), Payload::Word(b)) => {
                 if *b == 0 {
                     Err(Error::runtime(ctx.span, "division by zero"))
                 } else {
-                    Ok(Value::Word(a / b))
+                    Ok(Payload::Word(a / b))
                 }
             }
-            (Value::Float(a), Value::Float(b)) => {
+            (Payload::Float(a), Payload::Float(b)) => {
                 if b.0 == 0.0 {
                     Err(Error::runtime(ctx.span, "division by zero"))
                 } else {
-                    Ok(Value::Float(OrderedFloat((a.0 / b.0).floor())))
+                    Ok(Payload::Float(OrderedFloat((a.0 / b.0).floor())))
                 }
             }
             _ => typechecked!("//", "same Numeric type"),
@@ -495,29 +498,29 @@ impl Numeric {
 
     pub(crate) fn modulo(
         ctx: &mut ClassCtx<'_>,
-        l: &Value,
-        r: &Value,
-    ) -> Result<Value> {
+        l: &Payload,
+        r: &Payload,
+    ) -> Result<Payload> {
         match (l, r) {
-            (Value::Int(a), Value::Int(b)) => {
+            (Payload::Int(a), Payload::Int(b)) => {
                 if *b == 0 {
                     Err(Error::runtime(ctx.span, "modulo by zero"))
                 } else {
-                    Ok(Value::Int(a.rem_euclid(*b)))
+                    Ok(Payload::Int(a.rem_euclid(*b)))
                 }
             }
-            (Value::Word(a), Value::Word(b)) => {
+            (Payload::Word(a), Payload::Word(b)) => {
                 if *b == 0 {
                     Err(Error::runtime(ctx.span, "modulo by zero"))
                 } else {
-                    Ok(Value::Word(a % b))
+                    Ok(Payload::Word(a % b))
                 }
             }
-            (Value::Float(a), Value::Float(b)) => {
+            (Payload::Float(a), Payload::Float(b)) => {
                 if b.0 == 0.0 {
                     Err(Error::runtime(ctx.span, "modulo by zero"))
                 } else {
-                    Ok(Value::Float(OrderedFloat(a.0 % b.0)))
+                    Ok(Payload::Float(OrderedFloat(a.0 % b.0)))
                 }
             }
             _ => typechecked!("%", "same Numeric type"),
@@ -526,35 +529,37 @@ impl Numeric {
 
     pub(crate) fn pow(
         _: &mut ClassCtx<'_>,
-        l: &Value,
-        r: &Value,
-    ) -> Result<Value> {
+        l: &Payload,
+        r: &Payload,
+    ) -> Result<Payload> {
         Ok(match (l, r) {
-            (Value::Int(base), Value::Int(exp)) => {
+            (Payload::Int(base), Payload::Int(exp)) => {
                 if *exp < 0 {
-                    Value::Float(OrderedFloat((*base as f64).powf(*exp as f64)))
+                    Payload::Float(OrderedFloat(
+                        (*base as f64).powf(*exp as f64),
+                    ))
                 } else {
                     u32::try_from(*exp)
                         .ok()
                         .and_then(|e| base.checked_pow(e))
                         .map_or_else(
                             || {
-                                Value::Float(OrderedFloat(
+                                Payload::Float(OrderedFloat(
                                     (*base as f64).powf(*exp as f64),
                                 ))
                             },
-                            Value::Int,
+                            Payload::Int,
                         )
                 }
             }
-            (Value::Word(base), Value::Word(exp)) => Value::Word(
+            (Payload::Word(base), Payload::Word(exp)) => Payload::Word(
                 u32::try_from(*exp)
                     .ok()
                     .and_then(|e| base.checked_pow(e))
                     .unwrap_or(usize::MAX),
             ),
-            (Value::Float(a), Value::Float(b)) => {
-                Value::Float(OrderedFloat(a.0.powf(b.0)))
+            (Payload::Float(a), Payload::Float(b)) => {
+                Payload::Float(OrderedFloat(a.0.powf(b.0)))
             }
             _ => typechecked!("**", "same Numeric type"),
         })
@@ -567,10 +572,10 @@ pub(crate) struct Negatable;
 impl Class for Negatable {}
 
 impl Negatable {
-    pub(crate) fn neg(_: &mut ClassCtx<'_>, v: &Value) -> Result<Value> {
+    pub(crate) fn neg(_: &mut ClassCtx<'_>, v: &Payload) -> Result<Payload> {
         Ok(match v {
-            Value::Int(n) => Value::Int(-n),
-            Value::Float(f) => Value::Float(OrderedFloat(-f.0)),
+            Payload::Int(n) => Payload::Int(-n),
+            Payload::Float(f) => Payload::Float(OrderedFloat(-f.0)),
             _ => typechecked!("-", "Negatable"),
         })
     }
@@ -584,42 +589,42 @@ impl Class for BitLike {}
 impl BitLike {
     pub(crate) fn and(
         _: &mut ClassCtx<'_>,
-        l: &Value,
-        r: &Value,
-    ) -> Result<Value> {
+        l: &Payload,
+        r: &Payload,
+    ) -> Result<Payload> {
         Ok(match (l, r) {
-            (Value::Bool(a), Value::Bool(b)) => Value::Bool(*a && *b),
-            (Value::Int(a), Value::Int(b)) => Value::Int(a & b),
-            (Value::Word(a), Value::Word(b)) => Value::Word(a & b),
+            (Payload::Bool(a), Payload::Bool(b)) => Payload::Bool(*a && *b),
+            (Payload::Int(a), Payload::Int(b)) => Payload::Int(a & b),
+            (Payload::Word(a), Payload::Word(b)) => Payload::Word(a & b),
             _ => typechecked!("&", "BitLike"),
         })
     }
 
     pub(crate) fn or(
         _: &mut ClassCtx<'_>,
-        l: &Value,
-        r: &Value,
-    ) -> Result<Value> {
+        l: &Payload,
+        r: &Payload,
+    ) -> Result<Payload> {
         Ok(match (l, r) {
-            (Value::Bool(a), Value::Bool(b)) => Value::Bool(*a || *b),
-            (Value::Int(a), Value::Int(b)) => Value::Int(a | b),
-            (Value::Word(a), Value::Word(b)) => Value::Word(a | b),
+            (Payload::Bool(a), Payload::Bool(b)) => Payload::Bool(*a || *b),
+            (Payload::Int(a), Payload::Int(b)) => Payload::Int(a | b),
+            (Payload::Word(a), Payload::Word(b)) => Payload::Word(a | b),
             _ => typechecked!("|", "BitLike"),
         })
     }
 
     pub(crate) fn shl(
         _: &mut ClassCtx<'_>,
-        l: &Value,
-        r: &Value,
-    ) -> Result<Value> {
+        l: &Payload,
+        r: &Payload,
+    ) -> Result<Payload> {
         Ok(match (l, r) {
-            (Value::Bool(_), Value::Bool(_)) => Value::Bool(false),
-            (Value::Int(a), Value::Int(b)) => {
-                Value::Int(a.wrapping_shl((*b as u32) & 63))
+            (Payload::Bool(_), Payload::Bool(_)) => Payload::Bool(false),
+            (Payload::Int(a), Payload::Int(b)) => {
+                Payload::Int(a.wrapping_shl((*b as u32) & 63))
             }
-            (Value::Word(a), Value::Word(b)) => {
-                Value::Word(a.wrapping_shl((*b as u32) & (usize::BITS - 1)))
+            (Payload::Word(a), Payload::Word(b)) => {
+                Payload::Word(a.wrapping_shl((*b as u32) & (usize::BITS - 1)))
             }
             _ => typechecked!("<<", "BitLike"),
         })
@@ -627,16 +632,16 @@ impl BitLike {
 
     pub(crate) fn shr(
         _: &mut ClassCtx<'_>,
-        l: &Value,
-        r: &Value,
-    ) -> Result<Value> {
+        l: &Payload,
+        r: &Payload,
+    ) -> Result<Payload> {
         Ok(match (l, r) {
-            (Value::Bool(_), Value::Bool(_)) => Value::Bool(false),
-            (Value::Int(a), Value::Int(b)) => {
-                Value::Int(a.wrapping_shr((*b as u32) & 63))
+            (Payload::Bool(_), Payload::Bool(_)) => Payload::Bool(false),
+            (Payload::Int(a), Payload::Int(b)) => {
+                Payload::Int(a.wrapping_shr((*b as u32) & 63))
             }
-            (Value::Word(a), Value::Word(b)) => {
-                Value::Word(a.wrapping_shr((*b as u32) & (usize::BITS - 1)))
+            (Payload::Word(a), Payload::Word(b)) => {
+                Payload::Word(a.wrapping_shr((*b as u32) & (usize::BITS - 1)))
             }
             _ => typechecked!(">>", "BitLike"),
         })
@@ -655,72 +660,46 @@ impl Monoid {
     /// - `Array[T]` -> `[]`
     /// - `Map[K, V]` -> `{}`
     /// - `Option[T]` -> `Option.None`
-    ///
-    /// For container types, the element/key/value types use `intern_ty_lenient`
-    /// which gracefully handles unresolved type variables (from generics) by
-    /// substituting `UNKNOWN`. This is safe because empty containers don't
-    /// contain any values that need type checking.
-    pub(crate) fn identity(ctx: &mut ClassCtx<'_>, ty: &Ty) -> Result<Value> {
+    pub(crate) fn identity(ctx: &mut ClassCtx<'_>, ty: &Ty) -> Result<Payload> {
         Ok(match ty {
-            Ty::String => Value::String(ctx.arena.intern("")),
-            Ty::Array(elem) => {
-                let elem_ty =
-                    ctx.type_exprs.intern_ty_lenient(*elem, ctx.ty_arena);
-                Value::Array(elem_ty, Arc::new(SmallVec::new()))
-            }
-            Ty::Map(k, v) => {
-                let k_ty = ctx.type_exprs.intern_ty_lenient(*k, ctx.ty_arena);
-                let v_ty = ctx.type_exprs.intern_ty_lenient(*v, ctx.ty_arena);
-                Value::Map(k_ty, v_ty, Arc::new(IndexMap::new()))
-            }
-            Ty::Option(inner) => {
-                let inner_ty =
-                    ctx.type_exprs.intern_ty_lenient(*inner, ctx.ty_arena);
-                let opt_ty =
-                    ctx.type_exprs.app(TypeId::OPTION, smallvec![inner_ty]);
-                Value::none(opt_ty)
-            }
+            Ty::String => Payload::String(ctx.arena.intern("")),
+            Ty::Array(_) => Payload::Array(Arc::new(SmallVec::new())),
+            Ty::Map(_, _) => Payload::Map(Arc::new(IndexMap::new())),
+            Ty::Option(_) => Payload::none(),
             _ => typechecked!("identity", "Monoid type"),
         })
     }
 
     pub(crate) fn concat(
         ctx: &mut ClassCtx<'_>,
-        l: &Value,
-        r: &Value,
-    ) -> Result<Value> {
+        l: &Payload,
+        r: &Payload,
+    ) -> Result<Payload> {
         Ok(match (l, r) {
-            (Value::String(ls), Value::String(rs)) => {
+            (Payload::String(ls), Payload::String(rs)) => {
                 let l = ctx.arena.get_str(*ls).unwrap_or("");
                 let r = ctx.arena.get_str(*rs).unwrap_or("");
-                Value::String(ctx.arena.intern(&format!("{l}{r}")))
+                Payload::String(ctx.arena.intern(&format!("{l}{r}")))
             }
-            (Value::Array(ty, l), Value::Array(_, r)) => {
+            (Payload::Array(l), Payload::Array(r)) => {
                 let mut elems = Arc::unwrap_or_clone(l.clone());
                 elems.extend(r.iter().copied());
-                Value::Array(*ty, Arc::new(elems))
+                Payload::Array(Arc::new(elems))
             }
-            (Value::Map(k_ty, v_ty, l), Value::Map(_, _, r)) => {
+            (Payload::Map(l), Payload::Map(r)) => {
                 let mut merged = Arc::unwrap_or_clone(l.clone());
                 merged.extend(r.iter().map(|(k, v)| (k.clone(), *v)));
-                Value::Map(*k_ty, *v_ty, Arc::new(merged))
+                Payload::Map(Arc::new(merged))
             }
-            (Value::Tagged(ty1, i1, p1), Value::Tagged(ty2, i2, p2))
-                if ctx
-                    .type_exprs
-                    .base_type(*ty1)
-                    .is_some_and(|t| t == TypeId::OPTION)
-                    && ctx
-                        .type_exprs
-                        .base_type(*ty2)
-                        .is_some_and(|t| t == TypeId::OPTION) =>
+            (Payload::Tagged(ty1, i1, p1), Payload::Tagged(ty2, i2, p2))
+                if *ty1 == TypeId::OPTION && *ty2 == TypeId::OPTION =>
             {
                 if *i1 == 1 {
-                    Value::Tagged(*ty1, *i1, p1.clone())
+                    Payload::Tagged(*ty1, *i1, p1.clone())
                 } else if *i2 == 1 {
-                    Value::Tagged(*ty2, *i2, p2.clone())
+                    Payload::Tagged(*ty2, *i2, p2.clone())
                 } else {
-                    Value::Tagged(*ty1, *i1, SmallVec::new())
+                    Payload::Tagged(*ty1, *i1, SmallVec::new())
                 }
             }
             _ => typechecked!("++", "Monoid"),
@@ -736,11 +715,11 @@ impl Class for Ord {}
 impl Ord {
     pub(crate) fn compare(
         ctx: &mut ClassCtx<'_>,
-        l: &Value,
-        r: &Value,
-    ) -> Result<Value> {
+        l: &Payload,
+        r: &Payload,
+    ) -> Result<Payload> {
         let ord = Self::cmp_values(ctx, l, r);
-        Ok(Value::Int(match ord {
+        Ok(Payload::Int(match ord {
             Ordering::Less => -1,
             Ordering::Equal => 0,
             Ordering::Greater => 1,
@@ -748,38 +727,37 @@ impl Ord {
     }
 
     /// Recursive comparison helper returning `Ordering`.
-    fn cmp_values(ctx: &mut ClassCtx<'_>, l: &Value, r: &Value) -> Ordering {
+    fn cmp_values(
+        ctx: &mut ClassCtx<'_>,
+        l: &Payload,
+        r: &Payload,
+    ) -> Ordering {
         match (l, r) {
-            (Value::Int(a), Value::Int(b)) => a.cmp(b),
-            (Value::Word(a), Value::Word(b)) => a.cmp(b),
-            (Value::Float(a), Value::Float(b)) => a.cmp(b),
-            (Value::String(a), Value::String(b)) => {
+            (Payload::Int(a), Payload::Int(b)) => a.cmp(b),
+            (Payload::Word(a), Payload::Word(b)) => a.cmp(b),
+            (Payload::Float(a), Payload::Float(b)) => a.cmp(b),
+            (Payload::String(a), Payload::String(b)) => {
                 let sa = ctx.arena.get_str(*a).unwrap_or("");
                 let sb = ctx.arena.get_str(*b).unwrap_or("");
                 sa.cmp(sb)
             }
-            (Value::Char(a), Value::Char(b)) => a.cmp(b),
-            (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
-            (Value::Time(a), Value::Time(b)) => a.cmp(b),
+            (Payload::Char(a), Payload::Char(b)) => a.cmp(b),
+            (Payload::Bool(a), Payload::Bool(b)) => a.cmp(b),
+            (Payload::Time(a), Payload::Time(b)) => a.cmp(b),
             // Arrays: lexicographic comparison
-            (Value::Array(_, a), Value::Array(_, b)) => {
+            (Payload::Array(a), Payload::Array(b)) => {
                 Self::cmp_seqs(ctx, a.as_slice(), b.as_slice())
             }
             // Tuples: lexicographic comparison
-            (Value::Tuple(_, a), Value::Tuple(_, b)) => {
+            (Payload::Tuple(a), Payload::Tuple(b)) => {
                 Self::cmp_seqs(ctx, a.as_slice(), b.as_slice())
             }
             // Maps: lexicographic comparison by (key, value) pairs sorted by key
-            (Value::Map(_, _, a), Value::Map(_, _, b)) => {
-                Self::cmp_maps(ctx, a, b)
-            }
+            (Payload::Map(a), Payload::Map(b)) => Self::cmp_maps(ctx, a, b),
             // Tagged (Option, Result, user types): compare variant index, then payload
             // Note: Result has Ok=0, Err=1, but we want Err < Ok, so reverse for Result
-            (Value::Tagged(ty, i1, p1), Value::Tagged(_, i2, p2)) => {
-                let is_result = ctx
-                    .type_exprs
-                    .base_type(*ty)
-                    .is_some_and(|t| t == TypeId::RESULT);
+            (Payload::Tagged(ty, i1, p1), Payload::Tagged(_, i2, p2)) => {
+                let is_result = *ty == TypeId::RESULT;
                 let idx_ord = if is_result { i2.cmp(i1) } else { i1.cmp(i2) };
                 match idx_ord {
                     Ordering::Equal => {
@@ -787,40 +765,6 @@ impl Ord {
                     }
                     ord => ord,
                 }
-            }
-            // Union: types must match, then compare inner values if same type
-            (Value::Union(ty1, id1), Value::Union(ty2, id2)) => {
-                if !ctx.type_exprs.eq(*ty1, *ty2) {
-                    typechecked!("compare", "same Ord type")
-                }
-                ctx.arena
-                    .get(*id1)
-                    .cloned()
-                    .zip(ctx.arena.get(*id2).cloned())
-                    .map(|(a, b)| {
-                        if mem::discriminant(&a) == mem::discriminant(&b) {
-                            Self::cmp_values(ctx, &a, &b)
-                        } else {
-                            Ordering::Equal
-                        }
-                    })
-                    .unwrap_or_else(|| {
-                        invariant!("Union inner value missing from arena")
-                    })
-            }
-            // Newtype: types must match, then compare inner values
-            (Value::Newtype(ty1, id1), Value::Newtype(ty2, id2)) => {
-                if !ctx.type_exprs.eq(*ty1, *ty2) {
-                    typechecked!("compare", "same Ord type")
-                }
-                ctx.arena
-                    .get(*id1)
-                    .cloned()
-                    .zip(ctx.arena.get(*id2).cloned())
-                    .map(|(a, b)| Self::cmp_values(ctx, &a, &b))
-                    .unwrap_or_else(|| {
-                        invariant!("Newtype inner value missing from arena")
-                    })
             }
             _ => typechecked!("compare", "same Ord type"),
         }
@@ -852,11 +796,11 @@ impl Ord {
         a: &IndexMap<MapKey, ValueId>,
         b: &IndexMap<MapKey, ValueId>,
     ) -> Ordering {
-        // Collect and sort entries by key (convert MapKey to Value for comparison)
+        // Collect and sort entries by key (convert MapKey to Payload for comparison)
         let mut a_entries: Vec<_> =
-            a.iter().map(|(k, v)| (k.to_value(), *v)).collect();
+            a.iter().map(|(k, v)| (k.to_payload(), *v)).collect();
         let mut b_entries: Vec<_> =
-            b.iter().map(|(k, v)| (k.to_value(), *v)).collect();
+            b.iter().map(|(k, v)| (k.to_payload(), *v)).collect();
         a_entries.sort_by(|(k1, _), (k2, _)| Self::cmp_values(ctx, k1, k2));
         b_entries.sort_by(|(k1, _), (k2, _)| Self::cmp_values(ctx, k1, k2));
         // Compare lexicographically by (key, value) pairs
@@ -889,82 +833,64 @@ impl Class for Eq {}
 impl Eq {
     pub(crate) fn eq(
         ctx: &mut ClassCtx<'_>,
-        l: &Value,
-        r: &Value,
-    ) -> Result<Value> {
-        Ok(Value::Bool(Self::values_equal(ctx, l, r)))
+        l: &Payload,
+        r: &Payload,
+    ) -> Result<Payload> {
+        Ok(Payload::Bool(Self::values_equal(ctx, l, r)))
     }
 
     /// Recursive equality helper.
-    fn values_equal(ctx: &mut ClassCtx<'_>, l: &Value, r: &Value) -> bool {
+    fn values_equal(ctx: &mut ClassCtx<'_>, l: &Payload, r: &Payload) -> bool {
         match (l, r) {
-            (Value::Unit, Value::Unit) => true,
-            (Value::Bool(a), Value::Bool(b)) => a == b,
-            (Value::Int(a), Value::Int(b)) => a == b,
-            (Value::Word(a), Value::Word(b)) => a == b,
-            (Value::Float(a), Value::Float(b)) => a == b,
-            (Value::Char(a), Value::Char(b)) => a == b,
-            (Value::String(a), Value::String(b)) => {
+            (Payload::Unit, Payload::Unit) => true,
+            (Payload::Bool(a), Payload::Bool(b)) => a == b,
+            (Payload::Int(a), Payload::Int(b)) => a == b,
+            (Payload::Word(a), Payload::Word(b)) => a == b,
+            (Payload::Float(a), Payload::Float(b)) => a == b,
+            (Payload::Char(a), Payload::Char(b)) => a == b,
+            (Payload::String(a), Payload::String(b)) => {
                 let sa = ctx.arena.get_str(*a).unwrap_or("");
                 let sb = ctx.arena.get_str(*b).unwrap_or("");
                 sa == sb
             }
-            (Value::Time(a), Value::Time(b)) => a == b,
-            (Value::FilePath(a), Value::FilePath(b)) => {
+            (Payload::Time(a), Payload::Time(b)) => a == b,
+            (Payload::FilePath(a), Payload::FilePath(b)) => {
                 let sa = ctx.arena.get_str(*a).unwrap_or("");
                 let sb = ctx.arena.get_str(*b).unwrap_or("");
                 sa == sb
             }
-            (Value::Json(a), Value::Json(b)) => a == b,
-            (Value::Array(_, a), Value::Array(_, b)) => {
+            (Payload::Json(a), Payload::Json(b)) => a == b,
+            (Payload::Array(a), Payload::Array(b)) => {
                 a.len() == b.len()
                     && Self::seqs_equal(ctx, a.as_slice(), b.as_slice())
             }
-            (Value::Tuple(_, a), Value::Tuple(_, b)) => {
+            (Payload::Tuple(a), Payload::Tuple(b)) => {
                 a.len() == b.len()
                     && Self::seqs_equal(ctx, a.as_slice(), b.as_slice())
             }
-            (Value::Object(a), Value::Object(b)) => {
+            (Payload::Object(a), Payload::Object(b)) => {
                 a.len() == b.len() && Self::objects_equal(ctx, a, b)
             }
-            (Value::Map(_, _, a), Value::Map(_, _, b)) => {
+            (Payload::Map(a), Payload::Map(b)) => {
                 a.len() == b.len() && Self::maps_equal(ctx, a, b)
             }
-            (Value::Tagged(ty1, idx1, p1), Value::Tagged(ty2, idx2, p2)) => {
-                let types_eq = ctx.type_exprs.eq(*ty1, *ty2);
-                types_eq
+            (
+                Payload::Tagged(ty1, idx1, p1),
+                Payload::Tagged(ty2, idx2, p2),
+            ) => {
+                *ty1 == *ty2
                     && idx1 == idx2
                     && p1.len() == p2.len()
                     && Self::seqs_equal(ctx, p1.as_slice(), p2.as_slice())
             }
-            (Value::Ref(g1, name1, subs1), Value::Ref(g2, name2, subs2)) => {
+            (
+                Payload::Ref(g1, name1, subs1),
+                Payload::Ref(g2, name2, subs2),
+            ) => {
                 g1 == g2
                     && name1 == name2
                     && subs1.len() == subs2.len()
                     && Self::seqs_equal(ctx, subs1.as_slice(), subs2.as_slice())
-            }
-            // Union: types must match, inner types must match, then values must match
-            (Value::Union(ty1, id1), Value::Union(ty2, id2)) => {
-                ctx.type_exprs.eq(*ty1, *ty2)
-                    && ctx
-                        .arena
-                        .get(*id1)
-                        .cloned()
-                        .zip(ctx.arena.get(*id2).cloned())
-                        .is_some_and(|(a, b)| {
-                            mem::discriminant(&a) == mem::discriminant(&b)
-                                && Self::values_equal(ctx, &a, &b)
-                        })
-            }
-            // Newtype: types must match, then compare inner values
-            (Value::Newtype(ty1, id1), Value::Newtype(ty2, id2)) => {
-                ctx.type_exprs.eq(*ty1, *ty2)
-                    && ctx
-                        .arena
-                        .get(*id1)
-                        .cloned()
-                        .zip(ctx.arena.get(*id2).cloned())
-                        .is_some_and(|(a, b)| Self::values_equal(ctx, &a, &b))
             }
             _ => typechecked!("==", "same Eq type"),
         }
@@ -1042,104 +968,36 @@ impl Class for Fallible {}
 
 impl Fallible {
     /// Unwrap an `Option.Some` or `Result.Ok` value.
-    ///
-    /// Wraps the inner value if the type parameter is a union/newtype.
-    pub(crate) fn unwrap(ctx: &mut ClassCtx<'_>, v: &Value) -> Result<Value> {
-        let is_opt = |ty: TypeExprId| {
-            ctx.type_exprs
-                .base_type(ty)
-                .is_some_and(|t| t == TypeId::OPTION)
-        };
-        let is_res = |ty: TypeExprId| {
-            ctx.type_exprs
-                .base_type(ty)
-                .is_some_and(|t| t == TypeId::RESULT)
-        };
-
+    pub(crate) fn unwrap(
+        ctx: &mut ClassCtx<'_>,
+        v: &Payload,
+    ) -> Result<Payload> {
         match v {
-            Value::Tagged(ty, 1, p) if is_opt(*ty) => {
-                // Get inner type from Option[T]
-                let inner_ty = ctx
-                    .type_exprs
-                    .type_args(*ty)
-                    .and_then(|args| args.first().copied());
+            Payload::Tagged(ty, 1, p) if *ty == TypeId::OPTION => {
                 let val = p
                     .first()
                     .and_then(|id| ctx.arena.get(*id).cloned())
                     .unwrap_or_else(|| {
                         typechecked!("unwrap", "Option.Some payload")
                     });
-                Ok(match inner_ty {
-                    Some(ity) => Self::wrap_for_type(ctx, val, ity),
-                    None => val,
-                })
+                Ok(val)
             }
-            Value::Tagged(ty, 0, _) if is_opt(*ty) => {
+            Payload::Tagged(ty, 0, _) if *ty == TypeId::OPTION => {
                 Err(Error::runtime(ctx.span, "cannot unwrap Option.None"))
             }
-            Value::Tagged(ty, 0, p) if is_res(*ty) => {
-                // Get ok type from Result[Ok, Err]
-                let ok_ty = ctx
-                    .type_exprs
-                    .type_args(*ty)
-                    .and_then(|args| args.first().copied());
+            Payload::Tagged(ty, 0, p) if *ty == TypeId::RESULT => {
                 let val = p
                     .first()
                     .and_then(|id| ctx.arena.get(*id).cloned())
                     .unwrap_or_else(|| {
                         typechecked!("unwrap", "Result.Ok payload")
                     });
-                Ok(match ok_ty {
-                    Some(oty) => Self::wrap_for_type(ctx, val, oty),
-                    None => val,
-                })
+                Ok(val)
             }
-            Value::Tagged(ty, 1, _) if is_res(*ty) => {
+            Payload::Tagged(ty, 1, _) if *ty == TypeId::RESULT => {
                 Err(Error::runtime(ctx.span, "cannot unwrap Result.Err"))
             }
             _ => typechecked!("unwrap", "Fallible"),
-        }
-    }
-
-    /// Wrap a value in `Value::Union` or `Value::Newtype` if the type requires it.
-    fn wrap_for_type(
-        ctx: &mut ClassCtx<'_>,
-        val: Value,
-        ty: TypeExprId,
-    ) -> Value {
-        let already_wrapped = match &val {
-            Value::Union(t, _) => ctx.type_exprs.eq(*t, ty),
-            Value::Newtype(t, _) => ctx.type_exprs.eq(*t, ty),
-            _ => false,
-        };
-
-        if already_wrapped {
-            val
-        } else {
-            ctx.type_exprs
-                .base_type(ty)
-                .and_then(|type_id| {
-                    ctx.registry.get_def(type_id).and_then(|def| match def {
-                        TypeDef::Union { .. } => {
-                            let inner_id = ctx.arena.add(val.clone(), ctx.span);
-                            Some(Value::Union(ty, inner_id))
-                        }
-                        TypeDef::Alias { .. } => {
-                            let inner_id = ctx.arena.add(val.clone(), ctx.span);
-                            Some(Value::Newtype(ty, inner_id))
-                        }
-                        _ => None,
-                    })
-                })
-                .or_else(|| {
-                    if ctx.type_exprs.is_union(ty) {
-                        let inner_id = ctx.arena.add(val.clone(), ctx.span);
-                        Some(Value::Union(ty, inner_id))
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or(val)
         }
     }
 }
@@ -1157,27 +1015,15 @@ impl Wrappable {
     /// - `Result[T, E]` -> `Result.Ok(v)`
     pub(crate) fn wrap(
         ctx: &mut ClassCtx<'_>,
-        v: &Value,
+        v: &Payload,
         target: &Ty,
-    ) -> Result<Value> {
-        let v_id = ctx.arena.add(v.clone(), ctx.span);
+    ) -> Result<Payload> {
+        let v_id =
+            ctx.arena
+                .add_typed(v.clone(), ValueMeta::untyped(), ctx.span);
         match target {
-            Ty::Option(inner) => {
-                let inner_ty =
-                    ctx.type_exprs.intern_ty_lenient(*inner, ctx.ty_arena);
-                let opt_ty =
-                    ctx.type_exprs.app(TypeId::OPTION, smallvec![inner_ty]);
-                Ok(Value::some(opt_ty, v_id))
-            }
-            Ty::Result(ok, err) => {
-                let ok_ty = ctx.type_exprs.intern_ty_lenient(*ok, ctx.ty_arena);
-                let err_ty =
-                    ctx.type_exprs.intern_ty_lenient(*err, ctx.ty_arena);
-                let res_ty = ctx
-                    .type_exprs
-                    .app(TypeId::RESULT, smallvec![ok_ty, err_ty]);
-                Ok(Value::ok(res_ty, v_id))
-            }
+            Ty::Option(_) => Ok(Payload::some(v_id)),
+            Ty::Result(_, _) => Ok(Payload::ok(v_id)),
             _ => typechecked!("wrap", "Wrappable (Option or Result)"),
         }
     }
@@ -1196,11 +1042,11 @@ impl Class for Indexable {}
 impl Indexable {
     pub(crate) fn index(
         ctx: &mut ClassCtx<'_>,
-        base: &Value,
-        idx: &Value,
-    ) -> Result<Value> {
+        base: &Payload,
+        idx: &Payload,
+    ) -> Result<Payload> {
         match (base, idx) {
-            (Value::Array(_, elems), Value::Int(i)) => {
+            (Payload::Array(elems), Payload::Int(i)) => {
                 let index = if *i < 0 {
                     elems.len().checked_sub((-*i) as usize)
                 } else {
@@ -1216,7 +1062,7 @@ impl Indexable {
                         )
                     })
             }
-            (Value::Map(_, _, entries), key) => entries
+            (Payload::Map(entries), key) => entries
                 .get(&Self::map_key(key))
                 .and_then(|id| ctx.arena.get(*id).cloned())
                 .ok_or_else(|| {
@@ -1225,11 +1071,11 @@ impl Indexable {
                         format!("map key not found: {key:?}"),
                     )
                 }),
-            (Value::String(sid), Value::Int(i)) => {
+            (Payload::String(sid), Payload::Int(i)) => {
                 let s = ctx.arena.get_str(*sid).unwrap_or("");
                 let len = s.chars().count() as i64;
                 let index = if *i < 0 { len + *i } else { *i };
-                s.chars().nth(index as usize).map(Value::Char).ok_or_else(
+                s.chars().nth(index as usize).map(Payload::Char).ok_or_else(
                     || {
                         Error::runtime(
                             ctx.span,
@@ -1244,46 +1090,40 @@ impl Indexable {
 
     pub(crate) fn get(
         ctx: &mut ClassCtx<'_>,
-        base: &Value,
-        idx: &Value,
-    ) -> Result<Value> {
-        use smallvec::smallvec;
+        base: &Payload,
+        idx: &Payload,
+    ) -> Result<Payload> {
         match (base, idx) {
-            (Value::Array(elem_ty, elems), Value::Int(i)) => {
+            (Payload::Array(elems), Payload::Int(i)) => {
                 let index = if *i < 0 {
                     elems.len().checked_sub((-*i) as usize)
                 } else {
                     Some(*i as usize)
                 };
-                let opt_ty =
-                    ctx.type_exprs.app(TypeId::OPTION, smallvec![*elem_ty]);
                 Ok(index
                     .and_then(|idx| elems.get(idx))
-                    .map(|id| Value::some(opt_ty, *id))
-                    .unwrap_or_else(|| Value::none(opt_ty)))
+                    .map(|id| Payload::some(*id))
+                    .unwrap_or_else(Payload::none))
             }
-            (Value::Map(_, v_ty, entries), key) => {
-                let opt_ty =
-                    ctx.type_exprs.app(TypeId::OPTION, smallvec![*v_ty]);
-                Ok(entries
-                    .get(&Self::map_key(key))
-                    .map(|id| Value::some(opt_ty, *id))
-                    .unwrap_or_else(|| Value::none(opt_ty)))
-            }
-            (Value::String(sid), Value::Int(i)) => {
+            (Payload::Map(entries), key) => Ok(entries
+                .get(&Self::map_key(key))
+                .map(|id| Payload::some(*id))
+                .unwrap_or_else(Payload::none)),
+            (Payload::String(sid), Payload::Int(i)) => {
                 let s = ctx.arena.get_str(*sid).unwrap_or("");
                 let len = s.chars().count() as i64;
                 let index = if *i < 0 { len + *i } else { *i };
-                let char_ty = ctx.type_exprs.named(TypeId::CHAR);
-                let opt_ty =
-                    ctx.type_exprs.app(TypeId::OPTION, smallvec![char_ty]);
                 Ok(s.chars()
                     .nth(index as usize)
                     .map(|c| {
-                        let id = ctx.arena.add(Value::Char(c), ctx.span);
-                        Value::some(opt_ty, id)
+                        let id = ctx.arena.add_typed(
+                            Payload::Char(c),
+                            ctx.runtime_types.meta_char(),
+                            ctx.span,
+                        );
+                        Payload::some(id)
                     })
-                    .unwrap_or_else(|| Value::none(opt_ty)))
+                    .unwrap_or_else(Payload::none))
             }
             _ => typechecked!("get", "Indexable"),
         }
@@ -1307,55 +1147,58 @@ impl Into {
     /// - `DataStatus -> Int`
     pub(crate) fn into(
         ctx: &mut ClassCtx<'_>,
-        val: &Value,
+        val: &Payload,
         target: &Ty,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         match (val, target) {
             // Identity casts
-            (Value::Int(_), Ty::Int)
-            | (Value::Word(_), Ty::Word)
-            | (Value::Float(_), Ty::Float)
-            | (Value::Bool(_), Ty::Bool)
-            | (Value::Char(_), Ty::Char)
-            | (Value::String(_), Ty::String)
-            | (Value::FilePath(_), Ty::FilePath) => Ok(val.clone()),
+            (Payload::Int(_), Ty::Int)
+            | (Payload::Word(_), Ty::Word)
+            | (Payload::Float(_), Ty::Float)
+            | (Payload::Bool(_), Ty::Bool)
+            | (Payload::Char(_), Ty::Char)
+            | (Payload::String(_), Ty::String)
+            | (Payload::FilePath(_), Ty::FilePath) => Ok(val.clone()),
 
             // Int -> Float (widen)
-            (Value::Int(n), Ty::Float) => {
-                Ok(Value::Float(OrderedFloat(*n as f64)))
+            (Payload::Int(n), Ty::Float) => {
+                Ok(Payload::Float(OrderedFloat(*n as f64)))
             }
 
             // Word -> Int (always safe)
-            (Value::Word(n), Ty::Int) => Ok(Value::Int(*n as i64)),
+            (Payload::Word(n), Ty::Int) => Ok(Payload::Int(*n as i64)),
 
             // Word -> Float (widen)
-            (Value::Word(n), Ty::Float) => {
-                Ok(Value::Float(OrderedFloat(*n as f64)))
+            (Payload::Word(n), Ty::Float) => {
+                Ok(Payload::Float(OrderedFloat(*n as f64)))
             }
 
             // Float -> Int (truncate)
-            (Value::Float(f), Ty::Int) => Ok(Value::Int(f.0 as i64)),
+            (Payload::Float(f), Ty::Int) => Ok(Payload::Int(f.0 as i64)),
 
             // Bool -> Int
-            (Value::Bool(b), Ty::Int) => Ok(Value::Int(if *b { 1 } else { 0 })),
+            (Payload::Bool(b), Ty::Int) => {
+                Ok(Payload::Int(if *b { 1 } else { 0 }))
+            }
 
             // T -> String (stringify)
             (_, Ty::String) => {
                 let s = Self::stringify(ctx, val);
                 let id = ctx.arena.intern(&s);
-                Ok(Value::String(id))
+                Ok(Payload::String(id))
             }
 
             // T -> Json (jsonify)
-            (_, Ty::Json) => Ok(Value::Json(Arc::new(Self::jsonify(ctx, val)))),
+            (_, Ty::Json) => {
+                Ok(Payload::Json(Arc::new(Self::jsonify(ctx, val))))
+            }
 
             // String -> FilePath
-            (Value::String(sid), Ty::FilePath) => Ok(Value::FilePath(*sid)),
+            (Payload::String(sid), Ty::FilePath) => Ok(Payload::FilePath(*sid)),
 
             // DataStatus -> Int (variant idx to MUMPS value: 0, 1, 10, 11)
-            (Value::Tagged(ty, idx, _), Ty::Int)
-                if ctx.type_exprs.base_type(*ty)
-                    == Some(TypeId::DATA_STATUS) =>
+            (Payload::Tagged(ty, idx, _), Ty::Int)
+                if *ty == TypeId::DATA_STATUS =>
             {
                 let mumps_val = match idx {
                     0 => 0,  // NoData
@@ -1364,12 +1207,12 @@ impl Into {
                     3 => 11, // Both
                     _ => typechecked!("DataStatus AS Int", "valid variant"),
                 };
-                Ok(Value::Int(mumps_val))
+                Ok(Payload::Int(mumps_val))
             }
 
             // Path -> FilePath (extract filepath from either File or Dir variant)
-            (Value::Tagged(ty, _, payloads), Ty::FilePath)
-                if ctx.type_exprs.base_type(*ty) == Some(TypeId::PATH) =>
+            (Payload::Tagged(ty, _, payloads), Ty::FilePath)
+                if *ty == TypeId::PATH =>
             {
                 Ok(payloads
                     .first()
@@ -1381,7 +1224,7 @@ impl Into {
 
             // Range -> Array[Int]
             (
-                Value::Range {
+                Payload::Range {
                     start,
                     end,
                     inclusive,
@@ -1389,11 +1232,16 @@ impl Into {
                 Ty::Named(id, _),
             ) if *id == TypeId::ARRAY => {
                 let end = if *inclusive { *end + 1 } else { *end };
-                let elem_ty = ctx.type_exprs.named(TypeId::INT);
                 let elems = (*start..end)
-                    .map(|n| ctx.arena.add(Value::Int(n), ctx.span))
+                    .map(|n| {
+                        ctx.arena.add_typed(
+                            Payload::Int(n),
+                            ctx.runtime_types.meta_int(),
+                            ctx.span,
+                        )
+                    })
                     .collect();
-                Ok(Value::Array(elem_ty, Arc::new(elems)))
+                Ok(Payload::Array(Arc::new(elems)))
             }
 
             // Storable narrowing: `Storable AS T` where T is a Storable member.
@@ -1424,22 +1272,22 @@ impl Into {
     }
 
     /// Check if a value is a Storable that doesn't match the target type.
-    fn is_storable_mismatch(val: &Value, target: &Ty) -> bool {
+    fn is_storable_mismatch(val: &Payload, target: &Ty) -> bool {
         match (val, target) {
-            (Value::Bool(_), Ty::Bool)
-            | (Value::Int(_), Ty::Int)
-            | (Value::Float(_), Ty::Float)
-            | (Value::Char(_), Ty::Char)
-            | (Value::String(_), Ty::String)
-            | (Value::Json(_), Ty::Json) => false,
-            // Value is a Storable type but doesn't match target
+            (Payload::Bool(_), Ty::Bool)
+            | (Payload::Int(_), Ty::Int)
+            | (Payload::Float(_), Ty::Float)
+            | (Payload::Char(_), Ty::Char)
+            | (Payload::String(_), Ty::String)
+            | (Payload::Json(_), Ty::Json) => false,
+            // Payload is a Storable type but doesn't match target
             (
-                Value::Bool(_)
-                | Value::Int(_)
-                | Value::Float(_)
-                | Value::Char(_)
-                | Value::String(_)
-                | Value::Json(_),
+                Payload::Bool(_)
+                | Payload::Int(_)
+                | Payload::Float(_)
+                | Payload::Char(_)
+                | Payload::String(_)
+                | Payload::Json(_),
                 _,
             ) => true,
             // Not a Storable type at all; don't trigger this branch
@@ -1448,90 +1296,39 @@ impl Into {
     }
 
     /// Get a human-readable name for a value's type.
-    fn value_type_name(ctx: &ClassCtx<'_>, val: &Value) -> String {
+    fn value_type_name(ctx: &ClassCtx<'_>, val: &Payload) -> String {
         match val {
-            Value::Unit => "Unit".to_owned(),
-            Value::Bool(_) => "Bool".to_owned(),
-            Value::Int(_) => "Int".to_owned(),
-            Value::Word(_) => "Word".to_owned(),
-            Value::Float(_) => "Float".to_owned(),
-            Value::Char(_) => "Char".to_owned(),
-            Value::String(_) => "String".to_owned(),
-            Value::FilePath(_) => "FilePath".to_owned(),
-            Value::Json(_) => "Json".to_owned(),
-            Value::Array(_, _) => "Array".to_owned(),
-            Value::Tuple(_, _) => "Tuple".to_owned(),
-            Value::Object(_) => "Object".to_owned(),
-            Value::Map(_, _, _) => "Map".to_owned(),
-            Value::Time(_) => "Time".to_owned(),
-            Value::Regex(_) => "Regex".to_owned(),
-            Value::Range { .. } => "Range".to_owned(),
-            Value::Tagged(ty_expr, _, _) => ctx
-                .type_exprs
-                .base_type(*ty_expr)
-                .and_then(|ty| ctx.registry.type_name(ty, ctx.arena))
+            Payload::Unit => "Unit".to_owned(),
+            Payload::Bool(_) => "Bool".to_owned(),
+            Payload::Int(_) => "Int".to_owned(),
+            Payload::Word(_) => "Word".to_owned(),
+            Payload::Float(_) => "Float".to_owned(),
+            Payload::Char(_) => "Char".to_owned(),
+            Payload::String(_) => "String".to_owned(),
+            Payload::FilePath(_) => "FilePath".to_owned(),
+            Payload::Json(_) => "Json".to_owned(),
+            Payload::Array(_) => "Array".to_owned(),
+            Payload::Tuple(_) => "Tuple".to_owned(),
+            Payload::Object(_) => "Object".to_owned(),
+            Payload::Map(_) => "Map".to_owned(),
+            Payload::Time(_) => "Time".to_owned(),
+            Payload::Regex(_) => "Regex".to_owned(),
+            Payload::Range { .. } => "Range".to_owned(),
+            Payload::Tagged(ty_id, _, _) => ctx
+                .registry
+                .type_name(*ty_id, ctx.arena)
                 .unwrap_or("Tagged")
                 .to_owned(),
-            Value::Closure { .. } => "Closure".to_owned(),
-            Value::Function { .. } => "Function".to_owned(),
-            Value::ModuleFn { .. } => "ModuleFn".to_owned(),
-            Value::ClassMethodFn { .. } => "ClassMethodFn".to_owned(),
-            Value::PartialApp { .. } => "PartialApp".to_owned(),
-            Value::ModuleConst { .. } => "ModuleConst".to_owned(),
-            Value::ForeverContinuation => "Continuation".to_owned(),
-            Value::LoopContinue(_) => "LoopContinue".to_owned(),
-            Value::Ref(is_global, _, _) => {
+            Payload::Closure { .. } => "Closure".to_owned(),
+            Payload::Function { .. } => "Function".to_owned(),
+            Payload::ModuleFn { .. } => "ModuleFn".to_owned(),
+            Payload::ClassMethodFn { .. } => "ClassMethodFn".to_owned(),
+            Payload::PartialApp { .. } => "PartialApp".to_owned(),
+            Payload::ModuleConst { .. } => "ModuleConst".to_owned(),
+            Payload::ForeverContinuation => "Continuation".to_owned(),
+            Payload::LoopContinue(_) => "LoopContinue".to_owned(),
+            Payload::Ref(is_global, _, _) => {
                 if *is_global { "Global" } else { "Local" }.to_owned()
-            }
-            Value::Newtype(ty_expr, _) => {
-                let ty = ctx
-                    .type_exprs
-                    .base_type(*ty_expr)
-                    .unwrap_or_else(|| invariant!("newtype has base type"));
-                ctx.registry
-                    .type_name(ty, ctx.arena)
-                    .unwrap_or_else(|| invariant!("newtype has type name"))
-                    .to_owned()
-            }
-            Value::Union(ty_expr, _) => {
-                // Unions can be either named (`union Result = Ok | Err`) or
-                // anonymous (`String | Int`). Named unions have a type name
-                // in the registry; anonymous unions need to be formatted as
-                // their type expression (e.g., `"String | Int"`).
-                ctx.type_exprs
-                    .base_type(*ty_expr)
-                    .and_then(|ty| {
-                        ctx.registry
-                            .type_name(ty, ctx.arena)
-                            .map(|s| s.to_owned())
-                    })
-                    .unwrap_or_else(|| {
-                        let arena = &*ctx.arena;
-                        let registry = ctx.registry;
-                        ctx.type_exprs
-                            .format(
-                                *ty_expr,
-                                |ty| {
-                                    registry
-                                        .type_name(ty, arena)
-                                        .unwrap_or_else(|| {
-                                            invariant!("type in registry")
-                                        })
-                                        .to_owned()
-                                },
-                                |s| {
-                                    arena
-                                        .get_str(s)
-                                        .unwrap_or_else(|| {
-                                            invariant!("string in arena")
-                                        })
-                                        .to_owned()
-                                },
-                            )
-                            .unwrap_or_else(|| {
-                                invariant!("union type expr in arena")
-                            })
-                    })
             }
         }
     }
@@ -1575,14 +1372,9 @@ impl Into {
     }
 
     /// Stringify a value to produce raw string content (not quoted).
-    fn coerce_to_str(ctx: &ClassCtx<'_>, v: &Value) -> String {
+    fn coerce_to_str(ctx: &ClassCtx<'_>, v: &Payload) -> String {
         match v {
-            Value::Union(_, inner_id) | Value::Newtype(_, inner_id) => ctx
-                .arena
-                .get(*inner_id)
-                .map(|inner| Self::coerce_to_str(ctx, inner))
-                .unwrap_or_else(|| Display::format(ctx, v)),
-            Value::String(id) | Value::FilePath(id) => {
+            Payload::String(id) | Payload::FilePath(id) => {
                 ctx.arena.get_str(*id).unwrap_or("").to_owned()
             }
             _ => Display::format(ctx, v),
@@ -1590,37 +1382,40 @@ impl Into {
     }
 
     /// Stringify a value for `AS String` conversion.
-    fn stringify(ctx: &ClassCtx<'_>, v: &Value) -> String {
+    fn stringify(ctx: &ClassCtx<'_>, v: &Payload) -> String {
         Self::coerce_to_str(ctx, v)
     }
 
     /// Convert a value to JSON.
     ///
     /// Returns the JSON directly; for the class method wrapper that returns
-    /// `Value::Json`, dispatch to `Into[Json]` via `Into::into`.
-    pub(crate) fn jsonify(ctx: &ClassCtx<'_>, v: &Value) -> serde_json::Value {
+    /// `Payload::Json`, dispatch to `Into[Json]` via `Into::into`.
+    pub(crate) fn jsonify(
+        ctx: &ClassCtx<'_>,
+        v: &Payload,
+    ) -> serde_json::Value {
         match v {
-            Value::Unit => serde_json::Value::Null,
-            Value::Bool(b) => serde_json::Value::Bool(*b),
-            Value::Int(n) => serde_json::json!(*n),
-            Value::Word(n) => serde_json::json!(*n),
-            Value::Float(f) => serde_json::json!(f.0),
-            Value::Char(c) => serde_json::Value::String(c.to_string()),
-            Value::String(id) => {
+            Payload::Unit => serde_json::Value::Null,
+            Payload::Bool(b) => serde_json::Value::Bool(*b),
+            Payload::Int(n) => serde_json::json!(*n),
+            Payload::Word(n) => serde_json::json!(*n),
+            Payload::Float(f) => serde_json::json!(f.0),
+            Payload::Char(c) => serde_json::Value::String(c.to_string()),
+            Payload::String(id) => {
                 let s = ctx
                     .arena
                     .get_str(*id)
                     .unwrap_or_else(|| invariant!("StringId in arena"));
                 serde_json::Value::String(s.to_owned())
             }
-            Value::FilePath(id) => {
+            Payload::FilePath(id) => {
                 let s = ctx
                     .arena
                     .get_str(*id)
                     .unwrap_or_else(|| invariant!("StringId in arena"));
                 serde_json::Value::String(s.to_owned())
             }
-            Value::Array(_, arr) => {
+            Payload::Array(arr) => {
                 let elems: Vec<_> = arr
                     .iter()
                     .map(|id| {
@@ -1632,7 +1427,7 @@ impl Into {
                     .collect();
                 serde_json::Value::Array(elems)
             }
-            Value::Tuple(_, elems) => {
+            Payload::Tuple(elems) => {
                 let items: Vec<_> = elems
                     .iter()
                     .map(|id| {
@@ -1644,7 +1439,7 @@ impl Into {
                     .collect();
                 serde_json::Value::Array(items)
             }
-            Value::Object(obj) => {
+            Payload::Object(obj) => {
                 let map: serde_json::Map<_, _> = obj
                     .iter()
                     .map(|(k, vid)| {
@@ -1661,11 +1456,9 @@ impl Into {
                     .collect();
                 serde_json::Value::Object(map)
             }
-            Value::Tagged(ty_expr, idx, payloads) => {
-                let base_ty = ctx.type_exprs.base_type(*ty_expr);
-
+            Payload::Tagged(ty_id, idx, payloads) => {
                 // Option encodes as null/value rather than tagged object
-                if base_ty.is_some_and(|ty| ty == TypeId::OPTION) {
+                if *ty_id == TypeId::OPTION {
                     if *idx == 0 {
                         serde_json::Value::Null
                     } else {
@@ -1676,13 +1469,13 @@ impl Into {
                             .unwrap_or(serde_json::Value::Null)
                     }
                 } else {
-                    let ty_name = base_ty
-                        .and_then(|ty| ctx.registry.type_name(ty, ctx.arena))
+                    let ty_name = ctx
+                        .registry
+                        .type_name(*ty_id, ctx.arena)
                         .unwrap_or("?");
-                    let var_name = base_ty
-                        .and_then(|ty| {
-                            ctx.registry.variant_name(ty, *idx, ctx.arena)
-                        })
+                    let var_name = ctx
+                        .registry
+                        .variant_name(*ty_id, *idx, ctx.arena)
                         .unwrap_or("?");
 
                     let payload_json = if payloads.is_empty() {
@@ -1713,7 +1506,7 @@ impl Into {
                     })
                 }
             }
-            Value::Map(_, _, entries) => {
+            Payload::Map(entries) => {
                 let map: serde_json::Map<_, _> = entries
                     .iter()
                     .map(|(k, vid)| {
@@ -1727,9 +1520,9 @@ impl Into {
                     .collect();
                 serde_json::Value::Object(map)
             }
-            Value::Time(t) => serde_json::Value::String(t.to_rfc3339()),
-            Value::Json(j) => j.as_ref().clone(),
-            Value::Regex(idx) => {
+            Payload::Time(t) => serde_json::Value::String(t.to_rfc3339()),
+            Payload::Json(j) => j.as_ref().clone(),
+            Payload::Regex(idx) => {
                 let pattern = ctx
                     .regex_cache
                     .get(*idx as usize)
@@ -1737,7 +1530,7 @@ impl Into {
                     .unwrap_or("?");
                 serde_json::Value::String(pattern.to_owned())
             }
-            Value::Range {
+            Payload::Range {
                 start,
                 end,
                 inclusive,
@@ -1748,15 +1541,15 @@ impl Into {
                     "inclusive": *inclusive
                 })
             }
-            Value::Closure { .. }
-            | Value::Function { .. }
-            | Value::ModuleFn { .. }
-            | Value::ClassMethodFn { .. }
-            | Value::ModuleConst { .. }
-            | Value::PartialApp { .. }
-            | Value::ForeverContinuation
-            | Value::LoopContinue(_) => serde_json::Value::Null,
-            Value::Ref(is_global, name_id, sub_ids) => {
+            Payload::Closure { .. }
+            | Payload::Function { .. }
+            | Payload::ModuleFn { .. }
+            | Payload::ClassMethodFn { .. }
+            | Payload::ModuleConst { .. }
+            | Payload::PartialApp { .. }
+            | Payload::ForeverContinuation
+            | Payload::LoopContinue(_) => serde_json::Value::Null,
+            Payload::Ref(is_global, name_id, sub_ids) => {
                 let prefix = if *is_global { "^" } else { "" };
                 let name = ctx.arena.get_str(*name_id).unwrap_or("?");
                 let subs: Vec<_> = sub_ids
@@ -1768,13 +1561,6 @@ impl Into {
                     "ref": format!("{prefix}{name}"),
                     "subscripts": subs
                 })
-            }
-            Value::Union(_, inner_id) | Value::Newtype(_, inner_id) => {
-                let inner = ctx
-                    .arena
-                    .get(*inner_id)
-                    .unwrap_or_else(|| invariant!("inner value in arena"));
-                Self::jsonify(ctx, inner)
             }
         }
     }
@@ -1805,9 +1591,9 @@ impl TryInto {
     /// Mirrors the `read` operator behavior exactly.
     pub(crate) fn try_into(
         ctx: &mut ClassCtx<'_>,
-        val: &Value,
+        val: &Payload,
         target: &Ty,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         match (val, target) {
             // Same type: identity conversion always succeeds
             _ if Self::types_match(val, target) => {
@@ -1815,10 +1601,10 @@ impl TryInto {
             }
 
             // String -> Int
-            (Value::String(sid), Ty::Int) => {
+            (Payload::String(sid), Ty::Int) => {
                 let s = ctx.arena.get_str(*sid).unwrap_or("").to_owned();
                 Ok(match s.parse::<i64>() {
-                    Ok(n) => Self::make_result_ok(ctx, Value::Int(n)),
+                    Ok(n) => Self::make_result_ok(ctx, Payload::Int(n)),
                     Err(_) => Self::make_result_err(
                         ctx,
                         &format!("invalid integer: {s}"),
@@ -1827,12 +1613,13 @@ impl TryInto {
             }
 
             // String -> Float
-            (Value::String(sid), Ty::Float) => {
+            (Payload::String(sid), Ty::Float) => {
                 let s = ctx.arena.get_str(*sid).unwrap_or("").to_owned();
                 Ok(match s.parse::<f64>() {
-                    Ok(n) => {
-                        Self::make_result_ok(ctx, Value::Float(OrderedFloat(n)))
-                    }
+                    Ok(n) => Self::make_result_ok(
+                        ctx,
+                        Payload::Float(OrderedFloat(n)),
+                    ),
                     Err(_) => Self::make_result_err(
                         ctx,
                         &format!("invalid float: {s}"),
@@ -1841,10 +1628,10 @@ impl TryInto {
             }
 
             // String -> Word
-            (Value::String(sid), Ty::Word) => {
+            (Payload::String(sid), Ty::Word) => {
                 let s = ctx.arena.get_str(*sid).unwrap_or("").to_owned();
                 Ok(match s.parse::<usize>() {
-                    Ok(n) => Self::make_result_ok(ctx, Value::Word(n)),
+                    Ok(n) => Self::make_result_ok(ctx, Payload::Word(n)),
                     Err(_) => Self::make_result_err(
                         ctx,
                         &format!("invalid unsigned integer: {s}"),
@@ -1853,9 +1640,9 @@ impl TryInto {
             }
 
             // Int -> Bool (strict: only 0 and 1)
-            (Value::Int(n), Ty::Bool) => Ok(match *n {
-                0 => Self::make_result_ok(ctx, Value::Bool(false)),
-                1 => Self::make_result_ok(ctx, Value::Bool(true)),
+            (Payload::Int(n), Ty::Bool) => Ok(match *n {
+                0 => Self::make_result_ok(ctx, Payload::Bool(false)),
+                1 => Self::make_result_ok(ctx, Payload::Bool(true)),
                 _ => Self::make_result_err(
                     ctx,
                     &format!("expected 0 or 1 for Bool, got {n}"),
@@ -1863,8 +1650,8 @@ impl TryInto {
             }),
 
             // Int -> Word (must be non-negative)
-            (Value::Int(n), Ty::Word) => Ok(if *n >= 0 {
-                Self::make_result_ok(ctx, Value::Word(*n as usize))
+            (Payload::Int(n), Ty::Word) => Ok(if *n >= 0 {
+                Self::make_result_ok(ctx, Payload::Word(*n as usize))
             } else {
                 Self::make_result_err(
                     ctx,
@@ -1873,9 +1660,9 @@ impl TryInto {
             }),
 
             // Json -> Bool
-            (Value::Json(j), Ty::Bool) => Ok(match &**j {
+            (Payload::Json(j), Ty::Bool) => Ok(match &**j {
                 serde_json::Value::Bool(b) => {
-                    Self::make_result_ok(ctx, Value::Bool(*b))
+                    Self::make_result_ok(ctx, Payload::Bool(*b))
                 }
                 serde_json::Value::Null => {
                     Self::make_result_err(ctx, "expected Bool, got null")
@@ -1887,10 +1674,10 @@ impl TryInto {
             }),
 
             // Json -> Int
-            (Value::Json(j), Ty::Int) => Ok(match &**j {
+            (Payload::Json(j), Ty::Int) => Ok(match &**j {
                 serde_json::Value::Number(n) => n
                     .as_i64()
-                    .map(|i| Self::make_result_ok(ctx, Value::Int(i)))
+                    .map(|i| Self::make_result_ok(ctx, Payload::Int(i)))
                     .unwrap_or_else(|| {
                         Self::make_result_err(
                             ctx,
@@ -1909,11 +1696,14 @@ impl TryInto {
             }),
 
             // Json -> Float
-            (Value::Json(j), Ty::Float) => Ok(match &**j {
+            (Payload::Json(j), Ty::Float) => Ok(match &**j {
                 serde_json::Value::Number(n) => n
                     .as_f64()
                     .map(|f| {
-                        Self::make_result_ok(ctx, Value::Float(OrderedFloat(f)))
+                        Self::make_result_ok(
+                            ctx,
+                            Payload::Float(OrderedFloat(f)),
+                        )
                     })
                     .unwrap_or_else(|| {
                         Self::make_result_err(
@@ -1931,10 +1721,10 @@ impl TryInto {
             }),
 
             // Json -> String
-            (Value::Json(j), Ty::String) => Ok(match &**j {
+            (Payload::Json(j), Ty::String) => Ok(match &**j {
                 serde_json::Value::String(s) => {
                     let id = ctx.arena.intern(s);
-                    Self::make_result_ok(ctx, Value::String(id))
+                    Self::make_result_ok(ctx, Payload::String(id))
                 }
                 serde_json::Value::Null => {
                     Self::make_result_err(ctx, "expected String, got null")
@@ -1951,11 +1741,11 @@ impl TryInto {
             // T -> Json (jsonify)
             (_, Ty::Json) => Ok(Self::make_result_ok(
                 ctx,
-                Value::Json(Arc::new(Into::jsonify(ctx, val))),
+                Payload::Json(Arc::new(Into::jsonify(ctx, val))),
             )),
 
             // Int -> DataStatus (MUMPS @data values: 0, 1, 10, 11 -> variants)
-            (Value::Int(n), Ty::DataStatus) => {
+            (Payload::Int(n), Ty::DataStatus) => {
                 let (variant_idx, valid) = match *n {
                     0 => (0, true),  // NoData
                     1 => (1, true),  // HasValue
@@ -1965,10 +1755,13 @@ impl TryInto {
                 };
 
                 Ok(if valid {
-                    let ty_expr = ctx.type_exprs.named(TypeId::DATA_STATUS);
                     Self::make_result_ok(
                         ctx,
-                        Value::Tagged(ty_expr, variant_idx, SmallVec::new()),
+                        Payload::Tagged(
+                            TypeId::DATA_STATUS,
+                            variant_idx,
+                            SmallVec::new(),
+                        ),
                     )
                 } else {
                     Self::make_result_err(
@@ -1991,18 +1784,18 @@ impl TryInto {
     }
 
     /// Check if a value's runtime type matches the target type.
-    fn types_match(val: &Value, target: &Ty) -> bool {
+    fn types_match(val: &Payload, target: &Ty) -> bool {
         matches!(
             (val, target),
-            (Value::Bool(_), Ty::Bool)
-                | (Value::Int(_), Ty::Int)
-                | (Value::Word(_), Ty::Word)
-                | (Value::Float(_), Ty::Float)
-                | (Value::Char(_), Ty::Char)
-                | (Value::String(_), Ty::String)
-                | (Value::FilePath(_), Ty::FilePath)
-                | (Value::Json(_), Ty::Json)
-                | (Value::Unit, Ty::Unit)
+            (Payload::Bool(_), Ty::Bool)
+                | (Payload::Int(_), Ty::Int)
+                | (Payload::Word(_), Ty::Word)
+                | (Payload::Float(_), Ty::Float)
+                | (Payload::Char(_), Ty::Char)
+                | (Payload::String(_), Ty::String)
+                | (Payload::FilePath(_), Ty::FilePath)
+                | (Payload::Json(_), Ty::Json)
+                | (Payload::Unit, Ty::Unit)
         )
     }
 
@@ -2019,24 +1812,20 @@ impl TryInto {
     }
 
     /// Create a `Result.Ok(val)` value.
-    fn make_result_ok(ctx: &mut ClassCtx<'_>, val: Value) -> Value {
-        let val_id = ctx.arena.add(val, ctx.span);
-        let ok_ty = ctx.type_exprs.named(TypeId::UNKNOWN);
-        let err_ty = ctx.type_exprs.named(TypeId::STRING);
-        let result_ty =
-            ctx.type_exprs.app(TypeId::RESULT, smallvec![ok_ty, err_ty]);
-        Value::Tagged(result_ty, 0, smallvec![val_id])
+    fn make_result_ok(ctx: &mut ClassCtx<'_>, val: Payload) -> Payload {
+        let val_id = ctx.arena.add_typed(val, ValueMeta::untyped(), ctx.span);
+        Payload::ok(val_id)
     }
 
     /// Create a `Result.Err(msg)` value.
-    fn make_result_err(ctx: &mut ClassCtx<'_>, msg: &str) -> Value {
+    fn make_result_err(ctx: &mut ClassCtx<'_>, msg: &str) -> Payload {
         let msg_id = ctx.arena.intern(msg);
-        let msg_val_id = ctx.arena.add(Value::String(msg_id), ctx.span);
-        let ok_ty = ctx.type_exprs.named(TypeId::UNKNOWN);
-        let err_ty = ctx.type_exprs.named(TypeId::STRING);
-        let result_ty =
-            ctx.type_exprs.app(TypeId::RESULT, smallvec![ok_ty, err_ty]);
-        Value::Tagged(result_ty, 1, smallvec![msg_val_id])
+        let msg_val_id = ctx.arena.add_typed(
+            Payload::String(msg_id),
+            ctx.runtime_types.meta_string(),
+            ctx.span,
+        );
+        Payload::err(msg_val_id)
     }
 }
 
@@ -2051,23 +1840,26 @@ impl Display {
     /// Unlike `Into[String]` which produces raw string content, this produces
     /// output suitable for display (e.g., `write` statements) where strings
     /// are quoted and complex types are formatted for readability.
-    pub(crate) fn display(ctx: &mut ClassCtx<'_>, v: &Value) -> Result<Value> {
+    pub(crate) fn display(
+        ctx: &mut ClassCtx<'_>,
+        v: &Payload,
+    ) -> Result<Payload> {
         let s = Self::format(ctx, v);
         let id = ctx.arena.intern(&s);
-        Ok(Value::String(id))
+        Ok(Payload::String(id))
     }
 
     /// Format a value as valid RUMPS syntax.
     ///
     /// Returns the string directly; for the class method wrapper that returns
-    /// `Value::String`, see [`display`](Self::display).
-    pub(crate) fn format(ctx: &ClassCtx<'_>, v: &Value) -> String {
+    /// `Payload::String`, see [`display`](Self::display).
+    pub(crate) fn format(ctx: &ClassCtx<'_>, v: &Payload) -> String {
         match v {
-            Value::Unit => "Unit".into(),
-            Value::Bool(b) => b.to_string(),
-            Value::Int(n) => n.to_string(),
-            Value::Word(n) => n.to_string(),
-            Value::Float(f) => {
+            Payload::Unit => "Unit".into(),
+            Payload::Bool(b) => b.to_string(),
+            Payload::Int(n) => n.to_string(),
+            Payload::Word(n) => n.to_string(),
+            Payload::Float(f) => {
                 let s = f.to_string();
                 if s.contains('.') || s.contains('e') || s.contains('E') {
                     s
@@ -2075,19 +1867,19 @@ impl Display {
                     format!("{s}.0")
                 }
             }
-            Value::Char(c) => format!("'{c}'"),
-            Value::String(id) | Value::FilePath(id) => {
+            Payload::Char(c) => format!("'{c}'"),
+            Payload::String(id) | Payload::FilePath(id) => {
                 let s = ctx.arena.get_str(*id).unwrap_or("");
                 format!("\"{s}\"")
             }
-            Value::Regex(idx) => {
+            Payload::Regex(idx) => {
                 let re =
                     ctx.regex_cache.get(*idx as usize).unwrap_or_else(|| {
                         typechecked!("Display", "valid Regex cache index")
                     });
                 format!("/{}/", re.as_str())
             }
-            Value::Array(_, elems) => {
+            Payload::Array(elems) => {
                 let items = elems
                     .iter()
                     .filter_map(|id| ctx.arena.get(*id))
@@ -2095,7 +1887,7 @@ impl Display {
                     .join(", ");
                 format!("[ {items} ]")
             }
-            Value::Tuple(_, elems) => {
+            Payload::Tuple(elems) => {
                 let items = elems
                     .iter()
                     .filter_map(|id| ctx.arena.get(*id))
@@ -2104,7 +1896,7 @@ impl Display {
                 let trail = if elems.len() == 1 { "," } else { "" };
                 format!("({items}{trail})")
             }
-            Value::Object(obj) => {
+            Payload::Object(obj) => {
                 let fields = obj
                     .iter()
                     .map(|(k, vid)| {
@@ -2119,7 +1911,7 @@ impl Display {
                     .join(", ");
                 format!("{{ {fields} }}")
             }
-            Value::Map(_, _, entries) => {
+            Payload::Map(entries) => {
                 let items = entries
                     .iter()
                     .map(|(k, vid)| {
@@ -2134,17 +1926,14 @@ impl Display {
                     .join(", ");
                 format!("{{ {items} }}")
             }
-            Value::Time(t) => t.to_rfc3339(),
-            Value::Json(j) => j.to_string(),
-            Value::Tagged(ty_expr, idx, payloads) => {
-                let base_ty = ctx.type_exprs.base_type(*ty_expr);
-                let ty_name = base_ty
-                    .and_then(|ty| ctx.registry.type_name(ty, ctx.arena))
-                    .unwrap_or("?");
-                let var_name = base_ty
-                    .and_then(|ty| {
-                        ctx.registry.variant_name(ty, *idx, ctx.arena)
-                    })
+            Payload::Time(t) => t.to_rfc3339(),
+            Payload::Json(j) => j.to_string(),
+            Payload::Tagged(ty_id, idx, payloads) => {
+                let ty_name =
+                    ctx.registry.type_name(*ty_id, ctx.arena).unwrap_or("?");
+                let var_name = ctx
+                    .registry
+                    .variant_name(*ty_id, *idx, ctx.arena)
                     .unwrap_or("?");
 
                 if payloads.is_empty() {
@@ -2158,29 +1947,29 @@ impl Display {
                     format!("{ty_name}.{var_name}({args})")
                 }
             }
-            Value::Closure { .. } => {
+            Payload::Closure { .. } => {
                 typechecked!("Display", "Display (not Closure)")
             }
-            Value::Function { .. } => {
+            Payload::Function { .. } => {
                 typechecked!("Display", "Display (not Function)")
             }
-            Value::ModuleFn { .. } => {
+            Payload::ModuleFn { .. } => {
                 typechecked!("Display", "Display (not ModuleFn)")
             }
-            Value::ClassMethodFn { .. } => {
+            Payload::ClassMethodFn { .. } => {
                 typechecked!("Display", "Display (not ClassMethodFn)")
             }
-            Value::PartialApp { .. } => {
+            Payload::PartialApp { .. } => {
                 typechecked!("Display", "Display (not PartialApp)")
             }
-            Value::ModuleConst { path } => {
+            Payload::ModuleConst { path } => {
                 let path_str: String = path
                     .iter()
                     .filter_map(|id| ctx.arena.get_str(*id))
                     .join(".");
                 format!("<{path_str}>")
             }
-            Value::Range {
+            Payload::Range {
                 start,
                 end,
                 inclusive,
@@ -2191,9 +1980,9 @@ impl Display {
                     format!("{start} .. {end}")
                 }
             }
-            Value::ForeverContinuation => "<continuation>".into(),
-            Value::LoopContinue(_) => "<loop-continue>".into(),
-            Value::Ref(is_global, name_id, sub_ids) => {
+            Payload::ForeverContinuation => "<continuation>".into(),
+            Payload::LoopContinue(_) => "<loop-continue>".into(),
+            Payload::Ref(is_global, name_id, sub_ids) => {
                 let prefix = if *is_global { "^" } else { "" };
                 let name = ctx.arena.get_str(*name_id).unwrap_or("?");
                 let subs = sub_ids
@@ -2202,13 +1991,6 @@ impl Display {
                     .map(|v| Self::format(ctx, v))
                     .join(", ");
                 format!("{prefix}{name}{{{subs}}}")
-            }
-            Value::Union(_, inner_id) | Value::Newtype(_, inner_id) => {
-                let inner = ctx
-                    .arena
-                    .get(*inner_id)
-                    .unwrap_or_else(|| invariant!("inner value in arena"));
-                Self::format(ctx, inner)
             }
         }
     }
@@ -2252,23 +2034,16 @@ impl Mappable {
             EmptyArray,
             Array(ValueId),
             OptionSome(ValueId),
-            OptionNone(TypeExprId),
-            ResultOk(ValueId, TypeExprId), // inner, err_ty
-            ResultErr(Value),
+            OptionNone,
+            ResultOk(ValueId),
+            ResultErr(Payload),
             Other,
         }
         let kind = match ctx.arena.get(src) {
-            Some(Value::Array(_, elems)) if elems.is_empty() => {
-                Kind::EmptyArray
-            }
-            Some(Value::Array(_, elems)) => Kind::Array(elems[0]),
+            Some(Payload::Array(elems)) if elems.is_empty() => Kind::EmptyArray,
+            Some(Payload::Array(elems)) => Kind::Array(elems[0]),
             // Option.Some(v) -> map inner
-            Some(Value::Tagged(ty, 1, payloads))
-                if ctx
-                    .type_exprs
-                    .base_type(*ty)
-                    .is_some_and(|t| t == TypeId::OPTION) =>
-            {
+            Some(Payload::Tagged(ty, 1, payloads)) if *ty == TypeId::OPTION => {
                 Kind::OptionSome(
                     *payloads
                         .first()
@@ -2276,52 +2051,27 @@ impl Mappable {
                 )
             }
             // Option.None -> return None
-            Some(Value::Tagged(ty, 0, _))
-                if ctx
-                    .type_exprs
-                    .base_type(*ty)
-                    .is_some_and(|t| t == TypeId::OPTION) =>
-            {
-                Kind::OptionNone(*ty)
+            Some(Payload::Tagged(ty, 0, _)) if *ty == TypeId::OPTION => {
+                Kind::OptionNone
             }
             // Result.Ok(v) -> map inner
-            Some(Value::Tagged(ty, 0, payloads))
-                if ctx
-                    .type_exprs
-                    .base_type(*ty)
-                    .is_some_and(|t| t == TypeId::RESULT) =>
-            {
+            Some(Payload::Tagged(ty, 0, payloads)) if *ty == TypeId::RESULT => {
                 let inner = *payloads
                     .first()
                     .unwrap_or_else(|| invariant!("Ok has payload"));
-                // Extract error type from Result[T, E]
-                let err_ty = ctx
-                    .type_exprs
-                    .type_args(*ty)
-                    .and_then(|args| args.get(1).copied())
-                    .unwrap_or_else(|| ctx.type_exprs.named(TypeId::UNKNOWN));
-                Kind::ResultOk(inner, err_ty)
+                Kind::ResultOk(inner)
             }
             // Result.Err(e) -> return unchanged
-            Some(v @ Value::Tagged(ty, 1, _))
-                if ctx
-                    .type_exprs
-                    .base_type(*ty)
-                    .is_some_and(|t| t == TypeId::RESULT) =>
-            {
+            Some(v @ Payload::Tagged(ty, 1, _)) if *ty == TypeId::RESULT => {
                 Kind::ResultErr(v.clone())
             }
             _ => Kind::Other,
         };
 
         match kind {
-            Kind::EmptyArray => {
-                let ty = ctx.type_exprs.named(TypeId::UNKNOWN);
-                Ok(MethodResult::Done(Value::Array(
-                    ty,
-                    Arc::new(SmallVec::new()),
-                )))
-            }
+            Kind::EmptyArray => Ok(MethodResult::Done(Payload::Array(
+                Arc::new(SmallVec::new()),
+            ))),
             Kind::Array(first) => Ok(MethodResult::Invoke(Continuation {
                 callee: fn_id,
                 args: smallvec![first],
@@ -2331,7 +2081,6 @@ impl Mappable {
                         idx: 0,
                     },
                     acc: SmallVec::new(),
-                    elem_ty: None,
                 },
             })),
             Kind::OptionSome(inner) => Ok(MethodResult::Invoke(Continuation {
@@ -2340,18 +2089,16 @@ impl Mappable {
                 state: HofState::MapContainer {
                     ctor_ty: TypeId::OPTION,
                     tag: 1, // Some
-                    extra_ty: None,
                 },
             })),
-            Kind::OptionNone(ty) => Ok(MethodResult::Done(Value::none(ty))),
-            Kind::ResultOk(inner, err_ty) => {
+            Kind::OptionNone => Ok(MethodResult::Done(Payload::none())),
+            Kind::ResultOk(inner) => {
                 Ok(MethodResult::Invoke(Continuation {
                     callee: fn_id,
                     args: smallvec![inner],
                     state: HofState::MapContainer {
                         ctor_ty: TypeId::RESULT,
                         tag: 0, // Ok
-                        extra_ty: Some(err_ty),
                     },
                 }))
             }
@@ -2378,22 +2125,17 @@ impl Filterable {
             .unwrap_or_else(|| typechecked!("Filterable:filter", "2 args"));
 
         match ctx.arena.get(src) {
-            Some(Value::Array(ty, elems)) if elems.is_empty() => {
-                let ty = *ty;
-                Ok(MethodResult::Done(Value::Array(
-                    ty,
-                    Arc::new(SmallVec::new()),
-                )))
-            }
-            Some(Value::Array(ty, elems)) => {
-                let (ty, first) = (*ty, elems[0]);
+            Some(Payload::Array(elems)) if elems.is_empty() => Ok(
+                MethodResult::Done(Payload::Array(Arc::new(SmallVec::new()))),
+            ),
+            Some(Payload::Array(elems)) => {
+                let first = elems[0];
                 Ok(MethodResult::Invoke(Continuation {
                     callee: pred_id,
                     args: smallvec![first],
                     state: HofState::FilterArray {
                         source: src,
                         idx: 0,
-                        elem_ty: ty,
                         acc: SmallVec::new(),
                         pending: first,
                     },
@@ -2431,21 +2173,10 @@ impl Foldable {
             Range(i64, i64),
             Other,
         }
-        // Helper to unwrap Union/Newtype to get inner value
-        fn unwrap_src(arena: &ValueArena, id: ValueId) -> Option<&Value> {
-            arena.get(id).and_then(|v| match v {
-                Value::Union(_, inner) | Value::Newtype(_, inner) => {
-                    unwrap_src(arena, *inner)
-                }
-                other => Some(other),
-            })
-        }
-        let kind = match unwrap_src(ctx.arena, src) {
-            Some(Value::Array(_, elems)) if elems.is_empty() => {
-                Kind::EmptyArray
-            }
-            Some(Value::Array(_, elems)) => Kind::Array(elems[0]),
-            Some(Value::Range {
+        let kind = match ctx.arena.get(src) {
+            Some(Payload::Array(elems)) if elems.is_empty() => Kind::EmptyArray,
+            Some(Payload::Array(elems)) => Kind::Array(elems[0]),
+            Some(Payload::Range {
                 start,
                 end,
                 inclusive,
@@ -2478,7 +2209,11 @@ impl Foldable {
                 },
             })),
             Kind::Range(start, end) => {
-                let int_id = ctx.arena.add(Value::Int(start), ctx.span);
+                let int_id = ctx.arena.add_typed(
+                    Payload::Int(start),
+                    ctx.runtime_types.meta_int(),
+                    ctx.span,
+                );
                 Ok(MethodResult::Invoke(Continuation {
                     callee: fn_id,
                     args: smallvec![init, int_id],
@@ -2499,10 +2234,10 @@ pub(crate) struct Iterable;
 
 impl Iterable {
     /// `Iterable:length`; returns the number of elements.
-    pub(crate) fn length(_: &mut ClassCtx<'_>, v: &Value) -> Result<Value> {
+    pub(crate) fn length(_: &mut ClassCtx<'_>, v: &Payload) -> Result<Payload> {
         Ok(match v {
-            Value::Array(_, elems) => Value::Int(elems.len() as i64),
-            Value::Range {
+            Payload::Array(elems) => Payload::Int(elems.len() as i64),
+            Payload::Range {
                 start,
                 end,
                 inclusive,
@@ -2512,27 +2247,35 @@ impl Iterable {
                 } else {
                     end - start
                 };
-                Value::Int(len.max(0))
+                Payload::Int(len.max(0))
             }
             _ => typechecked!("Iterable:length", "Iterable"),
         })
     }
 
     /// `Iterable:collect`; materializes an iterable into an `Array`.
-    pub(crate) fn collect(ctx: &mut ClassCtx<'_>, v: &Value) -> Result<Value> {
+    pub(crate) fn collect(
+        ctx: &mut ClassCtx<'_>,
+        v: &Payload,
+    ) -> Result<Payload> {
         Ok(match v {
-            Value::Array(ty, elems) => Value::Array(*ty, elems.clone()),
-            Value::Range {
+            Payload::Array(elems) => Payload::Array(elems.clone()),
+            Payload::Range {
                 start,
                 end,
                 inclusive,
             } => {
                 let actual_end = if *inclusive { *end + 1 } else { *end };
                 let elems: SmallVec<[ValueId; 4]> = (*start..actual_end)
-                    .map(|i| ctx.arena.add(Value::Int(i), ctx.span))
+                    .map(|i| {
+                        ctx.arena.add_typed(
+                            Payload::Int(i),
+                            ctx.runtime_types.meta_int(),
+                            ctx.span,
+                        )
+                    })
                     .collect();
-                let ty = ctx.type_exprs.named(TypeId::INT);
-                Value::Array(ty, Arc::new(elems))
+                Payload::Array(Arc::new(elems))
             }
             _ => typechecked!("Iterable:collect", "Iterable"),
         })
@@ -2555,21 +2298,11 @@ impl Chainable {
 
         match ctx.arena.get(src) {
             // Option.None -> None
-            Some(Value::Tagged(ty, 0, _))
-                if ctx
-                    .type_exprs
-                    .base_type(*ty)
-                    .is_some_and(|t| t == TypeId::OPTION) =>
-            {
-                Ok(MethodResult::Done(Value::none(*ty)))
+            Some(Payload::Tagged(ty, 0, _)) if *ty == TypeId::OPTION => {
+                Ok(MethodResult::Done(Payload::none()))
             }
             // Option.Some(v) -> invoke fn(v)
-            Some(Value::Tagged(ty, 1, payloads))
-                if ctx
-                    .type_exprs
-                    .base_type(*ty)
-                    .is_some_and(|t| t == TypeId::OPTION) =>
-            {
+            Some(Payload::Tagged(ty, 1, payloads)) if *ty == TypeId::OPTION => {
                 let inner = payloads
                     .first()
                     .copied()
@@ -2583,12 +2316,7 @@ impl Chainable {
                 }))
             }
             // Result.Ok(v) -> invoke fn(v)
-            Some(Value::Tagged(ty, 0, payloads))
-                if ctx
-                    .type_exprs
-                    .base_type(*ty)
-                    .is_some_and(|t| t == TypeId::RESULT) =>
-            {
+            Some(Payload::Tagged(ty, 0, payloads)) if *ty == TypeId::RESULT => {
                 let inner = payloads
                     .first()
                     .copied()
@@ -2602,17 +2330,12 @@ impl Chainable {
                 }))
             }
             // Result.Err(e) -> propagate error unchanged
-            Some(Value::Tagged(ty, 1, payloads))
-                if ctx
-                    .type_exprs
-                    .base_type(*ty)
-                    .is_some_and(|t| t == TypeId::RESULT) =>
-            {
+            Some(Payload::Tagged(ty, 1, payloads)) if *ty == TypeId::RESULT => {
                 let err = payloads
                     .first()
                     .copied()
                     .unwrap_or_else(|| invariant!("Err has payload"));
-                Ok(MethodResult::Done(Value::Tagged(*ty, 1, smallvec![err])))
+                Ok(MethodResult::Done(Payload::Tagged(*ty, 1, smallvec![err])))
             }
             _ => typechecked!("Chainable:chain", "Option or Result"),
         }
@@ -2637,10 +2360,6 @@ impl Bimappable {
             .get(2)
             .unwrap_or_else(|| typechecked!("Bimappable:bimap", "3 args"));
 
-        let output_ty = ctx.output_ty.unwrap_or_else(|| {
-            typechecked!("Bimappable:bimap", "resolved output type")
-        });
-
         enum Kind {
             ResultOk(ValueId),
             ResultErr(ValueId),
@@ -2649,31 +2368,21 @@ impl Bimappable {
         }
 
         let kind = match ctx.arena.get(src) {
-            Some(Value::Tagged(ty, 0, payloads))
-                if ctx
-                    .type_exprs
-                    .base_type(*ty)
-                    .is_some_and(|t| t == TypeId::RESULT) =>
-            {
+            Some(Payload::Tagged(ty, 0, payloads)) if *ty == TypeId::RESULT => {
                 Kind::ResultOk(
                     *payloads
                         .first()
                         .unwrap_or_else(|| invariant!("Ok has payload")),
                 )
             }
-            Some(Value::Tagged(ty, 1, payloads))
-                if ctx
-                    .type_exprs
-                    .base_type(*ty)
-                    .is_some_and(|t| t == TypeId::RESULT) =>
-            {
+            Some(Payload::Tagged(ty, 1, payloads)) if *ty == TypeId::RESULT => {
                 Kind::ResultErr(
                     *payloads
                         .first()
                         .unwrap_or_else(|| invariant!("Err has payload")),
                 )
             }
-            Some(Value::Tuple(_, elems)) => {
+            Some(Payload::Tuple(elems)) => {
                 let a = *elems
                     .first()
                     .unwrap_or_else(|| invariant!("bimap tuple has 2 elems"));
@@ -2689,12 +2398,12 @@ impl Bimappable {
             Kind::ResultOk(inner) => Ok(MethodResult::Invoke(Continuation {
                 callee: f,
                 args: smallvec![inner],
-                state: HofState::BimapResult { tag: 0, output_ty },
+                state: HofState::BimapResult { tag: 0 },
             })),
             Kind::ResultErr(inner) => Ok(MethodResult::Invoke(Continuation {
                 callee: g,
                 args: smallvec![inner],
-                state: HofState::BimapResult { tag: 1, output_ty },
+                state: HofState::BimapResult { tag: 1 },
             })),
             Kind::Tuple(a, b) => Ok(MethodResult::Invoke(Continuation {
                 callee: f,
@@ -2702,7 +2411,6 @@ impl Bimappable {
                 state: HofState::BimapTuple {
                     second_fn: g,
                     second_elem: b,
-                    output_ty,
                     first_result: None,
                 },
             })),

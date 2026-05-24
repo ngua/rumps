@@ -163,12 +163,21 @@ impl ConvertCtx<'_> {
             TypeId::SCALAR => self.ty_arena.scalar(),
             TypeId::SUBSCRIPT => self.ty_arena.subscript(),
             _ => match self.registry.get_def(id) {
-                Some(TypeDef::Union { members, .. }) => {
+                Some(TypeDef::Union {
+                    members,
+                    member_exprs,
+                    ..
+                }) => {
                     let members = members.clone();
-                    let member_tys = members
-                        .iter()
-                        .map(|m| self.type_expr_to_ty(*m))
-                        .collect();
+                    let member_exprs = member_exprs.clone();
+                    let member_tys = if member_exprs.is_empty() {
+                        members.iter().map(|&m| self.type_id_to_ty(m)).collect()
+                    } else {
+                        member_exprs
+                            .iter()
+                            .map(|&m| self.ast_type_to_ty(m, &IndexMap::new()))
+                            .collect()
+                    };
                     self.ty_arena.alloc(Ty::Union(Some(id), member_tys))
                 }
                 _ => self.ty_arena.named(id, smallvec![]),
@@ -400,8 +409,51 @@ impl ConvertCtx<'_> {
                                         .iter()
                                         .map(|a| self.ast_type_to_ty(*a, subst))
                                         .collect();
-                                    let base = self.type_id_to_ty(type_id);
-                                    self.apply_type_args(base, arg_tys)
+                                    let union = self
+                                        .registry
+                                        .get_def(type_id)
+                                        .and_then(|def| match def {
+                                            TypeDef::Union {
+                                                type_params,
+                                                member_exprs,
+                                                ..
+                                            } if !member_exprs.is_empty() => {
+                                                Some((
+                                                    type_params.clone(),
+                                                    member_exprs.clone(),
+                                                ))
+                                            }
+                                            _ => None,
+                                        });
+                                    match union {
+                                        Some((ps, ms)) => {
+                                            let subst: IndexMap<
+                                                StringId,
+                                                TyId,
+                                            > = ps
+                                                .iter()
+                                                .zip(arg_tys.iter())
+                                                .map(|(&p, &a)| (p, a))
+                                                .collect();
+                                            let member_tys = ms
+                                                .iter()
+                                                .map(|&m| {
+                                                    self.ast_type_to_ty(
+                                                        m, &subst,
+                                                    )
+                                                })
+                                                .collect();
+                                            self.ty_arena.alloc(Ty::Union(
+                                                Some(type_id),
+                                                member_tys,
+                                            ))
+                                        }
+                                        None => {
+                                            let base =
+                                                self.type_id_to_ty(type_id);
+                                            self.apply_type_args(base, arg_tys)
+                                        }
+                                    }
                                 }
                             }
                         }

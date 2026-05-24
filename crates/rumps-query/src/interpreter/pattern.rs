@@ -6,79 +6,99 @@ use smallvec::SmallVec;
 
 use super::Interpreter;
 use crate::ast::{
-    AstTypeExprId, BindingPattern, MatchPattern, MatchPatternId, RestPattern,
-    TypePattern,
+    AstTypeExprId, BindingPattern, ExprId, MatchPattern, MatchPatternId,
+    RestPattern, TypePattern,
 };
 use crate::intern::{QualifiedName, StringId};
 use crate::io::IoContext;
-use crate::value::{TypeId, Value, ValueId, VariantDef};
+use crate::typecheck::{RuntimeTyId, Ty};
+use crate::value::{Payload, TypeDef, TypeId, ValueId, ValueMeta, VariantDef};
 use crate::{Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
-    /// Recursively unwrap `Union`/`Newtype` wrappers to get the inner value.
+    /// No-op after Phase 7: `Payload::Union`/`Payload::Newtype` are removed.
     ///
-    /// Returns `Some(inner)` if `val` was wrapped, `None` if it was not.
-    pub(super) fn unwrap_value_recursive(&self, val: &Value) -> Option<Value> {
-        match val {
-            Value::Union(_, inner_id) | Value::Newtype(_, inner_id) => {
-                self.arena.get(*inner_id).cloned().map(|inner| {
-                    self.unwrap_value_recursive(&inner).unwrap_or(inner)
-                })
-            }
-            _ => None,
-        }
+    /// Retained temporarily for callers outside this module; always returns
+    /// `None` (the value is never wrapped).
+    pub(super) fn unwrap_value_recursive(
+        &self,
+        _val: &Payload,
+    ) -> Option<Payload> {
+        None
     }
 
     /// Check if a value matches a type pattern (without binding).
+    ///
+    /// `checked_ty` is the statically-known type of `val` from the typechecker,
+    /// used when the payload alone cannot determine its parameterized type.
     pub(super) fn check_pattern(
         &mut self,
-        val: &Value,
+        val: &Payload,
+        checked_ty: Option<RuntimeTyId>,
         pattern: &TypePattern,
         span: Span,
     ) -> Result<bool> {
-        // Unwrap Union/Newtype to check inner value for structural patterns
-        let unwrapped = self.unwrap_value_recursive(val);
-        let v = unwrapped.as_ref().unwrap_or(val);
-
         match pattern {
             TypePattern::Type(ast_ty_id) => {
-                // Type check: `is Int`, `is Array[String]`, `is Option[_]`
-                // Try to resolve; if None, type contains wildcards
-                // Note: use original `val` since `value_matches_type_expr`
-                // already handles Union/Newtype unwrapping
-                match self.try_resolve_type_expr(*ast_ty_id, span)? {
-                    Some(ty_expr) => {
-                        Ok(self.value_matches_type_expr(val, ty_expr))
+                match self.ast_type_map.get(ast_ty_id).copied() {
+                    Some(expected)
+                        if !self.runtime_types.contains_var(expected) =>
+                    {
+                        let payload_ty = self.payload_runtime_ty(val);
+                        let actual = if payload_ty == RuntimeTyId::UNKNOWN {
+                            checked_ty.unwrap_or(payload_ty)
+                        } else {
+                            payload_ty
+                        };
+                        let matched = self
+                            .runtime_types
+                            .matches(actual, actual, expected);
+                        Ok(matched
+                            || self.alias_structurally_matches(
+                                val, expected, *ast_ty_id, span,
+                            ))
+                    }
+                    Some(expected) => {
+                        let payload_ty = self.payload_runtime_ty(val);
+                        let actual = if payload_ty == RuntimeTyId::UNKNOWN {
+                            checked_ty.unwrap_or(payload_ty)
+                        } else {
+                            payload_ty
+                        };
+                        Ok(self.runtime_types.matches(actual, actual, expected))
                     }
                     None => {
-                        // Contains wildcards; check base type only
-                        self.value_matches_ast_type_with_wildcards(
-                            val, *ast_ty_id,
-                        )
+                        typechecked!("type pattern", "in ast_type_map")
                     }
                 }
             }
             TypePattern::Variant(ref ty_name, var_name) => {
-                self.check_variant_zero_arity(v, ty_name, *var_name, span)
+                self.check_variant_zero_arity(val, ty_name, *var_name, span)
             }
             TypePattern::VariantWildcard(ref ty_name, var_name) => {
-                self.check_variant(v, ty_name, *var_name, span)
+                self.check_variant(val, ty_name, *var_name, span)
             }
             TypePattern::VariantBind(ref ty_name, var_name, _) => {
-                self.check_variant(v, ty_name, *var_name, span)
+                self.check_variant(val, ty_name, *var_name, span)
             }
             TypePattern::Object(fields) => {
                 // Structural object check: `is { name: String, age: Int }`
-                // Resolve field type exprs, then check value matches.
-                match v {
-                    Value::Object(obj) => {
+                match val {
+                    Payload::Object(obj) => {
                         let obj = obj.clone();
                         fields.iter().try_fold(true, |acc, (name, ty_id)| {
-                            let ty = self.resolve_type_expr(*ty_id, span)?;
+                            let expected = self
+                                .ast_type_map
+                                .get(ty_id)
+                                .copied()
+                                .unwrap_or_else(|| {
+                                    typechecked!(
+                                        "object field type",
+                                        "in ast_type_map"
+                                    )
+                                });
                             let matches = obj.get(name).is_some_and(|&vid| {
-                                self.arena.get(vid).cloned().is_some_and(|fv| {
-                                    self.value_matches_type_expr(&fv, ty)
-                                })
+                                self.value_id_matches_type(vid, expected)
                             });
                             Ok(acc && matches)
                         })
@@ -89,13 +109,204 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
+    /// Check if a runtime value matches an expected type, handling nested
+    /// objects recursively. For primitives, uses `payload_runtime_ty` + `matches`.
+    /// For objects, recurses into fields structurally.
+    fn value_matches_type(&self, val: &Payload, expected: RuntimeTyId) -> bool {
+        match self.runtime_types.get(expected) {
+            Ty::Object(fields) => match val {
+                Payload::Object(obj) => fields.iter().all(|(name, &ty)| {
+                    obj.get(name).is_some_and(|&vid| {
+                        self.value_id_matches_type(vid, RuntimeTyId::from(ty))
+                    })
+                }),
+                _ => false,
+            },
+            _ => {
+                let actual = self.payload_runtime_ty(val);
+                self.runtime_types.matches(actual, actual, expected)
+            }
+        }
+    }
+
+    fn value_id_matches_type(
+        &self,
+        id: ValueId,
+        expected: RuntimeTyId,
+    ) -> bool {
+        self.arena
+            .meta(id)
+            .is_some_and(|m| self.runtime_types.matches(m.ty, m.repr, expected))
+            || self
+                .arena
+                .get(id)
+                .is_some_and(|v| self.value_matches_type(v, expected))
+    }
+
+    /// Check if a value matches a `Named` alias or union type structurally.
+    ///
+    /// When `expected` is `Ty::Named(type_id, _)` and the registry entry is an
+    /// alias or union, performs structural base-type comparison. For aliases,
+    /// resolves the target through `ast_type_map` (if available) or the AST
+    /// type expression. For unions, checks membership.
+    fn alias_structurally_matches(
+        &mut self,
+        val: &Payload,
+        expected: RuntimeTyId,
+        ast_ty_id: AstTypeExprId,
+        _span: Span,
+    ) -> bool {
+        if let Some(&expanded) = self.alias_expansions.get(&ast_ty_id) {
+            self.value_matches_type(val, RuntimeTyId::from(expanded))
+        } else {
+            self.alias_structurally_matches_inner(val, expected)
+        }
+    }
+
+    fn alias_structurally_matches_inner(
+        &mut self,
+        val: &Payload,
+        expected: RuntimeTyId,
+    ) -> bool {
+        let type_id = match self.runtime_types.get(expected) {
+            Ty::Named(id, _) => *id,
+            _ => TypeId::UNKNOWN,
+        };
+
+        self.registry
+            .get_def(type_id)
+            .cloned()
+            .is_some_and(|def| match def {
+                TypeDef::Alias {
+                    target,
+                    type_params,
+                    ..
+                } => {
+                    let args = match self.runtime_types.get(expected) {
+                        Ty::Named(_, args) => args.clone(),
+                        _ => Default::default(),
+                    };
+                    self.alias_target_matches(val, target, &type_params, &args)
+                }
+                TypeDef::Union { members, .. } => {
+                    members.iter().any(|m| *m == val.base_type())
+                }
+                _ => false,
+            })
+    }
+
+    fn alias_target_matches(
+        &mut self,
+        val: &Payload,
+        target: AstTypeExprId,
+        ps: &[StringId],
+        args: &[crate::typecheck::TyId],
+    ) -> bool {
+        let subst: Vec<_> =
+            ps.iter().copied().zip(args.iter().copied()).collect();
+        self.ast
+            .get_type_expr(target)
+            .cloned()
+            .is_some_and(|te| match te {
+                crate::ast::AstTypeExpr::Object(fields) => match val {
+                    Payload::Object(obj) => fields.iter().all(|(name, ty)| {
+                        obj.get(name).is_some_and(|&vid| {
+                            self.resolve_alias_ty(*ty, &subst).is_some_and(
+                                |rt| self.value_id_matches_type(vid, rt),
+                            )
+                        })
+                    }),
+                    _ => false,
+                },
+                _ => self.ast_alias_base_matches(val, target),
+            })
+    }
+
+    fn resolve_alias_ty(
+        &mut self,
+        ast_id: AstTypeExprId,
+        subst: &[(StringId, crate::typecheck::TyId)],
+    ) -> Option<RuntimeTyId> {
+        self.ast
+            .get_type_expr(ast_id)
+            .cloned()
+            .and_then(|te| match te {
+                crate::ast::AstTypeExpr::Named(name) => subst
+                    .iter()
+                    .find(|(n, _)| *n == name.local_name())
+                    .map(|(_, ty)| RuntimeTyId::from(*ty))
+                    .or_else(|| {
+                        self.registry.lookup(&name).map(|tid| {
+                            RuntimeTyId::from(Self::type_id_to_ty_id(
+                                tid,
+                                &mut self.ty_arena,
+                            ))
+                        })
+                    }),
+                crate::ast::AstTypeExpr::App(name, args) => {
+                    self.registry.lookup(&name).map(|tid| {
+                        let ts = args
+                            .iter()
+                            .filter_map(|id| {
+                                self.resolve_alias_ty(*id, subst)
+                                    .map(|rt| rt.raw())
+                            })
+                            .collect();
+                        RuntimeTyId::from(self.ty_arena.named(tid, ts))
+                    })
+                }
+                crate::ast::AstTypeExpr::Tuple(elems) => {
+                    let ts = elems
+                        .iter()
+                        .filter_map(|id| {
+                            self.resolve_alias_ty(*id, subst).map(|rt| rt.raw())
+                        })
+                        .collect();
+                    Some(RuntimeTyId::from(self.ty_arena.alloc(Ty::Tuple(ts))))
+                }
+                crate::ast::AstTypeExpr::Object(fields) => {
+                    let fs = fields
+                        .iter()
+                        .filter_map(|(name, id)| {
+                            self.resolve_alias_ty(*id, subst)
+                                .map(|rt| (*name, rt.raw()))
+                        })
+                        .collect();
+                    Some(RuntimeTyId::from(self.ty_arena.alloc(Ty::Object(fs))))
+                }
+                _ => None,
+            })
+    }
+
+    /// Fallback alias match via AST type expression when the target is not in
+    /// `ast_type_map`. Compares the value's base `TypeId` with the AST type's
+    /// implied base.
+    fn ast_alias_base_matches(
+        &self,
+        val: &Payload,
+        target: AstTypeExprId,
+    ) -> bool {
+        self.ast.get_type_expr(target).is_some_and(|te| {
+            let base = val.base_type();
+            match te {
+                crate::ast::AstTypeExpr::Object(_) => base == TypeId::OBJECT,
+                crate::ast::AstTypeExpr::Tuple(_) => base == TypeId::TUPLE,
+                crate::ast::AstTypeExpr::Named(name)
+                | crate::ast::AstTypeExpr::App(name, _) => {
+                    self.registry.lookup(name).is_some_and(|tid| base == tid)
+                }
+                _ => false,
+            }
+        })
+    }
+
     /// Check variant match, requiring zero-arity.
     ///
     /// Used for `is Type.Variant` without parens; variants with payloads
     /// must use `is Type.Variant(_)` or `is Type.Variant(name)`.
     fn check_variant_zero_arity(
         &self,
-        val: &Value,
+        val: &Payload,
         ty_name: &QualifiedName,
         var_name: StringId,
         span: Span,
@@ -109,11 +320,8 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
 
         Ok(match val {
-            Value::Tagged(ty_expr, idx, _) => {
-                self.type_exprs
-                    .base_type(*ty_expr)
-                    .is_some_and(|t| t == type_id)
-                    && *idx == var_def.idx
+            Payload::Tagged(ty, idx, _) => {
+                *ty == type_id && *idx == var_def.idx
             }
             _ => false,
         })
@@ -122,7 +330,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Check if a value is a Tagged variant matching the given type and variant.
     pub(super) fn check_variant(
         &self,
-        val: &Value,
+        val: &Payload,
         ty_name: &QualifiedName,
         var_name: StringId,
         span: Span,
@@ -131,11 +339,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             self.lookup_variant(ty_name, var_name, span)?;
 
         Ok(match val {
-            Value::Tagged(ty_expr, idx, _) => {
-                self.type_exprs
-                    .base_type(*ty_expr)
-                    .is_some_and(|t| t == type_id)
-                    && *idx == var_def.idx
+            Payload::Tagged(ty, idx, _) => {
+                *ty == type_id && *idx == var_def.idx
             }
             _ => false,
         })
@@ -180,7 +385,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 // Re-add the value to get a fresh ValueId in case it matters
                 let val =
                     self.arena.get(val_id).cloned().unwrap_or(fallback.clone());
-                let new_val_id = self.arena.add(val, span);
+                let new_val_id =
+                    self.arena.add_typed(val, ValueMeta::untyped(), span);
                 self.env.scopes.bind(nid, new_val_id);
             });
     }
@@ -192,44 +398,44 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Returns `None` if the pattern does not match.
     pub(super) fn try_match_pattern(
         &mut self,
+        scrutinee: ExprId,
         pat_id: MatchPatternId,
-        val: &Value,
+        val: &Payload,
         span: Span,
     ) -> Result<Option<Vec<(StringId, ValueId)>>> {
         let pat = self.ast.get_pattern(pat_id).cloned().unwrap_or_else(|| {
             typechecked!("match pattern", "valid PatternId")
         });
 
-        // For most structural patterns, unwrap Union/Newtype
-        let unwrapped = self.unwrap_value_recursive(val);
-        let v = unwrapped.as_ref().unwrap_or(val);
-
         match &pat {
-            // Wildcard and Var bind the ORIGINAL value (preserving wrapper)
             MatchPattern::Wildcard => Ok(Some(vec![])),
             MatchPattern::Var(name) => {
-                let val_id = self.arena.add(val.clone(), span);
+                let val_id = self.arena.add_typed(
+                    val.clone(),
+                    ValueMeta::untyped(),
+                    span,
+                );
                 Ok(Some(vec![(*name, val_id)]))
             }
-            // Literal uses unwrapped value for comparison
             MatchPattern::Literal(lit) => {
-                let lit_val = self.pattern_literal(lit, v);
-                Ok(self.values_eq(v, &lit_val).then_some(vec![]))
+                let lit_val = self.pattern_literal(lit, val);
+                Ok(self.values_eq(val, &lit_val).then_some(vec![]))
             }
-            // Structural patterns use unwrapped value
-            MatchPattern::Variant(ty_name, var_name, sub_pats) => {
-                self.try_match_variant(ty_name, *var_name, sub_pats, v, span)
-            }
+            MatchPattern::Variant(ty_name, var_name, sub_pats) => self
+                .try_match_variant(
+                    scrutinee, ty_name, *var_name, sub_pats, val, span,
+                ),
             MatchPattern::Object(fields) => {
-                self.try_match_object(fields, v, span)
+                self.try_match_object(scrutinee, fields, val, span)
             }
-            MatchPattern::Tuple(pats) => self.try_match_tuple(pats, v, span),
+            MatchPattern::Tuple(pats) => {
+                self.try_match_tuple(scrutinee, pats, val, span)
+            }
             MatchPattern::Array(pats, rest) => {
-                self.try_match_array(pats, rest.as_ref(), v, span)
+                self.try_match_array(scrutinee, pats, rest.as_ref(), val, span)
             }
-            // Is pattern uses original value (value_matches_type_expr handles unwrapping)
             MatchPattern::Is(name, ty_id) => {
-                self.try_match_is(*name, *ty_id, val, span)
+                self.try_match_is(scrutinee, *name, *ty_id, val, span)
             }
         }
     }
@@ -237,17 +443,38 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Try to match a type-narrowing pattern: `x IS Type`
     fn try_match_is(
         &mut self,
+        scrutinee: ExprId,
         name: StringId,
         ast_ty_id: AstTypeExprId,
-        val: &Value,
+        val: &Payload,
         span: Span,
     ) -> Result<Option<Vec<(StringId, ValueId)>>> {
-        let ty_expr = self.resolve_type_expr(ast_ty_id, span)?;
-        if self.value_matches_type_expr(val, ty_expr) {
-            // Unwrap Union/Newtype wrappers to bind the inner value
-            let unwrapped = self.unwrap_value_recursive(val);
-            let bound_val = unwrapped.as_ref().unwrap_or(val);
-            let val_id = self.arena.add(bound_val.clone(), span);
+        let expected = self
+            .ast_type_map
+            .get(&ast_ty_id)
+            .copied()
+            .unwrap_or_else(|| typechecked!("match IS", "in ast_type_map"));
+        let matched = if self.runtime_types.contains_var(expected) {
+            let actual_base = val.base_type();
+            self.runtime_types
+                .base_type(expected)
+                .is_some_and(|eb| actual_base == eb)
+        } else {
+            let payload_ty = self.payload_runtime_ty(val);
+            let actual = if payload_ty == RuntimeTyId::UNKNOWN {
+                self.checked_exprs
+                    .get(&scrutinee)
+                    .map(|e| e.ty)
+                    .unwrap_or(payload_ty)
+            } else {
+                payload_ty
+            };
+            self.runtime_types.matches(actual, actual, expected)
+        };
+        if matched {
+            let val_id =
+                self.arena
+                    .add_typed(val.clone(), ValueMeta::untyped(), span);
             Ok(Some(vec![(name, val_id)]))
         } else {
             Ok(None)
@@ -257,32 +484,23 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Try to match a variant pattern against a value.
     fn try_match_variant(
         &mut self,
+        scrutinee: ExprId,
         ty_name: &QualifiedName,
         var_name: StringId,
         sub_pats: &[MatchPatternId],
-        val: &Value,
+        val: &Payload,
         span: Span,
     ) -> Result<Option<Vec<(StringId, ValueId)>>> {
-        // Look up the type and variant
         let (type_id, var_def) =
             self.lookup_variant(ty_name, var_name, span)?;
 
         match val {
-            Value::Tagged(ty_expr, idx, payloads) => {
-                // Check type and variant match
-                let type_matches = self
-                    .type_exprs
-                    .base_type(*ty_expr)
-                    .is_some_and(|t| t == type_id);
-                let variant_matches = *idx == var_def.idx;
-
-                if type_matches && variant_matches {
-                    // Type checker guarantees pattern arity matches variant arity
+            Payload::Tagged(ty, idx, payloads) => {
+                if *ty == type_id && *idx == var_def.idx {
                     if payloads.len() != sub_pats.len() {
                         typechecked!("match variant", "matching arity");
                     }
-                    // Recursively match sub-patterns against payloads
-                    self.try_match_all(sub_pats, payloads, span)
+                    self.try_match_all(scrutinee, sub_pats, payloads, span)
                 } else {
                     Ok(None)
                 }
@@ -294,25 +512,30 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Try to match an object pattern against a value.
     fn try_match_object(
         &mut self,
+        scrutinee: ExprId,
         fields: &[(StringId, MatchPatternId)],
-        val: &Value,
+        val: &Payload,
         span: Span,
     ) -> Result<Option<Vec<(StringId, ValueId)>>> {
         match val {
-            Value::Object(obj) => {
+            Payload::Object(obj) => {
                 // Collect bindings from all field matches
                 fields.iter().try_fold(Some(vec![]), |acc, (fid, pat_id)| {
                     acc.map_or(Ok(None), |mut bindings| {
                         obj.get(fid)
                             .and_then(|&vid| self.arena.get(vid).cloned())
                             .map_or(Ok(None), |fval| {
-                                self.try_match_pattern(*pat_id, &fval, span)
-                                    .map(|maybe_sub| {
+                                self.try_match_pattern(
+                                    scrutinee, *pat_id, &fval, span,
+                                )
+                                .map(
+                                    |maybe_sub| {
                                         maybe_sub.map(|sub| {
                                             bindings.extend(sub);
                                             bindings
                                         })
-                                    })
+                                    },
+                                )
                             })
                     })
                 })
@@ -324,16 +547,17 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Try to match a tuple pattern against a value.
     fn try_match_tuple(
         &mut self,
+        scrutinee: ExprId,
         pats: &[MatchPatternId],
-        val: &Value,
+        val: &Payload,
         span: Span,
     ) -> Result<Option<Vec<(StringId, ValueId)>>> {
         match val {
-            Value::Tuple(_, elems) => {
+            Payload::Tuple(elems) => {
                 if elems.len() != pats.len() {
                     Ok(None)
                 } else {
-                    self.try_match_all(pats, elems, span)
+                    self.try_match_all(scrutinee, pats, elems, span)
                 }
             }
             _ => Ok(None),
@@ -346,14 +570,14 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// - With rest: matches arrays of at least `pats.len()` elements
     fn try_match_array(
         &mut self,
+        scrutinee: ExprId,
         pats: &[MatchPatternId],
         rest: Option<&RestPattern>,
-        val: &Value,
+        val: &Payload,
         span: Span,
     ) -> Result<Option<Vec<(StringId, ValueId)>>> {
         match val {
-            Value::Array(ty_id, elems) => {
-                // Check length constraints
+            Payload::Array(elems) => {
                 let len_ok = rest.map_or_else(
                     || elems.len() == pats.len(),
                     |_| elems.len() >= pats.len(),
@@ -361,10 +585,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                 if !len_ok {
                     Ok(None)
                 } else {
-                    // Match prefix elements
                     let prefix_vals: SmallVec<[ValueId; 4]> =
                         elems.iter().take(pats.len()).copied().collect();
-                    self.try_match_all(pats, &prefix_vals, span).map(
+                    self.try_match_all(scrutinee, pats, &prefix_vals, span).map(
                         |maybe_bindings| {
                             maybe_bindings.map(|mut bindings| {
                                 // Handle rest pattern
@@ -377,12 +600,14 @@ impl<I: IoContext> Interpreter<'_, I> {
                                             .skip(pats.len())
                                             .copied()
                                             .collect();
-                                        let rest_arr = Value::Array(
-                                            *ty_id,
+                                        let rest_arr = Payload::Array(
                                             Arc::new(rest_elems),
                                         );
-                                        let val_id =
-                                            self.arena.add(rest_arr, span);
+                                        let val_id = self.arena.add_typed(
+                                            rest_arr,
+                                            ValueMeta::untyped(),
+                                            span,
+                                        );
                                         bindings.push((*name, val_id));
                                     }
                                 }
@@ -401,6 +626,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Returns `Some(bindings)` if all patterns match, `None` if any fails.
     fn try_match_all(
         &mut self,
+        scrutinee: ExprId,
         pats: &[MatchPatternId],
         val_ids: &[ValueId],
         span: Span,
@@ -414,7 +640,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                         .get(val_id)
                         .cloned()
                         .unwrap_or_else(|| invariant!("ValueId in arena"));
-                    self.try_match_pattern(pat_id, &val, span).map(
+                    self.try_match_pattern(scrutinee, pat_id, &val, span).map(
                         |maybe_sub| {
                             maybe_sub.map(|sub| {
                                 bindings.extend(sub);
@@ -439,20 +665,14 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Check if two values are equal (for pattern matching literals).
-    fn values_eq(&self, a: &Value, b: &Value) -> bool {
-        // Unwrap Union/Newtype wrappers
-        let ua = self.unwrap_value_recursive(a);
-        let ub = self.unwrap_value_recursive(b);
-        let a = ua.as_ref().unwrap_or(a);
-        let b = ub.as_ref().unwrap_or(b);
-
+    fn values_eq(&self, a: &Payload, b: &Payload) -> bool {
         match (a, b) {
-            (Value::Bool(x), Value::Bool(y)) => x == y,
-            (Value::Int(x), Value::Int(y)) => x == y,
-            (Value::Word(x), Value::Word(y)) => x == y,
-            (Value::Float(x), Value::Float(y)) => x == y,
-            (Value::String(x), Value::String(y)) => x == y,
-            (Value::Char(x), Value::Char(y)) => x == y,
+            (Payload::Bool(x), Payload::Bool(y)) => x == y,
+            (Payload::Int(x), Payload::Int(y)) => x == y,
+            (Payload::Word(x), Payload::Word(y)) => x == y,
+            (Payload::Float(x), Payload::Float(y)) => x == y,
+            (Payload::String(x), Payload::String(y)) => x == y,
+            (Payload::Char(x), Payload::Char(y)) => x == y,
             _ => false,
         }
     }
@@ -461,23 +681,22 @@ impl<I: IoContext> Interpreter<'_, I> {
     pub(super) fn destructure(
         &mut self,
         pat: &BindingPattern,
-        val: &Value,
+        val: &Payload,
         span: Span,
     ) -> Result<()> {
-        // Unwrap Union/Newtype for structural patterns
-        let unwrapped = self.unwrap_value_recursive(val);
-        let v = unwrapped.as_ref().unwrap_or(val);
-
         match pat {
-            // Var binds the ORIGINAL value (preserving wrapper)
             BindingPattern::Var(name) => {
-                let val_id = self.arena.add(val.clone(), span);
+                let val_id = self.arena.add_typed(
+                    val.clone(),
+                    ValueMeta::untyped(),
+                    span,
+                );
                 self.env.scopes.bind(*name, val_id);
                 Ok(())
             }
             BindingPattern::Wildcard => Ok(()),
-            BindingPattern::Tuple(pats) => match v {
-                Value::Tuple(_, elems) => {
+            BindingPattern::Tuple(pats) => match val {
+                Payload::Tuple(elems) => {
                     if elems.len() != pats.len() {
                         typechecked!("destructure tuple", "matching size");
                     }
@@ -491,8 +710,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 }
                 _ => typechecked!("destructure", "Tuple"),
             },
-            BindingPattern::Object(fields) => match v {
-                Value::Object(obj) => {
+            BindingPattern::Object(fields) => match val {
+                Payload::Object(obj) => {
                     let obj = obj.clone();
                     fields.iter().try_for_each(|(name, pat)| {
                         let vid = obj.get(name).copied().unwrap_or_else(|| {

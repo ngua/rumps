@@ -449,15 +449,12 @@ mod tests {
     use super::*;
     use crate::parser::Parser;
     use crate::typecheck::TyArena;
-    use crate::value::TypeExprArena;
-
     fn parse_and_resolve(src: &str) -> (Ast, ValueArena) {
         let mut interner = StringInterner::new();
         let mut result =
             Parser::parse(src, &mut interner).expect("parse failed");
         let mut arena = ValueArena::with_interner(interner);
-        let mut type_exprs = TypeExprArena::new();
-        let registry = TypeRegistry::new(&mut arena, &mut type_exprs);
+        let registry = TypeRegistry::new(&mut arena);
         let class_registry = {
             let mut tmp = TyArena::new();
             ClassRegistry::builtins(&mut |s| arena.strings.intern(s), &mut tmp)

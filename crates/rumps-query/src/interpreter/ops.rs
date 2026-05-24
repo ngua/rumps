@@ -9,7 +9,7 @@ use crate::ast::{BinOp, ExprId, UnOp};
 use crate::intern::StringId;
 use crate::io::IoContext;
 use crate::typecheck::Ty;
-use crate::value::Value;
+use crate::value::{Payload, ValueMeta};
 use crate::{ClassId, Error, Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
@@ -25,16 +25,16 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// through to class method dispatch.
     pub(super) fn apply_binop(
         &mut self,
-        left: &Value,
+        left: &Payload,
         op: BinOp,
-        right: &Value,
+        right: &Payload,
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         match op {
             // Numeric class methods with Int fast-path
             BinOp::Add => match (left, right) {
-                (Value::Int(a), Value::Int(b)) => {
-                    Ok(Value::Int(a.wrapping_add(*b)))
+                (Payload::Int(a), Payload::Int(b)) => {
+                    Ok(Payload::Int(a.wrapping_add(*b)))
                 }
                 _ => {
                     let id = self.arena.intern("add");
@@ -48,8 +48,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 }
             },
             BinOp::Sub => match (left, right) {
-                (Value::Int(a), Value::Int(b)) => {
-                    Ok(Value::Int(a.wrapping_sub(*b)))
+                (Payload::Int(a), Payload::Int(b)) => {
+                    Ok(Payload::Int(a.wrapping_sub(*b)))
                 }
                 _ => {
                     let id = self.arena.intern("sub");
@@ -63,8 +63,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 }
             },
             BinOp::Mul => match (left, right) {
-                (Value::Int(a), Value::Int(b)) => {
-                    Ok(Value::Int(a.wrapping_mul(*b)))
+                (Payload::Int(a), Payload::Int(b)) => {
+                    Ok(Payload::Int(a.wrapping_mul(*b)))
                 }
                 _ => {
                     let id = self.arena.intern("mul");
@@ -101,26 +101,26 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let eq =
                     self.dispatch_binary(ClassId::EQ, id, left, right, span)?;
                 match eq {
-                    Value::Bool(b) => Ok(Value::Bool(!b)),
+                    Payload::Bool(b) => Ok(Payload::Bool(!b)),
                     _ => typechecked!("==", "Bool"),
                 }
             }
 
             // Ord class methods with Int fast-path
             BinOp::Lt => match (left, right) {
-                (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a < b)),
+                (Payload::Int(a), Payload::Int(b)) => Ok(Payload::Bool(a < b)),
                 _ => self.dispatch_compare(left, right, span, |ord| ord < 0),
             },
             BinOp::Gt => match (left, right) {
-                (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a > b)),
+                (Payload::Int(a), Payload::Int(b)) => Ok(Payload::Bool(a > b)),
                 _ => self.dispatch_compare(left, right, span, |ord| ord > 0),
             },
             BinOp::Le => match (left, right) {
-                (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a <= b)),
+                (Payload::Int(a), Payload::Int(b)) => Ok(Payload::Bool(a <= b)),
                 _ => self.dispatch_compare(left, right, span, |ord| ord <= 0),
             },
             BinOp::Ge => match (left, right) {
-                (Value::Int(a), Value::Int(b)) => Ok(Value::Bool(a >= b)),
+                (Payload::Int(a), Payload::Int(b)) => Ok(Payload::Bool(a >= b)),
                 _ => self.dispatch_compare(left, right, span, |ord| ord >= 0),
             },
 
@@ -156,34 +156,24 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Dispatch a binary class method.
-    ///
-    /// Unwraps Union/Newtype values before dispatching to allow auto-derivation
-    /// of class methods for user-defined types.
     fn dispatch_binary(
         &mut self,
         kind: ClassId,
         mid: StringId,
-        left: &Value,
-        right: &Value,
+        left: &Payload,
+        right: &Payload,
         span: Span,
-    ) -> Result<Value> {
-        // Unwrap Union/Newtype to auto-derive class methods
-        let unwrapped_l = self.unwrap_value_recursive(left);
-        let l = unwrapped_l.as_ref().unwrap_or(left);
-        let unwrapped_r = self.unwrap_value_recursive(right);
-        let r = unwrapped_r.as_ref().unwrap_or(right);
-
+    ) -> Result<Payload> {
         let mut ctx = ClassCtx {
             arena: &mut self.arena,
-            type_exprs: &mut self.type_exprs,
             ty_arena: &self.ty_arena,
+            runtime_types: &self.runtime_types,
             registry: &self.registry,
             regex_cache: &self.regex_cache,
             span,
-            output_ty: None,
         };
         self.class_methods
-            .dispatch_binary(kind, mid, &mut ctx, l, r)
+            .dispatch_binary(kind, mid, &mut ctx, left, right)
     }
 
     /// Dispatch a binary operator through user-defined class instance.
@@ -196,18 +186,22 @@ impl<I: IoContext> Interpreter<'_, I> {
     pub(super) async fn dispatch_binop_user(
         &mut self,
         id: ExprId,
-        left: &Value,
+        left: &Payload,
         op: BinOp,
-        right: &Value,
+        right: &Payload,
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         let (class, method_str) = op.class_dispatch().unwrap_or_else(|| {
             typechecked!("binop user dispatch", "class-dispatched op")
         });
         let method = self.arena.intern(method_str);
 
-        let l = self.arena.add(left.clone(), span);
-        let r = self.arena.add(right.clone(), span);
+        let l = self
+            .arena
+            .add_typed(left.clone(), ValueMeta::untyped(), span);
+        let r = self
+            .arena
+            .add_typed(right.clone(), ValueMeta::untyped(), span);
         let result = self
             .dispatch_class_method(Some(id), class, method, &[l, r], span)
             .await?;
@@ -216,23 +210,23 @@ impl<I: IoContext> Interpreter<'_, I> {
         // User `compare` returns `Ordering` (Tagged discriminant: `0`=Lt, `1`=Eq, `2`=Gt).
         match op {
             BinOp::Ne => match result {
-                Value::Bool(b) => Ok(Value::Bool(!b)),
+                Payload::Bool(b) => Ok(Payload::Bool(!b)),
                 _ => typechecked!("!=", "Bool"),
             },
             BinOp::Lt => match result {
-                Value::Tagged(_, d, _) => Ok(Value::Bool(d == 0)),
+                Payload::Tagged(_, d, _) => Ok(Payload::Bool(d == 0)),
                 _ => typechecked!("compare result", "Ordering"),
             },
             BinOp::Gt => match result {
-                Value::Tagged(_, d, _) => Ok(Value::Bool(d == 2)),
+                Payload::Tagged(_, d, _) => Ok(Payload::Bool(d == 2)),
                 _ => typechecked!("compare result", "Ordering"),
             },
             BinOp::Le => match result {
-                Value::Tagged(_, d, _) => Ok(Value::Bool(d <= 1)),
+                Payload::Tagged(_, d, _) => Ok(Payload::Bool(d <= 1)),
                 _ => typechecked!("compare result", "Ordering"),
             },
             BinOp::Ge => match result {
-                Value::Tagged(_, d, _) => Ok(Value::Bool(d >= 1)),
+                Payload::Tagged(_, d, _) => Ok(Payload::Bool(d >= 1)),
                 _ => typechecked!("compare result", "Ordering"),
             },
             _ => Ok(result),
@@ -253,28 +247,29 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         id: ExprId,
         op: UnOp,
-        v: Value,
+        v: Payload,
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         match op {
             UnOp::Neg => match &v {
                 // Fast-path: Int negation (most common)
-                Value::Int(n) => Ok(Value::Int(-n)),
+                Payload::Int(n) => Ok(Payload::Int(-n)),
                 _ => {
                     let id = self.arena.intern("neg");
                     self.dispatch_unary(ClassId::NEGATABLE, id, &v, span)
                 }
             },
             UnOp::Not => Ok(match &v {
-                Value::Bool(b) => Value::Bool(!b),
+                Payload::Bool(b) => Payload::Bool(!b),
                 _ => typechecked!("NOT", "Bool"),
             }),
             UnOp::Wrap => {
                 // Look up target type (defaulted to `Option[T]` during constraint solving)
-                let ty_id =
-                    self.wrap_types.get(&id).copied().unwrap_or_else(|| {
-                        typechecked!("?", "resolved wrap type")
-                    });
+                let ty_id = self
+                    .checked_exprs
+                    .get(&id)
+                    .map(|info| info.ty.raw())
+                    .unwrap_or_else(|| typechecked!("?", "resolved wrap type"));
                 let ty = self.ty_arena.get(ty_id).clone();
                 let mid = self.arena.intern("wrap");
                 self.dispatch_convert(ClassId::WRAPPABLE, mid, &v, &ty, span)
@@ -283,57 +278,43 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Dispatch a unary class method.
-    ///
-    /// Unwraps Union/Newtype values before dispatching.
     pub(super) fn dispatch_unary(
         &mut self,
         kind: ClassId,
         mid: StringId,
-        v: &Value,
+        v: &Payload,
         span: Span,
-    ) -> Result<Value> {
-        // Unwrap Union/Newtype to auto-derive class methods
-        let unwrapped = self.unwrap_value_recursive(v);
-        let val = unwrapped.as_ref().unwrap_or(v);
-
+    ) -> Result<Payload> {
         let mut ctx = ClassCtx {
             arena: &mut self.arena,
-            type_exprs: &mut self.type_exprs,
             ty_arena: &self.ty_arena,
+            runtime_types: &self.runtime_types,
             registry: &self.registry,
             regex_cache: &self.regex_cache,
             span,
-            output_ty: None,
         };
-        self.class_methods.dispatch_unary(kind, mid, &mut ctx, val)
+        self.class_methods.dispatch_unary(kind, mid, &mut ctx, v)
     }
 
     /// Dispatch a conversion class method (`Into:into`, `TryInto:try-into`).
-    ///
-    /// Unwraps Union/Newtype values before dispatching.
     pub(super) fn dispatch_convert(
         &mut self,
         kind: ClassId,
         mid: StringId,
-        v: &Value,
+        v: &Payload,
         target: &Ty,
         span: Span,
-    ) -> Result<Value> {
-        // Unwrap Union/Newtype to auto-derive conversions
-        let unwrapped = self.unwrap_value_recursive(v);
-        let val = unwrapped.as_ref().unwrap_or(v);
-
+    ) -> Result<Payload> {
         let mut ctx = ClassCtx {
             arena: &mut self.arena,
-            type_exprs: &mut self.type_exprs,
             ty_arena: &self.ty_arena,
+            runtime_types: &self.runtime_types,
             registry: &self.registry,
             regex_cache: &self.regex_cache,
             span,
-            output_ty: None,
         };
         self.class_methods
-            .dispatch_convert(kind, mid, &mut ctx, val, target)
+            .dispatch_convert(kind, mid, &mut ctx, v, target)
     }
 
     /// Dispatch `Ord:compare` and apply a predicate to the result.
@@ -342,18 +323,18 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// whether the comparison is satisfied.
     fn dispatch_compare<F>(
         &mut self,
-        left: &Value,
-        right: &Value,
+        left: &Payload,
+        right: &Payload,
         span: Span,
         pred: F,
-    ) -> Result<Value>
+    ) -> Result<Payload>
     where
         F: FnOnce(i64) -> bool,
     {
         let cmp = self.arena.intern("compare");
         let ord = self.dispatch_binary(ClassId::ORD, cmp, left, right, span)?;
         match ord {
-            Value::Int(n) => Ok(Value::Bool(pred(n))),
+            Payload::Int(n) => Ok(Payload::Bool(pred(n))),
             _ => typechecked!("compare result", "Int"),
         }
     }
@@ -364,22 +345,16 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Division by zero remains a runtime error (not type-level).
     fn binop_div(
         &self,
-        left: &Value,
-        right: &Value,
+        left: &Payload,
+        right: &Payload,
         span: Span,
-    ) -> Result<Value> {
-        // Unwrap Union/Newtype to auto-derive
-        let unwrapped_l = self.unwrap_value_recursive(left);
-        let l = unwrapped_l.as_ref().unwrap_or(left);
-        let unwrapped_r = self.unwrap_value_recursive(right);
-        let r = unwrapped_r.as_ref().unwrap_or(right);
-
-        match (l, r) {
-            (Value::Float(a), Value::Float(b)) => {
+    ) -> Result<Payload> {
+        match (left, right) {
+            (Payload::Float(a), Payload::Float(b)) => {
                 if b.0 == 0.0 {
                     Err(Error::runtime(span, "division by zero"))
                 } else {
-                    Ok(Value::Float(OrderedFloat(a.0 / b.0)))
+                    Ok(Payload::Float(OrderedFloat(a.0 / b.0)))
                 }
             }
             _ => typechecked!("/", "Float"),
@@ -394,7 +369,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         lhs: ExprId,
         rhs: ExprId,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         let lhs_val = self.eval(lhs).await?;
         let rhs_val = self.eval(rhs).await?;
 
@@ -403,12 +378,12 @@ impl<I: IoContext> Interpreter<'_, I> {
 
         // Get the regex cache index from RHS (typechecker guarantees Regex)
         let idx = match rhs_val {
-            Value::Regex(idx) => idx,
+            Payload::Regex(idx) => idx,
             _ => typechecked!("MATCHES", "Regex"),
         };
         let re = self.regex_cache.get(idx as usize).unwrap_or_else(|| {
             typechecked!("MATCHES regex", "valid cache index")
         });
-        Ok(Value::Bool(re.is_match(&text)))
+        Ok(Payload::Bool(re.is_match(&text)))
     }
 }

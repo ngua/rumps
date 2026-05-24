@@ -7,10 +7,10 @@
 //!
 //! # Clone cost
 //!
-//! Cloning a [`Value`] is always O(1). Scalar variants are `Copy`-sized, and
+//! Cloning a [`Payload`] is always O(1). Scalar variants are `Copy`-sized, and
 //! all collection variants (`Array`, `Object`, `Tuple`, `Map`, `Json`) wrap
 //! their heap data in `Arc`, so a clone is just a refcount bump. This means
-//! patterns like `self.eval(expr).await?` (which returns `Result<Value>`) are
+//! patterns like `self.eval(expr).await?` (which returns `Result<Payload>`) are
 //! cheap even for large collections.
 //!
 //! For mutation sites that need owned inner data (e.g. `Array.push`), use the
@@ -19,8 +19,8 @@
 //!
 //! # Note
 //!
-//! Value conversion methods (to/from storage, JSON, display) live on
-//! `Interpreter` rather than `Value` because they require context (arena,
+//! Payload conversion methods (to/from storage, JSON, display) live on
+//! `Interpreter` rather than `Payload` because they require context (arena,
 //! registry) that the interpreter owns.
 
 #![allow(dead_code)]
@@ -37,10 +37,11 @@ use ordered_float::OrderedFloat;
 use smallvec::{smallvec, SmallVec};
 
 use crate::ast::{
-    Ast, AstTypeExprId, ExprId, Stmt, StmtId, TypeDefAst, TypeParam,
+    Ast, AstTypeExpr, AstTypeExprId, ExprId, Stmt, StmtId, TypeDefAst,
+    TypeParam,
 };
 use crate::intern::{QualifiedName, StringId, StringInterner};
-use crate::typecheck::{Ty, TyArena, TyId};
+use crate::typecheck::{RuntimeTyId, Ty, TyArena, TyId};
 use crate::Span;
 
 /// A hashable key for `Map` values.
@@ -57,26 +58,26 @@ pub(crate) enum MapKey {
 }
 
 impl MapKey {
-    /// Convert a `Value` to a `MapKey`, or `None` if not a scalar type.
-    pub(crate) fn from_value(v: &Value) -> Option<Self> {
+    /// Convert a `Payload` to a `MapKey`, or `None` if not a scalar type.
+    pub(crate) fn from_payload(v: &Payload) -> Option<Self> {
         match v {
-            Value::Bool(b) => Some(Self::Bool(*b)),
-            Value::Int(n) => Some(Self::Int(*n)),
-            Value::Float(f) => Some(Self::Float(*f)),
-            Value::Char(c) => Some(Self::Char(*c)),
-            Value::String(sid) => Some(Self::String(*sid)),
+            Payload::Bool(b) => Some(Self::Bool(*b)),
+            Payload::Int(n) => Some(Self::Int(*n)),
+            Payload::Float(f) => Some(Self::Float(*f)),
+            Payload::Char(c) => Some(Self::Char(*c)),
+            Payload::String(sid) => Some(Self::String(*sid)),
             _ => None,
         }
     }
 
-    /// Convert a `MapKey` back to a `Value`.
-    pub(crate) fn to_value(&self) -> Value {
+    /// Convert a `MapKey` back to a `Payload`.
+    pub(crate) fn to_payload(&self) -> Payload {
         match self {
-            Self::Bool(b) => Value::Bool(*b),
-            Self::Int(n) => Value::Int(*n),
-            Self::Float(f) => Value::Float(*f),
-            Self::Char(c) => Value::Char(*c),
-            Self::String(sid) => Value::String(*sid),
+            Self::Bool(b) => Payload::Bool(*b),
+            Self::Int(n) => Payload::Int(*n),
+            Self::Float(f) => Payload::Float(*f),
+            Self::Char(c) => Payload::Char(*c),
+            Self::String(sid) => Payload::String(*sid),
         }
     }
 
@@ -347,7 +348,8 @@ impl fmt::Display for ClassId {
 /// parallel for error messages (e.g., "type mismatch: value created at line 5").
 #[derive(Clone, Debug)]
 pub(crate) struct ValueArena {
-    values: Vec<Value>,
+    values: Vec<Payload>,
+    metas: Vec<Option<ValueMeta>>,
     value_spans: Vec<Span>,
     /// Shared with `TypeEnv` so type lookups use consistent `StringId`s.
     pub(crate) strings: StringInterner,
@@ -364,6 +366,7 @@ impl ValueArena {
     pub(crate) fn new() -> Self {
         Self {
             values: Vec::new(),
+            metas: Vec::new(),
             value_spans: Vec::new(),
             strings: StringInterner::new(),
         }
@@ -373,31 +376,41 @@ impl ValueArena {
     pub(crate) fn with_interner(interner: StringInterner) -> Self {
         Self {
             values: Vec::new(),
+            metas: Vec::new(),
             value_spans: Vec::new(),
             strings: interner,
         }
     }
 
-    /// Add a value to the arena.
-    pub(crate) fn add(&mut self, v: Value, span: Span) -> ValueId {
+    /// Add a value with explicit type metadata.
+    pub(crate) fn add_typed(
+        &mut self,
+        v: Payload,
+        meta: ValueMeta,
+        span: Span,
+    ) -> ValueId {
         let id = ValueId(self.values.len() as u32);
         self.values.push(v);
+        self.metas.push(Some(meta));
         self.value_spans.push(span);
         id
     }
 
-    /// Get a value by ID.
-    pub(crate) fn get(&self, id: ValueId) -> Option<&Value> {
-        self.values.get(id.idx())
+    /// Get the type metadata for a value.
+    pub(crate) fn meta(&self, id: ValueId) -> Option<ValueMeta> {
+        self.metas.get(id.idx()).copied().flatten()
     }
 
-    /// Get the base type of a value by ID without cloning.
-    pub(crate) fn base_type_of(
-        &self,
-        id: ValueId,
-        type_exprs: &TypeExprArena,
-    ) -> Option<TypeId> {
-        self.get(id).map(|v| v.base_type(type_exprs))
+    /// Set or update the type metadata for a value.
+    pub(crate) fn set_meta(&mut self, id: ValueId, meta: ValueMeta) {
+        if let Some(slot) = self.metas.get_mut(id.idx()) {
+            *slot = Some(meta);
+        }
+    }
+
+    /// Get a value by ID.
+    pub(crate) fn get(&self, id: ValueId) -> Option<&Payload> {
+        self.values.get(id.idx())
     }
 
     /// Get the span of a value.
@@ -430,9 +443,9 @@ impl ValueArena {
     pub(crate) fn get_array(
         &self,
         id: ValueId,
-    ) -> Option<(TypeExprId, &SmallVec<[ValueId; 4]>)> {
+    ) -> Option<&SmallVec<[ValueId; 4]>> {
         match self.get(id)? {
-            Value::Array(ty, elems) => Some((*ty, elems)),
+            Payload::Array(elems) => Some(elems),
             _ => None,
         }
     }
@@ -445,11 +458,9 @@ impl ValueArena {
     pub(crate) fn take_array(
         &self,
         id: ValueId,
-    ) -> Option<(TypeExprId, SmallVec<[ValueId; 4]>)> {
+    ) -> Option<SmallVec<[ValueId; 4]>> {
         match self.get(id)? {
-            Value::Array(ty, elems) => {
-                Some((*ty, Arc::unwrap_or_clone(elems.clone())))
-            }
+            Payload::Array(elems) => Some(Arc::unwrap_or_clone(elems.clone())),
             _ => None,
         }
     }
@@ -462,7 +473,7 @@ impl ValueArena {
         id: ValueId,
     ) -> Option<&IndexMap<StringId, ValueId>> {
         match self.get(id)? {
-            Value::Object(map) => Some(map),
+            Payload::Object(map) => Some(map),
             _ => None,
         }
     }
@@ -473,9 +484,9 @@ impl ValueArena {
     pub(crate) fn get_tuple(
         &self,
         id: ValueId,
-    ) -> Option<(TypeExprId, &SmallVec<[ValueId; 4]>)> {
+    ) -> Option<&SmallVec<[ValueId; 4]>> {
         match self.get(id)? {
-            Value::Tuple(ty, elems) => Some((*ty, elems)),
+            Payload::Tuple(elems) => Some(elems),
             _ => None,
         }
     }
@@ -483,29 +494,22 @@ impl ValueArena {
     /// Get string ID from a value, returning the interned `StringId`.
     ///
     /// Returns `None` if the value doesn't exist or isn't a string.
-    /// Unwraps Union/Newtype wrappers to find the inner String.
     pub(crate) fn get_string_id(&self, id: ValueId) -> Option<StringId> {
         match self.get(id)? {
-            Value::String(sid) => Some(*sid),
-            Value::Union(_, inner) | Value::Newtype(_, inner) => {
-                self.get_string_id(*inner)
-            }
+            Payload::String(sid) => Some(*sid),
             _ => None,
         }
     }
 
     /// Get map contents by ID (no cloning; returns a reference into the `Arc`).
     ///
-    /// Previously `get_map_ref`; the old cloning `get_map` was removed since
-    /// `Arc` makes the clone cheap and callers should borrow where possible.
-    ///
     /// Returns `None` if the value doesn't exist or isn't a map.
     pub(crate) fn get_map(
         &self,
         id: ValueId,
-    ) -> Option<(TypeExprId, TypeExprId, &IndexMap<MapKey, ValueId>)> {
+    ) -> Option<&IndexMap<MapKey, ValueId>> {
         match self.get(id)? {
-            Value::Map(k_ty, v_ty, entries) => Some((*k_ty, *v_ty, entries)),
+            Payload::Map(entries) => Some(entries),
             _ => None,
         }
     }
@@ -518,10 +522,10 @@ impl ValueArena {
     pub(crate) fn take_map(
         &self,
         id: ValueId,
-    ) -> Option<(TypeExprId, TypeExprId, IndexMap<MapKey, ValueId>)> {
+    ) -> Option<IndexMap<MapKey, ValueId>> {
         match self.get(id)? {
-            Value::Map(k_ty, v_ty, entries) => {
-                Some((*k_ty, *v_ty, Arc::unwrap_or_clone(entries.clone())))
+            Payload::Map(entries) => {
+                Some(Arc::unwrap_or_clone(entries.clone()))
             }
             _ => None,
         }
@@ -586,16 +590,16 @@ impl CapturedEnv {
     }
 }
 
-/// A runtime value.
+/// The runtime payload of a value (data without type metadata).
 ///
 /// Uses `StringId` for interned strings and `ValueId` for nested values,
 /// avoiding allocation and enabling O(1) string comparison.
 ///
 /// Collection variants (`Array`, `Object`, `Tuple`, `Map`) and `Json`/`Closure`
-/// wrap their heap data in `Arc`, so cloning a `Value` is always O(1). Callers
+/// wrap their heap data in `Arc`, so cloning a `Payload` is always O(1). Callers
 /// that need owned inner data should use `Arc::unwrap_or_clone()`.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Value {
+pub(crate) enum Payload {
     /// The unit value; represents "no meaningful value".
     ///
     /// Used for statements, blocks without trailing expressions, and
@@ -621,9 +625,9 @@ pub(crate) enum Value {
     /// An interned string.
     String(StringId),
 
-    /// An array of values with element type. Note that in native RUMPS arrays
-    /// elements must by homogeneous
-    Array(TypeExprId, Arc<SmallVec<[ValueId; 4]>>),
+    /// An array of values. Note that in native RUMPS arrays
+    /// elements must be homogeneous.
+    Array(Arc<SmallVec<[ValueId; 4]>>),
 
     /// An object/record with string keys (insertion order preserved).
     Object(Arc<IndexMap<StringId, ValueId>>),
@@ -631,17 +635,14 @@ pub(crate) enum Value {
     /// A tuple value (heterogeneous, fixed-size sequence).
     ///
     /// Unlike arrays, tuples can hold different types and support positional
-    /// access (`.0`, `.1`, etc.). The `TypeExprId` encodes the element types.
-    Tuple(TypeExprId, Arc<SmallVec<[ValueId; 4]>>),
+    /// access (`.0`, `.1`, etc.).
+    Tuple(Arc<SmallVec<[ValueId; 4]>>),
 
     /// A homogeneous map with typed keys and values.
     ///
-    /// - First `TypeExprId`: key type (K)
-    /// - Second `TypeExprId`: value type (V)
-    /// - `IndexMap<MapKey, ValueId>`: key-value pairs (insertion order preserved)
-    ///
     /// Keys are restricted to scalar types (Bool, Int, Float, Char, String).
-    Map(TypeExprId, TypeExprId, Arc<IndexMap<MapKey, ValueId>>),
+    /// Insertion order is preserved.
+    Map(Arc<IndexMap<MapKey, ValueId>>),
 
     /// A point in time (UTC).
     Time(DateTime<Utc>),
@@ -671,29 +672,10 @@ pub(crate) enum Value {
 
     /// A tagged value (sum type variant).
     ///
-    /// - `TypeExprId`: the full parameterized type (e.g., `Option[Int]`, `Result[Int, String]`)
+    /// - `TypeId`: the base type (e.g., `Option`, `Result`, `Ordering`)
     /// - `u8`: the variant index (e.g., `0` for `None`, `1` for `Some`)
     /// - `SmallVec`: the payload values (most variants have 0-4)
-    Tagged(TypeExprId, u8, SmallVec<[ValueId; 4]>),
-
-    /// A value in a union type context.
-    ///
-    /// - `TypeExprId`: identifies the union type (e.g., `Storable`, `Int | String`)
-    /// - `ValueId`: the underlying value
-    ///
-    /// Used for both named unions (`TypeDef::Union`) and inline unions (`TypeExpr::Union`).
-    /// Class methods dispatch to the inner value's type implementation unless
-    /// a user-defined instance exists for the union type itself.
-    Union(TypeExprId, ValueId),
-
-    /// A value in a newtype context.
-    ///
-    /// - `TypeExprId`: identifies the newtype (e.g., `UserId` if `newtype UserId = Int`)
-    /// - `ValueId`: the underlying value
-    ///
-    /// Class methods auto-derive by delegating to the wrapped type unless
-    /// a user-defined instance exists for the newtype.
-    Newtype(TypeExprId, ValueId),
+    Tagged(TypeId, u8, SmallVec<[ValueId; 4]>),
 
     /// A closure (anonymous function) with captured environment.
     ///
@@ -701,8 +683,7 @@ pub(crate) enum Value {
     /// The body is an AST expression ID; the interpreter evaluates it
     /// with the captured environment restored when the closure is called.
     Closure {
-        params: SmallVec<[(StringId, Option<TypeExprId>); 4]>,
-        ret: Option<TypeExprId>,
+        params: SmallVec<[StringId; 4]>,
         body: ExprId,
         env: Arc<CapturedEnv>,
     },
@@ -714,8 +695,7 @@ pub(crate) enum Value {
     /// higher-order functions.
     Function {
         name: StringId,
-        params: SmallVec<[(StringId, Option<TypeExprId>); 4]>,
-        ret: Option<TypeExprId>,
+        params: SmallVec<[StringId; 4]>,
         body: ExprId,
     },
 
@@ -804,7 +784,7 @@ pub(crate) enum Value {
     Ref(bool, StringId, SmallVec<[ValueId; 4]>),
 }
 
-impl Value {
+impl Payload {
     /// Get the type name of this value for error messages.
     ///
     /// Returns a structural type representation for objects (e.g., `{ name: String }`).
@@ -812,7 +792,6 @@ impl Value {
     pub(crate) fn type_name(
         &self,
         reg: &TypeRegistry,
-        type_exprs: &TypeExprArena,
         arena: &ValueArena,
     ) -> Cow<'static, str> {
         match self {
@@ -825,13 +804,12 @@ impl Value {
             Self::String(_) => Cow::Borrowed("String"),
             Self::Array(..) => Cow::Borrowed("Array"),
             Self::Object(fields) => {
-                // Build structural type: `{ field: Type, ... }`
                 let parts = fields
                     .iter()
                     .filter_map(|(name_id, val_id)| {
                         let name = arena.get_str(*name_id)?;
                         let val = arena.get(*val_id)?;
-                        let ty = val.type_name(reg, type_exprs, arena);
+                        let ty = val.type_name(reg, arena);
                         Some(format!("{name}: {ty}"))
                     })
                     .join(", ");
@@ -843,10 +821,8 @@ impl Value {
             Self::Json(_) => Cow::Borrowed("Json"),
             Self::FilePath(_) => Cow::Borrowed("FilePath"),
             Self::Regex(_) => Cow::Borrowed("Regex"),
-            Self::Tagged(ty_expr, _, _) => Cow::Borrowed(
-                type_exprs
-                    .base_type(*ty_expr)
-                    .and_then(|ty| reg.get_def(ty))
+            Self::Tagged(ty, _, _) => Cow::Borrowed(
+                reg.get_def(*ty)
                     .map(|def| match def {
                         TypeDef::Builtin(b) => b.name(),
                         TypeDef::Sum { .. } => "Tagged",
@@ -855,8 +831,6 @@ impl Value {
                     })
                     .unwrap_or("Unknown"),
             ),
-            Self::Union(..) => Cow::Borrowed("Union"),
-            Self::Newtype(..) => Cow::Borrowed("Newtype"),
             Self::Closure { .. } => Cow::Borrowed("Closure"),
             Self::Function { .. } => Cow::Borrowed("Function"),
             Self::ModuleFn { .. } => Cow::Borrowed("ModuleFn"),
@@ -870,87 +844,67 @@ impl Value {
         }
     }
 
-    /// Create an `Option.None` value with the given type expression.
-    pub(crate) fn none(ty_expr: TypeExprId) -> Self {
-        Self::Tagged(ty_expr, 0, SmallVec::new())
+    /// Create an `Option.None` value.
+    pub(crate) fn none() -> Self {
+        Self::Tagged(TypeId::OPTION, 0, SmallVec::new())
     }
 
-    /// Create an `Option.Some(v)` value with the given type expression.
-    pub(crate) fn some(ty_expr: TypeExprId, v: ValueId) -> Self {
-        Self::Tagged(ty_expr, 1, smallvec::smallvec![v])
+    /// Create an `Option.Some(v)` value.
+    pub(crate) fn some(v: ValueId) -> Self {
+        Self::Tagged(TypeId::OPTION, 1, smallvec![v])
     }
 
-    /// Create a `Result.Ok(v)` value with the given type expression.
-    pub(crate) fn ok(ty_expr: TypeExprId, v: ValueId) -> Self {
-        Self::Tagged(ty_expr, 0, smallvec::smallvec![v])
+    /// Create a `Result.Ok(v)` value.
+    pub(crate) fn ok(v: ValueId) -> Self {
+        Self::Tagged(TypeId::RESULT, 0, smallvec![v])
     }
 
-    /// Create a `Result.Err(e)` value with the given type expression.
-    pub(crate) fn err(ty_expr: TypeExprId, e: ValueId) -> Self {
-        Self::Tagged(ty_expr, 1, smallvec::smallvec![e])
+    /// Create a `Result.Err(e)` value.
+    pub(crate) fn err(e: ValueId) -> Self {
+        Self::Tagged(TypeId::RESULT, 1, smallvec![e])
     }
 
-    /// Create an `Ordering.Lt` value with the given type expression.
-    pub(crate) fn lt(ty_expr: TypeExprId) -> Self {
-        Self::Tagged(ty_expr, 0, SmallVec::new())
+    /// Create an `Ordering.Lt` value.
+    pub(crate) fn lt() -> Self {
+        Self::Tagged(TypeId::ORDERING, 0, SmallVec::new())
     }
 
-    /// Create an `Ordering.Eq` value with the given type expression.
-    pub(crate) fn eq_ord(ty_expr: TypeExprId) -> Self {
-        Self::Tagged(ty_expr, 1, SmallVec::new())
+    /// Create an `Ordering.Eq` value.
+    pub(crate) fn eq_ord() -> Self {
+        Self::Tagged(TypeId::ORDERING, 1, SmallVec::new())
     }
 
-    /// Create an `Ordering.Gt` value with the given type expression.
-    pub(crate) fn gt(ty_expr: TypeExprId) -> Self {
-        Self::Tagged(ty_expr, 2, SmallVec::new())
+    /// Create an `Ordering.Gt` value.
+    pub(crate) fn gt() -> Self {
+        Self::Tagged(TypeId::ORDERING, 2, SmallVec::new())
     }
 
     /// Check if this is `Option.None`.
-    pub(crate) fn is_none(&self, type_exprs: &TypeExprArena) -> bool {
-        match self {
-            Self::Tagged(ty_expr, 0, _) => type_exprs
-                .base_type(*ty_expr)
-                .is_some_and(|ty| ty == TypeId::OPTION),
-            _ => false,
-        }
+    pub(crate) fn is_none(&self) -> bool {
+        matches!(self, Self::Tagged(ty, 0, _) if *ty == TypeId::OPTION)
     }
 
     /// Check if this is `Option.Some(_)`.
-    pub(crate) fn is_some(&self, type_exprs: &TypeExprArena) -> bool {
-        match self {
-            Self::Tagged(ty_expr, 1, _) => type_exprs
-                .base_type(*ty_expr)
-                .is_some_and(|ty| ty == TypeId::OPTION),
-            _ => false,
-        }
+    pub(crate) fn is_some(&self) -> bool {
+        matches!(self, Self::Tagged(ty, 1, _) if *ty == TypeId::OPTION)
     }
 
     /// Check if this is `Result.Ok(_)`.
-    pub(crate) fn is_ok(&self, type_exprs: &TypeExprArena) -> bool {
-        match self {
-            Self::Tagged(ty_expr, 0, _) => type_exprs
-                .base_type(*ty_expr)
-                .is_some_and(|ty| ty == TypeId::RESULT),
-            _ => false,
-        }
+    pub(crate) fn is_ok(&self) -> bool {
+        matches!(self, Self::Tagged(ty, 0, _) if *ty == TypeId::RESULT)
     }
 
     /// Check if this is `Result.Err(_)`.
-    pub(crate) fn is_err(&self, type_exprs: &TypeExprArena) -> bool {
-        match self {
-            Self::Tagged(ty_expr, 1, _) => type_exprs
-                .base_type(*ty_expr)
-                .is_some_and(|ty| ty == TypeId::RESULT),
-            _ => false,
-        }
+    pub(crate) fn is_err(&self) -> bool {
+        matches!(self, Self::Tagged(ty, 1, _) if *ty == TypeId::RESULT)
     }
 
     /// Get the simplified base `TypeId` for this value.
     ///
-    /// Returns the primitive type id for scalars. For tagged values, resolves
-    /// the base type from the type expression (e.g., `Option` or `Result`).
+    /// Returns the primitive type id for scalars. For tagged values, returns
+    /// the base type directly (e.g., `Option` or `Result`).
     /// Returns `UNKNOWN` for closures and functions.
-    pub(crate) fn base_type(&self, type_exprs: &TypeExprArena) -> TypeId {
+    pub(crate) fn base_type(&self) -> TypeId {
         match self {
             Self::Unit => TypeId::UNIT,
             Self::Bool(_) => TypeId::BOOL,
@@ -967,11 +921,7 @@ impl Value {
             Self::Json(_) => TypeId::JSON,
             Self::FilePath(_) => TypeId::FILEPATH,
             Self::Regex(_) => TypeId::REGEX,
-            Self::Tagged(ty_expr, _, _)
-            | Self::Union(ty_expr, _)
-            | Self::Newtype(ty_expr, _) => {
-                type_exprs.base_type(*ty_expr).unwrap_or(TypeId::UNKNOWN)
-            }
+            Self::Tagged(ty, _, _) => *ty,
             Self::Closure { .. }
             | Self::Function { .. }
             | Self::ModuleFn { .. }
@@ -980,7 +930,6 @@ impl Value {
             | Self::PartialApp { .. } => TypeId::UNKNOWN,
             Self::Range { .. } => TypeId::RANGE,
             Self::Ref(..) => TypeId::REF,
-            // Internal types; not exposed to user code
             Self::ForeverContinuation | Self::LoopContinue(_) => TypeId::UNIT,
         }
     }
@@ -1074,8 +1023,10 @@ pub(crate) enum TypeDef {
     Union {
         name: StringId,
         type_params: SmallVec<[StringId; 2]>,
-        /// Member type expressions (stored in `TypeExprArena`).
-        members: SmallVec<[TypeExprId; 8]>,
+        /// Member base types.
+        members: SmallVec<[TypeId; 8]>,
+        /// Original member type expressions, preserving type arguments.
+        member_exprs: SmallVec<[AstTypeExprId; 8]>,
     },
 }
 
@@ -1114,13 +1065,12 @@ enum TypeExpr {
 
 /// A named function definition stored in the function registry.
 ///
-/// Created from `Stmt::Fun` during interpretation; the names and type
-/// annotations are resolved to interned IDs.
+/// Created from `Stmt::Fun` during interpretation; the names are
+/// resolved to interned IDs.
 #[derive(Clone, Debug)]
 pub(crate) struct FunctionDef {
     pub(crate) name: StringId,
-    pub(crate) params: SmallVec<[(StringId, Option<TypeExprId>); 4]>,
-    pub(crate) ret: Option<TypeExprId>,
+    pub(crate) params: SmallVec<[StringId; 4]>,
     pub(crate) body: ExprId,
 }
 
@@ -1629,21 +1579,17 @@ pub(crate) struct TypeRegistry {
 /// Context for union type registration.
 struct UnionRegCtx<'a> {
     arena: &'a mut ValueArena,
-    type_exprs: &'a mut TypeExprArena,
     ast: &'a Ast,
 }
 
 impl TypeRegistry {
     /// Create a type registry with all builtins registered.
-    pub(crate) fn new(
-        arena: &mut ValueArena,
-        type_exprs: &mut TypeExprArena,
-    ) -> Self {
+    pub(crate) fn new(arena: &mut ValueArena) -> Self {
         let mut reg = Self {
             defs: Vec::new(),
             by_name: HashMap::new(),
         };
-        reg.register_builtins(arena, type_exprs);
+        reg.register_builtins(arena);
         reg
     }
 
@@ -1758,11 +1704,7 @@ impl TypeRegistry {
     ///
     /// Registers in order: Bool, Int, Float, String, Array, Object, Option, Result, Char,
     /// Tuple, Map, Time, Range, Unit, Json, Storable, Scalar.
-    fn register_builtins(
-        &mut self,
-        arena: &mut ValueArena,
-        type_exprs: &mut TypeExprArena,
-    ) {
+    fn register_builtins(&mut self, arena: &mut ValueArena) {
         // Primitives (indices 0-5)
         let bool_name = arena.intern("Bool");
         self.register(TypeDef::Builtin(BuiltinType::Bool), bool_name.into());
@@ -1912,19 +1854,20 @@ impl TypeRegistry {
 
         // Storable union at index 15: Bool | Int | Float | Char | String | Json
         let storable_name = arena.intern("Storable");
-        let storable_members: SmallVec<[TypeExprId; 8]> = smallvec::smallvec![
-            type_exprs.named(TypeId::BOOL),
-            type_exprs.named(TypeId::INT),
-            type_exprs.named(TypeId::FLOAT),
-            type_exprs.named(TypeId::CHAR),
-            type_exprs.named(TypeId::STRING),
-            type_exprs.named(TypeId::JSON),
+        let storable_members: SmallVec<[TypeId; 8]> = smallvec::smallvec![
+            TypeId::BOOL,
+            TypeId::INT,
+            TypeId::FLOAT,
+            TypeId::CHAR,
+            TypeId::STRING,
+            TypeId::JSON,
         ];
         let storable = self.register(
             TypeDef::Union {
                 name: storable_name,
                 type_params: SmallVec::new(),
                 members: storable_members,
+                member_exprs: SmallVec::new(),
             },
             storable_name.into(),
         );
@@ -1934,17 +1877,18 @@ impl TypeRegistry {
 
         // Scalar union at index 16: Bool | Int | Float | String
         let scalar_name = arena.intern("Scalar");
-        let scalar_members: SmallVec<[TypeExprId; 8]> = smallvec::smallvec![
-            type_exprs.named(TypeId::BOOL),
-            type_exprs.named(TypeId::INT),
-            type_exprs.named(TypeId::FLOAT),
-            type_exprs.named(TypeId::STRING),
+        let scalar_members: SmallVec<[TypeId; 8]> = smallvec::smallvec![
+            TypeId::BOOL,
+            TypeId::INT,
+            TypeId::FLOAT,
+            TypeId::STRING,
         ];
         let scalar = self.register(
             TypeDef::Union {
                 name: scalar_name,
                 type_params: SmallVec::new(),
                 members: scalar_members,
+                member_exprs: SmallVec::new(),
             },
             scalar_name.into(),
         );
@@ -2085,19 +2029,20 @@ impl TypeRegistry {
 
         // Subscript union at index 22: Bool | Int | Float | Char | String | Json
         let subscript_name = arena.intern("Subscript");
-        let subscript_members: SmallVec<[TypeExprId; 8]> = smallvec::smallvec![
-            type_exprs.named(TypeId::BOOL),
-            type_exprs.named(TypeId::INT),
-            type_exprs.named(TypeId::FLOAT),
-            type_exprs.named(TypeId::CHAR),
-            type_exprs.named(TypeId::STRING),
-            type_exprs.named(TypeId::JSON),
+        let subscript_members: SmallVec<[TypeId; 8]> = smallvec::smallvec![
+            TypeId::BOOL,
+            TypeId::INT,
+            TypeId::FLOAT,
+            TypeId::CHAR,
+            TypeId::STRING,
+            TypeId::JSON,
         ];
         let subscript = self.register(
             TypeDef::Union {
                 name: subscript_name,
                 type_params: SmallVec::new(),
                 members: subscript_members,
+                member_exprs: SmallVec::new(),
             },
             subscript_name.into(),
         );
@@ -2177,15 +2122,14 @@ impl TypeRegistry {
 
         // Ref union at index 27: Local | Global
         let ref_name = arena.intern("Ref");
-        let ref_members: SmallVec<[TypeExprId; 8]> = smallvec::smallvec![
-            type_exprs.named(TypeId::LOCAL),
-            type_exprs.named(TypeId::GLOBAL),
-        ];
+        let ref_members: SmallVec<[TypeId; 8]> =
+            smallvec::smallvec![TypeId::LOCAL, TypeId::GLOBAL,];
         let ref_ty = self.register(
             TypeDef::Union {
                 name: ref_name,
                 type_params: SmallVec::new(),
                 members: ref_members,
+                member_exprs: SmallVec::new(),
             },
             ref_name.into(),
         );
@@ -2205,13 +2149,8 @@ impl TypeRegistry {
         ast: &Ast,
         stmts: &[StmtId],
         arena: &mut ValueArena,
-        type_exprs: &mut TypeExprArena,
     ) {
-        let mut ctx = UnionRegCtx {
-            arena,
-            type_exprs,
-            ast,
-        };
+        let mut ctx = UnionRegCtx { arena, ast };
         self.register_stmts_with_prefix(stmts, None, &mut ctx);
     }
 
@@ -2330,16 +2269,12 @@ impl TypeRegistry {
         let disp = qn.display(&ctx.arena.strings);
         let name_id = ctx.arena.intern(&disp);
 
-        // Type parameters already have `StringId`; use directly
         let type_param_ids: SmallVec<[StringId; 2]> =
             type_params.iter().map(|tp| tp.name).collect();
 
-        // Convert AST type expressions to TypeExprIds
-        let members: SmallVec<[TypeExprId; 8]> = ast_members
+        let members: SmallVec<[TypeId; 8]> = ast_members
             .iter()
-            .map(|m| {
-                resolve_type_expr(ctx.ast, ctx.arena, self, ctx.type_exprs, *m)
-            })
+            .map(|m| resolve_member_type(ctx.ast, self, *m))
             .collect();
 
         self.register(
@@ -2347,6 +2282,7 @@ impl TypeRegistry {
                 name: name_id,
                 type_params: type_param_ids,
                 members,
+                member_exprs: ast_members.iter().copied().collect(),
             },
             qn.clone(),
         );
@@ -2388,101 +2324,51 @@ impl TypeRegistry {
     }
 }
 
-/// Resolve an AST type expression to a `TypeExprId`.
+/// Resolve an AST type expression to a base `TypeId` for union member registration.
 ///
-/// Used during type registration to convert user type annotations.
-fn resolve_type_expr(
+/// Union members are stored as `TypeId`s (not `TypeExprId`s), so we only need
+/// the base type name lookup.
+fn resolve_member_type(
     ast: &Ast,
-    arena: &mut ValueArena,
-    registry: &TypeRegistry,
-    type_exprs: &mut TypeExprArena,
+    reg: &TypeRegistry,
     id: AstTypeExprId,
-) -> TypeExprId {
-    use crate::ast::AstTypeExpr;
-
+) -> TypeId {
     let te = ast
         .get_type_expr(id)
         .unwrap_or_else(|| invariant!("AST type expression ID exists"));
 
     match te {
-        // Wildcard shouldn't appear in runtime type resolution
-        AstTypeExpr::Wildcard => {
-            typechecked!("type resolution", "no wildcard at runtime")
-        }
-        AstTypeExpr::Named(name) => {
-            let ty_id = registry.lookup(name).unwrap_or_else(|| {
+        AstTypeExpr::Named(name) | AstTypeExpr::App(name, _) => {
+            reg.lookup(name).unwrap_or_else(|| {
                 typechecked!("type reference", "type is defined")
-            });
-            type_exprs.named(ty_id)
+            })
         }
-        AstTypeExpr::App(name, args) => {
-            let base = registry.lookup(name).unwrap_or_else(|| {
-                typechecked!("type reference", "type is defined")
-            });
-            let arg_ids: SmallVec<[TypeExprId; 2]> = args
-                .iter()
-                .map(|a| {
-                    resolve_type_expr(ast, arena, registry, type_exprs, *a)
-                })
-                .collect();
-            type_exprs.app(base, arg_ids)
-        }
-        AstTypeExpr::Tuple(elems) => {
-            let elem_ids: SmallVec<[TypeExprId; 4]> = elems
-                .iter()
-                .map(|e| {
-                    resolve_type_expr(ast, arena, registry, type_exprs, *e)
-                })
-                .collect();
-            type_exprs.tuple(elem_ids)
-        }
-        AstTypeExpr::Fn(params, ret) => {
-            let param_ids: SmallVec<[TypeExprId; 4]> = params
-                .iter()
-                .map(|p| {
-                    resolve_type_expr(ast, arena, registry, type_exprs, *p)
-                })
-                .collect();
-            let ret_id =
-                resolve_type_expr(ast, arena, registry, type_exprs, *ret);
-            type_exprs.fn_type(param_ids, ret_id)
-        }
-        AstTypeExpr::Union(members) => {
-            let member_ids: SmallVec<[TypeExprId; 4]> = members
-                .iter()
-                .map(|m| {
-                    resolve_type_expr(ast, arena, registry, type_exprs, *m)
-                })
-                .collect();
-            type_exprs.union(member_ids)
-        }
-        AstTypeExpr::Object(fields) => {
-            let field_ids: IndexMap<StringId, TypeExprId> = fields
-                .iter()
-                .map(|(name, ty)| {
-                    let ty_id = resolve_type_expr(
-                        ast, arena, registry, type_exprs, *ty,
-                    );
-                    (*name, ty_id)
-                })
-                .collect();
-            type_exprs.object(field_ids)
-        }
-        // `VarApp` shouldn't appear in union member registration; it means
-        // an HKT type param is used as a constructor, which is unresolvable
-        // at registration time.
-        AstTypeExpr::VarApp(..) => {
-            invariant!("`VarApp` in union member registration")
-        }
-        // Associated types should be resolved by typechecker before runtime
-        AstTypeExpr::AssocType { .. } => {
-            typechecked!("type resolution", "associated types resolved")
-        }
-        AstTypeExpr::TupleConstructor { .. } => {
-            typechecked!(
-                "type resolution",
-                "tuple constructors resolved during hoisting"
-            )
+        _ => typechecked!("union member", "named type expected"),
+    }
+}
+
+/// A runtime value: typed envelope over a `Payload`.
+///
+/// `ty` is the semantic type; `repr` is the transparent representation type.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Value<P = Payload> {
+    pub(crate) ty: RuntimeTyId,
+    pub(crate) repr: RuntimeTyId,
+    pub(crate) payload: P,
+}
+
+/// Lightweight metadata pairing a solved type with its representation type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ValueMeta {
+    pub(crate) ty: RuntimeTyId,
+    pub(crate) repr: RuntimeTyId,
+}
+
+impl ValueMeta {
+    pub(crate) fn untyped() -> Self {
+        Self {
+            ty: RuntimeTyId::UNKNOWN,
+            repr: RuntimeTyId::UNKNOWN,
         }
     }
 }

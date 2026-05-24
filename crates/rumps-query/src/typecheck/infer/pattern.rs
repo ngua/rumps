@@ -246,6 +246,7 @@ impl InferCtx<'_> {
                 MatchPattern::Is(name, ty_id) => {
                     let narrowed_ty =
                         self.convert().ast_type_to_ty(*ty_id, &IndexMap::new());
+                    self.interp.ast_type_map.insert(*ty_id, narrowed_ty);
 
                     // Function types cannot be inspected at runtime for
                     // opaque callables (class method refs, module fn refs,

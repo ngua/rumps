@@ -16,80 +16,74 @@ use smallvec::SmallVec;
 use super::class::{self, ClassCtx};
 use super::Interpreter;
 use crate::io::IoContext;
-use crate::value::{MapKey, TypeExprArena, TypeExprId, TypeId, Value};
+use crate::value::{MapKey, Payload, ValueMeta};
 use crate::Span;
 
 impl<I: IoContext> Interpreter<'_, I> {
     /// Convert a runtime value to a storage value.
     ///
     /// Scalars convert directly; complex values serialize to JSON.
-    pub(crate) fn store(&mut self, v: &Value) -> rumps_types::Value {
+    pub(crate) fn store(&mut self, v: &Payload) -> rumps_types::Value {
         match v {
-            Value::Unit => typechecked!("store", "Storable (not Unit)"),
-            Value::Bool(b) => rumps_types::Value::Boolean(*b),
-            Value::Int(i) => rumps_types::Value::Integer(*i),
+            Payload::Unit => typechecked!("store", "Storable (not Unit)"),
+            Payload::Bool(b) => rumps_types::Value::Boolean(*b),
+            Payload::Int(i) => rumps_types::Value::Integer(*i),
             // Word is stored as Int (converted)
-            Value::Word(w) => rumps_types::Value::Integer(*w as i64),
-            Value::Float(f) => rumps_types::Value::Double(*f),
-            Value::Char(c) => rumps_types::Value::Char(*c),
-            Value::String(id) => {
+            Payload::Word(w) => rumps_types::Value::Integer(*w as i64),
+            Payload::Float(f) => rumps_types::Value::Double(*f),
+            Payload::Char(c) => rumps_types::Value::Char(*c),
+            Payload::String(id) => {
                 let s = self
                     .arena
                     .get_str(*id)
                     .unwrap_or_else(|| invariant!("StringId in arena"));
                 rumps_types::Value::String(s.to_owned())
             }
-            Value::Json(j) => rumps_types::Value::Json(j.as_ref().clone()),
-            Value::FilePath(id) => {
+            Payload::Json(j) => rumps_types::Value::Json(j.as_ref().clone()),
+            Payload::FilePath(id) => {
                 let s = self
                     .arena
                     .get_str(*id)
                     .unwrap_or_else(|| invariant!("StringId in arena"));
                 rumps_types::Value::String(s.to_owned())
             }
-            Value::Regex(_) => typechecked!("store", "Storable (not Regex)"),
+            Payload::Regex(_) => typechecked!("store", "Storable (not Regex)"),
             // Serialize to JSON for complex values (closures, module fns,
             // ranges, and continuations will panic in jsonify via typechecked!)
-            Value::Array(_, _)
-            | Value::Object(_)
-            | Value::Tuple(_, _)
-            | Value::Map(_, _, _)
-            | Value::Tagged(_, _, _)
-            | Value::Closure { .. }
-            | Value::Function { .. }
-            | Value::ModuleFn { .. }
-            | Value::ModuleConst { .. }
-            | Value::Range { .. }
-            | Value::ForeverContinuation
-            | Value::LoopContinue(_)
-            | Value::ClassMethodFn { .. }
-            | Value::PartialApp { .. } => {
+            Payload::Array(_)
+            | Payload::Object(_)
+            | Payload::Tuple(_)
+            | Payload::Map(_)
+            | Payload::Tagged(_, _, _)
+            | Payload::Closure { .. }
+            | Payload::Function { .. }
+            | Payload::ModuleFn { .. }
+            | Payload::ModuleConst { .. }
+            | Payload::Range { .. }
+            | Payload::ForeverContinuation
+            | Payload::LoopContinue(_)
+            | Payload::ClassMethodFn { .. }
+            | Payload::PartialApp { .. } => {
                 rumps_types::Value::Json(self.jsonify(v))
             }
-            Value::Time(t) => rumps_types::Value::String(t.to_rfc3339()),
-            Value::Ref(..) => typechecked!("store", "Storable (not Ref)"),
-            Value::Union(_, inner_id) | Value::Newtype(_, inner_id) => self
-                .arena
-                .get(*inner_id)
-                .cloned()
-                .map(|inner| self.store(&inner))
-                .unwrap_or_else(|| invariant!("inner value in arena")),
+            Payload::Time(t) => rumps_types::Value::String(t.to_rfc3339()),
+            Payload::Ref(..) => typechecked!("store", "Storable (not Ref)"),
         }
     }
 
     /// Convert a storage value to a runtime value.
     ///
-    /// JSON values are loaded as opaque `Value::Json`; use `read` to convert.
-    pub(crate) fn load(&mut self, v: rumps_types::Value) -> Value {
+    /// JSON values are loaded as opaque `Payload::Json`; use `read` to convert.
+    pub(crate) fn load(&mut self, v: rumps_types::Value) -> Payload {
         match v {
-            rumps_types::Value::Boolean(b) => Value::Bool(b),
-            rumps_types::Value::Integer(i) => Value::Int(i),
-            rumps_types::Value::Double(d) => Value::Float(d),
-            rumps_types::Value::Char(c) => Value::Char(c),
+            rumps_types::Value::Boolean(b) => Payload::Bool(b),
+            rumps_types::Value::Integer(i) => Payload::Int(i),
+            rumps_types::Value::Double(d) => Payload::Float(d),
+            rumps_types::Value::Char(c) => Payload::Char(c),
             rumps_types::Value::String(s) => {
-                Value::String(self.arena.intern(&s))
+                Payload::String(self.arena.intern(&s))
             }
-            rumps_types::Value::Json(j) => Value::Json(Arc::new(j)),
+            rumps_types::Value::Json(j) => Payload::Json(Arc::new(j)),
         }
     }
 
@@ -97,7 +91,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     ///
     /// Used for `write` statements. Quotes strings and file paths so output
     /// is valid RUMPS syntax.
-    pub(crate) fn display(&mut self, v: &Value) -> String {
+    pub(crate) fn display(&mut self, v: &Payload) -> String {
         self.stringify(v)
     }
 
@@ -105,14 +99,14 @@ impl<I: IoContext> Interpreter<'_, I> {
     ///
     /// Used for `write expr raw`. Strings are quoted and special characters
     /// (`\n`, `\t`, etc.) are shown as escape sequences rather than rendered.
-    pub(crate) fn display_raw(&mut self, v: &Value) -> String {
+    pub(crate) fn display_raw(&mut self, v: &Payload) -> String {
         match v {
-            Value::Char(c) => escape_char(*c),
-            Value::String(id) | Value::FilePath(id) => {
+            Payload::Char(c) => escape_char(*c),
+            Payload::String(id) | Payload::FilePath(id) => {
                 let s = self.arena.get_str(*id).unwrap_or("");
                 format!("\"{}\"", escape_str(s))
             }
-            Value::Array(_, elems) => {
+            Payload::Array(elems) => {
                 let vals: Vec<_> = elems
                     .iter()
                     .filter_map(|id| self.arena.get(*id).cloned())
@@ -120,7 +114,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let items = vals.iter().map(|v| self.display_raw(v)).join(", ");
                 format!("[ {items} ]")
             }
-            Value::Tuple(_, elems) => {
+            Payload::Tuple(elems) => {
                 let len = elems.len();
                 let vals: Vec<_> = elems
                     .iter()
@@ -130,7 +124,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let trail = if len == 1 { "," } else { "" };
                 format!("({items}{trail})")
             }
-            Value::Object(obj) => {
+            Payload::Object(obj) => {
                 // Collect keys and values first to avoid borrow conflicts
                 let data: Vec<_> = obj
                     .iter()
@@ -152,7 +146,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .join(", ");
                 format!("{{ {fields} }}")
             }
-            Value::Map(_, _, entries) => {
+            Payload::Map(entries) => {
                 // Collect keys and values first to avoid borrow conflicts
                 let data: Vec<_> = entries
                     .iter()
@@ -173,16 +167,15 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .join(", ");
                 format!("{{ {items} }}")
             }
-            Value::Tagged(ty_expr, idx, payloads) => {
-                let base_ty = self.type_exprs.base_type(*ty_expr);
-                let ty_name = base_ty
-                    .and_then(|ty| self.registry.type_name(ty, &self.arena))
+            Payload::Tagged(ty_id, idx, payloads) => {
+                let ty_name = self
+                    .registry
+                    .type_name(*ty_id, &self.arena)
                     .unwrap_or("?")
                     .to_owned();
-                let var_name = base_ty
-                    .and_then(|ty| {
-                        self.registry.variant_name(ty, *idx, &self.arena)
-                    })
+                let var_name = self
+                    .registry
+                    .variant_name(*ty_id, *idx, &self.arena)
                     .unwrap_or("?")
                     .to_owned();
                 if payloads.is_empty() {
@@ -197,7 +190,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     format!("{ty_name}.{var_name}({args_str})")
                 }
             }
-            Value::Ref(is_global, name_id, sub_ids) => {
+            Payload::Ref(is_global, name_id, sub_ids) => {
                 let prefix = if *is_global { "^" } else { "" };
                 let name =
                     self.arena.get_str(*name_id).unwrap_or("?").to_owned();
@@ -213,14 +206,6 @@ impl<I: IoContext> Interpreter<'_, I> {
                     format!("{prefix}{name}{{ {subs_str} }}")
                 }
             }
-            Value::Union(_, inner_id) | Value::Newtype(_, inner_id) => {
-                let inner = self
-                    .arena
-                    .get(*inner_id)
-                    .cloned()
-                    .unwrap_or_else(|| invariant!("inner value in arena"));
-                self.display_raw(&inner)
-            }
             // Non-string types delegate to normal stringify
             _ => self.stringify(v),
         }
@@ -229,15 +214,9 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Coerce a value to a raw string for concatenation.
     ///
     /// Unlike `stringify`, this does not quote strings.
-    pub(crate) fn coerce_to_str(&mut self, v: &Value) -> String {
+    pub(crate) fn coerce_to_str(&mut self, v: &Payload) -> String {
         match v {
-            Value::Union(_, inner_id) | Value::Newtype(_, inner_id) => self
-                .arena
-                .get(*inner_id)
-                .cloned()
-                .map(|inner_val| self.coerce_to_str(&inner_val))
-                .unwrap_or_else(|| self.stringify(v)),
-            Value::String(id) | Value::FilePath(id) => {
+            Payload::String(id) | Payload::FilePath(id) => {
                 self.arena.get_str(*id).unwrap_or("").to_owned()
             }
             _ => self.stringify(v),
@@ -252,15 +231,14 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// This is a convenience wrapper around `Display::format`; the class
     /// method is used so frequently that constructing a `ClassCtx` at every
     /// call site would be overly verbose.
-    pub(crate) fn stringify(&mut self, v: &Value) -> String {
+    pub(crate) fn stringify(&mut self, v: &Payload) -> String {
         let ctx = ClassCtx {
             arena: &mut self.arena,
-            type_exprs: &mut self.type_exprs,
             ty_arena: &self.ty_arena,
+            runtime_types: &self.runtime_types,
             registry: &self.registry,
             regex_cache: &self.regex_cache,
             span: Span::default(),
-            output_ty: None,
         };
         class::Display::format(&ctx, v)
     }
@@ -272,29 +250,28 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// This is a convenience wrapper around `Into::jsonify`; the class
     /// method is used so frequently that constructing a `ClassCtx` at every
     /// call site would be overly verbose.
-    pub(crate) fn jsonify(&mut self, v: &Value) -> serde_json::Value {
+    pub(crate) fn jsonify(&mut self, v: &Payload) -> serde_json::Value {
         let ctx = ClassCtx {
             arena: &mut self.arena,
-            type_exprs: &mut self.type_exprs,
             ty_arena: &self.ty_arena,
+            runtime_types: &self.runtime_types,
             registry: &self.registry,
             regex_cache: &self.regex_cache,
             span: Span::default(),
-            output_ty: None,
         };
         class::Into::jsonify(&ctx, v)
     }
 
     /// Convert a JSON value to a runtime value.
-    pub(crate) fn unjsonify(&mut self, j: serde_json::Value) -> Value {
+    pub(crate) fn unjsonify(&mut self, j: serde_json::Value) -> Payload {
         match j {
             serde_json::Value::Null => self.make_none(),
-            serde_json::Value::Bool(b) => Value::Bool(b),
+            serde_json::Value::Bool(b) => Payload::Bool(b),
             serde_json::Value::Number(n) => {
-                Value::Float(OrderedFloat(n.as_f64().unwrap_or(0.0)))
+                Payload::Float(OrderedFloat(n.as_f64().unwrap_or(0.0)))
             }
             serde_json::Value::String(s) => {
-                Value::String(self.arena.intern(&s))
+                Payload::String(self.arena.intern(&s))
             }
             serde_json::Value::Array(arr) => {
                 let dominated = arr.first().is_none_or(|first| {
@@ -303,25 +280,21 @@ impl<I: IoContext> Interpreter<'_, I> {
                 });
 
                 if dominated {
-                    // Get element type from first element, or UNKNOWN for empty
-                    let elem_ty = match arr.first() {
-                        None => self.type_exprs.named(TypeId::UNKNOWN),
-                        Some(first) => {
-                            json_type_expr(first, &mut self.type_exprs)
-                        }
-                    };
-
                     let elems: SmallVec<[_; 4]> = arr
                         .into_iter()
                         .map(|v| {
                             let val = self.unjsonify(v);
-                            self.arena.add(val, Span::default())
+                            self.arena.add_typed(
+                                val,
+                                ValueMeta::untyped(),
+                                Span::default(),
+                            )
                         })
                         .collect();
-                    Value::Array(elem_ty, Arc::new(elems))
+                    Payload::Array(Arc::new(elems))
                 } else {
                     // Heterogeneous arrays stay as opaque Json
-                    Value::Json(Arc::new(serde_json::Value::Array(arr)))
+                    Payload::Json(Arc::new(serde_json::Value::Array(arr)))
                 }
             }
             serde_json::Value::Object(obj) => {
@@ -330,11 +303,15 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .map(|(k, v)| {
                         let key = self.arena.intern(&k);
                         let val = self.unjsonify(v);
-                        let val_id = self.arena.add(val, Span::default());
+                        let val_id = self.arena.add_typed(
+                            val,
+                            ValueMeta::untyped(),
+                            Span::default(),
+                        );
                         (key, val_id)
                     })
                     .collect();
-                Value::Object(Arc::new(fields))
+                Payload::Object(Arc::new(fields))
             }
         }
     }
@@ -342,57 +319,51 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Convert a value to a subscript for key construction.
     ///
     /// Only scalar types (Bool, Int, Word, Float, Char, String, Json) can be subscripts.
-    pub(crate) fn subscript(&self, v: &Value) -> Subscript {
+    pub(crate) fn subscript(&self, v: &Payload) -> Subscript {
         match v {
-            Value::Bool(b) => Subscript::Boolean(*b),
-            Value::Int(i) => Subscript::Number(OrderedFloat(*i as f64)),
-            Value::Word(w) => Subscript::Number(OrderedFloat(*w as f64)),
-            Value::Float(f) => Subscript::Number(*f),
-            Value::Char(c) => Subscript::String(c.to_string()),
-            Value::String(id) => {
+            Payload::Bool(b) => Subscript::Boolean(*b),
+            Payload::Int(i) => Subscript::Number(OrderedFloat(*i as f64)),
+            Payload::Word(w) => Subscript::Number(OrderedFloat(*w as f64)),
+            Payload::Float(f) => Subscript::Number(*f),
+            Payload::Char(c) => Subscript::String(c.to_string()),
+            Payload::String(id) => {
                 let s = self
                     .arena
                     .get_str(*id)
                     .unwrap_or_else(|| invariant!("StringId in arena"));
                 Subscript::String(s.to_owned())
             }
-            Value::Json(j) => Subscript::Json(j.as_ref().clone()),
-            Value::Unit
-            | Value::Array(_, _)
-            | Value::Object(_)
-            | Value::Tuple(_, _)
-            | Value::Map(_, _, _)
-            | Value::Time(_)
-            | Value::FilePath(_)
-            | Value::Regex(_)
-            | Value::Tagged(_, _, _)
-            | Value::Closure { .. }
-            | Value::Function { .. }
-            | Value::ModuleFn { .. }
-            | Value::ModuleConst { .. }
-            | Value::Range { .. }
-            | Value::ForeverContinuation
-            | Value::LoopContinue(_)
-            | Value::Ref(..)
-            | Value::ClassMethodFn { .. }
-            | Value::PartialApp { .. } => {
+            Payload::Json(j) => Subscript::Json(j.as_ref().clone()),
+            Payload::Unit
+            | Payload::Array(_)
+            | Payload::Object(_)
+            | Payload::Tuple(_)
+            | Payload::Map(_)
+            | Payload::Time(_)
+            | Payload::FilePath(_)
+            | Payload::Regex(_)
+            | Payload::Tagged(_, _, _)
+            | Payload::Closure { .. }
+            | Payload::Function { .. }
+            | Payload::ModuleFn { .. }
+            | Payload::ModuleConst { .. }
+            | Payload::Range { .. }
+            | Payload::ForeverContinuation
+            | Payload::LoopContinue(_)
+            | Payload::Ref(..)
+            | Payload::ClassMethodFn { .. }
+            | Payload::PartialApp { .. } => {
                 typechecked!("subscript", "Subscriptable")
             }
-            Value::Union(_, inner_id) | Value::Newtype(_, inner_id) => self
-                .arena
-                .get(*inner_id)
-                .cloned()
-                .map(|inner| self.subscript(&inner))
-                .unwrap_or_else(|| invariant!("inner value in arena")),
         }
     }
 
     /// Convert a subscript from storage to a runtime value.
     ///
     /// Inverse of `subscript`; used by `order` to convert results.
-    pub(crate) fn value_from_subscript(&mut self, sub: Subscript) -> Value {
+    pub(crate) fn value_from_subscript(&mut self, sub: Subscript) -> Payload {
         match sub {
-            Subscript::Boolean(b) => Value::Bool(b),
+            Subscript::Boolean(b) => Payload::Bool(b),
             Subscript::Number(n) => {
                 // Check if it's a whole number
                 let f = n.into_inner();
@@ -401,14 +372,14 @@ impl<I: IoContext> Interpreter<'_, I> {
                     && f >= i64::MIN as f64
                     && f <= i64::MAX as f64;
                 if is_int {
-                    Value::Int(f as i64)
+                    Payload::Int(f as i64)
                 } else {
-                    Value::Float(n)
+                    Payload::Float(n)
                 }
             }
-            Subscript::Char(c) => Value::Char(c),
-            Subscript::String(s) => Value::String(self.arena.intern(&s)),
-            Subscript::Json(j) => Value::Json(Arc::new(j)),
+            Subscript::Char(c) => Payload::Char(c),
+            Subscript::String(s) => Payload::String(self.arena.intern(&s)),
+            Subscript::Json(j) => Payload::Json(Arc::new(j)),
         }
     }
 
@@ -430,9 +401,9 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Convert a value to a file path string.
     ///
     /// Accepts `FilePath` or `String` values; returns the path as a `String`.
-    pub(super) fn filepath(&self, val: &Value) -> String {
+    pub(super) fn filepath(&self, val: &Payload) -> String {
         match val {
-            Value::FilePath(id) | Value::String(id) => self
+            Payload::FilePath(id) | Payload::String(id) => self
                 .arena
                 .get_str(*id)
                 .unwrap_or_else(|| invariant!("StringId in arena"))
@@ -451,27 +422,6 @@ fn json_type_tag(v: &serde_json::Value) -> u8 {
         serde_json::Value::String(_) => 3,
         serde_json::Value::Array(_) => 4,
         serde_json::Value::Object(_) => 5,
-    }
-}
-
-/// Get a `TypeExprId` for a JSON value's type.
-fn json_type_expr(
-    v: &serde_json::Value,
-    arena: &mut TypeExprArena,
-) -> TypeExprId {
-    match v {
-        serde_json::Value::Null => arena.named(TypeId::OPTION),
-        serde_json::Value::Bool(_) => arena.named(TypeId::BOOL),
-        serde_json::Value::Number(_) => arena.named(TypeId::FLOAT),
-        serde_json::Value::String(_) => arena.named(TypeId::STRING),
-        serde_json::Value::Array(arr) => {
-            let elem_ty = match arr.first() {
-                None => arena.named(TypeId::UNKNOWN),
-                Some(first) => json_type_expr(first, arena),
-            };
-            arena.app(TypeId::ARRAY, smallvec::smallvec![elem_ty])
-        }
-        serde_json::Value::Object(_) => arena.named(TypeId::OBJECT),
     }
 }
 

@@ -2882,6 +2882,7 @@ impl InferCtx<'_> {
             TypePattern::Type(ty_id) => {
                 let target_ty =
                     self.convert().ast_type_to_ty(*ty_id, &IndexMap::new());
+                self.interp.ast_type_map.insert(*ty_id, target_ty);
                 // Function types cannot be inspected at runtime for opaque
                 // callables (class method refs, module fn refs, partial
                 // apps); reject them here (at any depth) so the interpreter's
@@ -3018,6 +3019,7 @@ impl InferCtx<'_> {
                 fields.iter().for_each(|(_, ty_id)| {
                     let fty =
                         self.convert().ast_type_to_ty(*ty_id, &IndexMap::new());
+                    self.interp.ast_type_map.insert(*ty_id, fty);
                     if Self::type_contains_fn(fty, &self.ty_arena) {
                         self.error(TypeError::FnTypeInPattern(span));
                     }
@@ -3044,6 +3046,7 @@ impl InferCtx<'_> {
     ) -> TyId {
         let inner_ty = self.expr(inner_id);
         let target_ty = self.convert().ast_type_to_ty(ty_id, &IndexMap::new());
+        self.interp.ast_type_map.insert(ty_id, target_ty);
 
         // Emit Into constraint for validation
         self.constrain(Constraint::Class {
@@ -3090,6 +3093,11 @@ impl InferCtx<'_> {
     ) -> TyId {
         let inner_ty = self.expr(inner_id);
         let target_ty = self.convert().ast_type_to_ty(ty_id, &IndexMap::new());
+        self.interp.ast_type_map.insert(ty_id, target_ty);
+
+        // For alias types, store the expanded underlying type so the
+        // interpreter can resolve `read Person` to `read { name: String, age: Int }`
+        self.expand_alias_for_read(ty_id, target_ty);
 
         // Emit TryInto constraint for validation
         self.constrain(Constraint::Class {
@@ -3099,6 +3107,29 @@ impl InferCtx<'_> {
         });
 
         self.ty_arena.result(target_ty, TyArena::STRING)
+    }
+
+    /// If `ty` is `Ty::Named(id, args)` and `id` is an alias, expand it and
+    /// store the mapping in `alias_expansions` keyed by `AstTypeExprId`.
+    fn expand_alias_for_read(&mut self, ast_ty: AstTypeExprId, ty: TyId) {
+        if let Ty::Named(type_id, args) = self.ty_arena.get(ty).clone() {
+            if let Some(TypeDef::Alias {
+                target,
+                type_params,
+                ..
+            }) = self.registry.get_def(type_id)
+            {
+                let target = *target;
+                let type_params = type_params.clone();
+                let subst: IndexMap<StringId, TyId> = type_params
+                    .iter()
+                    .zip(args.iter())
+                    .map(|(&p, &a)| (p, a))
+                    .collect();
+                let expanded = self.convert().ast_type_to_ty(target, &subst);
+                self.interp.alias_expansions.insert(ast_ty, expanded);
+            }
+        }
     }
 
     /// Infer type of a database intrinsic (`@get`, `@set`, `@kill`, etc.).
@@ -3266,6 +3297,7 @@ impl InferCtx<'_> {
         span: Span,
     ) -> TyId {
         let ann_ty = self.convert().ast_type_to_ty(ty_id, &IndexMap::new());
+        self.interp.ast_type_map.insert(ty_id, ann_ty);
 
         // Clone inner expression to avoid borrow issues
         let inner_expr = self.ast.get_expr(inner_id).cloned();

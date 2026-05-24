@@ -3,7 +3,7 @@
 use super::Interpreter;
 use crate::ast::{ExprId, StmtId, TransactionExpr, TxnId};
 use crate::io::IoContext;
-use crate::value::Value;
+use crate::value::Payload;
 use crate::{Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
@@ -17,7 +17,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         txn_expr: &TransactionExpr,
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         // Get the unique ID assigned during typecheck
         let id = txn_expr
             .id
@@ -33,7 +33,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         if let Some(timeout_id) = txn_expr.modifiers.timeout {
             let timeout_val = self.eval(timeout_id).await?;
             let ms = match timeout_val {
-                Value::Int(n) => n as u64,
+                Payload::Int(n) => n as u64,
                 _ => typechecked!("timeout", "Int"),
             };
             timeout_ms = Some(ms);
@@ -68,7 +68,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         expr: Option<ExprId>,
         ms: Option<u64>,
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         // Start the transaction
         let txn = match builder.start().await {
             Ok(t) => t,
@@ -112,10 +112,10 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         stmts: &[StmtId],
         expr: Option<ExprId>,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         self.stmts(stmts).await?;
         match expr {
-            None => Ok(Value::Unit),
+            None => Ok(Payload::Unit),
             Some(id) => self.eval(id).await,
         }
     }

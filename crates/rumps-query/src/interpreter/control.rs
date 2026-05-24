@@ -9,7 +9,7 @@ use crate::ast::{
 };
 use crate::intern::{QualifiedName, StringId};
 use crate::io::IoContext;
-use crate::value::{TypeId, Value};
+use crate::value::{Payload, TypeId, ValueMeta};
 use crate::{Error, Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
@@ -19,9 +19,9 @@ impl<I: IoContext> Interpreter<'_, I> {
     pub(super) fn postfix(
         &mut self,
         op: PostfixOp,
-        val: Value,
+        val: Payload,
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         match op {
             PostfixOp::Unwrap => self.unwrap(val, span),
         }
@@ -34,25 +34,10 @@ impl<I: IoContext> Interpreter<'_, I> {
     ///
     /// Type checker guarantees operand is `Option` or `Result`.
     /// `None`/`Err` remain runtime errors (value-level, not type-level).
-    fn unwrap(&mut self, val: Value, span: Span) -> Result<Value> {
-        let is_option = |ty_expr| {
-            self.type_exprs
-                .base_type(ty_expr)
-                .is_some_and(|t| t == TypeId::OPTION)
-        };
-        let is_result = |ty_expr| {
-            self.type_exprs
-                .base_type(ty_expr)
-                .is_some_and(|t| t == TypeId::RESULT)
-        };
-
-        // Unwrap Union/Newtype wrappers to find the inner Option/Result
-        let unwrapped = self.unwrap_value_recursive(&val);
-        let v = unwrapped.as_ref().unwrap_or(&val);
-
-        match v {
+    fn unwrap(&mut self, val: Payload, span: Span) -> Result<Payload> {
+        match &val {
             // Option.Some(v) -> v
-            Value::Tagged(ty_expr, 1, payload) if is_option(*ty_expr) => {
+            Payload::Tagged(ty, 1, payload) if *ty == TypeId::OPTION => {
                 Ok(payload
                     .first()
                     .and_then(|id| self.arena.get(*id).cloned())
@@ -61,11 +46,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                     }))
             }
             // Option.None -> runtime error (not type error)
-            Value::Tagged(ty_expr, 0, _) if is_option(*ty_expr) => {
+            Payload::Tagged(ty, 0, _) if *ty == TypeId::OPTION => {
                 Err(Error::runtime(span, "cannot unwrap Option.None"))
             }
             // Result.Ok(v) -> v
-            Value::Tagged(ty_expr, 0, payload) if is_result(*ty_expr) => {
+            Payload::Tagged(ty, 0, payload) if *ty == TypeId::RESULT => {
                 Ok(payload
                     .first()
                     .and_then(|id| self.arena.get(*id).cloned())
@@ -74,7 +59,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     }))
             }
             // Result.Err(e) -> runtime error with stringified e
-            Value::Tagged(ty_expr, 1, payload) if is_result(*ty_expr) => {
+            Payload::Tagged(ty, 1, payload) if *ty == TypeId::RESULT => {
                 let err_val =
                     payload.first().and_then(|id| self.arena.get(*id).cloned());
                 let err_msg = err_val
@@ -102,48 +87,32 @@ impl<I: IoContext> Interpreter<'_, I> {
     #[async_recursion]
     pub(super) async fn coalesce(
         &mut self,
-        left: Value,
+        left: Payload,
         rhs: ExprId,
-    ) -> Result<Value> {
-        // Helper to check if type expression has a given base type
-        let is_option = |ty_expr| {
-            self.type_exprs
-                .base_type(ty_expr)
-                .is_some_and(|t| t == TypeId::OPTION)
-        };
-        let is_result = |ty_expr| {
-            self.type_exprs
-                .base_type(ty_expr)
-                .is_some_and(|t| t == TypeId::RESULT)
-        };
-
-        // Unwrap Union/Newtype wrappers to find the inner Option/Result
-        let unwrapped = self.unwrap_value_recursive(&left);
-        let v = unwrapped.as_ref().unwrap_or(&left);
-
-        match v {
+    ) -> Result<Payload> {
+        match &left {
             // Option.Some(v) -> unwrap to v
-            Value::Tagged(ty_expr, 1, payload) if is_option(*ty_expr) => {
+            Payload::Tagged(ty, 1, payload) if *ty == TypeId::OPTION => {
                 Ok(payload
                     .first()
                     .and_then(|id| self.arena.get(*id).cloned())
                     // Payload should always exist for Some
-                    .unwrap_or(Value::Unit))
+                    .unwrap_or(Payload::Unit))
             }
             // Option.None -> evaluate rhs
-            Value::Tagged(ty_expr, 0, _) if is_option(*ty_expr) => {
+            Payload::Tagged(ty, 0, _) if *ty == TypeId::OPTION => {
                 self.eval(rhs).await
             }
             // Result.Ok(v) -> unwrap to v
-            Value::Tagged(ty_expr, 0, payload) if is_result(*ty_expr) => {
+            Payload::Tagged(ty, 0, payload) if *ty == TypeId::RESULT => {
                 Ok(payload
                     .first()
                     .and_then(|id| self.arena.get(*id).cloned())
                     // Payload should always exist for Ok
-                    .unwrap_or(Value::Unit))
+                    .unwrap_or(Payload::Unit))
             }
             // Result.Err(_) -> evaluate rhs (error discarded)
-            Value::Tagged(ty_expr, 1, _) if is_result(*ty_expr) => {
+            Payload::Tagged(ty, 1, _) if *ty == TypeId::RESULT => {
                 self.eval(rhs).await
             }
             // Type checker guarantees Option or Result
@@ -160,7 +129,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         stmts: &[StmtId],
         tail: Option<ExprId>,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         self.env.scopes.push();
         // Hoist local function declarations for forward references
         self.hoist_declarations(stmts).await?;
@@ -175,11 +144,11 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         stmts: &[StmtId],
         tail: Option<ExprId>,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         match stmts.split_first() {
             None => match tail {
                 Some(e) => self.eval(e).await,
-                None => Ok(Value::Unit),
+                None => Ok(Payload::Unit),
             },
             Some((head, rest)) => {
                 self.exec(*head).await?;
@@ -203,7 +172,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         cond: ExprId,
         then_br: ExprId,
         else_br: Option<ExprId>,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         // Check if condition is `Expr::Is` with bindings
         let cond_expr = self.ast.get_expr(cond).cloned();
         match cond_expr {
@@ -217,7 +186,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             _ => {
                 let cond_val = self.eval(cond).await?;
                 let cond_true = match cond_val {
-                    Value::Bool(b) => b,
+                    Payload::Bool(b) => b,
                     _ => typechecked!("if condition", "Bool"),
                 };
 
@@ -238,7 +207,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                         if cond_true {
                             self.eval(then_br).await?;
                         }
-                        Ok(Value::Unit)
+                        Ok(Payload::Unit)
                     }
                 }
             }
@@ -258,7 +227,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         names: &[StringId],
         then_br: ExprId,
         else_br: Option<ExprId>,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         let span = self.ast.expr_span(expr).unwrap_or_default();
         let val = self.eval(expr).await?;
 
@@ -282,7 +251,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     self.eval_with_variant_bindings(&val, names, then_br, span)
                         .await?;
                 }
-                Ok(Value::Unit)
+                Ok(Payload::Unit)
             }
         }
     }
@@ -294,17 +263,13 @@ impl<I: IoContext> Interpreter<'_, I> {
     #[async_recursion]
     async fn eval_with_variant_bindings(
         &mut self,
-        val: &Value,
+        val: &Payload,
         names: &[StringId],
         body: ExprId,
         span: Span,
-    ) -> Result<Value> {
-        // Unwrap Union/Newtype to find Tagged
-        let unwrapped = self.unwrap_value_recursive(val);
-        let v = unwrapped.as_ref().unwrap_or(val);
-
-        let payloads = match v {
-            Value::Tagged(_, _, p) => p.clone(),
+    ) -> Result<Payload> {
+        let payloads = match val {
+            Payload::Tagged(_, _, p) => p.clone(),
             _ => SmallVec::new(),
         };
 
@@ -331,26 +296,34 @@ impl<I: IoContext> Interpreter<'_, I> {
         scrutinee: ExprId,
         arms: &[MatchArm],
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         let val = self.eval(scrutinee).await?;
-        self.try_match_arms(&val, arms, span).await
+        self.try_match_arms(scrutinee, &val, arms, span).await
     }
 
     /// Try each match arm in order until one matches.
     #[async_recursion]
     async fn try_match_arms(
         &mut self,
-        val: &Value,
+        scrutinee: ExprId,
+        val: &Payload,
         arms: &[MatchArm],
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         match arms.split_first() {
             // Typechecker validates exhaustiveness
             None => typechecked!("match", "exhaustive"),
             Some((arm, rest)) => {
                 // Try to match the pattern
-                match self.try_match_pattern(arm.pattern, val, span)? {
-                    None => self.try_match_arms(val, rest, span).await,
+                match self.try_match_pattern(
+                    scrutinee,
+                    arm.pattern,
+                    val,
+                    span,
+                )? {
+                    None => {
+                        self.try_match_arms(scrutinee, val, rest, span).await
+                    }
                     Some(bindings) => {
                         // Pattern matched; check guard if present
                         self.env.scopes.push();
@@ -361,7 +334,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                             Some(guard_expr) => {
                                 let guard_val = self.eval(guard_expr).await?;
                                 match guard_val {
-                                    Value::Bool(b) => b,
+                                    Payload::Bool(b) => b,
                                     _ => typechecked!("match guard", "Bool"),
                                 }
                             }
@@ -375,7 +348,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                         } else {
                             // Guard failed; pop scope and try next arm
                             self.env.scopes.pop();
-                            self.try_match_arms(val, rest, span).await
+                            self.try_match_arms(scrutinee, val, rest, span)
+                                .await
                         }
                     }
                 }
@@ -385,7 +359,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Evaluate a range expression.
     ///
-    /// Creates a lazy `Value::Range` from start and end expressions.
+    /// Creates a lazy `Payload::Range` from start and end expressions.
     ///
     /// Type checker guarantees both bounds are `Int`.
     #[async_recursion]
@@ -395,21 +369,21 @@ impl<I: IoContext> Interpreter<'_, I> {
         end_id: ExprId,
         inclusive: bool,
         _span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         let start_val = self.eval(start_id).await?;
         let end_val = self.eval(end_id).await?;
 
         let start = match &start_val {
-            Value::Int(n) => *n,
+            Payload::Int(n) => *n,
             _ => typechecked!("..", "Int"),
         };
 
         let end = match &end_val {
-            Value::Int(n) => *n,
+            Payload::Int(n) => *n,
             _ => typechecked!("..", "Int"),
         };
 
-        Ok(Value::Range {
+        Ok(Payload::Range {
             start,
             end,
             inclusive,
@@ -427,32 +401,32 @@ impl<I: IoContext> Interpreter<'_, I> {
         expr: ExprId,
         handler: ExprId,
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         match self.eval(expr).await {
             Ok(val) => Ok(val),
             Err(e) => match e.runtime_variant() {
                 Some((idx, msg)) => {
                     let h = self.eval(handler).await?;
                     let msg_id = self.arena.intern(msg);
-                    let payload_id =
-                        self.arena.add(Value::String(msg_id), span);
-                    let err_ty = self.type_exprs.named(TypeId::ERROR);
-                    let err_val = Value::Tagged(
-                        err_ty,
+                    let payload_id = self.add_val(
+                        Payload::String(msg_id),
+                        self.runtime_types.meta_string(),
+                        span,
+                    );
+                    let err_val = Payload::Tagged(
+                        TypeId::ERROR,
                         idx,
                         smallvec::smallvec![payload_id],
                     );
-                    let arg_id = self.arena.add(err_val, span);
+                    let arg_id = self.arena.add_typed(
+                        err_val,
+                        self.runtime_types.meta_error(),
+                        span,
+                    );
                     match h {
-                        Value::Closure {
-                            params,
-                            ret,
-                            body,
-                            env,
-                        } => {
+                        Payload::Closure { params, body, env } => {
                             self.invoke_closure(
                                 &params,
-                                ret,
                                 body,
                                 &env,
                                 &[arg_id],
@@ -487,9 +461,10 @@ impl<I: IoContext> Interpreter<'_, I> {
         cont_param: (StringId, Option<AstTypeExprId>),
         body: ExprId,
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         let init = self.eval(seed).await?;
-        let mut state_id = self.arena.add(init, span);
+        let seed_meta = self.expr_meta(seed);
+        let mut state_id = self.arena.add_typed(init, seed_meta, span);
 
         let state_name_id = state_param.0;
         let cont_name_id = cont_param.0;
@@ -498,14 +473,18 @@ impl<I: IoContext> Interpreter<'_, I> {
             self.env.scopes.push();
             self.env.scopes.bind(state_name_id, state_id);
 
-            let cont_id = self.arena.add(Value::ForeverContinuation, span);
+            let cont_id = self.arena.add_typed(
+                Payload::ForeverContinuation,
+                ValueMeta::untyped(),
+                span,
+            );
             self.env.scopes.bind(cont_name_id, cont_id);
 
             let result = self.eval(body).await;
             self.env.scopes.pop();
 
             match result {
-                Ok(Value::LoopContinue(new_state_id)) => {
+                Ok(Payload::LoopContinue(new_state_id)) => {
                     state_id = new_state_id;
                 }
                 other => break other,

@@ -551,6 +551,14 @@ impl ClassRegistry {
         Self { defs, by_name }
     }
 
+    /// Empty registry with no class definitions.
+    pub(crate) fn empty() -> Self {
+        Self {
+            defs: Vec::new(),
+            by_name: HashMap::new(),
+        }
+    }
+
     pub(crate) fn get(&self, id: ClassId) -> &ClassDef {
         &self.defs[id.idx()]
     }
@@ -1754,6 +1762,96 @@ impl TyArena {
                                     })
                                     .collect();
                                 self.alloc(Ty::Tuple(filled))
+                            }
+                            Ty::Union(prov, members) => {
+                                let filled: SmallVec<[TyId; 4]> = members
+                                    .iter()
+                                    .map(|&m| match self.get(m).clone() {
+                                        Ty::Option(_) => na
+                                            .first()
+                                            .map_or(Self::ERROR, |&a| {
+                                                self.alloc(Ty::Option(a))
+                                            }),
+                                        Ty::Result(_, e) => match na.len() {
+                                            1 => na.first().map_or(
+                                                Self::ERROR,
+                                                |&a| {
+                                                    self.alloc(Ty::Result(a, e))
+                                                },
+                                            ),
+                                            _ => {
+                                                match (na.first(), na.get(1)) {
+                                                    (Some(&a), Some(&b)) => {
+                                                        self.alloc(Ty::Result(
+                                                            a, b,
+                                                        ))
+                                                    }
+                                                    _ => Self::ERROR,
+                                                }
+                                            }
+                                        },
+                                        Ty::Array(_) => na
+                                            .first()
+                                            .map_or(Self::ERROR, |&a| {
+                                                self.alloc(Ty::Array(a))
+                                            }),
+                                        Ty::Map(_, mv) => match na.len() {
+                                            1 => na
+                                                .first()
+                                                .map_or(Self::ERROR, |&a| {
+                                                    self.alloc(Ty::Map(a, mv))
+                                                }),
+                                            _ => {
+                                                match (na.first(), na.get(1)) {
+                                                    (Some(&a), Some(&b)) => {
+                                                        self.alloc(Ty::Map(
+                                                            a, b,
+                                                        ))
+                                                    }
+                                                    _ => Self::ERROR,
+                                                }
+                                            }
+                                        },
+                                        Ty::Range => Self::RANGE,
+                                        Ty::Named(tid, orig) => {
+                                            let keep = orig
+                                                .len()
+                                                .saturating_sub(na.len());
+                                            let new_args: SmallVec<[TyId; 4]> =
+                                                orig.iter()
+                                                    .take(keep)
+                                                    .chain(na.iter())
+                                                    .copied()
+                                                    .collect();
+                                            self.alloc(Ty::Named(tid, new_args))
+                                        }
+                                        Ty::Tuple(ts) => {
+                                            let mut na_iter =
+                                                na.iter().copied();
+                                            let filled: SmallVec<[TyId; 4]> =
+                                                ts.iter()
+                                                    .map(|&t| {
+                                                        if t == Self::ERROR {
+                                                            na_iter
+                                                                .next()
+                                                                .unwrap_or(
+                                                                    Self::ERROR,
+                                                                )
+                                                        } else {
+                                                            t
+                                                        }
+                                                    })
+                                                    .collect();
+                                            self.alloc(Ty::Tuple(filled))
+                                        }
+                                        _ => Self::ERROR,
+                                    })
+                                    .collect();
+                                if filled.contains(&Self::ERROR) {
+                                    Self::ERROR
+                                } else {
+                                    self.alloc(Ty::Union(prov, filled))
+                                }
                             }
                             _ if na.is_empty() => cid,
                             _ => Self::ERROR,

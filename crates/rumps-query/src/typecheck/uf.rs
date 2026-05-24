@@ -335,6 +335,82 @@ impl UnionFind {
                                     arena.alloc(Ty::Map(a, mv))
                                 })
                             }
+                            Ty::Union(prov, members) => {
+                                let filled: SmallVec<[TyId; 4]> = members
+                                    .iter()
+                                    .map(|&m| match arena.get(m).clone() {
+                                        Ty::Option(_) => na
+                                            .first()
+                                            .map_or(TyArena::ERROR, |&a| {
+                                                arena.alloc(Ty::Option(a))
+                                            }),
+                                        Ty::Result(_, e) => {
+                                            match (na.first(), na.get(1)) {
+                                                (Some(&a), Some(&b)) => arena
+                                                    .alloc(Ty::Result(a, b)),
+                                                (Some(&a), None) => arena
+                                                    .alloc(Ty::Result(a, e)),
+                                                _ => TyArena::ERROR,
+                                            }
+                                        }
+                                        Ty::Array(_) => na
+                                            .first()
+                                            .map_or(TyArena::ERROR, |&a| {
+                                                arena.alloc(Ty::Array(a))
+                                            }),
+                                        Ty::Map(_, mv) => {
+                                            match (na.first(), na.get(1)) {
+                                                (Some(&a), Some(&b)) => {
+                                                    arena.alloc(Ty::Map(a, b))
+                                                }
+                                                (Some(&a), None) => {
+                                                    arena.alloc(Ty::Map(a, mv))
+                                                }
+                                                _ => TyArena::ERROR,
+                                            }
+                                        }
+                                        Ty::Range => TyArena::RANGE,
+                                        Ty::Named(tid, orig) => {
+                                            let keep = orig
+                                                .len()
+                                                .saturating_sub(na.len());
+                                            let new_args: SmallVec<[TyId; 4]> =
+                                                orig.iter()
+                                                    .take(keep)
+                                                    .chain(na.iter())
+                                                    .copied()
+                                                    .collect();
+                                            arena
+                                                .alloc(Ty::Named(tid, new_args))
+                                        }
+                                        Ty::Tuple(ts) => {
+                                            let mut na_iter =
+                                                na.iter().copied();
+                                            let filled: SmallVec<[TyId; 4]> =
+                                                ts.iter()
+                                                    .map(|&t| {
+                                                        if t == TyArena::ERROR {
+                                                            na_iter
+                                                                .next()
+                                                                .unwrap_or(
+                                                                TyArena::ERROR,
+                                                            )
+                                                        } else {
+                                                            t
+                                                        }
+                                                    })
+                                                    .collect();
+                                            arena.alloc(Ty::Tuple(filled))
+                                        }
+                                        _ => TyArena::ERROR,
+                                    })
+                                    .collect();
+                                if filled.contains(&TyArena::ERROR) {
+                                    TyArena::ERROR
+                                } else {
+                                    arena.alloc(Ty::Union(prov, filled))
+                                }
+                            }
                             Ty::Named(tid, orig) => {
                                 let new_args: SmallVec<[TyId; 4]> = na
                                     .iter()

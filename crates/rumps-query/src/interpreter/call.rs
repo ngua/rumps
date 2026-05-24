@@ -10,7 +10,8 @@ use crate::ast::{Expr, ExprId};
 use crate::env::{PrimCtx, PrimFn};
 use crate::intern::{QualifiedName, StringId};
 use crate::io::IoContext;
-use crate::value::{CapturedEnv, FunctionDef, TypeExprId, Value, ValueId};
+use crate::typecheck::ExprAux;
+use crate::value::{CapturedEnv, FunctionDef, Payload, ValueId, ValueMeta};
 use crate::{ClassId, Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
@@ -21,15 +22,15 @@ impl<I: IoContext> Interpreter<'_, I> {
     #[async_recursion]
     pub(super) async fn pipeline(
         &mut self,
-        left: Value,
-        right: Value,
+        left: Payload,
+        right: Payload,
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         // Intern left value as argument
-        let arg_id = self.arena.add(left, span);
+        let arg_id = self.arena.add_typed(left, ValueMeta::untyped(), span);
 
         // Handle PartialApp via resolve to avoid nesting
-        if let Value::PartialApp { callee, ref bound } = right {
+        if let Payload::PartialApp { callee, ref bound } = right {
             self.resolve_partial_app(callee, bound, &[arg_id], span)
                 .await
         // `right.clone()` is unavoidable here: `maybe_partial_app` takes
@@ -43,32 +44,17 @@ impl<I: IoContext> Interpreter<'_, I> {
         } else {
             // Full application (arity == 1); dispatch as before
             match right {
-                Value::Closure {
-                    params,
-                    ret,
-                    body,
-                    env,
-                } => {
-                    self.invoke_closure(
-                        &params,
-                        ret,
-                        body,
-                        &env,
-                        &[arg_id],
-                        span,
-                    )
-                    .await
-                }
-                Value::Function {
-                    params, ret, body, ..
-                } => {
-                    self.invoke_function(&params, ret, body, &[arg_id], span)
+                Payload::Closure { params, body, env } => {
+                    self.invoke_closure(&params, body, &env, &[arg_id], span)
                         .await
                 }
-                Value::ModuleFn { path } => {
+                Payload::Function { params, body, .. } => {
+                    self.invoke_function(&params, body, &[arg_id], span).await
+                }
+                Payload::ModuleFn { path } => {
                     self.invoke_module_fn(&path, &[arg_id], span).await
                 }
-                Value::ClassMethodFn {
+                Payload::ClassMethodFn {
                     class,
                     method,
                     expr_id,
@@ -92,13 +78,12 @@ impl<I: IoContext> Interpreter<'_, I> {
     #[async_recursion]
     pub(super) async fn invoke_closure(
         &mut self,
-        params: &[(StringId, Option<TypeExprId>)],
-        ret: Option<TypeExprId>,
+        params: &[StringId],
         body: ExprId,
         env: &CapturedEnv,
         args: &[ValueId],
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         // Type checker guarantees arity matches
         if params.len() != args.len() {
             typechecked!("closure call", "correct arity")
@@ -110,7 +95,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
         // Push new scope for parameters
         self.env.scopes.push();
-        self.bind_params(params, args, span)?;
+        self.bind_params(params, args, span);
 
         // Evaluate body
         let result = self.eval(body).await;
@@ -118,20 +103,18 @@ impl<I: IoContext> Interpreter<'_, I> {
         // Restore original scope stack
         self.env.scopes.restore(saved);
 
-        // Validate return type if annotated
-        result.and_then(|val| self.check_return_type(val, ret, span))
+        result
     }
 
     /// Invoke a named function with pre-evaluated arguments.
     #[async_recursion]
     async fn invoke_function(
         &mut self,
-        params: &[(StringId, Option<TypeExprId>)],
-        ret: Option<TypeExprId>,
+        params: &[StringId],
         body: ExprId,
         args: &[ValueId],
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         // Type checker guarantees arity matches
         if params.len() != args.len() {
             typechecked!("function call", "correct arity")
@@ -139,7 +122,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
         // Push new scope for parameters
         self.env.scopes.push();
-        self.bind_params(params, args, span)?;
+        self.bind_params(params, args, span);
 
         // Evaluate body
         let result = self.eval(body).await;
@@ -147,8 +130,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         // Pop parameter scope
         self.env.scopes.pop();
 
-        // Validate return type if annotated
-        result.and_then(|val| self.check_return_type(val, ret, span))
+        result
     }
 
     /// Call a function with an expression-based callee.
@@ -164,7 +146,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         callee: ExprId,
         args: &[ExprId],
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         let callee_expr = self
             .ast
             .get_expr(callee)
@@ -220,7 +202,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         name: StringId,
         args: &[ExprId],
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         // Clone function def to avoid borrow issues with async
         let func_def = self.functions.get(&name).cloned();
         let scope_val = func_def.as_ref().map_or_else(
@@ -235,15 +217,8 @@ impl<I: IoContext> Interpreter<'_, I> {
 
         match (func_def, scope_val) {
             (Some(def), _) => {
-                self.call_function(
-                    name,
-                    &def.params,
-                    def.ret,
-                    def.body,
-                    args,
-                    span,
-                )
-                .await
+                self.call_function(name, &def.params, def.body, args, span)
+                    .await
             }
             (None, Some(callee)) => self.call_value(callee, args, span).await,
             // Type checker / resolver guarantees function exists
@@ -260,7 +235,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         prim: PrimFn,
         args: &[ExprId],
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         // Evaluate arguments
         let arg_ids: SmallVec<[ValueId; 4]> =
             self.eval_args(args).await?.into_iter().collect();
@@ -268,7 +243,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         // Create context and call primitive
         let mut ctx = PrimCtx {
             arena: &mut self.arena,
-            type_exprs: &mut self.type_exprs,
+            runtime_types: &self.runtime_types,
             io: &mut self.io,
             span,
         };
@@ -292,7 +267,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         path: &[StringId],
         args: &[ValueId],
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         // Higher-order functions (those that invoke closures/functions passed as
         // arguments) are dispatched via `module_hofs` registry. The `PrimFn`
         // signature only receives values; it has no access to the interpreter's
@@ -304,7 +279,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             // the produced value, evaluating to `Unit` instead.
             Ok(match result {
                 HofResult::Keep => v,
-                HofResult::Discard => Value::Unit,
+                HofResult::Discard => Payload::Unit,
             })
         } else if let Some(fn_def) = self.env.get_user_module_fn(path).cloned()
         {
@@ -333,7 +308,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         fn_def: &FunctionDef,
         args: &[ValueId],
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         // Type checker guarantees arity matches
         if fn_def.params.len() != args.len() {
             typechecked!("user module call", "correct arity")
@@ -355,15 +330,14 @@ impl<I: IoContext> Interpreter<'_, I> {
         // Push a new scope for this function call
         self.env.scopes.push();
 
-        // Bind all sibling functions as Value::Function so they can be called
+        // Bind all sibling functions as Payload::Function so they can be called
         module.functions.iter().for_each(|(&name, sibling)| {
-            let val = Value::Function {
+            let val = Payload::Function {
                 name: sibling.name,
                 params: sibling.params.clone(),
-                ret: sibling.ret,
                 body: sibling.body,
             };
-            let val_id = self.arena.add(val, span);
+            let val_id = self.arena.add_typed(val, ValueMeta::untyped(), span);
             self.env.scopes.bind(name, val_id);
         });
 
@@ -373,7 +347,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         });
 
         // Bind parameters
-        self.bind_params(&fn_def.params, args, span)?;
+        self.bind_params(&fn_def.params, args, span);
 
         // Evaluate body
         let result = self.eval(fn_def.body).await;
@@ -381,8 +355,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         // Pop the scope
         self.env.scopes.pop();
 
-        // Validate return type if annotated
-        result.and_then(|val| self.check_return_type(val, fn_def.ret, span))
+        result
     }
 
     /// Evaluate a class method expression.
@@ -397,10 +370,10 @@ impl<I: IoContext> Interpreter<'_, I> {
         method: StringId,
         args: &SmallVec<[ExprId; 4]>,
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         let arg_ids = self.eval_args(args).await?;
 
-        let cmf = Value::ClassMethodFn {
+        let cmf = Payload::ClassMethodFn {
             class,
             method,
             expr_id: Some(expr_id),
@@ -437,7 +410,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         expr_id: Option<ExprId>,
         args: &[ValueId],
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         let kind =
             self.class_registry
                 .lookup_by_name(class)
@@ -451,18 +424,15 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Dispatch a class method call.
     ///
-    /// Unified entry point for all class methods. Checks for user-defined instances
-    /// first; falls back to auto-derivation for Union/Newtype, then builtin dispatch.
-    ///
-    /// User instance lookup:
-    /// 1. Check `instance_calls` map (for newtype/union where type isn't in value)
-    /// 2. Check first arg if `Value::Tagged`, `Value::Union`, or `Value::Newtype`
-    /// 3. Look up user instance by (class, type_id)
-    /// 4. If found, dispatch to generated function; else auto-derive for Union/Newtype
+    /// Unified entry point for all class methods. Dispatch order:
+    /// 1. `ExprAux::InstanceCall` metadata (exact recv type + optional resolved fn)
+    /// 2. `ValueMeta.ty` from the receiver arg (via arena metadata)
+    /// 3. `Payload::Tagged` on first arg (fallback for generic contexts)
+    /// 4. `ValueMeta.repr` from the receiver arg
+    /// 5. Builtin/HOF dispatch
     ///
     /// The `expr_id` parameter is used by nullary methods (like `Monoid:identity`)
-    /// to look up the inferred type from `mempty_types`, and for user instance
-    /// dispatch with newtype/union types.
+    /// to look up the inferred type, and for user instance dispatch.
     #[async_recursion]
     pub(super) async fn dispatch_class_method(
         &mut self,
@@ -471,117 +441,112 @@ impl<I: IoContext> Interpreter<'_, I> {
         method: StringId,
         args: &[ValueId],
         span: Span,
-    ) -> Result<Value> {
-        // Check for user-defined instance dispatch.
-        // Priority: `instance_calls` map > `Value::Tagged` (NOT `Union`/`Newtype`)
-        //
-        // IMPORTANT: Only `Value::Tagged` is used to infer user instances from
-        // the value itself. `Union`/`Newtype` values should ONLY use user instances
-        // when the typechecker explicitly marked the call site in `instance_calls`.
-        // This prevents infinite recursion inside user class implementations.
+    ) -> Result<Payload> {
+        // Resolved parameterized instance function from the typechecker.
+        // When `fun` is `Some`, the typechecker guarantees `recv` matches the
+        // type discovered by the priority chain below, so pairing `resolved_fn`
+        // with a priority 2/3 type (rather than only priority 1) is safe.
+        let resolved_fn = expr_id.and_then(|id| {
+            self.checked_exprs
+                .get(&id)
+                .and_then(|info| match &info.aux {
+                    ExprAux::InstanceCall { fun, .. } => *fun,
+                    _ => None,
+                })
+        });
+
+        // Priority 1: `ExprAux::InstanceCall` recv type
+        // Priority 2: `ValueMeta.ty` from receiver arg
+        // Priority 3: `Payload::Tagged` on first arg (generic/legacy contexts)
         let user_type_id = expr_id
-            .and_then(|id| self.instance_calls.get(&id).copied())
+            .and_then(|id| {
+                self.checked_exprs
+                    .get(&id)
+                    .and_then(|info| match &info.aux {
+                        ExprAux::InstanceCall { recv, .. } => {
+                            self.runtime_types.base_type(*recv)
+                        }
+                        _ => None,
+                    })
+            })
+            .or_else(|| {
+                args.first()
+                    .and_then(|&id| self.arena.meta(id))
+                    .and_then(|m| self.runtime_types.base_type(m.ty))
+            })
             .or_else(|| {
                 args.first()
                     .and_then(|id| self.arena.get(*id))
                     .and_then(|v| match v {
-                        Value::Tagged(ty_expr, _, _) => {
-                            self.type_exprs.base_type(*ty_expr)
-                        }
+                        Payload::Tagged(ty_id, _, _) => Some(*ty_id),
                         _ => None,
                     })
             });
-
-        // Check for resolved parameterized instance function first
-        let resolved_fn =
-            expr_id.and_then(|id| self.resolved_instance_fns.get(&id).copied());
 
         // If we have a user type, check for user instance
         if let Some(type_id) = user_type_id {
             if let Some(fn_name) = resolved_fn.or_else(|| {
                 self.user_instances.lookup_method(class, type_id, method)
             }) {
-                // Dispatch to user-defined instance method
                 let func_def = self.functions.get(&fn_name).cloned();
                 if let Some(def) = func_def {
-                    self.invoke_function(
-                        &def.params,
-                        def.ret,
-                        def.body,
-                        args,
-                        span,
-                    )
-                    .await
+                    self.invoke_function(&def.params, def.body, args, span)
+                        .await
                 } else {
-                    // User instance registered but function not found
                     typechecked!("user instance method", "registered function")
                 }
             } else {
-                // No user instance for this type; auto-derive for Union/Newtype
-                self.dispatch_with_auto_derive(
+                // No user instance for ty; try repr then builtin
+                self.dispatch_via_repr_or_builtin(
                     expr_id, class, method, args, span,
                 )
                 .await
             }
         } else {
-            // No user type from instance_calls or Tagged.
-            // For Union/Newtype, auto-derive (unwrap and dispatch to builtin).
-            // Check *all* args, not just the first; the container may not be
-            // `args[0]` (e.g. `Foldable:reduce(f, init, container)`).
-            let is_wrapped = args.iter().any(|id| {
-                self.arena.get(*id).is_some_and(|v| {
-                    matches!(v, Value::Union(..) | Value::Newtype(..))
-                })
-            });
-
-            if is_wrapped {
-                self.dispatch_with_auto_derive(
-                    expr_id, class, method, args, span,
-                )
-                .await
-            } else {
-                self.dispatch_builtin_or_hof(expr_id, class, method, args, span)
-                    .await
-            }
+            // No ty-based type; try repr then builtin
+            self.dispatch_via_repr_or_builtin(
+                expr_id, class, method, args, span,
+            )
+            .await
         }
     }
 
-    /// Dispatch with auto-derivation for Union/Newtype.
-    ///
-    /// Unwraps ALL Union/Newtype args (recursively) and dispatches to builtin methods.
-    /// This allows Union/Newtype values to use the inner type's class implementations.
+    /// Try `ValueMeta.repr` for user instance, then fall back to builtin
+    /// dispatch.
     #[async_recursion]
-    async fn dispatch_with_auto_derive(
+    async fn dispatch_via_repr_or_builtin(
         &mut self,
         expr_id: Option<ExprId>,
         class: ClassId,
         method: StringId,
         args: &[ValueId],
         span: Span,
-    ) -> Result<Value> {
-        let unwrapped_args: SmallVec<[ValueId; 4]> =
-            args.iter().map(|&id| self.unwrap_to_inner(id)).collect();
+    ) -> Result<Payload> {
+        // Priority 4: `ValueMeta.repr` from receiver arg
+        let repr_ty = args
+            .first()
+            .and_then(|&id| self.arena.meta(id))
+            .and_then(|m| self.runtime_types.base_type(m.repr));
 
-        self.dispatch_builtin_or_hof(
-            expr_id,
-            class,
-            method,
-            &unwrapped_args,
-            span,
-        )
-        .await
-    }
-
-    /// Recursively unwrap Union/Newtype wrappers until we reach a non-wrapper value.
-    ///
-    /// This handles nested wrappers correctly, e.g. `Union(_, Newtype(_, inner))`.
-    fn unwrap_to_inner(&self, val_id: ValueId) -> ValueId {
-        self.arena.get(val_id).map_or(val_id, |v| match v {
-            Value::Union(_, inner_id) | Value::Newtype(_, inner_id) => {
-                self.unwrap_to_inner(*inner_id)
+        if let Some(type_id) = repr_ty {
+            if let Some(fn_name) =
+                self.user_instances.lookup_method(class, type_id, method)
+            {
+                let func_def = self.functions.get(&fn_name).cloned();
+                if let Some(def) = func_def {
+                    self.invoke_function(&def.params, def.body, args, span)
+                        .await
+                } else {
+                    typechecked!("user instance method", "registered function")
+                }
+            } else {
+                self.dispatch_builtin_or_hof(expr_id, class, method, args, span)
+                    .await
             }
-            _ => val_id,
-        })
+        } else {
+            self.dispatch_builtin_or_hof(expr_id, class, method, args, span)
+                .await
+        }
     }
 
     /// Dispatch to builtin class method or async HOF.
@@ -595,7 +560,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         method: StringId,
         args: &[ValueId],
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         // Check for HOF first (requires async)
         if let Some(MethodFn::Hof(f)) = self.class_methods.lookup(class, method)
         {
@@ -618,7 +583,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         method: StringId,
         args: &[ValueId],
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         let val = |i: usize| {
             self.arena
                 .get(args[i])
@@ -632,12 +597,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let right = val(1);
                 let mut ctx = ClassCtx {
                     arena: &mut self.arena,
-                    type_exprs: &mut self.type_exprs,
                     ty_arena: &self.ty_arena,
+                    runtime_types: &self.runtime_types,
                     registry: &self.registry,
                     regex_cache: &self.regex_cache,
                     span,
-                    output_ty: None,
                 };
                 self.class_methods
                     .dispatch_binary(class, method, &mut ctx, &left, &right)
@@ -646,12 +610,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let v = val(0);
                 let mut ctx = ClassCtx {
                     arena: &mut self.arena,
-                    type_exprs: &mut self.type_exprs,
                     ty_arena: &self.ty_arena,
+                    runtime_types: &self.runtime_types,
                     registry: &self.registry,
                     regex_cache: &self.regex_cache,
                     span,
-                    output_ty: None,
                 };
                 self.class_methods
                     .dispatch_unary(class, method, &mut ctx, &v)
@@ -660,19 +623,21 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let id = expr_id.unwrap_or_else(|| {
                     typechecked!("nullary class method", "expression id")
                 });
-                let ty_id =
-                    self.mempty_types.get(&id).copied().unwrap_or_else(|| {
+                let ty_id = self
+                    .checked_exprs
+                    .get(&id)
+                    .map(|info| info.ty.raw())
+                    .unwrap_or_else(|| {
                         typechecked!("nullary class method", "resolved type")
                     });
                 let ty = self.ty_arena.get(ty_id).clone();
                 let mut ctx = ClassCtx {
                     arena: &mut self.arena,
-                    type_exprs: &mut self.type_exprs,
                     ty_arena: &self.ty_arena,
+                    runtime_types: &self.runtime_types,
                     registry: &self.registry,
                     regex_cache: &self.regex_cache,
                     span,
-                    output_ty: None,
                 };
                 self.class_methods
                     .dispatch_nullary(class, method, &mut ctx, &ty)
@@ -682,24 +647,24 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let id = expr_id.unwrap_or_else(|| {
                     typechecked!("convert class method", "expression id")
                 });
-                let ty_id =
-                    self.convert_targets.get(&id).copied().unwrap_or_else(
-                        || {
-                            typechecked!(
-                                "convert class method",
-                                "resolved target type"
-                            )
-                        },
-                    );
+                let ty_id = self
+                    .checked_exprs
+                    .get(&id)
+                    .map(|info| info.ty.raw())
+                    .unwrap_or_else(|| {
+                        typechecked!(
+                            "convert class method",
+                            "resolved target type"
+                        )
+                    });
                 let ty = self.ty_arena.get(ty_id).clone();
                 let mut ctx = ClassCtx {
                     arena: &mut self.arena,
-                    type_exprs: &mut self.type_exprs,
                     ty_arena: &self.ty_arena,
+                    runtime_types: &self.runtime_types,
                     registry: &self.registry,
                     regex_cache: &self.regex_cache,
                     span,
-                    output_ty: None,
                 };
                 self.class_methods
                     .dispatch_convert(class, method, &mut ctx, &v, &ty)
@@ -719,24 +684,18 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// The trampoline keeps stack depth O(1) regardless of input size.
     async fn run_hof_trampoline(
         &mut self,
-        expr_id: Option<ExprId>,
+        _expr_id: Option<ExprId>,
         starter: HofMethodFn,
         args: &[ValueId],
         span: Span,
-    ) -> Result<Value> {
-        let output_ty = expr_id.and_then(|id| {
-            self.bimap_output_types.get(&id).copied().map(|ty_id| {
-                self.type_exprs.intern_ty_lenient(ty_id, &self.ty_arena)
-            })
-        });
+    ) -> Result<Payload> {
         let mut ctx = ClassCtx {
             arena: &mut self.arena,
-            type_exprs: &mut self.type_exprs,
             ty_arena: &self.ty_arena,
+            runtime_types: &self.runtime_types,
             registry: &self.registry,
             regex_cache: &self.regex_cache,
             span,
-            output_ty,
         };
         let mut result = starter(&mut ctx, args)?;
 
@@ -750,12 +709,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                         .await?;
                     let mut ctx = ClassCtx {
                         arena: &mut self.arena,
-                        type_exprs: &mut self.type_exprs,
                         ty_arena: &self.ty_arena,
+                        runtime_types: &self.runtime_types,
                         registry: &self.registry,
                         regex_cache: &self.regex_cache,
                         span,
-                        output_ty: None,
                     };
                     result = hof::resume(&mut ctx, cont, call_result)?;
                 }
@@ -780,30 +738,22 @@ impl<I: IoContext> Interpreter<'_, I> {
             .unwrap_or_else(|| invariant!("ValueId in arena"));
 
         match callee {
-            Value::Closure {
-                params,
-                ret,
-                body,
-                env,
-            } => {
+            Payload::Closure { params, body, env } => {
                 let result = self
-                    .invoke_closure(&params, ret, body, &env, args, span)
+                    .invoke_closure(&params, body, &env, args, span)
                     .await?;
-                Ok(self.arena.add(result, span))
+                Ok(self.arena.add_typed(result, ValueMeta::untyped(), span))
             }
-            Value::Function {
-                params, ret, body, ..
-            } => {
-                let result = self
-                    .invoke_function(&params, ret, body, args, span)
-                    .await?;
-                Ok(self.arena.add(result, span))
+            Payload::Function { params, body, .. } => {
+                let result =
+                    self.invoke_function(&params, body, args, span).await?;
+                Ok(self.arena.add_typed(result, ValueMeta::untyped(), span))
             }
-            Value::ModuleFn { path } => {
+            Payload::ModuleFn { path } => {
                 let result = self.invoke_module_fn(&path, args, span).await?;
-                Ok(self.arena.add(result, span))
+                Ok(self.arena.add_typed(result, ValueMeta::untyped(), span))
             }
-            Value::ClassMethodFn {
+            Payload::ClassMethodFn {
                 class,
                 method,
                 expr_id,
@@ -811,13 +761,13 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let result = self
                     .invoke_class_method_fn(class, method, expr_id, args, span)
                     .await?;
-                Ok(self.arena.add(result, span))
+                Ok(self.arena.add_typed(result, ValueMeta::untyped(), span))
             }
-            Value::PartialApp { callee, bound } => {
+            Payload::PartialApp { callee, bound } => {
                 let result = self
                     .resolve_partial_app(callee, &bound, args, span)
                     .await?;
-                Ok(self.arena.add(result, span))
+                Ok(self.arena.add_typed(result, ValueMeta::untyped(), span))
             }
             // Type checker guarantees callee is callable
             _ => typechecked!("invoke_callable", "Callable"),
@@ -831,12 +781,12 @@ impl<I: IoContext> Interpreter<'_, I> {
         prim: PrimFn,
         args: &[ValueId],
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         let arg_ids: SmallVec<[ValueId; 4]> = args.iter().copied().collect();
 
         let mut ctx = PrimCtx {
             arena: &mut self.arena,
-            type_exprs: &mut self.type_exprs,
+            runtime_types: &self.runtime_types,
             io: &mut self.io,
             span,
         };
@@ -853,33 +803,21 @@ impl<I: IoContext> Interpreter<'_, I> {
     #[async_recursion]
     async fn call_value(
         &mut self,
-        callee: Value,
+        callee: Payload,
         args: &[ExprId],
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         match callee {
-            Value::Closure {
-                params,
-                ret,
-                body,
-                env,
-            } => {
-                self.call_closure(&params, ret, body, &env, args, span)
-                    .await
+            Payload::Closure { params, body, env } => {
+                self.call_closure(&params, body, &env, args, span).await
             }
-            Value::Function {
-                name,
-                params,
-                ret,
-                body,
-            } => {
-                self.call_function(name, &params, ret, body, args, span)
-                    .await
+            Payload::Function { name, params, body } => {
+                self.call_function(name, &params, body, args, span).await
             }
-            Value::ModuleFn { path } => {
+            Payload::ModuleFn { path } => {
                 let vals = self.eval_args(args).await?;
                 if let Some(partial) = self.maybe_partial_app(
-                    Value::ModuleFn { path: path.clone() },
+                    Payload::ModuleFn { path: path.clone() },
                     &vals,
                     span,
                 ) {
@@ -888,14 +826,14 @@ impl<I: IoContext> Interpreter<'_, I> {
                     self.invoke_module_fn(&path, &vals, span).await
                 }
             }
-            Value::ClassMethodFn {
+            Payload::ClassMethodFn {
                 class,
                 method,
                 expr_id,
             } => {
                 let vals = self.eval_args(args).await?;
                 if let Some(partial) = self.maybe_partial_app(
-                    Value::ClassMethodFn {
+                    Payload::ClassMethodFn {
                         class,
                         method,
                         expr_id,
@@ -912,16 +850,17 @@ impl<I: IoContext> Interpreter<'_, I> {
                 }
             }
             // FOREVER continuation: calling it signals loop continuation
-            Value::ForeverContinuation => {
+            Payload::ForeverContinuation => {
                 // Type checker guarantees exactly one argument
                 let new_state_expr = args
                     .first()
                     .unwrap_or_else(|| typechecked!("continuation", "1 arg"));
                 let new_state = self.eval(*new_state_expr).await?;
-                let state_id = self.arena.add(new_state, span);
-                Ok(Value::LoopContinue(state_id))
+                let meta = self.expr_meta(*new_state_expr);
+                let state_id = self.arena.add_typed(new_state, meta, span);
+                Ok(Payload::LoopContinue(state_id))
             }
-            Value::PartialApp { callee, bound } => {
+            Payload::PartialApp { callee, bound } => {
                 let vals = self.eval_args(args).await?;
                 self.resolve_partial_app(callee, &bound, &vals, span).await
             }
@@ -935,28 +874,26 @@ impl<I: IoContext> Interpreter<'_, I> {
     pub(super) async fn call_function(
         &mut self,
         name: StringId,
-        params: &[(StringId, Option<TypeExprId>)],
-        ret: Option<TypeExprId>,
+        params: &[StringId],
         body: ExprId,
         args: &[ExprId],
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         if args.len() > params.len() {
             typechecked!("call_function", "correct arity")
         }
         let vals = self.eval_args(args).await?;
         if vals.len() < params.len() {
-            let f = Value::Function {
+            let f = Payload::Function {
                 name,
                 params: params.iter().copied().collect(),
-                ret,
                 body,
             };
             Ok(self.maybe_partial_app(f, &vals, span).unwrap_or_else(|| {
                 invariant!("partial app when under-applied")
             }))
         } else {
-            self.invoke_function(params, ret, body, &vals, span).await
+            self.invoke_function(params, body, &vals, span).await
         }
     }
 
@@ -964,21 +901,19 @@ impl<I: IoContext> Interpreter<'_, I> {
     #[async_recursion]
     pub(super) async fn call_closure(
         &mut self,
-        params: &[(StringId, Option<TypeExprId>)],
-        ret: Option<TypeExprId>,
+        params: &[StringId],
         body: ExprId,
         env: &CapturedEnv,
         args: &[ExprId],
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         if args.len() > params.len() {
             typechecked!("call_closure", "correct arity")
         }
         let vals = self.eval_args(args).await?;
         if vals.len() < params.len() {
-            let c = Value::Closure {
+            let c = Payload::Closure {
                 params: params.iter().copied().collect(),
-                ret,
                 body,
                 env: env.clone().into(),
             };
@@ -986,20 +921,18 @@ impl<I: IoContext> Interpreter<'_, I> {
                 invariant!("partial app when under-applied")
             }))
         } else {
-            self.invoke_closure(params, ret, body, env, &vals, span)
-                .await
+            self.invoke_closure(params, body, env, &vals, span).await
         }
     }
 
     /// Determine the expected arity of any callable value.
     ///
     /// Returns `None` if the value is not callable.
-    fn callable_arity(&self, v: &Value) -> Option<usize> {
+    fn callable_arity(&self, v: &Payload) -> Option<usize> {
         match v {
-            Value::Closure { params, .. } | Value::Function { params, .. } => {
-                Some(params.len())
-            }
-            Value::ModuleFn { path } => self
+            Payload::Closure { params, .. }
+            | Payload::Function { params, .. } => Some(params.len()),
+            Payload::ModuleFn { path } => self
                 .env
                 .get_user_module_fn(path)
                 .map(|d| d.params.len())
@@ -1008,7 +941,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                         .get_module_fn_type(path)
                         .and_then(|s| s.arity(&self.ty_arena))
                 }),
-            Value::ClassMethodFn { class, method, .. } => {
+            Payload::ClassMethodFn { class, method, .. } => {
                 self.class_registry.lookup_by_name(*class).and_then(|kind| {
                     self.class_registry
                         .get(kind)
@@ -1017,7 +950,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                         .and_then(|spec| spec.scheme().arity(&self.ty_arena))
                 })
             }
-            Value::PartialApp { callee, bound } => self
+            Payload::PartialApp { callee, bound } => self
                 .arena
                 .get(*callee)
                 .and_then(|c| self.callable_arity(c))
@@ -1029,18 +962,19 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Check if a call is a partial application.
     ///
     /// If `args` supplies fewer arguments than `callee` expects, returns a
-    /// `Value::PartialApp` capturing the callee and bound args. Otherwise
+    /// `Payload::PartialApp` capturing the callee and bound args. Otherwise
     /// returns `None`, meaning the caller should proceed with full invocation.
     fn maybe_partial_app(
         &mut self,
-        callee: Value,
+        callee: Payload,
         args: &[ValueId],
         span: Span,
-    ) -> Option<Value> {
+    ) -> Option<Payload> {
         let arity = self.callable_arity(&callee)?;
         if args.len() < arity && !args.is_empty() {
-            let callee_id = self.arena.add(callee, span);
-            Some(Value::PartialApp {
+            let callee_id =
+                self.arena.add_typed(callee, ValueMeta::untyped(), span);
+            Some(Payload::PartialApp {
                 callee: callee_id,
                 bound: args.iter().copied().collect(),
             })
@@ -1060,7 +994,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         bound: &[ValueId],
         new_args: &[ValueId],
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         let all_args: SmallVec<[ValueId; 4]> =
             bound.iter().chain(new_args.iter()).copied().collect();
 
@@ -1077,33 +1011,23 @@ impl<I: IoContext> Interpreter<'_, I> {
         if all_args.len() > arity {
             typechecked!("resolve_partial_app", "args <= arity")
         } else if all_args.len() < arity {
-            Ok(Value::PartialApp {
+            Ok(Payload::PartialApp {
                 callee: callee_id,
                 bound: all_args,
             })
         } else {
             match callee {
-                Value::Closure {
-                    params,
-                    ret,
-                    body,
-                    env,
-                } => {
-                    self.invoke_closure(
-                        &params, ret, body, &env, &all_args, span,
-                    )
-                    .await
-                }
-                Value::Function {
-                    params, ret, body, ..
-                } => {
-                    self.invoke_function(&params, ret, body, &all_args, span)
+                Payload::Closure { params, body, env } => {
+                    self.invoke_closure(&params, body, &env, &all_args, span)
                         .await
                 }
-                Value::ModuleFn { path } => {
+                Payload::Function { params, body, .. } => {
+                    self.invoke_function(&params, body, &all_args, span).await
+                }
+                Payload::ModuleFn { path } => {
                     self.invoke_module_fn(&path, &all_args, span).await
                 }
-                Value::ClassMethodFn {
+                Payload::ClassMethodFn {
                     class,
                     method,
                     expr_id,
@@ -1114,30 +1038,6 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .await
                 }
                 _ => typechecked!("resolve_partial_app", "Callable callee"),
-            }
-        }
-    }
-
-    /// Check that a return value matches the declared return type.
-    ///
-    /// Also wraps the return value in `Value::Union` or `Value::Newtype` when
-    /// the return type is a union or newtype.
-    fn check_return_type(
-        &mut self,
-        val: Value,
-        ret: Option<TypeExprId>,
-        span: Span,
-    ) -> Result<Value> {
-        match ret {
-            None => Ok(val),
-            Some(expected_ty) => {
-                if self.value_matches_type_expr(&val, expected_ty) {
-                    Ok(self
-                        .maybe_wrap_value(&val, expected_ty, span)
-                        .unwrap_or(val))
-                } else {
-                    typechecked!("return type", "matches declaration")
-                }
             }
         }
     }
@@ -1163,7 +1063,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             Some((head, tail)) => {
                 let span = self.ast.expr_span(*head).unwrap_or_default();
                 let val = self.eval(*head).await?;
-                let val_id = self.arena.add(val, span);
+                let meta = self.expr_meta(*head);
+                let val_id = self.arena.add_typed(val, meta, span);
                 acc.push(val_id);
                 self.eval_args_rec(tail, acc).await
             }
@@ -1172,69 +1073,15 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Bind parameters to argument values in the current scope.
     ///
-    /// Validates each argument against its declared type (if any), and wraps
-    /// values in `Value::Union` or `Value::Newtype` when the parameter type
-    /// requires it.
+    /// Type checking has already validated all argument types at call sites.
     pub(super) fn bind_params(
         &mut self,
-        params: &[(StringId, Option<TypeExprId>)],
+        params: &[StringId],
         args: &[ValueId],
-        span: Span,
-    ) -> Result<()> {
-        params
-            .iter()
-            .zip(args.iter())
-            .try_for_each(|((name, ty), val_id)| {
-                // Validate type if annotated
-                ty.map_or(Ok(()), |expected_ty| {
-                    self.arena.get(*val_id).cloned().map_or(Ok(()), |val| {
-                        self.validate_param(&val, expected_ty, *name, span)
-                    })
-                })?;
-
-                // Wrap if parameter type is union/newtype (named or inline)
-                let bound_id = ty.map_or(*val_id, |expected_ty| {
-                    self.maybe_wrap_value_id(*val_id, expected_ty, span)
-                });
-
-                self.env.scopes.bind(*name, bound_id);
-                Ok(())
-            })
-    }
-
-    /// Validate a function parameter against its expected type.
-    ///
-    /// Provides detailed error messages, especially for object alias types.
-    fn validate_param(
-        &mut self,
-        val: &Value,
-        expected_ty: TypeExprId,
-        param_name: StringId,
-        span: Span,
-    ) -> Result<()> {
-        let pname = self.arena.get_str(param_name).unwrap_or("?").to_owned();
-
-        // Check if this is an object alias type and get resolved fields
-        let resolved_fields = self.resolve_object_alias_fields(expected_ty);
-
-        if let Some(fields) = resolved_fields {
-            // Unwrap Union/Newtype to find the inner Object
-            let unwrapped = self.unwrap_value_recursive(val);
-            let v = unwrapped.as_ref().unwrap_or(val);
-            // Object alias type: validate with detailed errors
-            match v {
-                Value::Object(obj) => self.validate_object_fields(
-                    obj,
-                    &fields,
-                    span,
-                    Some(&pname),
-                ),
-                _ => typechecked!("parameter type", "Object"),
-            }
-        } else if self.value_matches_type_expr(val, expected_ty) {
-            Ok(())
-        } else {
-            typechecked!("parameter type", "matches declaration")
-        }
+        _span: Span,
+    ) {
+        params.iter().zip(args.iter()).for_each(|(name, val_id)| {
+            self.env.scopes.bind(*name, *val_id);
+        });
     }
 }

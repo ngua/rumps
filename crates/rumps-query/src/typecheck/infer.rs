@@ -124,6 +124,15 @@ pub(super) struct InterpreterOutput {
     /// Maps each `NakedClassMethod`/`NakedClassMethodRef` expression to the
     /// `StringId` of the class that was resolved during type checking.
     pub(super) naked_method_classes: HashMap<ExprId, StringId>,
+    /// Mapping from AST type expression IDs to their resolved `TyId`s.
+    ///
+    /// Populated for `IS` type patterns, `AS` casts, `READ` conversions, and
+    /// match `IS` arms so the interpreter can look up the target type as a
+    /// `RuntimeTyId` without going through the `TypeExprArena`.
+    pub(super) ast_type_map: HashMap<AstTypeExprId, TyId>,
+    /// Maps `read` target `AstTypeExprId`s to their expanded underlying `TyId`
+    /// when the target is an alias type.
+    pub(super) alias_expansions: HashMap<AstTypeExprId, TyId>,
 }
 
 impl InterpreterOutput {
@@ -139,6 +148,8 @@ impl InterpreterOutput {
             instance_calls: HashMap::new(),
             resolved_instance_fns: HashMap::new(),
             naked_method_classes: HashMap::new(),
+            ast_type_map: HashMap::new(),
+            alias_expansions: HashMap::new(),
         }
     }
 
@@ -149,6 +160,12 @@ impl InterpreterOutput {
         resolve_map(&mut self.convert_targets, uf, arena);
         resolve_map(&mut self.wrap_types, uf, arena);
         resolve_map(&mut self.bimap_output_types, uf, arena);
+        self.ast_type_map
+            .values_mut()
+            .for_each(|ty| *ty = uf.resolve(*ty, arena));
+        self.alias_expansions
+            .values_mut()
+            .for_each(|ty| *ty = uf.resolve(*ty, arena));
     }
 }
 
@@ -1483,6 +1500,9 @@ impl<'a> InferCtx<'a> {
                 resolved_instance_fns: self.interp.resolved_instance_fns,
                 class_registry: self.env.class_registry,
                 naked_method_classes: self.interp.naked_method_classes,
+                expr_types: self.expr_types,
+                ast_type_map: self.interp.ast_type_map,
+                alias_expansions: self.interp.alias_expansions,
             })
         }
     }

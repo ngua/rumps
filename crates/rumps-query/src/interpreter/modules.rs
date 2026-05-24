@@ -29,15 +29,15 @@ use smallvec::SmallVec;
 use super::Interpreter;
 use crate::intern::{QualifiedName, StringId};
 use crate::io::IoContext;
-use crate::value::Value;
+use crate::value::Payload;
 use crate::{Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
     /// Evaluate a namespace path to a module function.
     ///
     /// Handles paths of any length:
-    /// - `Iter.length` -> `Value::ModuleFn { path: ["Array", "length"] }`
-    /// - `Math.Trig.sin` -> `Value::ModuleFn { path: ["Math", "Trig", "sin"] }`
+    /// - `Iter.length` -> `Payload::ModuleFn { path: ["Array", "length"] }`
+    /// - `Math.Trig.sin` -> `Payload::ModuleFn { path: ["Math", "Trig", "sin"] }`
     ///
     /// If the path doesn't resolve to a module function, falls back to
     /// treating it as a type variant path (for user-defined types registered
@@ -46,7 +46,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         segments: &[StringId],
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         // Need at least two segments: module + function (or type + variant)
         // Typechecker validates path structure
         let (&first, _) = segments
@@ -67,11 +67,11 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// The path must have at least two segments. The last segment is the
     /// function/constant name; all preceding segments form the module path.
     /// Checks both builtin and user-defined modules.
-    fn module_path(&mut self, segments: &[StringId]) -> Result<Value> {
+    fn module_path(&mut self, segments: &[StringId]) -> Result<Payload> {
         // Check for builtin module function first
         if self.env.module_fn_exists(segments) {
             let path: SmallVec<[StringId; 4]> = segments.into();
-            Ok(Value::ModuleFn { path })
+            Ok(Payload::ModuleFn { path })
         }
         // Check for builtin module constant
         else if let Some(const_id) = self.env.get_module_const(segments) {
@@ -87,7 +87,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             // Return ModuleFn; actual FunctionDef is looked up at call time
             // so siblings can be bound then (enabling mutual recursion).
             let path: SmallVec<[StringId; 4]> = segments.into();
-            Ok(Value::ModuleFn { path })
+            Ok(Payload::ModuleFn { path })
         }
         // Check for user module constant
         else if let Some(const_id) = self.env.get_user_module_const(segments)
@@ -112,7 +112,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         segments: &[StringId],
         _span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         match segments {
             [ty_name, var_name] => {
                 // Typechecker validates type names
@@ -130,8 +130,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     });
 
                 let idx = v.idx;
-                let ty_expr = self.build_variant_type_expr(type_id, idx, &[]);
-                Ok(Value::Tagged(ty_expr, idx, smallvec::SmallVec::new()))
+                Ok(Payload::Tagged(type_id, idx, smallvec::SmallVec::new()))
             }
             // Typechecker validates path structure
             _ => typechecked!("type path", "two segments"),

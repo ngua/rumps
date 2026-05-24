@@ -100,8 +100,8 @@ pub use span::Span;
 pub(crate) use token::Token;
 #[allow(unused_imports)]
 pub(crate) use value::{
-    ClassId, TypeExprArena, TypeExprId, TypeId, TypeRegistry, Value,
-    ValueArena, ValueId,
+    ClassId, Payload, TypeId, TypeRegistry, Value, ValueArena, ValueId,
+    ValueMeta,
 };
 
 /// Run a RUMPS script, outputting to stdout.

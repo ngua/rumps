@@ -9,11 +9,11 @@ use smallvec::SmallVec;
 use super::Interpreter;
 use crate::ast::{DbRef, ExprId, Intrinsic, RefTarget, SubscriptElem, TxnId};
 use crate::io::IoContext;
-use crate::value::{TypeId, Value, ValueId};
+use crate::value::{Payload, TypeId, ValueId, ValueMeta};
 use crate::{Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
-    /// Evaluate a `DbRef` literal to a `Value::Ref`.
+    /// Evaluate a `DbRef` literal to a `Payload::Ref`.
     ///
     /// Evaluates all subscript expressions and creates a first-class `Ref` value.
     #[async_recursion]
@@ -21,7 +21,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         dbref: &DbRef,
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         let (is_global, name_id) = match dbref {
             DbRef::Local(n, _) => (false, *n),
             DbRef::Global(n, _) => (true, *n),
@@ -31,7 +31,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         // Evaluate subscripts and store them
         let sub_ids = self.eval_subscripts(subs, span).await?;
 
-        Ok(Value::Ref(is_global, name_id, sub_ids))
+        Ok(Payload::Ref(is_global, name_id, sub_ids))
     }
 
     /// Dispatcher for all DB intrinsics (`@get`, `@set`, `@kill`, `@data`, `@order`, `@query`).
@@ -43,7 +43,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         val: Option<ExprId>,
         txn_id: Option<TxnId>,
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         match op {
             Intrinsic::Get => self.get(rt, txn_id, span).await,
             Intrinsic::Set => {
@@ -83,13 +83,14 @@ impl<I: IoContext> Interpreter<'_, I> {
                 match head {
                     SubscriptElem::Elem(id) => {
                         let val = self.eval(*id).await?;
-                        let val_id = self.arena.add(val, span);
+                        let meta = self.expr_meta(*id);
+                        let val_id = self.arena.add_typed(val, meta, span);
                         acc.push(val_id);
                     }
                     SubscriptElem::Spread(id) => {
                         let val = self.eval(*id).await?;
                         match &val {
-                            Value::Array(_, elems) => {
+                            Payload::Array(elems) => {
                                 elems.iter().for_each(|elem_id| {
                                     acc.push(*elem_id);
                                 });
@@ -106,7 +107,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Resolve a `RefTarget` to `(Name, Key)`.
     ///
     /// - `Inline(DbRef)`: extracts name and evaluates subscript expressions
-    /// - `Expr(ExprId)`: evaluates to `Value::Ref` with pre-evaluated subscripts
+    /// - `Expr(ExprId)`: evaluates to `Payload::Ref` with pre-evaluated subscripts
     #[async_recursion]
     async fn resolve_ref_target(
         &mut self,
@@ -120,11 +121,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             RefTarget::Expr(e) => {
                 let val = self.eval(*e).await?;
-                // Unwrap Union/Newtype to find the inner Ref
-                let unwrapped = self.unwrap_value_recursive(&val);
-                let v = unwrapped.as_ref().unwrap_or(&val);
-                match v {
-                    Value::Ref(is_global, name_id, sub_ids) => {
+                match &val {
+                    Payload::Ref(is_global, name_id, sub_ids) => {
                         let name_str = self
                             .arena
                             .get_str(*name_id)
@@ -147,7 +145,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                             .collect::<Vec<_>>();
                         Ok((name, Key::from(key)))
                     }
-                    _ => typechecked!("RefTarget::Expr", "Value::Ref"),
+                    _ => typechecked!("RefTarget::Expr", "Payload::Ref"),
                 }
             }
         }
@@ -163,7 +161,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         rt: &RefTarget,
         txn_id: Option<TxnId>,
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         let (name, key) = self.resolve_ref_target(rt).await?;
 
         let opt_val = match txn_id.and_then(|id| self.txns.get(&id)) {
@@ -175,7 +173,11 @@ impl<I: IoContext> Interpreter<'_, I> {
             None => self.make_none_storable(),
             Some(sv) => {
                 let v = self.load(sv);
-                let vid = self.arena.add(v, span);
+                let vid = self.arena.add_typed(
+                    v,
+                    self.runtime_types.meta_storable(),
+                    span,
+                );
                 self.make_some_storable(vid)
             }
         })
@@ -192,7 +194,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         expr_id: ExprId,
         txn_id: Option<TxnId>,
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         let (name, key) = self.resolve_ref_target(rt).await?;
         let val = self.eval(expr_id).await?;
         let storage_val = self.store(&val);
@@ -215,7 +217,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         };
 
         Ok(match res {
-            Ok(()) => self.make_result_ok(Value::Unit, span),
+            Ok(()) => self.make_result_ok(Payload::Unit, span),
             Err(e) => self.make_result_err(&format!("@set failed: {e}"), span),
         })
     }
@@ -230,7 +232,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         rt: &RefTarget,
         txn_id: Option<TxnId>,
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         let (name, key) = self.resolve_ref_target(rt).await?;
 
         // Global writes require transaction (typechecked); locals go direct
@@ -248,7 +250,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         };
 
         Ok(match res {
-            Ok(()) => self.make_result_ok(Value::Unit, span),
+            Ok(()) => self.make_result_ok(Payload::Unit, span),
             Err(e) => self.make_result_err(&format!("@kill failed: {e}"), span),
         })
     }
@@ -262,7 +264,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         rt: &RefTarget,
         txn_id: Option<TxnId>,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         let (name, key) = self.resolve_ref_target(rt).await?;
 
         let status = match txn_id.and_then(|id| self.txns.get(&id)) {
@@ -272,14 +274,17 @@ impl<I: IoContext> Interpreter<'_, I> {
         .unwrap_or(DataStatus::NoData);
 
         // Convert DataStatus to Tagged variant
-        let type_expr_id = self.type_exprs.named(TypeId::DATA_STATUS);
         let variant_idx = match status {
             DataStatus::NoData => 0,
             DataStatus::HasValue => 1,
             DataStatus::HasDescendants => 2,
             DataStatus::Both => 3,
         };
-        Ok(Value::Tagged(type_expr_id, variant_idx, SmallVec::new()))
+        Ok(Payload::Tagged(
+            TypeId::DATA_STATUS,
+            variant_idx,
+            SmallVec::new(),
+        ))
     }
 
     /// `@order` primitive; returns the next subscript at a given level.
@@ -292,7 +297,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         rt: &RefTarget,
         txn_id: Option<TxnId>,
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         let (name, key) = self.resolve_ref_target(rt).await?;
 
         // `@order items(1)` means "find next subscript after `1` at root level",
@@ -324,7 +329,11 @@ impl<I: IoContext> Interpreter<'_, I> {
             None => Ok(self.make_none()),
             Some(sub) => {
                 let val = self.value_from_subscript(sub);
-                let val_id = self.arena.add(val, span);
+                let val_id = self.arena.add_typed(
+                    val,
+                    self.runtime_types.meta_subscript(),
+                    span,
+                );
                 Ok(self.make_some(val_id))
             }
         }
@@ -340,7 +349,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         rt: &RefTarget,
         txn_id: Option<TxnId>,
         span: Span,
-    ) -> Result<Value> {
+    ) -> Result<Payload> {
         let (name, key) = self.resolve_ref_target(rt).await?;
 
         // The `query` API takes `Option<&Key>` for the "after" position.
@@ -356,23 +365,24 @@ impl<I: IoContext> Interpreter<'_, I> {
             None => Ok(self.make_none()),
             Some(k) => {
                 let arr = self.key_to_array(k, span);
-                let arr_id = self.arena.add(arr, span);
+                let arr_id =
+                    self.arena.add_typed(arr, ValueMeta::untyped(), span);
                 Ok(self.make_some(arr_id))
             }
         }
     }
 
     /// Convert a `Key` to an `Array[Subscript]` value.
-    fn key_to_array(&mut self, key: Key, span: Span) -> Value {
+    fn key_to_array(&mut self, key: Key, span: Span) -> Payload {
+        let sub_meta = self.runtime_types.meta_subscript();
         let elem_ids = key
             .into_iter()
             .map(|sub| {
                 let v = self.value_from_subscript(sub);
-                self.arena.add(v, span)
+                self.arena.add_typed(v, sub_meta, span)
             })
             .collect();
-        let type_expr_id = self.type_exprs.named(TypeId::SUBSCRIPT);
-        Value::Array(type_expr_id, Arc::new(elem_ids))
+        Payload::Array(Arc::new(elem_ids))
     }
 
     /// Evaluate subscript elements and build a `Key`.
@@ -408,7 +418,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                         let val = self.eval(*id).await?;
                         // Extract subscripts from the array
                         match &val {
-                            Value::Array(_, elems) => {
+                            Payload::Array(elems) => {
                                 elems.iter().for_each(|elem_id| {
                                     let elem = self
                                         .arena
