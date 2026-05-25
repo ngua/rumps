@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use super::ty::{ClassRegistry, Ty, TyArena, TyId};
-use crate::ast::ExprId;
+use crate::ast::{AstTypeExprId, ExprId};
 use crate::intern::StringId;
 use crate::value::ValueMeta;
 use crate::TypeId;
@@ -368,6 +368,9 @@ pub(crate) struct CheckedProgram {
     pub(crate) exprs: HashMap<ExprId, ExprInfo>,
     pub(crate) regex_cache: Vec<regex::Regex>,
     pub(crate) class_registry: ClassRegistry,
+    pub(crate) ast_type_map: HashMap<AstTypeExprId, RuntimeTyId>,
+    pub(crate) alias_expansions: HashMap<AstTypeExprId, RuntimeTyId>,
+    pub(crate) alias_type_expansions: HashMap<RuntimeTyId, RuntimeTyId>,
 }
 
 impl CheckedProgram {

@@ -243,7 +243,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         // Create context and call primitive
         let mut ctx = PrimCtx {
             arena: &mut self.arena,
-            runtime_types: &self.runtime_types,
+            runtime_types: &self.checked.types,
             io: &mut self.io,
             span,
         };
@@ -381,10 +381,13 @@ impl<I: IoContext> Interpreter<'_, I> {
         if let Some(partial) = self.maybe_partial_app(cmf, &arg_ids, span) {
             Ok(partial)
         } else {
-            let kind =
-                self.class_registry.lookup_by_name(class).unwrap_or_else(
-                    || typechecked!("class method class", "known class"),
-                );
+            let kind = self
+                .checked
+                .class_registry
+                .lookup_by_name(class)
+                .unwrap_or_else(|| {
+                    typechecked!("class method class", "known class")
+                });
             self.dispatch_class_method(
                 Some(expr_id),
                 kind,
@@ -411,12 +414,13 @@ impl<I: IoContext> Interpreter<'_, I> {
         args: &[ValueId],
         span: Span,
     ) -> Result<Payload> {
-        let kind =
-            self.class_registry
-                .lookup_by_name(class)
-                .unwrap_or_else(|| {
-                    typechecked!("invoke_class_method_fn", "known class")
-                });
+        let kind = self
+            .checked
+            .class_registry
+            .lookup_by_name(class)
+            .unwrap_or_else(|| {
+                typechecked!("invoke_class_method_fn", "known class")
+            });
 
         self.dispatch_class_method(expr_id, kind, method, args, span)
             .await
@@ -447,7 +451,8 @@ impl<I: IoContext> Interpreter<'_, I> {
         // type discovered by the priority chain below, so pairing `resolved_fn`
         // with a priority 2/3 type (rather than only priority 1) is safe.
         let resolved_fn = expr_id.and_then(|id| {
-            self.checked_exprs
+            self.checked
+                .exprs
                 .get(&id)
                 .and_then(|info| match &info.aux {
                     ExprAux::InstanceCall { fun, .. } => *fun,
@@ -460,11 +465,12 @@ impl<I: IoContext> Interpreter<'_, I> {
         // Priority 3: `Payload::Tagged` on first arg (generic/legacy contexts)
         let user_type_id = expr_id
             .and_then(|id| {
-                self.checked_exprs
+                self.checked
+                    .exprs
                     .get(&id)
                     .and_then(|info| match &info.aux {
                         ExprAux::InstanceCall { recv, .. } => {
-                            self.runtime_types.base_type(*recv)
+                            self.checked.types.base_type(*recv)
                         }
                         _ => None,
                     })
@@ -472,7 +478,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             .or_else(|| {
                 args.first()
                     .and_then(|&id| self.arena.meta(id))
-                    .and_then(|m| self.runtime_types.base_type(m.ty))
+                    .and_then(|m| self.checked.types.base_type(m.ty))
             })
             .or_else(|| {
                 args.first()
@@ -526,7 +532,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         let repr_ty = args
             .first()
             .and_then(|&id| self.arena.meta(id))
-            .and_then(|m| self.runtime_types.base_type(m.repr));
+            .and_then(|m| self.checked.types.base_type(m.repr));
 
         if let Some(type_id) = repr_ty {
             if let Some(fn_name) =
@@ -598,9 +604,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let mut ctx = ClassCtx {
                     arena: &mut self.arena,
                     ty_arena: &self.ty_arena,
-                    runtime_types: &self.runtime_types,
+                    runtime_types: &self.checked.types,
                     registry: &self.registry,
-                    regex_cache: &self.regex_cache,
+                    regex_cache: &self.checked.regex_cache,
                     span,
                 };
                 self.class_methods
@@ -611,9 +617,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let mut ctx = ClassCtx {
                     arena: &mut self.arena,
                     ty_arena: &self.ty_arena,
-                    runtime_types: &self.runtime_types,
+                    runtime_types: &self.checked.types,
                     registry: &self.registry,
-                    regex_cache: &self.regex_cache,
+                    regex_cache: &self.checked.regex_cache,
                     span,
                 };
                 self.class_methods
@@ -624,7 +630,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                     typechecked!("nullary class method", "expression id")
                 });
                 let ty_id = self
-                    .checked_exprs
+                    .checked
+                    .exprs
                     .get(&id)
                     .map(|info| info.ty.raw())
                     .unwrap_or_else(|| {
@@ -634,9 +641,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let mut ctx = ClassCtx {
                     arena: &mut self.arena,
                     ty_arena: &self.ty_arena,
-                    runtime_types: &self.runtime_types,
+                    runtime_types: &self.checked.types,
                     registry: &self.registry,
-                    regex_cache: &self.regex_cache,
+                    regex_cache: &self.checked.regex_cache,
                     span,
                 };
                 self.class_methods
@@ -648,7 +655,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                     typechecked!("convert class method", "expression id")
                 });
                 let ty_id = self
-                    .checked_exprs
+                    .checked
+                    .exprs
                     .get(&id)
                     .map(|info| info.ty.raw())
                     .unwrap_or_else(|| {
@@ -661,9 +669,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let mut ctx = ClassCtx {
                     arena: &mut self.arena,
                     ty_arena: &self.ty_arena,
-                    runtime_types: &self.runtime_types,
+                    runtime_types: &self.checked.types,
                     registry: &self.registry,
-                    regex_cache: &self.regex_cache,
+                    regex_cache: &self.checked.regex_cache,
                     span,
                 };
                 self.class_methods
@@ -692,9 +700,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         let mut ctx = ClassCtx {
             arena: &mut self.arena,
             ty_arena: &self.ty_arena,
-            runtime_types: &self.runtime_types,
+            runtime_types: &self.checked.types,
             registry: &self.registry,
-            regex_cache: &self.regex_cache,
+            regex_cache: &self.checked.regex_cache,
             span,
         };
         let mut result = starter(&mut ctx, args)?;
@@ -710,9 +718,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                     let mut ctx = ClassCtx {
                         arena: &mut self.arena,
                         ty_arena: &self.ty_arena,
-                        runtime_types: &self.runtime_types,
+                        runtime_types: &self.checked.types,
                         registry: &self.registry,
-                        regex_cache: &self.regex_cache,
+                        regex_cache: &self.checked.regex_cache,
                         span,
                     };
                     result = hof::resume(&mut ctx, cont, call_result)?;
@@ -786,7 +794,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
         let mut ctx = PrimCtx {
             arena: &mut self.arena,
-            runtime_types: &self.runtime_types,
+            runtime_types: &self.checked.types,
             io: &mut self.io,
             span,
         };
@@ -941,15 +949,18 @@ impl<I: IoContext> Interpreter<'_, I> {
                         .get_module_fn_type(path)
                         .and_then(|s| s.arity(&self.ty_arena))
                 }),
-            Payload::ClassMethodFn { class, method, .. } => {
-                self.class_registry.lookup_by_name(*class).and_then(|kind| {
-                    self.class_registry
+            Payload::ClassMethodFn { class, method, .. } => self
+                .checked
+                .class_registry
+                .lookup_by_name(*class)
+                .and_then(|kind| {
+                    self.checked
+                        .class_registry
                         .get(kind)
                         .method(*method, Span::default())
                         .ok()
                         .and_then(|spec| spec.scheme().arity(&self.ty_arena))
-                })
-            }
+                }),
             Payload::PartialApp { callee, bound } => self
                 .arena
                 .get(*callee)

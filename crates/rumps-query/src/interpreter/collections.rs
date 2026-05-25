@@ -536,7 +536,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .map(|c| {
                         let char_id = self.add_val(
                             Payload::Char(c),
-                            self.runtime_types.meta_char(),
+                            self.checked.types.meta_char(),
                             span,
                         );
                         Payload::some(char_id)

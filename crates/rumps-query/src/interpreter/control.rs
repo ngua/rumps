@@ -410,7 +410,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     let msg_id = self.arena.intern(msg);
                     let payload_id = self.add_val(
                         Payload::String(msg_id),
-                        self.runtime_types.meta_string(),
+                        self.checked.types.meta_string(),
                         span,
                     );
                     let err_val = Payload::Tagged(
@@ -420,7 +420,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     );
                     let arg_id = self.arena.add_typed(
                         err_val,
-                        self.runtime_types.meta_error(),
+                        self.checked.types.meta_error(),
                         span,
                     );
                     match h {

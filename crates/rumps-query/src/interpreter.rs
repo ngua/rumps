@@ -126,7 +126,7 @@ use crate::ast::{
 use crate::intern::{QualifiedName, StringId, StringInterner};
 use crate::io::IoContext;
 use crate::resolve::{InstanceMap, ResolveCtx};
-use crate::typecheck::{ExprAux, ExprInfo, RuntimeTyId};
+use crate::typecheck::{CheckedProgram, ExprAux, RuntimeTyId};
 use crate::value::{
     CapturedEnv, FunctionDef, Payload, TypeDef, TypeId, TypeRegistry,
     ValueArena, ValueId, ValueMeta, VariantDef,
@@ -177,35 +177,12 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
     /// I/O context for output operations.
     io: I,
 
-    /// Cache of compiled regex patterns (populated during typechecking).
-    ///
-    /// `Payload::Regex(idx)` holds an index into this cache.
-    regex_cache: Vec<regex::Regex>,
-
     /// Type arena from typechecking; owns all interned `Ty` values referenced
-    /// by `TyId` handles in `checked_exprs`.
+    /// by `TyId` handles during the migration.
     ty_arena: typecheck::TyArena,
 
-    /// Runtime type layer; provides `ValueMeta` constructors for scalar types.
-    runtime_types: typecheck::RuntimeTypes,
-
-    /// Unified per-expression type metadata populated during typechecking.
-    ///
-    /// Replaces the previous separate maps (`numeric_types`, `mempty_types`,
-    /// `convert_targets`, `wrap_types`, `bimap_output_types`, `regex_indices`,
-    /// `instance_calls`, `resolved_instance_fns`, `naked_method_classes`).
-    checked_exprs: HashMap<ExprId, ExprInfo>,
-
-    /// Mapping from AST type expression IDs to their resolved `RuntimeTyId`s.
-    ///
-    /// Populated from the typechecker's `ast_type_map`; used for `IS` type
-    /// patterns, `AS` casts, `READ` conversions, and match `IS` arms.
-    ast_type_map: HashMap<AstTypeExprId, RuntimeTyId>,
-
-    /// Maps alias `TypeId`s to their expanded underlying `TyId`.
-    ///
-    /// Used by `read` to resolve alias targets (e.g., `Person` -> `Object({name: String, age: Int})`).
-    alias_expansions: HashMap<AstTypeExprId, typecheck::TyId>,
+    /// Checked program metadata produced by typechecking.
+    checked: CheckedProgram,
 
     /// Registry of class methods for dispatch.
     class_methods: class::ClassMethods,
@@ -218,9 +195,6 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
     /// Populated from the typechecker's instance registry when `class`
     /// statements are processed.
     user_instances: instance::RuntimeInstanceRegistry,
-
-    /// Class registry; carries class definitions indexed by `ClassId`.
-    class_registry: typecheck::ClassRegistry,
 
     /// Resolved class instance information from the resolution pass.
     ///
@@ -315,148 +289,8 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             cm
         };
 
-        let mut ty_arena = tc.ty_arena;
-
-        // Build the unified checked_exprs map from the typechecker output.
-        // Base layer: all expression types from `expr_types`.
-        let mut checked_exprs: HashMap<ExprId, ExprInfo> = tc
-            .expr_types
-            .iter()
-            .map(|(&id, &ty)| {
-                (
-                    id,
-                    ExprInfo {
-                        ty: RuntimeTyId::from(ty),
-                        aux: ExprAux::None,
-                    },
-                )
-            })
-            .collect();
-
-        // Overlay side-map entries on top of the base layer.
-        tc.numeric_types.iter().for_each(|(&id, &ty)| {
-            checked_exprs.insert(
-                id,
-                ExprInfo {
-                    ty: RuntimeTyId::from(ty),
-                    aux: ExprAux::None,
-                },
-            );
-        });
-
-        tc.mempty_types.iter().for_each(|(&id, &ty)| {
-            checked_exprs.insert(
-                id,
-                ExprInfo {
-                    ty: RuntimeTyId::from(ty),
-                    aux: ExprAux::None,
-                },
-            );
-        });
-
-        tc.wrap_types.iter().for_each(|(&id, &ty)| {
-            checked_exprs.insert(
-                id,
-                ExprInfo {
-                    ty: RuntimeTyId::from(ty),
-                    aux: ExprAux::None,
-                },
-            );
-        });
-
-        tc.convert_targets.iter().for_each(|(&id, &ty)| {
-            checked_exprs.insert(
-                id,
-                ExprInfo {
-                    ty: RuntimeTyId::from(ty),
-                    aux: ExprAux::None,
-                },
-            );
-        });
-
-        tc.bimap_output_types.iter().for_each(|(&id, &ty)| {
-            checked_exprs.insert(
-                id,
-                ExprInfo {
-                    ty: RuntimeTyId::from(ty),
-                    aux: ExprAux::HofCall {
-                        out: RuntimeTyId::from(ty),
-                    },
-                },
-            );
-        });
-
-        tc.regex_indices.iter().for_each(|(&id, &idx)| {
-            checked_exprs.insert(
-                id,
-                ExprInfo {
-                    ty: RuntimeTyId::from(typecheck::TyArena::REGEX),
-                    aux: ExprAux::RegexIndex(idx),
-                },
-            );
-        });
-
-        tc.instance_calls.iter().for_each(|(&id, &tid)| {
-            let recv = RuntimeTyId::from(ty_arena.named(tid, SmallVec::new()));
-            let fun = tc.resolved_instance_fns.get(&id).copied();
-            let ty = checked_exprs
-                .get(&id)
-                .map_or(RuntimeTyId::from(typecheck::TyArena::UNKNOWN), |e| {
-                    e.ty
-                });
-            checked_exprs.insert(
-                id,
-                ExprInfo {
-                    ty,
-                    aux: ExprAux::InstanceCall { recv, fun },
-                },
-            );
-        });
-
-        // Handle resolved_instance_fns entries that are NOT in instance_calls.
-        // This can happen for `Expr::ClassMethod` with turbofish where the
-        // receiver type is available from the value itself (Payload::Tagged).
-        tc.resolved_instance_fns.iter().for_each(|(&id, &fun)| {
-            if !tc.instance_calls.contains_key(&id) {
-                let ty = checked_exprs.get(&id).map_or(
-                    RuntimeTyId::from(typecheck::TyArena::UNKNOWN),
-                    |e| e.ty,
-                );
-                checked_exprs.insert(
-                    id,
-                    ExprInfo {
-                        ty,
-                        aux: ExprAux::InstanceCall {
-                            recv: RuntimeTyId::UNKNOWN,
-                            fun: Some(fun),
-                        },
-                    },
-                );
-            }
-        });
-
-        tc.naked_method_classes.iter().for_each(|(&id, &class)| {
-            let ty = checked_exprs
-                .get(&id)
-                .map_or(RuntimeTyId::from(typecheck::TyArena::UNKNOWN), |e| {
-                    e.ty
-                });
-            checked_exprs.insert(
-                id,
-                ExprInfo {
-                    ty,
-                    aux: ExprAux::NakedMethod { class },
-                },
-            );
-        });
-
-        let ast_type_map: HashMap<AstTypeExprId, RuntimeTyId> = tc
-            .ast_type_map
-            .iter()
-            .map(|(&k, &v)| (k, RuntimeTyId::from(v)))
-            .collect();
-
-        let alias_expansions = tc.alias_expansions;
+        let checked = tc.to_checked();
+        let ty_arena = tc.ty_arena;
 
         Ok(Self {
             ast,
@@ -465,18 +299,13 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             txns: HashMap::new(),
             arena,
             registry,
-            regex_cache: tc.regex_cache,
-            runtime_types: typecheck::RuntimeTypes::new(ty_arena.clone()),
             ty_arena,
-            checked_exprs,
+            checked,
             functions: HashMap::new(),
             io,
-            ast_type_map,
-            alias_expansions,
             class_methods,
             module_hofs,
             user_instances: instance::RuntimeInstanceRegistry::new(),
-            class_registry: tc.class_registry,
             resolved_instances,
         })
     }
@@ -615,6 +444,15 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             &mut |s| arena.strings.intern(s),
             &mut ty_arena,
         );
+        let checked = CheckedProgram {
+            types: typecheck::RuntimeTypes::new(ty_arena.clone()),
+            exprs: HashMap::new(),
+            regex_cache: Vec::new(),
+            class_registry,
+            ast_type_map: HashMap::new(),
+            alias_expansions: HashMap::new(),
+            alias_type_expansions: HashMap::new(),
+        };
         Self {
             ast,
             env: Environment::with_interner(arena.interner()),
@@ -622,19 +460,14 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             txns: HashMap::new(),
             arena,
             registry,
-            regex_cache: Vec::new(),
-            runtime_types: typecheck::RuntimeTypes::new(ty_arena.clone()),
             ty_arena,
-            checked_exprs: HashMap::new(),
+            checked,
             functions: HashMap::new(),
             io,
-            ast_type_map: HashMap::new(),
-            alias_expansions: HashMap::new(),
             class_methods,
             module_hofs,
             user_instances: instance::RuntimeInstanceRegistry::new(),
             resolved_instances: HashMap::new(),
-            class_registry,
         }
     }
 
@@ -703,7 +536,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             }
             Expr::Postfix(op, inner) => {
                 let val = self.eval(inner).await?;
-                if self.checked_exprs.get(&id).is_some_and(|info| {
+                if self.checked.exprs.get(&id).is_some_and(|info| {
                     matches!(info.aux, ExprAux::InstanceCall { .. })
                 }) {
                     let val_id =
@@ -732,7 +565,8 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::Regex(_, _) => {
                 // Look up the cache index set during typechecking
                 let idx = self
-                    .checked_exprs
+                    .checked
+                    .exprs
                     .get(&id)
                     .and_then(|info| match info.aux {
                         ExprAux::RegexIndex(i) => Some(i),
@@ -783,7 +617,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             }
             Expr::NakedClassMethod(ref method, ref args) => {
                 let class =
-                    match self.checked_exprs.get(&id).map(|info| &info.aux) {
+                    match self.checked.exprs.get(&id).map(|info| &info.aux) {
                         Some(ExprAux::NakedMethod { class }) => *class,
                         _ => {
                             typechecked!("naked class method", "resolved class")
@@ -793,7 +627,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             }
             Expr::NakedClassMethodRef(ref method) => {
                 let class =
-                    match self.checked_exprs.get(&id).map(|info| &info.aux) {
+                    match self.checked.exprs.get(&id).map(|info| &info.aux) {
                         Some(ExprAux::NakedMethod { class }) => *class,
                         _ => typechecked!(
                             "naked class method ref",
@@ -1456,10 +1290,11 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Falls back to `ValueMeta::untyped()` if no entry exists (e.g. for
     /// internally-generated expressions with no corresponding AST node).
     fn expr_meta(&self, id: ExprId) -> ValueMeta {
-        self.checked_exprs
+        self.checked
+            .exprs
             .get(&id)
             .map_or(ValueMeta::untyped(), |info| {
-                self.runtime_types.meta(info.ty)
+                self.checked.types.meta(info.ty)
             })
     }
 
@@ -1473,7 +1308,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             Literal::Numeric(n) => {
                 // Look up the resolved type from typechecking
                 let ty = self
-                    .checked_exprs
+                    .checked
+                    .exprs
                     .get(&id)
                     .map(|info| self.ty_arena.get(info.ty.raw()));
                 match (n, ty) {
@@ -1569,7 +1405,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let s = match &val {
                     Payload::String(sid)
                         if !matches!(
-                            self.runtime_types.get(self.expr_meta(id).ty),
+                            self.checked.types.get(self.expr_meta(id).ty),
                             typecheck::Ty::Named(tid, _)
                                 if self.registry.get_def(*tid).is_some_and(
                                     |def| matches!(def, TypeDef::Alias { .. })
@@ -1700,7 +1536,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             // Coalesce: unwrap Option.Some/Result.Ok, or evaluate right for None/Err
             BinOp::Coalesce => {
                 let left = self.eval(lhs).await?;
-                if self.checked_exprs.get(&id).is_some_and(|info| {
+                if self.checked.exprs.get(&id).is_some_and(|info| {
                     matches!(info.aux, ExprAux::InstanceCall { .. })
                 }) {
                     let val_id =
@@ -1738,7 +1574,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             _ => {
                 let left = self.eval(lhs).await?;
                 let right = self.eval(rhs).await?;
-                if self.checked_exprs.get(&id).is_some_and(|info| {
+                if self.checked.exprs.get(&id).is_some_and(|info| {
                     matches!(info.aux, ExprAux::InstanceCall { .. })
                 }) {
                     self.dispatch_binop_user(id, &left, op, &right, span).await
@@ -1760,7 +1596,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<Payload> {
         let val = self.eval(operand).await?;
         if matches!(op, UnOp::Wrap)
-            && self.checked_exprs.get(&id).is_some_and(|info| {
+            && self.checked.exprs.get(&id).is_some_and(|info| {
                 matches!(info.aux, ExprAux::InstanceCall { .. })
             })
         {
@@ -1793,7 +1629,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<Payload> {
         let val = self.eval(expr).await?;
-        let checked = self.checked_exprs.get(&expr).map(|e| e.ty);
+        let checked = self.checked.exprs.get(&expr).map(|e| e.ty);
         let matched = self.check_pattern(&val, checked, pattern, span)?;
         Ok(Payload::Bool(matched))
     }
@@ -1818,16 +1654,17 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<Payload> {
         let val = self.eval(expr).await?;
         let rty = self
+            .checked
             .ast_type_map
             .get(&ast_ty)
             .copied()
             .unwrap_or(RuntimeTyId::UNKNOWN);
 
-        if let Some(target_base) = self.runtime_types.to_type_id(rty) {
+        if let Some(target_base) = self.checked.types.to_type_id(rty) {
             let val_ty = self.payload_runtime_ty(&val);
             let storable = RuntimeTyId::from(typecheck::TyArena::STORABLE);
             if target_base == TypeId::STORABLE
-                && self.runtime_types.matches(val_ty, val_ty, storable)
+                && self.checked.types.matches(val_ty, val_ty, storable)
             {
                 Ok(val)
             } else {
@@ -1853,8 +1690,12 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<Payload> {
         let val = self.eval(expr).await?;
-        let rty =
-            self.ast_type_map.get(&ast_ty).copied().unwrap_or_else(|| {
+        let rty = self
+            .checked
+            .ast_type_map
+            .get(&ast_ty)
+            .copied()
+            .unwrap_or_else(|| {
                 typechecked!("read", "resolved type in ast_type_map")
             });
 
@@ -1872,12 +1713,13 @@ impl<I: IoContext> Interpreter<'_, I> {
         ast_ty: AstTypeExprId,
         rty: RuntimeTyId,
     ) -> ReadTarget {
-        match self.runtime_types.get(rty) {
+        match self.checked.types.get(rty) {
             typecheck::Ty::Object(fields) => ReadTarget::Object(fields.clone()),
             typecheck::Ty::Named(_, _) => self
+                .checked
                 .alias_expansions
                 .get(&ast_ty)
-                .and_then(|&expanded| match self.ty_arena.get(expanded) {
+                .and_then(|&expanded| match self.checked.types.get(expanded) {
                     typecheck::Ty::Object(fields) => {
                         Some(ReadTarget::Object(fields.clone()))
                     }
@@ -1992,113 +1834,17 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Resolve a field type while reading object fields.
-    fn resolve_read_field_target(
-        &mut self,
-        ty: typecheck::TyId,
-    ) -> Option<ReadTarget> {
+    fn resolve_read_field_target(&self, ty: typecheck::TyId) -> ReadTarget {
         match self.ty_arena.get(ty).clone() {
-            typecheck::Ty::Object(fields) => Some(ReadTarget::Object(fields)),
-            typecheck::Ty::Named(type_id, args) => {
-                let alias =
-                    self.registry.get_def(type_id).and_then(|def| match def {
-                        TypeDef::Alias {
-                            type_params,
-                            target,
-                            ..
-                        } => Some((type_params.clone(), *target)),
-                        _ => None,
-                    });
-                match alias {
-                    Some((params, target)) => {
-                        let subst: indexmap::IndexMap<
-                            StringId,
-                            typecheck::TyId,
-                        > = params
-                            .iter()
-                            .zip(args.iter())
-                            .map(|(&p, &a)| (p, a))
-                            .collect();
-                        let expanded = self.read_ast_type_to_ty(target, &subst);
-                        self.resolve_read_field_target(expanded)
-                    }
-                    None => Some(ReadTarget::Ty(ty)),
-                }
-            }
-            _ => Some(ReadTarget::Ty(ty)),
-        }
-    }
-
-    /// Convert an alias target AST type to a runtime `TyId` for `read`.
-    fn read_ast_type_to_ty(
-        &mut self,
-        ty: AstTypeExprId,
-        subst: &indexmap::IndexMap<StringId, typecheck::TyId>,
-    ) -> typecheck::TyId {
-        match self.ast.get_type_expr(ty).cloned() {
-            Some(AstTypeExpr::Named(name)) => subst
-                .get(&name.local_name())
-                .copied()
-                .or_else(|| {
-                    self.registry.lookup(&name).map(|id| {
-                        Self::type_id_to_ty_id(id, &mut self.ty_arena)
-                    })
-                })
-                .unwrap_or(typecheck::TyArena::ERROR),
-            Some(AstTypeExpr::App(name, args)) => {
-                let arg_tys: SmallVec<[typecheck::TyId; 4]> = args
-                    .iter()
-                    .map(|&a| self.read_ast_type_to_ty(a, subst))
-                    .collect();
-                self.registry
-                    .lookup(&name)
-                    .map(|id| match id {
-                        TypeId::ARRAY => arg_tys
-                            .first()
-                            .map_or(typecheck::TyArena::ERROR, |&a| {
-                                self.ty_arena.array(a)
-                            }),
-                        TypeId::OPTION => arg_tys
-                            .first()
-                            .map_or(typecheck::TyArena::ERROR, |&a| {
-                                self.ty_arena.option(a)
-                            }),
-                        TypeId::RESULT => {
-                            match (arg_tys.first(), arg_tys.get(1)) {
-                                (Some(&ok), Some(&err)) => {
-                                    self.ty_arena.result(ok, err)
-                                }
-                                _ => typecheck::TyArena::ERROR,
-                            }
-                        }
-                        TypeId::MAP => {
-                            match (arg_tys.first(), arg_tys.get(1)) {
-                                (Some(&k), Some(&v)) => {
-                                    self.ty_arena.map_ty(k, v)
-                                }
-                                _ => typecheck::TyArena::ERROR,
-                            }
-                        }
-                        _ => self.ty_arena.named(id, arg_tys),
-                    })
-                    .unwrap_or(typecheck::TyArena::ERROR)
-            }
-            Some(AstTypeExpr::Object(fields)) => {
-                let fs = fields
-                    .iter()
-                    .map(|(name, fty)| {
-                        (*name, self.read_ast_type_to_ty(*fty, subst))
-                    })
-                    .collect();
-                self.ty_arena.alloc(typecheck::Ty::Object(fs))
-            }
-            Some(AstTypeExpr::Tuple(elems)) => {
-                let ts = elems
-                    .iter()
-                    .map(|&e| self.read_ast_type_to_ty(e, subst))
-                    .collect();
-                self.ty_arena.alloc(typecheck::Ty::Tuple(ts))
-            }
-            _ => typecheck::TyArena::ERROR,
+            typecheck::Ty::Object(fields) => ReadTarget::Object(fields),
+            typecheck::Ty::Named(_, _) => self
+                .checked
+                .alias_type_expansions
+                .get(&RuntimeTyId::from(ty))
+                .map_or(ReadTarget::Ty(ty), |&expanded| {
+                    self.resolve_read_field_target(expanded.raw())
+                }),
+            _ => ReadTarget::Ty(ty),
         }
     }
 
@@ -2154,7 +1900,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     Some(jv) => {
                         let fval = Payload::Json(Arc::new(jv.clone()));
                         match self.resolve_read_field_target(fty) {
-                            Some(ReadTarget::Ty(tid)) => {
+                            ReadTarget::Ty(tid) => {
                                 match self.read_ty_value(&fval, tid, span) {
                                     Ok(rv) if rv.is_ok() => {
                                         let inner = self
@@ -2177,7 +1923,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                                     }
                                 }
                             }
-                            Some(ReadTarget::Object(fields)) => {
+                            ReadTarget::Object(fields) => {
                                 match self.read_to_object(&fval, &fields, span)
                                 {
                                     Ok(rv) if rv.is_ok() => {
@@ -2200,11 +1946,6 @@ impl<I: IoContext> Interpreter<'_, I> {
                                         err = Some(e.to_string());
                                     }
                                 }
-                            }
-                            None => {
-                                err = Some(format!(
-                                    "unsupported field type for `{fname}`"
-                                ));
                             }
                         }
                     }
@@ -2242,7 +1983,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     Some(&vid) => match self.arena.get(vid).cloned() {
                         Some(fval) => {
                             match self.resolve_read_field_target(fty) {
-                                Some(ReadTarget::Ty(tid)) => match self
+                                ReadTarget::Ty(tid) => match self
                                     .read_ty_value(&fval, tid, span)
                                 {
                                     Ok(rv) if rv.is_ok() => {
@@ -2265,7 +2006,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                                         err = Some(e.to_string());
                                     }
                                 },
-                                Some(ReadTarget::Object(fields)) => {
+                                ReadTarget::Object(fields) => {
                                     match self
                                         .read_to_object(&fval, &fields, span)
                                     {
@@ -2291,9 +2032,6 @@ impl<I: IoContext> Interpreter<'_, I> {
                                             err = Some(e.to_string());
                                         }
                                     }
-                                }
-                                None => {
-                                    result.insert(fid, vid);
                                 }
                             }
                         }
@@ -2489,7 +2227,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Some(serde_json::Value::Bool(b)) => {
                 let val_id = self.add_val(
                     Payload::Bool(b),
-                    self.runtime_types.meta_bool(),
+                    self.checked.types.meta_bool(),
                     span,
                 );
                 Ok(self.make_some_scalar(val_id))
@@ -2500,9 +2238,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                         let v = Payload::Float(OrderedFloat(
                             n.as_f64().unwrap_or(0.0),
                         ));
-                        (v, self.runtime_types.meta_float())
+                        (v, self.checked.types.meta_float())
                     },
-                    |i| (Payload::Int(i), self.runtime_types.meta_int()),
+                    |i| (Payload::Int(i), self.checked.types.meta_int()),
                 );
                 let val_id = self.add_val(val, meta, span);
                 Ok(self.make_some_scalar(val_id))
@@ -2511,7 +2249,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let sid = self.arena.intern(&s);
                 let val_id = self.add_val(
                     Payload::String(sid),
-                    self.runtime_types.meta_string(),
+                    self.checked.types.meta_string(),
                     span,
                 );
                 Ok(self.make_some_scalar(val_id))

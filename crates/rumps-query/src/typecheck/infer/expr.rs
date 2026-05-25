@@ -3112,6 +3112,7 @@ impl InferCtx<'_> {
     /// If `ty` is `Ty::Named(id, args)` and `id` is an alias, expand it and
     /// store the mapping in `alias_expansions` keyed by `AstTypeExprId`.
     fn expand_alias_for_read(&mut self, ast_ty: AstTypeExprId, ty: TyId) {
+        self.collect_read_alias_expansions(ty, &mut HashSet::new());
         if let Ty::Named(type_id, args) = self.ty_arena.get(ty).clone() {
             if let Some(TypeDef::Alias {
                 target,
@@ -3128,6 +3129,100 @@ impl InferCtx<'_> {
                     .collect();
                 let expanded = self.convert().ast_type_to_ty(target, &subst);
                 self.interp.alias_expansions.insert(ast_ty, expanded);
+                self.interp.alias_type_expansions.insert(ty, expanded);
+                self.collect_read_alias_expansions(
+                    expanded,
+                    &mut HashSet::new(),
+                );
+            }
+        }
+    }
+
+    fn collect_read_alias_expansions(
+        &mut self,
+        ty: TyId,
+        seen: &mut HashSet<TyId>,
+    ) {
+        if seen.insert(ty) {
+            match self.ty_arena.get(ty).clone() {
+                Ty::Named(type_id, args) => {
+                    let alias = self.registry.get_def(type_id).and_then(
+                        |def| match def {
+                            TypeDef::Alias {
+                                target,
+                                type_params,
+                                ..
+                            } => Some((*target, type_params.clone())),
+                            _ => None,
+                        },
+                    );
+                    match alias {
+                        Some((target, type_params)) => {
+                            let subst: IndexMap<StringId, TyId> = type_params
+                                .iter()
+                                .zip(args.iter())
+                                .map(|(&p, &a)| (p, a))
+                                .collect();
+                            let expanded =
+                                self.convert().ast_type_to_ty(target, &subst);
+                            self.interp
+                                .alias_type_expansions
+                                .insert(ty, expanded);
+                            self.collect_read_alias_expansions(expanded, seen);
+                        }
+                        None => {
+                            args.iter().for_each(|&arg| {
+                                self.collect_read_alias_expansions(arg, seen)
+                            });
+                        }
+                    }
+                }
+                Ty::Array(inner) | Ty::Option(inner) => {
+                    self.collect_read_alias_expansions(inner, seen);
+                }
+                Ty::Result(ok, err) | Ty::Map(ok, err) => {
+                    self.collect_read_alias_expansions(ok, seen);
+                    self.collect_read_alias_expansions(err, seen);
+                }
+                Ty::Tuple(elems) | Ty::Union(_, elems) => {
+                    elems.iter().for_each(|&elem| {
+                        self.collect_read_alias_expansions(elem, seen)
+                    });
+                }
+                Ty::Fn(params, ret) => {
+                    params.iter().for_each(|&param| {
+                        self.collect_read_alias_expansions(param, seen)
+                    });
+                    self.collect_read_alias_expansions(ret, seen);
+                }
+                Ty::Object(fields) => {
+                    fields.values().for_each(|&field| {
+                        self.collect_read_alias_expansions(field, seen)
+                    });
+                }
+                Ty::Var(_)
+                | Ty::Bool
+                | Ty::Int
+                | Ty::Word
+                | Ty::Float
+                | Ty::Char
+                | Ty::String
+                | Ty::Unit
+                | Ty::Time
+                | Ty::Range
+                | Ty::Json
+                | Ty::Ordering
+                | Ty::DataStatus
+                | Ty::FilePath
+                | Ty::Path
+                | Ty::Regex
+                | Ty::RuntimeError
+                | Ty::Local
+                | Ty::Global
+                | Ty::Apply(_, _)
+                | Ty::AssocType(_, _, _)
+                | Ty::Unknown
+                | Ty::Error => {}
             }
         }
     }

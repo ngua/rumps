@@ -56,6 +56,7 @@ impl MethodSpec {
 }
 
 /// Full definition of a type class, keyed by `ClassId`.
+#[derive(Clone)]
 pub(crate) struct ClassDef {
     pub(crate) name: StringId,
     pub(crate) shape: ClassShape,
@@ -89,6 +90,7 @@ impl ClassDef {
 }
 
 /// Registry of all known type classes, indexed by `ClassId`.
+#[derive(Clone)]
 pub(crate) struct ClassRegistry {
     defs: Vec<ClassDef>,
     by_name: HashMap<StringId, ClassId>,

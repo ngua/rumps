@@ -85,17 +85,16 @@ pub(crate) struct TypecheckOutput {
     /// Maps `read` target `AstTypeExprId`s to their expanded underlying `TyId`
     /// when the target is an alias type.
     pub(crate) alias_expansions: HashMap<AstTypeExprId, TyId>,
+    /// Maps solved alias `TyId`s to their expanded underlying `TyId`s.
+    pub(crate) alias_type_expansions: HashMap<TyId, TyId>,
 }
 
 impl TypecheckOutput {
     /// Build a `CheckedProgram` from this output.
     ///
-    /// Clones the type arena (since `TypecheckOutput` still owns it for the
-    /// current interpreter pipeline) and collects per-expression metadata
-    /// into a unified `HashMap<ExprId, ExprInfo>`.
-    ///
-    /// This is a transitional method; a later phase will switch the
-    /// interpreter to consume `CheckedProgram` directly.
+    /// Clones the type arena while `TypecheckOutput` still owns it for
+    /// migration-only interpreter helpers, then collects per-expression
+    /// metadata into a unified `HashMap<ExprId, ExprInfo>`.
     pub(crate) fn to_checked(&self) -> CheckedProgram {
         let mut arena = self.ty_arena.clone();
 
@@ -114,8 +113,6 @@ impl TypecheckOutput {
             })
             .collect();
 
-        // Overlay side-map entries (which carry more specific `ty` values
-        // for numeric literals, mempty, wrap, convert, bimap).
         self.numeric_types.iter().for_each(|(&id, &ty)| {
             exprs.insert(
                 id,
@@ -193,6 +190,24 @@ impl TypecheckOutput {
             );
         });
 
+        self.resolved_instance_fns.iter().for_each(|(&id, &fun)| {
+            if !self.instance_calls.contains_key(&id) {
+                let ty = exprs
+                    .get(&id)
+                    .map_or(RuntimeTyId::from(TyArena::UNKNOWN), |e| e.ty);
+                exprs.insert(
+                    id,
+                    ExprInfo {
+                        ty,
+                        aux: ExprAux::InstanceCall {
+                            recv: RuntimeTyId::UNKNOWN,
+                            fun: Some(fun),
+                        },
+                    },
+                );
+            }
+        });
+
         self.naked_method_classes.iter().for_each(|(&id, &class)| {
             let ty = exprs
                 .get(&id)
@@ -206,11 +221,32 @@ impl TypecheckOutput {
             );
         });
 
+        let ast_type_map = self
+            .ast_type_map
+            .iter()
+            .map(|(&id, &ty)| (id, RuntimeTyId::from(ty)))
+            .collect();
+        let alias_expansions = self
+            .alias_expansions
+            .iter()
+            .map(|(&id, &ty)| (id, RuntimeTyId::from(ty)))
+            .collect();
+        let alias_type_expansions = self
+            .alias_type_expansions
+            .iter()
+            .map(|(&alias, &expanded)| {
+                (RuntimeTyId::from(alias), RuntimeTyId::from(expanded))
+            })
+            .collect();
+
         CheckedProgram {
             types: RuntimeTypes::new(arena),
             exprs,
-            regex_cache: Vec::new(),
-            class_registry: ClassRegistry::empty(),
+            regex_cache: self.regex_cache.clone(),
+            class_registry: self.class_registry.clone(),
+            ast_type_map,
+            alias_expansions,
+            alias_type_expansions,
         }
     }
 }

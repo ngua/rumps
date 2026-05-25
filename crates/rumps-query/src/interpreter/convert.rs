@@ -235,9 +235,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         let ctx = ClassCtx {
             arena: &mut self.arena,
             ty_arena: &self.ty_arena,
-            runtime_types: &self.runtime_types,
+            runtime_types: &self.checked.types,
             registry: &self.registry,
-            regex_cache: &self.regex_cache,
+            regex_cache: &self.checked.regex_cache,
             span: Span::default(),
         };
         class::Display::format(&ctx, v)
@@ -254,9 +254,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         let ctx = ClassCtx {
             arena: &mut self.arena,
             ty_arena: &self.ty_arena,
-            runtime_types: &self.runtime_types,
+            runtime_types: &self.checked.types,
             registry: &self.registry,
-            regex_cache: &self.regex_cache,
+            regex_cache: &self.checked.regex_cache,
             span: Span::default(),
         };
         class::Into::jsonify(&ctx, v)

@@ -175,7 +175,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let v = self.load(sv);
                 let vid = self.arena.add_typed(
                     v,
-                    self.runtime_types.meta_storable(),
+                    self.checked.types.meta_storable(),
                     span,
                 );
                 self.make_some_storable(vid)
@@ -331,7 +331,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let val = self.value_from_subscript(sub);
                 let val_id = self.arena.add_typed(
                     val,
-                    self.runtime_types.meta_subscript(),
+                    self.checked.types.meta_subscript(),
                     span,
                 );
                 Ok(self.make_some(val_id))
@@ -374,7 +374,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Convert a `Key` to an `Array[Subscript]` value.
     fn key_to_array(&mut self, key: Key, span: Span) -> Payload {
-        let sub_meta = self.runtime_types.meta_subscript();
+        let sub_meta = self.checked.types.meta_subscript();
         let elem_ids = key
             .into_iter()
             .map(|sub| {

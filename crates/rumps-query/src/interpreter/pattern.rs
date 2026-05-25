@@ -40,9 +40,9 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<bool> {
         match pattern {
             TypePattern::Type(ast_ty_id) => {
-                match self.ast_type_map.get(ast_ty_id).copied() {
+                match self.checked.ast_type_map.get(ast_ty_id).copied() {
                     Some(expected)
-                        if !self.runtime_types.contains_var(expected) =>
+                        if !self.checked.types.contains_var(expected) =>
                     {
                         let payload_ty = self.payload_runtime_ty(val);
                         let actual = if payload_ty == RuntimeTyId::UNKNOWN {
@@ -51,7 +51,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                             payload_ty
                         };
                         let matched = self
-                            .runtime_types
+                            .checked
+                            .types
                             .matches(actual, actual, expected);
                         Ok(matched
                             || self.alias_structurally_matches(
@@ -65,7 +66,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                         } else {
                             payload_ty
                         };
-                        Ok(self.runtime_types.matches(actual, actual, expected))
+                        Ok(self.checked.types.matches(actual, actual, expected))
                     }
                     None => {
                         typechecked!("type pattern", "in ast_type_map")
@@ -88,6 +89,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                         let obj = obj.clone();
                         fields.iter().try_fold(true, |acc, (name, ty_id)| {
                             let expected = self
+                                .checked
                                 .ast_type_map
                                 .get(ty_id)
                                 .copied()
@@ -113,7 +115,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// objects recursively. For primitives, uses `payload_runtime_ty` + `matches`.
     /// For objects, recurses into fields structurally.
     fn value_matches_type(&self, val: &Payload, expected: RuntimeTyId) -> bool {
-        match self.runtime_types.get(expected) {
+        match self.checked.types.get(expected) {
             Ty::Object(fields) => match val {
                 Payload::Object(obj) => fields.iter().all(|(name, &ty)| {
                     obj.get(name).is_some_and(|&vid| {
@@ -124,7 +126,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             },
             _ => {
                 let actual = self.payload_runtime_ty(val);
-                self.runtime_types.matches(actual, actual, expected)
+                self.checked.types.matches(actual, actual, expected)
             }
         }
     }
@@ -136,7 +138,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> bool {
         self.arena
             .meta(id)
-            .is_some_and(|m| self.runtime_types.matches(m.ty, m.repr, expected))
+            .is_some_and(|m| self.checked.types.matches(m.ty, m.repr, expected))
             || self
                 .arena
                 .get(id)
@@ -156,7 +158,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         ast_ty_id: AstTypeExprId,
         _span: Span,
     ) -> bool {
-        if let Some(&expanded) = self.alias_expansions.get(&ast_ty_id) {
+        if let Some(&expanded) = self.checked.alias_expansions.get(&ast_ty_id) {
             self.value_matches_type(val, RuntimeTyId::from(expanded))
         } else {
             self.alias_structurally_matches_inner(val, expected)
@@ -168,7 +170,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         val: &Payload,
         expected: RuntimeTyId,
     ) -> bool {
-        let type_id = match self.runtime_types.get(expected) {
+        let type_id = match self.checked.types.get(expected) {
             Ty::Named(id, _) => *id,
             _ => TypeId::UNKNOWN,
         };
@@ -182,7 +184,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     type_params,
                     ..
                 } => {
-                    let args = match self.runtime_types.get(expected) {
+                    let args = match self.checked.types.get(expected) {
                         Ty::Named(_, args) => args.clone(),
                         _ => Default::default(),
                     };
@@ -450,26 +452,29 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<Option<Vec<(StringId, ValueId)>>> {
         let expected = self
+            .checked
             .ast_type_map
             .get(&ast_ty_id)
             .copied()
             .unwrap_or_else(|| typechecked!("match IS", "in ast_type_map"));
-        let matched = if self.runtime_types.contains_var(expected) {
+        let matched = if self.checked.types.contains_var(expected) {
             let actual_base = val.base_type();
-            self.runtime_types
+            self.checked
+                .types
                 .base_type(expected)
                 .is_some_and(|eb| actual_base == eb)
         } else {
             let payload_ty = self.payload_runtime_ty(val);
             let actual = if payload_ty == RuntimeTyId::UNKNOWN {
-                self.checked_exprs
+                self.checked
+                    .exprs
                     .get(&scrutinee)
                     .map(|e| e.ty)
                     .unwrap_or(payload_ty)
             } else {
                 payload_ty
             };
-            self.runtime_types.matches(actual, actual, expected)
+            self.checked.types.matches(actual, actual, expected)
         };
         if matched {
             let val_id =

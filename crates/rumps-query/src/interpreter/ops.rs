@@ -167,9 +167,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         let mut ctx = ClassCtx {
             arena: &mut self.arena,
             ty_arena: &self.ty_arena,
-            runtime_types: &self.runtime_types,
+            runtime_types: &self.checked.types,
             registry: &self.registry,
-            regex_cache: &self.regex_cache,
+            regex_cache: &self.checked.regex_cache,
             span,
         };
         self.class_methods
@@ -266,7 +266,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             UnOp::Wrap => {
                 // Look up target type (defaulted to `Option[T]` during constraint solving)
                 let ty_id = self
-                    .checked_exprs
+                    .checked
+                    .exprs
                     .get(&id)
                     .map(|info| info.ty.raw())
                     .unwrap_or_else(|| typechecked!("?", "resolved wrap type"));
@@ -288,9 +289,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         let mut ctx = ClassCtx {
             arena: &mut self.arena,
             ty_arena: &self.ty_arena,
-            runtime_types: &self.runtime_types,
+            runtime_types: &self.checked.types,
             registry: &self.registry,
-            regex_cache: &self.regex_cache,
+            regex_cache: &self.checked.regex_cache,
             span,
         };
         self.class_methods.dispatch_unary(kind, mid, &mut ctx, v)
@@ -308,9 +309,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         let mut ctx = ClassCtx {
             arena: &mut self.arena,
             ty_arena: &self.ty_arena,
-            runtime_types: &self.runtime_types,
+            runtime_types: &self.checked.types,
             registry: &self.registry,
-            regex_cache: &self.regex_cache,
+            regex_cache: &self.checked.regex_cache,
             span,
         };
         self.class_methods
@@ -381,9 +382,13 @@ impl<I: IoContext> Interpreter<'_, I> {
             Payload::Regex(idx) => idx,
             _ => typechecked!("MATCHES", "Regex"),
         };
-        let re = self.regex_cache.get(idx as usize).unwrap_or_else(|| {
-            typechecked!("MATCHES regex", "valid cache index")
-        });
+        let re =
+            self.checked
+                .regex_cache
+                .get(idx as usize)
+                .unwrap_or_else(|| {
+                    typechecked!("MATCHES regex", "valid cache index")
+                });
         Ok(Payload::Bool(re.is_match(&text)))
     }
 }

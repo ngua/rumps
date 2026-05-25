@@ -133,6 +133,11 @@ pub(super) struct InterpreterOutput {
     /// Maps `read` target `AstTypeExprId`s to their expanded underlying `TyId`
     /// when the target is an alias type.
     pub(super) alias_expansions: HashMap<AstTypeExprId, TyId>,
+    /// Maps solved alias `TyId`s to their expanded underlying `TyId`s.
+    ///
+    /// Populated for `read` targets so runtime object-field reads can resolve
+    /// nested aliases without reinterpreting AST type expressions.
+    pub(super) alias_type_expansions: HashMap<TyId, TyId>,
 }
 
 impl InterpreterOutput {
@@ -150,6 +155,7 @@ impl InterpreterOutput {
             naked_method_classes: HashMap::new(),
             ast_type_map: HashMap::new(),
             alias_expansions: HashMap::new(),
+            alias_type_expansions: HashMap::new(),
         }
     }
 
@@ -166,6 +172,12 @@ impl InterpreterOutput {
         self.alias_expansions
             .values_mut()
             .for_each(|ty| *ty = uf.resolve(*ty, arena));
+        self.alias_type_expansions = mem::take(&mut self.alias_type_expansions)
+            .into_iter()
+            .map(|(alias, expanded)| {
+                (uf.resolve(alias, arena), uf.resolve(expanded, arena))
+            })
+            .collect();
     }
 }
 
@@ -1503,6 +1515,7 @@ impl<'a> InferCtx<'a> {
                 expr_types: self.expr_types,
                 ast_type_map: self.interp.ast_type_map,
                 alias_expansions: self.interp.alias_expansions,
+                alias_type_expansions: self.interp.alias_type_expansions,
             })
         }
     }

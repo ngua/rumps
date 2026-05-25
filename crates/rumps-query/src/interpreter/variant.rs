@@ -58,7 +58,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         let msg_id = self.arena.intern(msg);
         let msg_val = self.add_val(
             Payload::String(msg_id),
-            self.runtime_types.meta_string(),
+            self.checked.types.meta_string(),
             span,
         );
         Payload::err(msg_val)
@@ -124,7 +124,8 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// the appropriate empty value.
     pub(super) fn mempty(&mut self, id: ExprId, span: Span) -> Result<Payload> {
         let ty_id = self
-            .checked_exprs
+            .checked
+            .exprs
             .get(&id)
             .map(|info| info.ty.raw())
             .unwrap_or_else(|| typechecked!("mempty", "resolved type"));
@@ -134,9 +135,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         let mut ctx = ClassCtx {
             arena: &mut self.arena,
             ty_arena: &self.ty_arena,
-            runtime_types: &self.runtime_types,
+            runtime_types: &self.checked.types,
             registry: &self.registry,
-            regex_cache: &self.regex_cache,
+            regex_cache: &self.checked.regex_cache,
             span,
         };
         self.class_methods
