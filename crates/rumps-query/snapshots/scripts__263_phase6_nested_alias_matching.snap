@@ -1,0 +1,21 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+assertion_line: 38
+description: "newtype Id = Int\nunion MaybeId = Id | String\nnewtype Inner = { id: Id }\nunion MaybeInner = Inner | String\nnewtype Person = { inner: Inner }\n\nfun main() {\n  write 1 is Id\n  write 1 is MaybeId\n  write { id: 1 } is { id: Id }\n  write { id: 1, extra: true } is MaybeInner\n  write { id: 1, extra: true } is Inner\n  write { inner: { id: 1, extra: true }, extra: \"x\" } is Person\n  write { inner: { id: \"bad\" } } is Person\n\n  let read-person = { \"inner\": { \"id\": 7 } } read Person\n  write read-person is Result.Ok(_)\n  write read-person!.inner.id\n\n  let read-id = \"8\" read Id\n  write read-id is Result.Ok(_)\n  write read-id! is Id\n\n  let read-inners = [{ \"id\": 9 }] as Json read Array[Inner]\n  write read-inners is Result.Ok(_)\n  write read-inners![0].id\n\n  let read-opt = { \"id\": 10 } as Json read Option[Inner]\n  write read-opt is Result.Ok(_)\n  write read-opt! is Option.Some(_)\n  write read-opt!!.id\n}\n"
+---
+true
+true
+true
+true
+true
+true
+false
+true
+7
+true
+true
+true
+9
+true
+true
+10

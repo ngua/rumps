@@ -6,10 +6,14 @@
 
 use std::collections::HashMap;
 
+use indexmap::IndexMap;
+use smallvec::SmallVec;
+
 use super::ty::{ClassRegistry, Ty, TyArena, TyId};
+use super::Scheme;
 use crate::ast::{AstTypeExprId, ExprId};
 use crate::intern::StringId;
-use crate::value::ValueMeta;
+use crate::value::{MapKey, Payload, Value, ValueArena, ValueMeta};
 use crate::TypeId;
 
 /// A solved `TyId`; guaranteed by the caller (the typechecker) to contain no
@@ -24,9 +28,6 @@ impl From<TyId> for RuntimeTyId {
 }
 
 impl RuntimeTyId {
-    /// Sentinel for unknown / unresolved types during migration.
-    pub(crate) const UNKNOWN: Self = Self(TyArena::UNKNOWN);
-
     /// Access the underlying `TyId`.
     pub(crate) fn raw(self) -> TyId {
         self.0
@@ -36,24 +37,23 @@ impl RuntimeTyId {
 /// Holds a `TyArena` and provides runtime type queries for the interpreter.
 pub(crate) struct RuntimeTypes {
     arena: TyArena,
+    alias_type_expansions: HashMap<RuntimeTyId, RuntimeTyId>,
 }
 
 impl RuntimeTypes {
-    pub(crate) fn new(arena: TyArena) -> Self {
-        Self { arena }
+    pub(crate) fn new(
+        arena: TyArena,
+        alias_type_expansions: HashMap<RuntimeTyId, RuntimeTyId>,
+    ) -> Self {
+        Self {
+            arena,
+            alias_type_expansions,
+        }
     }
 
     /// Look up the `Ty` for a `RuntimeTyId`.
     pub(crate) fn get(&self, t: RuntimeTyId) -> &Ty {
         self.arena.get(t.0)
-    }
-
-    /// If the type is `Ty::Named(id, _)`, return `Some(id)`. Otherwise `None`.
-    pub(crate) fn base_type(&self, t: RuntimeTyId) -> Option<TypeId> {
-        match self.get(t) {
-            Ty::Named(id, _) => Some(*id),
-            _ => None,
-        }
     }
 
     /// Convert a `RuntimeTyId` to its corresponding `TypeId`.
@@ -79,6 +79,7 @@ impl RuntimeTypes {
             Ty::FilePath => Some(TypeId::FILEPATH),
             Ty::Path => Some(TypeId::PATH),
             Ty::Regex => Some(TypeId::REGEX),
+            Ty::RuntimeError => Some(TypeId::ERROR),
             Ty::Local => Some(TypeId::LOCAL),
             Ty::Global => Some(TypeId::GLOBAL),
             Ty::Array(_) => Some(TypeId::ARRAY),
@@ -92,17 +93,29 @@ impl RuntimeTypes {
     }
 
     /// Unwrap newtype wrappers to find the transparent representation type.
-    ///
-    /// For now, this returns the input unchanged since we do not yet have
-    /// newtype metadata. Will be fleshed out in later phases.
     pub(crate) fn repr(&self, t: RuntimeTyId) -> RuntimeTyId {
-        t
+        self.alias_type_expansions
+            .get(&t)
+            .map_or(t, |&expanded| self.repr(expanded))
+    }
+
+    /// Build `ValueMeta` for a value widened into a union.
+    pub(crate) fn union_meta(
+        &self,
+        ty: RuntimeTyId,
+        member: RuntimeTyId,
+    ) -> ValueMeta {
+        ValueMeta {
+            ty,
+            repr: self.repr(member),
+        }
     }
 
     /// Check if `actual` (with representation `repr`) matches `expected`.
     ///
     /// Returns `true` if:
-    /// - `actual == expected` or `repr == expected` (identity / newtype transparency)
+    /// - `actual`/`repr` match `expected` or its representation
+    ///   (identity / newtype transparency)
     /// - structural equality holds between the types
     /// - `expected` is a union and `actual` or `repr` is a member (structurally)
     pub(crate) fn matches(
@@ -111,21 +124,130 @@ impl RuntimeTypes {
         repr: RuntimeTyId,
         expected: RuntimeTyId,
     ) -> bool {
+        let expected_repr = self.repr(expected);
         actual == expected
+            || actual == expected_repr
             || repr == expected
+            || repr == expected_repr
             || self.types_equal(actual.0, expected.0)
+            || self.types_equal(actual.0, expected_repr.0)
             || self.types_equal(repr.0, expected.0)
-            || self.union_contains(expected, actual.0)
-            || self.union_contains(expected, repr.0)
+            || self.types_equal(repr.0, expected_repr.0)
+            || self.structural_repr_matches(actual, expected_repr)
+            || self.structural_repr_matches(repr, expected_repr)
+            || self.union_contains(expected, actual)
+            || self.union_contains(expected, repr)
+            || self.union_contains(expected_repr, actual)
+            || self.union_contains(expected_repr, repr)
+    }
+
+    fn structural_repr_matches(
+        &self,
+        actual: RuntimeTyId,
+        expected: RuntimeTyId,
+    ) -> bool {
+        match self.get(expected) {
+            Ty::Object(fields) => self.object_type_contains(actual.0, fields),
+            Ty::Array(_) | Ty::Map(_, _) | Ty::Tuple(_) | Ty::Fn(_, _) => {
+                self.types_equal(actual.0, expected.0)
+            }
+            _ => false,
+        }
+    }
+
+    fn object_type_contains(
+        &self,
+        actual: TyId,
+        expected: &IndexMap<StringId, TyId>,
+    ) -> bool {
+        match self.arena.get(self.repr(RuntimeTyId::from(actual)).0) {
+            Ty::Object(fields) => expected.iter().all(|(name, &ty)| {
+                fields
+                    .get(name)
+                    .is_some_and(|&actual| self.field_type_matches(actual, ty))
+            }),
+            _ => false,
+        }
+    }
+
+    fn field_type_matches(&self, actual: TyId, expected: TyId) -> bool {
+        let actual = self.repr(RuntimeTyId::from(actual)).0;
+        let expected = self.repr(RuntimeTyId::from(expected)).0;
+        match self.arena.get(expected) {
+            Ty::Object(fields) => self.object_type_contains(actual, fields),
+            _ => self.types_equal(actual, expected),
+        }
+    }
+
+    /// Check if an object value has fields matching the checked type pattern.
+    pub(crate) fn object_matches(
+        &self,
+        arena: &ValueArena,
+        val: &Value,
+        fields: &[(StringId, RuntimeTyId)],
+    ) -> bool {
+        match &val.payload {
+            Payload::Object(obj) => fields.iter().all(|(name, ty)| {
+                obj.get(name).and_then(|id| arena.value(*id)).is_some_and(
+                    |field| {
+                        self.matches(field.ty, field.repr, *ty)
+                            || self.object_fields(*ty).is_some_and(|fields| {
+                                let fields: Vec<_> = fields
+                                    .iter()
+                                    .map(|(name, &ty)| {
+                                        (*name, RuntimeTyId::from(ty))
+                                    })
+                                    .collect();
+                                self.object_matches(arena, field, &fields)
+                            })
+                    },
+                )
+            }),
+            _ => false,
+        }
+    }
+
+    /// Return object fields for `t` after transparent representation lookup.
+    pub(crate) fn object_fields(
+        &self,
+        t: RuntimeTyId,
+    ) -> Option<&IndexMap<StringId, TyId>> {
+        match self.get(self.repr(t)) {
+            Ty::Object(fields) => Some(fields),
+            _ => None,
+        }
     }
 
     /// Check if `expected` is a union that structurally contains `member`.
-    fn union_contains(&self, expected: RuntimeTyId, member: TyId) -> bool {
+    fn union_contains(
+        &self,
+        expected: RuntimeTyId,
+        member: RuntimeTyId,
+    ) -> bool {
         self.union_members(expected).is_some_and(|members| {
             members
                 .iter()
-                .any(|&m| m == member || self.types_equal(m, member))
+                .any(|&m| self.member_matches(member, RuntimeTyId::from(m)))
         })
+    }
+
+    fn member_matches(
+        &self,
+        actual: RuntimeTyId,
+        expected: RuntimeTyId,
+    ) -> bool {
+        let actual_repr = self.repr(actual);
+        let expected_repr = self.repr(expected);
+        actual == expected
+            || actual == expected_repr
+            || actual_repr == expected
+            || actual_repr == expected_repr
+            || self.types_equal(actual.0, expected.0)
+            || self.types_equal(actual.0, expected_repr.0)
+            || self.types_equal(actual_repr.0, expected.0)
+            || self.types_equal(actual_repr.0, expected_repr.0)
+            || self.structural_repr_matches(actual, expected_repr)
+            || self.structural_repr_matches(actual_repr, expected_repr)
     }
 
     /// Structural type equality; recursively compares `Ty` values through the
@@ -204,37 +326,319 @@ impl RuntimeTypes {
         }
     }
 
-    /// Check if a type contains any unresolved type variables (`Ty::Var`).
-    ///
-    /// Used to detect wildcard types (`_`) that were not constrained during
-    /// inference and remain as `Ty::Var` after resolution.
-    pub(crate) fn contains_var(&self, t: RuntimeTyId) -> bool {
-        self.ty_contains_var(t.0)
-    }
-
-    fn ty_contains_var(&self, id: TyId) -> bool {
-        match self.arena.get(id) {
-            Ty::Var(_) => true,
-            Ty::Array(e) | Ty::Option(e) => self.ty_contains_var(*e),
-            Ty::Result(a, b) | Ty::Map(a, b) => {
-                self.ty_contains_var(*a) || self.ty_contains_var(*b)
-            }
-            Ty::Tuple(ts) | Ty::Union(_, ts) => {
-                ts.iter().any(|&t| self.ty_contains_var(t))
-            }
-            Ty::Fn(ps, r) => {
-                self.ty_contains_var(*r)
-                    || ps.iter().any(|&t| self.ty_contains_var(t))
-            }
-            Ty::Object(fs) => fs.values().any(|&t| self.ty_contains_var(t)),
-            Ty::Named(_, args) => args.iter().any(|&t| self.ty_contains_var(t)),
-            _ => false,
-        }
-    }
-
     /// Intern a `Ty` into the arena and wrap in `RuntimeTyId`.
     pub(crate) fn intern(&mut self, ty: Ty) -> RuntimeTyId {
         RuntimeTyId(self.arena.alloc(ty))
+    }
+
+    /// Convert a runtime `TypeId` to a solved runtime type.
+    pub(crate) fn type_id(&mut self, id: TypeId) -> RuntimeTyId {
+        RuntimeTyId(match id {
+            TypeId::UNIT => TyArena::UNIT,
+            TypeId::BOOL => TyArena::BOOL,
+            TypeId::INT => TyArena::INT,
+            TypeId::WORD => TyArena::WORD,
+            TypeId::FLOAT => TyArena::FLOAT,
+            TypeId::CHAR => TyArena::CHAR,
+            TypeId::STRING => TyArena::STRING,
+            TypeId::FILEPATH => TyArena::FILEPATH,
+            TypeId::JSON => TyArena::JSON,
+            TypeId::TIME => TyArena::TIME,
+            TypeId::RANGE => TyArena::RANGE,
+            TypeId::ORDERING => TyArena::ORDERING,
+            TypeId::DATA_STATUS => TyArena::DATA_STATUS,
+            TypeId::PATH => TyArena::PATH,
+            TypeId::REGEX => TyArena::REGEX,
+            TypeId::ERROR => TyArena::RUNTIME_ERROR,
+            TypeId::LOCAL => TyArena::LOCAL,
+            TypeId::GLOBAL => TyArena::GLOBAL,
+            TypeId::STORABLE => TyArena::STORABLE,
+            TypeId::SCALAR => TyArena::SCALAR,
+            TypeId::SUBSCRIPT => TyArena::SUBSCRIPT,
+            TypeId::REF => TyArena::REF,
+            other => self.arena.alloc(Ty::Named(other, SmallVec::new())),
+        })
+    }
+
+    /// Build a named runtime type in this arena.
+    pub(crate) fn named(
+        &mut self,
+        id: TypeId,
+        args: SmallVec<[RuntimeTyId; 4]>,
+    ) -> RuntimeTyId {
+        self.intern(Ty::Named(id, args.iter().map(|t| t.raw()).collect()))
+    }
+
+    /// Build a tuple runtime type in this arena.
+    pub(crate) fn tuple(
+        &mut self,
+        elems: SmallVec<[RuntimeTyId; 4]>,
+    ) -> RuntimeTyId {
+        self.intern(Ty::Tuple(elems.iter().map(|t| t.raw()).collect()))
+    }
+
+    /// Build an object runtime type in this arena.
+    pub(crate) fn object(
+        &mut self,
+        fields: IndexMap<StringId, RuntimeTyId>,
+    ) -> RuntimeTyId {
+        self.intern(Ty::Object(
+            fields.into_iter().map(|(n, t)| (n, t.raw())).collect(),
+        ))
+    }
+
+    /// Build an array runtime type in this arena.
+    pub(crate) fn array(&mut self, elem: RuntimeTyId) -> RuntimeTyId {
+        self.intern(Ty::Array(elem.raw()))
+    }
+
+    /// Build an option runtime type in this arena.
+    pub(crate) fn option(&mut self, elem: RuntimeTyId) -> RuntimeTyId {
+        self.intern(Ty::Option(elem.raw()))
+    }
+
+    /// Build a result runtime type in this arena.
+    pub(crate) fn result(
+        &mut self,
+        ok: RuntimeTyId,
+        err: RuntimeTyId,
+    ) -> RuntimeTyId {
+        self.intern(Ty::Result(ok.raw(), err.raw()))
+    }
+
+    /// Build a map runtime type in this arena.
+    pub(crate) fn map(
+        &mut self,
+        key: RuntimeTyId,
+        val: RuntimeTyId,
+    ) -> RuntimeTyId {
+        self.intern(Ty::Map(key.raw(), val.raw()))
+    }
+
+    /// Build a function runtime type in this arena.
+    pub(crate) fn func(
+        &mut self,
+        params: SmallVec<[RuntimeTyId; 4]>,
+        ret: RuntimeTyId,
+    ) -> RuntimeTyId {
+        self.intern(Ty::Fn(params.iter().map(|t| t.raw()).collect(), ret.raw()))
+    }
+
+    /// Copy a type from another arena into this runtime arena.
+    pub(crate) fn import_ty(
+        &mut self,
+        source: &TyArena,
+        ty: TyId,
+    ) -> RuntimeTyId {
+        match source.get(ty).clone() {
+            Ty::Var(v) => self.intern(Ty::Var(v)),
+            Ty::Bool => RuntimeTyId::from(TyArena::BOOL),
+            Ty::Int => RuntimeTyId::from(TyArena::INT),
+            Ty::Word => RuntimeTyId::from(TyArena::WORD),
+            Ty::Float => RuntimeTyId::from(TyArena::FLOAT),
+            Ty::Char => RuntimeTyId::from(TyArena::CHAR),
+            Ty::String => RuntimeTyId::from(TyArena::STRING),
+            Ty::Unit => RuntimeTyId::from(TyArena::UNIT),
+            Ty::Time => RuntimeTyId::from(TyArena::TIME),
+            Ty::Range => RuntimeTyId::from(TyArena::RANGE),
+            Ty::Json => RuntimeTyId::from(TyArena::JSON),
+            Ty::Ordering => RuntimeTyId::from(TyArena::ORDERING),
+            Ty::DataStatus => RuntimeTyId::from(TyArena::DATA_STATUS),
+            Ty::FilePath => RuntimeTyId::from(TyArena::FILEPATH),
+            Ty::Path => RuntimeTyId::from(TyArena::PATH),
+            Ty::Regex => RuntimeTyId::from(TyArena::REGEX),
+            Ty::RuntimeError => RuntimeTyId::from(TyArena::RUNTIME_ERROR),
+            Ty::Local => RuntimeTyId::from(TyArena::LOCAL),
+            Ty::Global => RuntimeTyId::from(TyArena::GLOBAL),
+            Ty::Array(elem) => {
+                let elem = self.import_ty(source, elem);
+                self.array(elem)
+            }
+            Ty::Option(elem) => {
+                let elem = self.import_ty(source, elem);
+                self.option(elem)
+            }
+            Ty::Result(ok, err) => {
+                let ok = self.import_ty(source, ok);
+                let err = self.import_ty(source, err);
+                self.result(ok, err)
+            }
+            Ty::Map(key, val) => {
+                let key = self.import_ty(source, key);
+                let val = self.import_ty(source, val);
+                self.map(key, val)
+            }
+            Ty::Tuple(elems) => {
+                let elems = elems
+                    .iter()
+                    .map(|&elem| self.import_ty(source, elem))
+                    .collect();
+                self.tuple(elems)
+            }
+            Ty::Fn(params, ret) => {
+                let params = params
+                    .iter()
+                    .map(|&param| self.import_ty(source, param))
+                    .collect();
+                let ret = self.import_ty(source, ret);
+                self.func(params, ret)
+            }
+            Ty::Object(fields) => {
+                let fields = fields
+                    .into_iter()
+                    .map(|(name, field)| (name, self.import_ty(source, field)))
+                    .collect();
+                self.object(fields)
+            }
+            Ty::Union(name, members) => {
+                let members = members
+                    .iter()
+                    .map(|&member| self.import_ty(source, member).raw())
+                    .collect();
+                self.intern(Ty::Union(name, members))
+            }
+            Ty::Named(id, args) => {
+                let args = args
+                    .iter()
+                    .map(|&arg| self.import_ty(source, arg))
+                    .collect();
+                self.named(id, args)
+            }
+            Ty::Apply(var, args) => {
+                let args = args
+                    .iter()
+                    .map(|&arg| self.import_ty(source, arg).raw())
+                    .collect();
+                self.intern(Ty::Apply(var, args))
+            }
+            Ty::AssocType(var, class, name) => {
+                self.intern(Ty::AssocType(var, class, name))
+            }
+            Ty::Unknown | Ty::Error => {
+                typechecked!("runtime type import", "solved concrete type")
+            }
+        }
+    }
+
+    /// Derive metadata from a runtime payload and available runtime type metadata.
+    pub(crate) fn meta_for_payload(
+        &mut self,
+        arena: &ValueArena,
+        v: &Payload,
+    ) -> ValueMeta {
+        let ty = self.ty_for_payload(arena, v);
+        self.meta(ty)
+    }
+
+    fn ty_for_payload(
+        &mut self,
+        arena: &ValueArena,
+        v: &Payload,
+    ) -> RuntimeTyId {
+        match v {
+            Payload::Unit => RuntimeTyId::from(TyArena::UNIT),
+            Payload::Bool(_) => RuntimeTyId::from(TyArena::BOOL),
+            Payload::Int(_) => RuntimeTyId::from(TyArena::INT),
+            Payload::Word(_) => RuntimeTyId::from(TyArena::WORD),
+            Payload::Float(_) => RuntimeTyId::from(TyArena::FLOAT),
+            Payload::Char(_) => RuntimeTyId::from(TyArena::CHAR),
+            Payload::String(_) => RuntimeTyId::from(TyArena::STRING),
+            Payload::FilePath(_) => RuntimeTyId::from(TyArena::FILEPATH),
+            Payload::Regex(_) => RuntimeTyId::from(TyArena::REGEX),
+            Payload::Time(_) => RuntimeTyId::from(TyArena::TIME),
+            Payload::Json(_) => RuntimeTyId::from(TyArena::JSON),
+            Payload::Range { .. } => RuntimeTyId::from(TyArena::RANGE),
+            Payload::ForeverContinuation | Payload::LoopContinue(_) => {
+                RuntimeTyId::from(TyArena::UNIT)
+            }
+            Payload::Ref(is_global, ..) => {
+                if *is_global {
+                    RuntimeTyId::from(TyArena::GLOBAL)
+                } else {
+                    RuntimeTyId::from(TyArena::LOCAL)
+                }
+            }
+            Payload::Array(vals) => {
+                let elem = vals
+                    .iter()
+                    .find_map(|id| arena.meta(*id).map(|m| m.ty))
+                    .unwrap_or_else(|| RuntimeTyId::from(TyArena::UNIT));
+                self.array(elem)
+            }
+            Payload::Tuple(vals) => self.tuple(
+                vals.iter()
+                    .map(|id| {
+                        arena
+                            .meta(*id)
+                            .map(|m| m.ty)
+                            .unwrap_or_else(|| RuntimeTyId::from(TyArena::UNIT))
+                    })
+                    .collect(),
+            ),
+            Payload::Object(fields) => self.object(
+                fields
+                    .iter()
+                    .map(|(&name, &id)| {
+                        let ty =
+                            arena.meta(id).map(|m| m.ty).unwrap_or_else(|| {
+                                RuntimeTyId::from(TyArena::UNIT)
+                            });
+                        (name, ty)
+                    })
+                    .collect(),
+            ),
+            Payload::Map(entries) => {
+                let key = entries
+                    .keys()
+                    .next()
+                    .map(Self::map_key_ty)
+                    .unwrap_or_else(|| RuntimeTyId::from(TyArena::UNIT));
+                let val = entries
+                    .values()
+                    .find_map(|id| arena.meta(*id).map(|m| m.ty))
+                    .unwrap_or_else(|| RuntimeTyId::from(TyArena::UNIT));
+                self.map(key, val)
+            }
+            Payload::Variant { .. } => {
+                typechecked!(
+                    "runtime payload metadata",
+                    "explicit variant metadata"
+                )
+            }
+            Payload::Closure { params, ret, .. }
+            | Payload::Function { params, ret, .. } => {
+                self.func(params.iter().map(|(_, ty)| *ty).collect(), *ret)
+            }
+            Payload::ModuleFn { .. }
+            | Payload::ClassMethodFn { .. }
+            | Payload::PartialApp { .. } => {
+                typechecked!(
+                    "runtime payload metadata",
+                    "explicit callable metadata"
+                )
+            }
+            Payload::ModuleConst { .. } => {
+                typechecked!(
+                    "runtime payload metadata",
+                    "explicit module constant metadata"
+                )
+            }
+        }
+    }
+
+    fn map_key_ty(key: &MapKey) -> RuntimeTyId {
+        match key {
+            MapKey::Bool(_) => RuntimeTyId::from(TyArena::BOOL),
+            MapKey::Int(_) => RuntimeTyId::from(TyArena::INT),
+            MapKey::Float(_) => RuntimeTyId::from(TyArena::FLOAT),
+            MapKey::Char(_) => RuntimeTyId::from(TyArena::CHAR),
+            MapKey::String(_) => RuntimeTyId::from(TyArena::STRING),
+        }
+    }
+
+    /// Read a scheme arity using this runtime arena.
+    pub(crate) fn scheme_arity(&self, s: &Scheme) -> Option<usize> {
+        s.arity(&self.arena)
     }
 
     /// Build `ValueMeta` from a semantic type, computing `repr` automatically.
@@ -368,9 +772,8 @@ pub(crate) struct CheckedProgram {
     pub(crate) exprs: HashMap<ExprId, ExprInfo>,
     pub(crate) regex_cache: Vec<regex::Regex>,
     pub(crate) class_registry: ClassRegistry,
+    pub(crate) function_types: HashMap<ExprId, RuntimeTyId>,
     pub(crate) ast_type_map: HashMap<AstTypeExprId, RuntimeTyId>,
-    pub(crate) alias_expansions: HashMap<AstTypeExprId, RuntimeTyId>,
-    pub(crate) alias_type_expansions: HashMap<RuntimeTyId, RuntimeTyId>,
 }
 
 impl CheckedProgram {
@@ -385,6 +788,7 @@ impl CheckedProgram {
 /// Per-expression type annotation produced by the checker.
 pub(crate) struct ExprInfo {
     pub(crate) ty: RuntimeTyId,
+    pub(crate) repr: Option<RuntimeTyId>,
     pub(crate) aux: ExprAux,
 }
 
@@ -395,12 +799,47 @@ pub(crate) enum ExprAux {
     /// Index into the compiled regex cache.
     RegexIndex(u32),
     /// Higher-order function call with a known output type.
-    HofCall { out: RuntimeTyId },
+    HofCall {
+        out: RuntimeTyId,
+        class: Option<StringId>,
+    },
     /// Method call dispatched through a class instance.
     InstanceCall {
         recv: RuntimeTyId,
         fun: Option<StringId>,
+        class: Option<StringId>,
     },
     /// Naked (`:method`) reference resolved to a specific class.
     NakedMethod { class: StringId },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn alias_types() -> (RuntimeTypes, RuntimeTyId) {
+        let mut arena = TyArena::new();
+        let alias =
+            RuntimeTyId::from(arena.named(TypeId::FILEPATH, SmallVec::new()));
+        let mut reps = HashMap::new();
+        reps.insert(alias, RuntimeTyId::from(TyArena::STRING));
+        (RuntimeTypes::new(arena, reps), alias)
+    }
+
+    #[test]
+    fn phase_11_repr_unwraps_newtype_expansion() {
+        let (tys, alias) = alias_types();
+
+        assert_eq!(tys.repr(alias), RuntimeTyId::from(TyArena::STRING));
+    }
+
+    #[test]
+    fn phase_11_union_meta_uses_union_ty_and_member_repr() {
+        let (tys, alias) = alias_types();
+        let union = RuntimeTyId::from(TyArena::STORABLE);
+        let meta = tys.union_meta(union, alias);
+
+        assert_eq!(meta.ty, union);
+        assert_eq!(meta.repr, RuntimeTyId::from(TyArena::STRING));
+    }
 }

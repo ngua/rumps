@@ -1,0 +1,28 @@
+#+TITLE: Runtime Guard Rails
+
+* Typed runtime review checks
+Run these before reviewing typed runtime changes. Each command should return no hits.
+
+1. No `ValueMeta::untyped` in runtime construction:
+
+#+begin_src sh
+rg "ValueMeta::untyped" crates/rumps-query/src/interpreter.rs crates/rumps-query/src/interpreter crates/rumps-query/src/env.rs crates/rumps-query/src/primitives.rs
+#+end_src
+
+2. No interpreter-owned `TyArena`:
+
+#+begin_src sh
+rg "ty_arena\\s*:" crates/rumps-query/src/interpreter.rs crates/rumps-query/src/interpreter
+#+end_src
+
+3. No runtime `TypeExprArena`:
+
+#+begin_src sh
+rg "TypeExprArena|\bTypeExprId\b|\benum TypeExpr\b" crates/rumps-query/src/interpreter.rs crates/rumps-query/src/interpreter crates/rumps-query/src/env.rs crates/rumps-query/src/primitives.rs crates/rumps-query/src/value.rs
+#+end_src
+
+4. No `Payload::Tagged`:
+
+#+begin_src sh
+rg "Payload::Tagged|Tagged\(" crates/rumps-query/src
+#+end_src

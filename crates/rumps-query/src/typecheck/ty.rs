@@ -30,11 +30,11 @@ pub(crate) enum ClassShape {
 /// What kind of type tracking a method requires for runtime dispatch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TrackKind {
-    /// Track return type in `mempty_types` (`Monoid:identity`).
+    /// Track return type in expression metadata (`Monoid:identity`).
     Mempty,
-    /// Track return type in `convert_targets` (`Into:into`, `Wrappable:wrap`).
+    /// Track return type in expression metadata (`Into:into`, `Wrappable:wrap`).
     Convert,
-    /// Track inner type of `Result` return in `convert_targets` (`TryInto:try-into`).
+    /// Track inner type of `Result` return in expression metadata (`TryInto:try-into`).
     ConvertResultInner,
 }
 
@@ -989,8 +989,8 @@ impl fmt::Display for TyId {
 
 /// Static types used during type checking.
 ///
-/// Unlike runtime `TypeExpr`, these include type variables (`Var`) for
-/// inference and structural object types.
+/// These include type variables (`Var`) for inference and structural object
+/// types.
 ///
 /// NOTE: `PartialEq` is derived intentionally; in particular, two `Union`s
 /// with identical members but different provenance (`None` vs `Some(id)`)

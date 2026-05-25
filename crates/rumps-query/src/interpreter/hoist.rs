@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use async_recursion::async_recursion;
 
-use crate::ast::{AstTypeExprId, ExprId, InstanceMethodDef, Stmt, StmtId};
+use crate::ast::{InstanceMethodDef, Stmt, StmtId};
 use crate::intern::StringId;
 use crate::interpreter::instance::RuntimeInstance;
 use crate::interpreter::Interpreter;
@@ -53,40 +53,25 @@ impl<I: IoContext> Interpreter<'_, I> {
 
         match stmt {
             Some(Stmt::Fun {
+                name, params, body, ..
+            }) => self.fun(
                 name,
-                params,
-                ret,
+                params.iter().map(|(name, _)| *name).collect(),
                 body,
-                ..
-            }) => self.hoist_fun(name, &params, ret, body, span),
+                span,
+            ),
 
             Some(Stmt::Module { name, body }) => {
                 self.hoist_module(name, &body, span).await
             }
 
-            Some(Stmt::ClassInstance {
-                for_type, methods, ..
-            }) => self.hoist_class_instance(id, for_type, &methods, span),
+            Some(Stmt::ClassInstance { methods, .. }) => {
+                self.hoist_class_instance(id, &methods, span)
+            }
 
             // Other statements don't introduce hoistable bindings
             _ => Ok(()),
         }
-    }
-
-    /// Hoist a function declaration.
-    ///
-    /// Registers the function in the `functions` map so it can be called
-    /// before its definition is executed.
-    fn hoist_fun(
-        &mut self,
-        name: StringId,
-        params: &[(StringId, Option<AstTypeExprId>)],
-        ret: Option<AstTypeExprId>,
-        body: ExprId,
-        span: Span,
-    ) -> Result<()> {
-        // Delegate to the existing `fun` method which handles registration
-        self.fun(name, params, ret, body, span)
     }
 
     /// Hoist a module declaration and its members.
@@ -107,7 +92,6 @@ impl<I: IoContext> Interpreter<'_, I> {
     pub(crate) fn hoist_class_instance(
         &mut self,
         id: StmtId,
-        _for_type: AstTypeExprId,
         methods: &[InstanceMethodDef],
         span: Span,
     ) -> Result<()> {
@@ -142,8 +126,11 @@ impl<I: IoContext> Interpreter<'_, I> {
 
                                 self.fun(
                                     fn_id,
-                                    &method_def.params,
-                                    method_def.ret,
+                                    method_def
+                                        .params
+                                        .iter()
+                                        .map(|(name, _)| *name)
+                                        .collect(),
                                     method_def.body,
                                     span,
                                 )?;

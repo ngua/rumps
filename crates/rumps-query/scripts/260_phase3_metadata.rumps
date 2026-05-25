@@ -1,0 +1,40 @@
+; Phase 3 typed runtime metadata guard rails
+
+module Phase3Meta {
+  +let module-item: Int | String | Bool = 7
+}
+
+newtype Phase3Id = Int
+
+fun classify(v: Int | String | Bool) -> String {
+  match v {
+    n is Int => { "int: {n}" }
+    s is String => { "str: {s}" }
+    b is Bool => { "bool: {b}" }
+    _ => { "other" }
+  }
+}
+
+fun main() {
+  let stmt-item: Int | String | Bool = 1
+  write classify(stmt-item)
+
+  let new-id: Phase3Id = 11
+  write if new-id is Int { "newtype-int: {new-id}" } else { "newtype-miss" }
+
+  let xs: Array[Int | String | Bool] = [1, "two"]
+  write classify(xs[0])
+  write classify(xs[1])
+
+  let ints = [1]
+  let strs: Array[String] = ["two"]
+  let ys: Array[Int | String | Bool] = [...ints, ...strs, true]
+  write classify(ys[0])
+  write classify(ys[2])
+
+  write classify(Phase3Meta.module-item)
+
+  let obj = { item: 9 }
+  let maybe-item = obj?.item
+  write classify(maybe-item!)
+}

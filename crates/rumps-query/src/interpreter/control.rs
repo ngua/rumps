@@ -4,12 +4,10 @@ use async_recursion::async_recursion;
 use smallvec::SmallVec;
 
 use super::Interpreter;
-use crate::ast::{
-    AstTypeExprId, Expr, ExprId, MatchArm, PostfixOp, StmtId, TypePattern,
-};
+use crate::ast::{Expr, ExprId, MatchArm, PostfixOp, StmtId, TypePattern};
 use crate::intern::{QualifiedName, StringId};
 use crate::io::IoContext;
-use crate::value::{Payload, TypeId, ValueMeta};
+use crate::value::{Payload, TypeId, Value, ValueId};
 use crate::{Error, Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
@@ -19,9 +17,9 @@ impl<I: IoContext> Interpreter<'_, I> {
     pub(super) fn postfix(
         &mut self,
         op: PostfixOp,
-        val: Payload,
+        val: Value,
         span: Span,
-    ) -> Result<Payload> {
+    ) -> Result<Value> {
         match op {
             PostfixOp::Unwrap => self.unwrap(val, span),
         }
@@ -34,36 +32,41 @@ impl<I: IoContext> Interpreter<'_, I> {
     ///
     /// Type checker guarantees operand is `Option` or `Result`.
     /// `None`/`Err` remain runtime errors (value-level, not type-level).
-    fn unwrap(&mut self, val: Payload, span: Span) -> Result<Payload> {
-        match &val {
+    fn unwrap(&mut self, val: Value, span: Span) -> Result<Value> {
+        let base = self
+            .checked
+            .types
+            .to_type_id(val.repr)
+            .or_else(|| self.checked.types.to_type_id(val.ty));
+        match (base, &val.payload) {
             // Option.Some(v) -> v
-            Payload::Tagged(ty, 1, payload) if *ty == TypeId::OPTION => {
-                Ok(payload
+            (Some(TypeId::OPTION), Payload::Variant { tag: 1, vals }) => {
+                Ok(vals
                     .first()
-                    .and_then(|id| self.arena.get(*id).cloned())
+                    .and_then(|id| self.arena.value(*id).cloned())
                     .unwrap_or_else(|| {
                         typechecked!("!", "Option.Some has payload")
                     }))
             }
             // Option.None -> runtime error (not type error)
-            Payload::Tagged(ty, 0, _) if *ty == TypeId::OPTION => {
+            (Some(TypeId::OPTION), Payload::Variant { tag: 0, .. }) => {
                 Err(Error::runtime(span, "cannot unwrap Option.None"))
             }
             // Result.Ok(v) -> v
-            Payload::Tagged(ty, 0, payload) if *ty == TypeId::RESULT => {
-                Ok(payload
+            (Some(TypeId::RESULT), Payload::Variant { tag: 0, vals }) => {
+                Ok(vals
                     .first()
-                    .and_then(|id| self.arena.get(*id).cloned())
+                    .and_then(|id| self.arena.value(*id).cloned())
                     .unwrap_or_else(|| {
                         typechecked!("!", "Result.Ok has payload")
                     }))
             }
             // Result.Err(e) -> runtime error with stringified e
-            Payload::Tagged(ty, 1, payload) if *ty == TypeId::RESULT => {
+            (Some(TypeId::RESULT), Payload::Variant { tag: 1, vals }) => {
                 let err_val =
-                    payload.first().and_then(|id| self.arena.get(*id).cloned());
+                    vals.first().and_then(|id| self.arena.value(*id).cloned());
                 let err_msg = err_val
-                    .map(|v| self.stringify(&v))
+                    .map(|v| self.stringify_value(&v))
                     .unwrap_or_else(|| "unknown error".into());
                 Err(Error::runtime(
                     span,
@@ -87,32 +90,39 @@ impl<I: IoContext> Interpreter<'_, I> {
     #[async_recursion]
     pub(super) async fn coalesce(
         &mut self,
-        left: Payload,
+        left: Value,
         rhs: ExprId,
-    ) -> Result<Payload> {
-        match &left {
+    ) -> Result<Value> {
+        let base = self
+            .checked
+            .types
+            .to_type_id(left.repr)
+            .or_else(|| self.checked.types.to_type_id(left.ty));
+        match (base, &left.payload) {
             // Option.Some(v) -> unwrap to v
-            Payload::Tagged(ty, 1, payload) if *ty == TypeId::OPTION => {
-                Ok(payload
+            (Some(TypeId::OPTION), Payload::Variant { tag: 1, vals }) => {
+                Ok(vals
                     .first()
-                    .and_then(|id| self.arena.get(*id).cloned())
-                    // Payload should always exist for Some
-                    .unwrap_or(Payload::Unit))
+                    .and_then(|id| self.arena.value(*id).cloned())
+                    .unwrap_or_else(|| {
+                        typechecked!("??", "Option.Some has payload")
+                    }))
             }
             // Option.None -> evaluate rhs
-            Payload::Tagged(ty, 0, _) if *ty == TypeId::OPTION => {
+            (Some(TypeId::OPTION), Payload::Variant { tag: 0, .. }) => {
                 self.eval(rhs).await
             }
             // Result.Ok(v) -> unwrap to v
-            Payload::Tagged(ty, 0, payload) if *ty == TypeId::RESULT => {
-                Ok(payload
+            (Some(TypeId::RESULT), Payload::Variant { tag: 0, vals }) => {
+                Ok(vals
                     .first()
-                    .and_then(|id| self.arena.get(*id).cloned())
-                    // Payload should always exist for Ok
-                    .unwrap_or(Payload::Unit))
+                    .and_then(|id| self.arena.value(*id).cloned())
+                    .unwrap_or_else(|| {
+                        typechecked!("??", "Result.Ok has payload")
+                    }))
             }
             // Result.Err(_) -> evaluate rhs (error discarded)
-            Payload::Tagged(ty, 1, _) if *ty == TypeId::RESULT => {
+            (Some(TypeId::RESULT), Payload::Variant { tag: 1, .. }) => {
                 self.eval(rhs).await
             }
             // Type checker guarantees Option or Result
@@ -129,7 +139,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         stmts: &[StmtId],
         tail: Option<ExprId>,
-    ) -> Result<Payload> {
+    ) -> Result<Value> {
         self.env.scopes.push();
         // Hoist local function declarations for forward references
         self.hoist_declarations(stmts).await?;
@@ -144,11 +154,14 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         stmts: &[StmtId],
         tail: Option<ExprId>,
-    ) -> Result<Payload> {
+    ) -> Result<Value> {
         match stmts.split_first() {
             None => match tail {
                 Some(e) => self.eval(e).await,
-                None => Ok(Payload::Unit),
+                None => Ok(self.value_from_meta(
+                    Payload::Unit,
+                    self.checked.types.meta_unit(),
+                )),
             },
             Some((head, rest)) => {
                 self.exec(*head).await?;
@@ -172,7 +185,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         cond: ExprId,
         then_br: ExprId,
         else_br: Option<ExprId>,
-    ) -> Result<Payload> {
+    ) -> Result<Value> {
         // Check if condition is `Expr::Is` with bindings
         let cond_expr = self.ast.get_expr(cond).cloned();
         match cond_expr {
@@ -184,7 +197,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .await
             }
             _ => {
-                let cond_val = self.eval(cond).await?;
+                let cond_val = self.eval_payload(cond).await?;
                 let cond_true = match cond_val {
                     Payload::Bool(b) => b,
                     _ => typechecked!("if condition", "Bool"),
@@ -205,9 +218,12 @@ impl<I: IoContext> Interpreter<'_, I> {
                         // Single-arm if: body must be Unit (side-effect only).
                         // Type checker guarantees body is Unit.
                         if cond_true {
-                            self.eval(then_br).await?;
+                            self.eval_payload(then_br).await?;
                         }
-                        Ok(Payload::Unit)
+                        Ok(self.value_from_meta(
+                            Payload::Unit,
+                            self.checked.types.meta_unit(),
+                        ))
                     }
                 }
             }
@@ -227,10 +243,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         names: &[StringId],
         then_br: ExprId,
         else_br: Option<ExprId>,
-    ) -> Result<Payload> {
+    ) -> Result<Value> {
         let span = self.ast.expr_span(expr).unwrap_or_default();
         let val = self.eval(expr).await?;
-
         // Check if the value matches the variant
         let matched = self.check_variant(&val, ty_name, var_name, span)?;
 
@@ -238,8 +253,13 @@ impl<I: IoContext> Interpreter<'_, I> {
             Some(else_id) => {
                 // if/else with bindings: only evaluate the taken branch
                 if matched {
-                    self.eval_with_variant_bindings(&val, names, then_br, span)
-                        .await
+                    self.eval_with_variant_bindings(
+                        &val.payload,
+                        names,
+                        then_br,
+                        span,
+                    )
+                    .await
                 } else {
                     self.eval(else_id).await
                 }
@@ -248,10 +268,18 @@ impl<I: IoContext> Interpreter<'_, I> {
                 // Single-arm if with bindings: body must be Unit.
                 // Type checker guarantees body is Unit.
                 if matched {
-                    self.eval_with_variant_bindings(&val, names, then_br, span)
-                        .await?;
+                    self.eval_with_variant_bindings(
+                        &val.payload,
+                        names,
+                        then_br,
+                        span,
+                    )
+                    .await?;
                 }
-                Ok(Payload::Unit)
+                Ok(self.value_from_meta(
+                    Payload::Unit,
+                    self.checked.types.meta_unit(),
+                ))
             }
         }
     }
@@ -267,9 +295,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         names: &[StringId],
         body: ExprId,
         span: Span,
-    ) -> Result<Payload> {
+    ) -> Result<Value> {
         let payloads = match val {
-            Payload::Tagged(_, _, p) => p.clone(),
+            Payload::Variant { vals, .. } => vals.clone(),
             _ => SmallVec::new(),
         };
 
@@ -296,9 +324,11 @@ impl<I: IoContext> Interpreter<'_, I> {
         scrutinee: ExprId,
         arms: &[MatchArm],
         span: Span,
-    ) -> Result<Payload> {
+    ) -> Result<Value> {
         let val = self.eval(scrutinee).await?;
-        self.try_match_arms(scrutinee, &val, arms, span).await
+        let val_id = self.add_value(val.clone(), span);
+        self.try_match_arms(scrutinee, val_id, &val, arms, span)
+            .await
     }
 
     /// Try each match arm in order until one matches.
@@ -306,10 +336,11 @@ impl<I: IoContext> Interpreter<'_, I> {
     async fn try_match_arms(
         &mut self,
         scrutinee: ExprId,
-        val: &Payload,
+        val_id: ValueId,
+        val: &Value,
         arms: &[MatchArm],
         span: Span,
-    ) -> Result<Payload> {
+    ) -> Result<Value> {
         match arms.split_first() {
             // Typechecker validates exhaustiveness
             None => typechecked!("match", "exhaustive"),
@@ -318,11 +349,13 @@ impl<I: IoContext> Interpreter<'_, I> {
                 match self.try_match_pattern(
                     scrutinee,
                     arm.pattern,
+                    Some(val_id),
                     val,
                     span,
                 )? {
                     None => {
-                        self.try_match_arms(scrutinee, val, rest, span).await
+                        self.try_match_arms(scrutinee, val_id, val, rest, span)
+                            .await
                     }
                     Some(bindings) => {
                         // Pattern matched; check guard if present
@@ -332,7 +365,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                         let guard_ok = match arm.guard {
                             None => true,
                             Some(guard_expr) => {
-                                let guard_val = self.eval(guard_expr).await?;
+                                let guard_val =
+                                    self.eval_payload(guard_expr).await?;
                                 match guard_val {
                                     Payload::Bool(b) => b,
                                     _ => typechecked!("match guard", "Bool"),
@@ -348,8 +382,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                         } else {
                             // Guard failed; pop scope and try next arm
                             self.env.scopes.pop();
-                            self.try_match_arms(scrutinee, val, rest, span)
-                                .await
+                            self.try_match_arms(
+                                scrutinee, val_id, val, rest, span,
+                            )
+                            .await
                         }
                     }
                 }
@@ -370,8 +406,8 @@ impl<I: IoContext> Interpreter<'_, I> {
         inclusive: bool,
         _span: Span,
     ) -> Result<Payload> {
-        let start_val = self.eval(start_id).await?;
-        let end_val = self.eval(end_id).await?;
+        let start_val = self.eval_payload(start_id).await?;
+        let end_val = self.eval_payload(end_id).await?;
 
         let start = match &start_val {
             Payload::Int(n) => *n,
@@ -401,30 +437,31 @@ impl<I: IoContext> Interpreter<'_, I> {
         expr: ExprId,
         handler: ExprId,
         span: Span,
-    ) -> Result<Payload> {
+    ) -> Result<Value> {
         match self.eval(expr).await {
             Ok(val) => Ok(val),
             Err(e) => match e.runtime_variant() {
                 Some((idx, msg)) => {
-                    let h = self.eval(handler).await?;
+                    let h = self.eval_payload(handler).await?;
                     let msg_id = self.arena.intern(msg);
                     let payload_id = self.add_val(
                         Payload::String(msg_id),
                         self.checked.types.meta_string(),
                         span,
                     );
-                    let err_val = Payload::Tagged(
-                        TypeId::ERROR,
-                        idx,
-                        smallvec::smallvec![payload_id],
-                    );
+                    let err_val = Payload::Variant {
+                        tag: idx,
+                        vals: smallvec::smallvec![payload_id],
+                    };
                     let arg_id = self.arena.add_typed(
                         err_val,
-                        self.checked.types.meta_error(),
+                        self.checked.types.meta_runtime_error(),
                         span,
                     );
                     match h {
-                        Payload::Closure { params, body, env } => {
+                        Payload::Closure {
+                            params, body, env, ..
+                        } => {
                             self.invoke_closure(
                                 &params,
                                 body,
@@ -457,34 +494,29 @@ impl<I: IoContext> Interpreter<'_, I> {
     pub(super) async fn forever(
         &mut self,
         seed: ExprId,
-        state_param: (StringId, Option<AstTypeExprId>),
-        cont_param: (StringId, Option<AstTypeExprId>),
+        state_name_id: StringId,
+        cont_name_id: StringId,
         body: ExprId,
         span: Span,
-    ) -> Result<Payload> {
+    ) -> Result<Value> {
         let init = self.eval(seed).await?;
-        let seed_meta = self.expr_meta(seed);
-        let mut state_id = self.arena.add_typed(init, seed_meta, span);
-
-        let state_name_id = state_param.0;
-        let cont_name_id = cont_param.0;
+        let mut state_id = self.add_value(init, span);
 
         loop {
             self.env.scopes.push();
             self.env.scopes.bind(state_name_id, state_id);
 
-            let cont_id = self.arena.add_typed(
-                Payload::ForeverContinuation,
-                ValueMeta::untyped(),
-                span,
-            );
+            let cont_id = self.add_payload(Payload::ForeverContinuation, span);
             self.env.scopes.bind(cont_name_id, cont_id);
 
             let result = self.eval(body).await;
             self.env.scopes.pop();
 
             match result {
-                Ok(Payload::LoopContinue(new_state_id)) => {
+                Ok(Value {
+                    payload: Payload::LoopContinue(new_state_id),
+                    ..
+                }) => {
                     state_id = new_state_id;
                 }
                 other => break other,

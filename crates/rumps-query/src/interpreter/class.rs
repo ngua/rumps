@@ -41,20 +41,43 @@ use super::hof::{
     ChainWrapper, Continuation, HofMethodFn, HofState, IterKind, MethodResult,
 };
 use crate::intern::{StringId, StringInterner};
-use crate::typecheck::{RuntimeTypes, Ty, TyArena};
+use crate::typecheck::{RuntimeTyId, RuntimeTypes, Ty};
 use crate::value::{
-    MapKey, Payload, TypeId, TypeRegistry, ValueArena, ValueId, ValueMeta,
+    MapKey, Payload, TypeId, TypeRegistry, Value, ValueArena, ValueId,
 };
 use crate::{ClassId, Error, Result, Span};
 
 /// Context for class method dispatch.
 pub(crate) struct ClassCtx<'a> {
     pub(crate) arena: &'a mut ValueArena,
-    pub(crate) ty_arena: &'a TyArena,
-    pub(crate) runtime_types: &'a RuntimeTypes,
+    pub(crate) runtime_types: &'a mut RuntimeTypes,
     pub(crate) registry: &'a TypeRegistry,
     pub(crate) regex_cache: &'a [regex::Regex],
     pub(crate) span: Span,
+}
+
+impl ClassCtx<'_> {
+    pub(crate) fn add(&mut self, v: Payload) -> ValueId {
+        let meta = self.runtime_types.meta_for_payload(self.arena, &v);
+        self.arena.add_typed(v, meta, self.span)
+    }
+
+    fn value_base_type(&self, id: ValueId) -> Option<TypeId> {
+        self.arena.meta(id).and_then(|meta| {
+            self.runtime_types
+                .to_type_id(meta.repr)
+                .or_else(|| self.runtime_types.to_type_id(meta.ty))
+        })
+    }
+
+    fn runtime_base_type(&self, ty: RuntimeTyId) -> Option<TypeId> {
+        self.runtime_types.to_type_id(ty)
+    }
+
+    fn value_variant_base_type(&self, value: &Value) -> Option<TypeId> {
+        self.runtime_base_type(value.repr)
+            .or_else(|| self.runtime_base_type(value.ty))
+    }
 }
 
 /// Binary class method signature.
@@ -141,7 +164,7 @@ impl ClassMethods {
         kind: ClassId,
         name: StringId,
     ) -> Option<MethodFn> {
-        self.tables[kind.idx()].lookup(name)
+        self.tables.get(kind.idx()).and_then(|t| t.lookup(name))
     }
 
     pub(crate) fn dispatch_binary(
@@ -691,19 +714,67 @@ impl Monoid {
                 merged.extend(r.iter().map(|(k, v)| (k.clone(), *v)));
                 Payload::Map(Arc::new(merged))
             }
-            (Payload::Tagged(ty1, i1, p1), Payload::Tagged(ty2, i2, p2))
-                if *ty1 == TypeId::OPTION && *ty2 == TypeId::OPTION =>
-            {
+            (
+                Payload::Variant { tag: i1, vals: p1 },
+                Payload::Variant { tag: i2, vals: p2 },
+            ) => {
                 if *i1 == 1 {
-                    Payload::Tagged(*ty1, *i1, p1.clone())
+                    Payload::Variant {
+                        tag: *i1,
+                        vals: p1.clone(),
+                    }
                 } else if *i2 == 1 {
-                    Payload::Tagged(*ty2, *i2, p2.clone())
+                    Payload::Variant {
+                        tag: *i2,
+                        vals: p2.clone(),
+                    }
                 } else {
-                    Payload::Tagged(*ty1, *i1, SmallVec::new())
+                    Payload::Variant {
+                        tag: *i1,
+                        vals: SmallVec::new(),
+                    }
                 }
             }
             _ => typechecked!("++", "Monoid"),
         })
+    }
+
+    pub(crate) fn concat_values(
+        ctx: &mut ClassCtx<'_>,
+        l: &Value,
+        r: &Value,
+    ) -> Result<Payload> {
+        let l_ty = ctx.value_variant_base_type(l);
+        let r_ty = ctx.value_variant_base_type(r);
+        match (&l.payload, &r.payload) {
+            (
+                Payload::Variant { tag: i1, vals: p1 },
+                Payload::Variant { tag: i2, vals: p2 },
+            ) if l_ty.is_none_or(|ty| ty == TypeId::OPTION)
+                && r_ty.is_none_or(|ty| ty == TypeId::OPTION) =>
+            {
+                Ok(if *i1 == 1 {
+                    Payload::Variant {
+                        tag: *i1,
+                        vals: p1.clone(),
+                    }
+                } else if *i2 == 1 {
+                    Payload::Variant {
+                        tag: *i2,
+                        vals: p2.clone(),
+                    }
+                } else {
+                    Payload::Variant {
+                        tag: *i1,
+                        vals: SmallVec::new(),
+                    }
+                })
+            }
+            (Payload::Variant { .. }, Payload::Variant { .. }) => {
+                typechecked!("++", "Monoid Option")
+            }
+            _ => Self::concat(ctx, &l.payload, &r.payload),
+        }
     }
 }
 
@@ -724,6 +795,19 @@ impl Ord {
             Ordering::Equal => 0,
             Ordering::Greater => 1,
         }))
+    }
+
+    pub(crate) fn compare_values(
+        ctx: &mut ClassCtx<'_>,
+        l: &Value,
+        r: &Value,
+    ) -> Payload {
+        let ord = Self::cmp_runtime_values(ctx, l, r);
+        Payload::Int(match ord {
+            Ordering::Less => -1,
+            Ordering::Equal => 0,
+            Ordering::Greater => 1,
+        })
     }
 
     /// Recursive comparison helper returning `Ordering`.
@@ -754,19 +838,62 @@ impl Ord {
             }
             // Maps: lexicographic comparison by (key, value) pairs sorted by key
             (Payload::Map(a), Payload::Map(b)) => Self::cmp_maps(ctx, a, b),
-            // Tagged (Option, Result, user types): compare variant index, then payload
-            // Note: Result has Ok=0, Err=1, but we want Err < Ok, so reverse for Result
-            (Payload::Tagged(ty, i1, p1), Payload::Tagged(_, i2, p2)) => {
-                let is_result = *ty == TypeId::RESULT;
-                let idx_ord = if is_result { i2.cmp(i1) } else { i1.cmp(i2) };
+            // Variants compare by tag, then payload.
+            (
+                Payload::Variant { tag: i1, vals: p1 },
+                Payload::Variant { tag: i2, vals: p2 },
+            ) => {
+                let idx_ord = i1.cmp(i2);
                 match idx_ord {
-                    Ordering::Equal => {
-                        Self::cmp_seqs(ctx, p1.as_slice(), p2.as_slice())
-                    }
+                    Ordering::Equal => Self::cmp_seqs(ctx, p1, p2),
                     ord => ord,
                 }
             }
             _ => typechecked!("compare", "same Ord type"),
+        }
+    }
+
+    fn cmp_runtime_values(
+        ctx: &mut ClassCtx<'_>,
+        l: &Value,
+        r: &Value,
+    ) -> Ordering {
+        match (&l.payload, &r.payload) {
+            (
+                Payload::Variant { tag: i1, vals: p1 },
+                Payload::Variant { tag: i2, vals: p2 },
+            ) => {
+                let l_ty = ctx.value_variant_base_type(l);
+                let r_ty = ctx.value_variant_base_type(r);
+                match l_ty.cmp(&r_ty) {
+                    Ordering::Equal => {
+                        let idx_ord = if l_ty == Some(TypeId::RESULT) {
+                            i2.cmp(i1)
+                        } else {
+                            i1.cmp(i2)
+                        };
+                        match idx_ord {
+                            Ordering::Equal => Self::cmp_seqs(ctx, p1, p2),
+                            ord => ord,
+                        }
+                    }
+                    ord => ord,
+                }
+            }
+            _ => Self::cmp_values(ctx, &l.payload, &r.payload),
+        }
+    }
+
+    fn cmp_value_ids(
+        ctx: &mut ClassCtx<'_>,
+        l: ValueId,
+        r: ValueId,
+    ) -> Ordering {
+        let lv = ctx.arena.value(l).cloned();
+        let rv = ctx.arena.value(r).cloned();
+        match (lv, rv) {
+            (Some(lv), Some(rv)) => Self::cmp_runtime_values(ctx, &lv, &rv),
+            _ => Ordering::Equal,
         }
     }
 
@@ -778,14 +905,7 @@ impl Ord {
     ) -> Ordering {
         a.iter()
             .zip(b.iter())
-            .map(|(ai, bi)| {
-                let av = ctx.arena.get(*ai).cloned();
-                let bv = ctx.arena.get(*bi).cloned();
-                match (av, bv) {
-                    (Some(av), Some(bv)) => Self::cmp_values(ctx, &av, &bv),
-                    _ => Ordering::Equal,
-                }
-            })
+            .map(|(ai, bi)| Self::cmp_value_ids(ctx, *ai, *bi))
             .find(|o| *o != Ordering::Equal)
             .unwrap_or_else(|| a.len().cmp(&b.len()))
     }
@@ -812,12 +932,7 @@ impl Ord {
                 if key_ord != Ordering::Equal {
                     key_ord
                 } else {
-                    let v1 = ctx.arena.get(*v1).cloned();
-                    let v2 = ctx.arena.get(*v2).cloned();
-                    match (v1, v2) {
-                        (Some(v1), Some(v2)) => Self::cmp_values(ctx, &v1, &v2),
-                        _ => Ordering::Equal,
-                    }
+                    Self::cmp_value_ids(ctx, *v1, *v2)
                 }
             })
             .find(|o| *o != Ordering::Equal)
@@ -837,6 +952,14 @@ impl Eq {
         r: &Payload,
     ) -> Result<Payload> {
         Ok(Payload::Bool(Self::values_equal(ctx, l, r)))
+    }
+
+    pub(crate) fn eq_values(
+        ctx: &mut ClassCtx<'_>,
+        l: &Value,
+        r: &Value,
+    ) -> Payload {
+        Payload::Bool(Self::runtime_values_equal(ctx, l, r))
     }
 
     /// Recursive equality helper.
@@ -875,13 +998,18 @@ impl Eq {
                 a.len() == b.len() && Self::maps_equal(ctx, a, b)
             }
             (
-                Payload::Tagged(ty1, idx1, p1),
-                Payload::Tagged(ty2, idx2, p2),
+                Payload::Variant {
+                    tag: idx1,
+                    vals: p1,
+                },
+                Payload::Variant {
+                    tag: idx2,
+                    vals: p2,
+                },
             ) => {
-                *ty1 == *ty2
-                    && idx1 == idx2
+                idx1 == idx2
                     && p1.len() == p2.len()
-                    && Self::seqs_equal(ctx, p1.as_slice(), p2.as_slice())
+                    && Self::seqs_equal(ctx, p1, p2)
             }
             (
                 Payload::Ref(g1, name1, subs1),
@@ -890,9 +1018,43 @@ impl Eq {
                 g1 == g2
                     && name1 == name2
                     && subs1.len() == subs2.len()
-                    && Self::seqs_equal(ctx, subs1.as_slice(), subs2.as_slice())
+                    && Self::seqs_equal(ctx, subs1, subs2)
             }
             _ => typechecked!("==", "same Eq type"),
+        }
+    }
+
+    fn runtime_values_equal(
+        ctx: &mut ClassCtx<'_>,
+        l: &Value,
+        r: &Value,
+    ) -> bool {
+        match (&l.payload, &r.payload) {
+            (
+                Payload::Variant {
+                    tag: idx1,
+                    vals: p1,
+                },
+                Payload::Variant {
+                    tag: idx2,
+                    vals: p2,
+                },
+            ) => {
+                ctx.value_variant_base_type(l) == ctx.value_variant_base_type(r)
+                    && idx1 == idx2
+                    && p1.len() == p2.len()
+                    && Self::seqs_equal(ctx, p1, p2)
+            }
+            _ => Self::values_equal(ctx, &l.payload, &r.payload),
+        }
+    }
+
+    fn value_ids_equal(ctx: &mut ClassCtx<'_>, l: ValueId, r: ValueId) -> bool {
+        let lv = ctx.arena.value(l).cloned();
+        let rv = ctx.arena.value(r).cloned();
+        match (lv, rv) {
+            (Some(lv), Some(rv)) => Self::runtime_values_equal(ctx, &lv, &rv),
+            _ => false,
         }
     }
 
@@ -902,14 +1064,9 @@ impl Eq {
         a: &[ValueId],
         b: &[ValueId],
     ) -> bool {
-        a.iter().zip(b.iter()).all(|(ai, bi)| {
-            let av = ctx.arena.get(*ai).cloned();
-            let bv = ctx.arena.get(*bi).cloned();
-            match (av, bv) {
-                (Some(av), Some(bv)) => Self::values_equal(ctx, &av, &bv),
-                _ => false,
-            }
-        })
+        a.iter()
+            .zip(b.iter())
+            .all(|(ai, bi)| Self::value_ids_equal(ctx, *ai, *bi))
     }
 
     /// Field-wise equality for objects.
@@ -920,16 +1077,7 @@ impl Eq {
     ) -> bool {
         a.iter().all(|(k, av)| {
             b.get(k)
-                .and_then(|bv| {
-                    let av_clone = ctx.arena.get(*av).cloned();
-                    let bv_clone = ctx.arena.get(*bv).cloned();
-                    match (av_clone, bv_clone) {
-                        (Some(av), Some(bv)) => {
-                            Some(Self::values_equal(ctx, &av, &bv))
-                        }
-                        _ => None,
-                    }
-                })
+                .map(|bv| Self::value_ids_equal(ctx, *av, *bv))
                 .unwrap_or(false)
         })
     }
@@ -945,16 +1093,7 @@ impl Eq {
         } else {
             a.iter().all(|(k, av)| {
                 b.get(k)
-                    .and_then(|bv| {
-                        let av_clone = ctx.arena.get(*av).cloned();
-                        let bv_clone = ctx.arena.get(*bv).cloned();
-                        match (av_clone, bv_clone) {
-                            (Some(av), Some(bv)) => {
-                                Some(Self::values_equal(ctx, &av, &bv))
-                            }
-                            _ => None,
-                        }
-                    })
+                    .map(|bv| Self::value_ids_equal(ctx, *av, *bv))
                     .unwrap_or(false)
             })
         }
@@ -973,28 +1112,52 @@ impl Fallible {
         v: &Payload,
     ) -> Result<Payload> {
         match v {
-            Payload::Tagged(ty, 1, p) if *ty == TypeId::OPTION => {
-                let val = p
+            Payload::Variant { tag: 1, vals } => {
+                let val = vals
                     .first()
-                    .and_then(|id| ctx.arena.get(*id).cloned())
+                    .and_then(|id| ctx.arena.payload(*id).cloned())
                     .unwrap_or_else(|| {
                         typechecked!("unwrap", "Option.Some payload")
                     });
                 Ok(val)
             }
-            Payload::Tagged(ty, 0, _) if *ty == TypeId::OPTION => {
+            Payload::Variant { tag: 0, .. } => {
                 Err(Error::runtime(ctx.span, "cannot unwrap Option.None"))
             }
-            Payload::Tagged(ty, 0, p) if *ty == TypeId::RESULT => {
-                let val = p
-                    .first()
-                    .and_then(|id| ctx.arena.get(*id).cloned())
-                    .unwrap_or_else(|| {
-                        typechecked!("unwrap", "Result.Ok payload")
-                    });
-                Ok(val)
+            _ => typechecked!("unwrap", "Fallible"),
+        }
+    }
+
+    pub(crate) fn unwrap_value(
+        ctx: &mut ClassCtx<'_>,
+        v: &Value,
+    ) -> Result<Payload> {
+        let ty = ctx.value_variant_base_type(v);
+        match &v.payload {
+            Payload::Variant { tag: 1, vals }
+                if ty.is_some_and(|ty| ty == TypeId::OPTION) =>
+            {
+                vals.first()
+                    .and_then(|id| ctx.arena.payload(*id).cloned())
+                    .ok_or_else(|| {
+                        typechecked!("unwrap", "Option.Some payload")
+                    })
             }
-            Payload::Tagged(ty, 1, _) if *ty == TypeId::RESULT => {
+            Payload::Variant { tag: 0, .. }
+                if ty.is_some_and(|ty| ty == TypeId::OPTION) =>
+            {
+                Err(Error::runtime(ctx.span, "cannot unwrap Option.None"))
+            }
+            Payload::Variant { tag: 0, vals }
+                if ty.is_some_and(|ty| ty == TypeId::RESULT) =>
+            {
+                vals.first()
+                    .and_then(|id| ctx.arena.payload(*id).cloned())
+                    .ok_or_else(|| typechecked!("unwrap", "Result.Ok payload"))
+            }
+            Payload::Variant { tag: 1, .. }
+                if ty.is_some_and(|ty| ty == TypeId::RESULT) =>
+            {
                 Err(Error::runtime(ctx.span, "cannot unwrap Result.Err"))
             }
             _ => typechecked!("unwrap", "Fallible"),
@@ -1018,12 +1181,17 @@ impl Wrappable {
         v: &Payload,
         target: &Ty,
     ) -> Result<Payload> {
-        let v_id =
-            ctx.arena
-                .add_typed(v.clone(), ValueMeta::untyped(), ctx.span);
         match target {
-            Ty::Option(_) => Ok(Payload::some(v_id)),
-            Ty::Result(_, _) => Ok(Payload::ok(v_id)),
+            Ty::Option(inner) => {
+                let meta = ctx.runtime_types.meta(RuntimeTyId::from(*inner));
+                let v_id = ctx.arena.add_typed(v.clone(), meta, ctx.span);
+                Ok(Payload::some(v_id))
+            }
+            Ty::Result(ok, _) => {
+                let meta = ctx.runtime_types.meta(RuntimeTyId::from(*ok));
+                let v_id = ctx.arena.add_typed(v.clone(), meta, ctx.span);
+                Ok(Payload::ok(v_id))
+            }
             _ => typechecked!("wrap", "Wrappable (Option or Result)"),
         }
     }
@@ -1054,7 +1222,7 @@ impl Indexable {
                 };
                 index
                     .and_then(|idx| elems.get(idx))
-                    .and_then(|id| ctx.arena.get(*id).cloned())
+                    .and_then(|id| ctx.arena.payload(*id).cloned())
                     .ok_or_else(|| {
                         Error::runtime(
                             ctx.span,
@@ -1064,7 +1232,7 @@ impl Indexable {
             }
             (Payload::Map(entries), key) => entries
                 .get(&Self::map_key(key))
-                .and_then(|id| ctx.arena.get(*id).cloned())
+                .and_then(|id| ctx.arena.payload(*id).cloned())
                 .ok_or_else(|| {
                     Error::runtime(
                         ctx.span,
@@ -1196,32 +1364,6 @@ impl Into {
             // String -> FilePath
             (Payload::String(sid), Ty::FilePath) => Ok(Payload::FilePath(*sid)),
 
-            // DataStatus -> Int (variant idx to MUMPS value: 0, 1, 10, 11)
-            (Payload::Tagged(ty, idx, _), Ty::Int)
-                if *ty == TypeId::DATA_STATUS =>
-            {
-                let mumps_val = match idx {
-                    0 => 0,  // NoData
-                    1 => 1,  // HasValue
-                    2 => 10, // HasDescendants
-                    3 => 11, // Both
-                    _ => typechecked!("DataStatus AS Int", "valid variant"),
-                };
-                Ok(Payload::Int(mumps_val))
-            }
-
-            // Path -> FilePath (extract filepath from either File or Dir variant)
-            (Payload::Tagged(ty, _, payloads), Ty::FilePath)
-                if *ty == TypeId::PATH =>
-            {
-                Ok(payloads
-                    .first()
-                    .and_then(|id| ctx.arena.get(*id).cloned())
-                    .unwrap_or_else(|| {
-                        typechecked!("Path AS FilePath", "valid Path")
-                    }))
-            }
-
             // Range -> Array[Int]
             (
                 Payload::Range {
@@ -1271,6 +1413,56 @@ impl Into {
         }
     }
 
+    pub(crate) fn into_value(
+        ctx: &mut ClassCtx<'_>,
+        val: &Value,
+        target: &Ty,
+    ) -> Result<Payload> {
+        match (&val.payload, target) {
+            (_, Ty::String) => {
+                let s = Self::coerce_to_str_value(ctx, val);
+                let id = ctx.arena.intern(&s);
+                Ok(Payload::String(id))
+            }
+            (_, Ty::Json) => {
+                Ok(Payload::Json(Arc::new(Self::jsonify_value(ctx, val))))
+            }
+            (Payload::Variant { tag: idx, .. }, Ty::Int)
+                if ctx
+                    .value_variant_base_type(val)
+                    .is_some_and(|ty| ty == TypeId::DATA_STATUS) =>
+            {
+                let mumps_val = match idx {
+                    0 => 0,
+                    1 => 1,
+                    2 => 10,
+                    3 => 11,
+                    _ => typechecked!("DataStatus AS Int", "valid variant"),
+                };
+                Ok(Payload::Int(mumps_val))
+            }
+            (Payload::Variant { .. }, Ty::Int) => {
+                typechecked!("DataStatus AS Int", "DataStatus")
+            }
+            (Payload::Variant { vals, .. }, Ty::FilePath)
+                if ctx
+                    .value_variant_base_type(val)
+                    .is_some_and(|ty| ty == TypeId::PATH) =>
+            {
+                Ok(vals
+                    .first()
+                    .and_then(|id| ctx.arena.payload(*id).cloned())
+                    .unwrap_or_else(|| {
+                        typechecked!("Path AS FilePath", "valid Path")
+                    }))
+            }
+            (Payload::Variant { .. }, Ty::FilePath) => {
+                typechecked!("Path AS FilePath", "Path")
+            }
+            _ => Self::into(ctx, &val.payload, target),
+        }
+    }
+
     /// Check if a value is a Storable that doesn't match the target type.
     fn is_storable_mismatch(val: &Payload, target: &Ty) -> bool {
         match (val, target) {
@@ -1296,7 +1488,7 @@ impl Into {
     }
 
     /// Get a human-readable name for a value's type.
-    fn value_type_name(ctx: &ClassCtx<'_>, val: &Payload) -> String {
+    fn value_type_name(_ctx: &ClassCtx<'_>, val: &Payload) -> String {
         match val {
             Payload::Unit => "Unit".to_owned(),
             Payload::Bool(_) => "Bool".to_owned(),
@@ -1314,11 +1506,7 @@ impl Into {
             Payload::Time(_) => "Time".to_owned(),
             Payload::Regex(_) => "Regex".to_owned(),
             Payload::Range { .. } => "Range".to_owned(),
-            Payload::Tagged(ty_id, _, _) => ctx
-                .registry
-                .type_name(*ty_id, ctx.arena)
-                .unwrap_or("Tagged")
-                .to_owned(),
+            Payload::Variant { .. } => "Variant".to_owned(),
             Payload::Closure { .. } => "Closure".to_owned(),
             Payload::Function { .. } => "Function".to_owned(),
             Payload::ModuleFn { .. } => "ModuleFn".to_owned(),
@@ -1386,6 +1574,15 @@ impl Into {
         Self::coerce_to_str(ctx, v)
     }
 
+    fn coerce_to_str_value(ctx: &ClassCtx<'_>, v: &Value) -> String {
+        match &v.payload {
+            Payload::String(id) | Payload::FilePath(id) => {
+                ctx.arena.get_str(*id).unwrap_or("").to_owned()
+            }
+            _ => Display::format_value(ctx, v),
+        }
+    }
+
     /// Convert a value to JSON.
     ///
     /// Returns the JSON directly; for the class method wrapper that returns
@@ -1420,10 +1617,10 @@ impl Into {
                     .iter()
                     .map(|id| {
                         ctx.arena
-                            .get(*id)
+                            .value(*id)
                             .unwrap_or_else(|| invariant!("ValueId in arena"))
                     })
-                    .map(|v| Self::jsonify(ctx, v))
+                    .map(|v| Self::jsonify_value(ctx, v))
                     .collect();
                 serde_json::Value::Array(elems)
             }
@@ -1432,10 +1629,10 @@ impl Into {
                     .iter()
                     .map(|id| {
                         ctx.arena
-                            .get(*id)
+                            .value(*id)
                             .unwrap_or_else(|| invariant!("ValueId in arena"))
                     })
-                    .map(|v| Self::jsonify(ctx, v))
+                    .map(|v| Self::jsonify_value(ctx, v))
                     .collect();
                 serde_json::Value::Array(items)
             }
@@ -1449,62 +1646,15 @@ impl Into {
                             .unwrap_or_else(|| invariant!("StringId in arena"));
                         let val = ctx
                             .arena
-                            .get(*vid)
+                            .value(*vid)
                             .unwrap_or_else(|| invariant!("ValueId in arena"));
-                        (key.to_owned(), Self::jsonify(ctx, val))
+                        (key.to_owned(), Self::jsonify_value(ctx, val))
                     })
                     .collect();
                 serde_json::Value::Object(map)
             }
-            Payload::Tagged(ty_id, idx, payloads) => {
-                // Option encodes as null/value rather than tagged object
-                if *ty_id == TypeId::OPTION {
-                    if *idx == 0 {
-                        serde_json::Value::Null
-                    } else {
-                        payloads
-                            .first()
-                            .and_then(|id| ctx.arena.get(*id))
-                            .map(|v| Self::jsonify(ctx, v))
-                            .unwrap_or(serde_json::Value::Null)
-                    }
-                } else {
-                    let ty_name = ctx
-                        .registry
-                        .type_name(*ty_id, ctx.arena)
-                        .unwrap_or("?");
-                    let var_name = ctx
-                        .registry
-                        .variant_name(*ty_id, *idx, ctx.arena)
-                        .unwrap_or("?");
-
-                    let payload_json = if payloads.is_empty() {
-                        serde_json::Value::Null
-                    } else if payloads.len() == 1 {
-                        payloads
-                            .first()
-                            .and_then(|id| ctx.arena.get(*id))
-                            .map(|v| Self::jsonify(ctx, v))
-                            .unwrap_or(serde_json::Value::Null)
-                    } else {
-                        let items: Vec<_> = payloads
-                            .iter()
-                            .map(|id| {
-                                ctx.arena.get(*id).unwrap_or_else(|| {
-                                    invariant!("ValueId in arena")
-                                })
-                            })
-                            .map(|v| Self::jsonify(ctx, v))
-                            .collect();
-                        serde_json::Value::Array(items)
-                    };
-
-                    serde_json::json!({
-                        "type": ty_name,
-                        "variant": var_name,
-                        "payload": payload_json
-                    })
-                }
+            Payload::Variant { tag, vals } => {
+                Self::jsonify_variant(ctx, None, *tag, vals)
             }
             Payload::Map(entries) => {
                 let map: serde_json::Map<_, _> = entries
@@ -1513,9 +1663,9 @@ impl Into {
                         let key = Self::jsonify_map_key(ctx, k);
                         let val = ctx
                             .arena
-                            .get(*vid)
+                            .value(*vid)
                             .unwrap_or_else(|| invariant!("ValueId in arena"));
-                        (key, Self::jsonify(ctx, val))
+                        (key, Self::jsonify_value(ctx, val))
                     })
                     .collect();
                 serde_json::Value::Object(map)
@@ -1554,14 +1704,85 @@ impl Into {
                 let name = ctx.arena.get_str(*name_id).unwrap_or("?");
                 let subs: Vec<_> = sub_ids
                     .iter()
-                    .filter_map(|id| ctx.arena.get(*id))
-                    .map(|v| Self::jsonify(ctx, v))
+                    .filter_map(|id| ctx.arena.value(*id))
+                    .map(|v| Self::jsonify_value(ctx, v))
                     .collect();
                 serde_json::json!({
                     "ref": format!("{prefix}{name}"),
                     "subscripts": subs
                 })
             }
+        }
+    }
+
+    pub(crate) fn jsonify_value(
+        ctx: &ClassCtx<'_>,
+        v: &Value,
+    ) -> serde_json::Value {
+        match &v.payload {
+            Payload::Variant { tag, vals } => Self::jsonify_variant(
+                ctx,
+                ctx.value_variant_base_type(v),
+                *tag,
+                vals,
+            ),
+            payload => Self::jsonify(ctx, payload),
+        }
+    }
+
+    fn jsonify_variant(
+        ctx: &ClassCtx<'_>,
+        type_id: Option<TypeId>,
+        tag: u8,
+        vals: &[ValueId],
+    ) -> serde_json::Value {
+        if type_id == Some(TypeId::OPTION) && tag == 0 {
+            serde_json::Value::Null
+        } else if type_id == Some(TypeId::OPTION) && tag == 1 {
+            vals.first()
+                .and_then(|id| ctx.arena.value(*id))
+                .map(|v| Self::jsonify_value(ctx, v))
+                .unwrap_or(serde_json::Value::Null)
+        } else {
+            let payload_json = if vals.is_empty() {
+                serde_json::Value::Null
+            } else if vals.len() == 1 {
+                vals.first()
+                    .and_then(|id| ctx.arena.value(*id))
+                    .map(|v| Self::jsonify_value(ctx, v))
+                    .unwrap_or(serde_json::Value::Null)
+            } else {
+                let items: Vec<_> = vals
+                    .iter()
+                    .map(|id| {
+                        ctx.arena
+                            .value(*id)
+                            .unwrap_or_else(|| invariant!("ValueId in arena"))
+                    })
+                    .map(|v| Self::jsonify_value(ctx, v))
+                    .collect();
+                serde_json::Value::Array(items)
+            };
+            let ty_name = type_id
+                .and_then(|type_id| {
+                    ctx.registry
+                        .type_name(type_id, ctx.arena)
+                        .map(ToOwned::to_owned)
+                })
+                .unwrap_or_else(|| "Variant".to_owned());
+            let variant = type_id
+                .and_then(|type_id| {
+                    ctx.registry
+                        .variant_name(type_id, tag, ctx.arena)
+                        .map(ToOwned::to_owned)
+                })
+                .unwrap_or_else(|| tag.to_string());
+
+            serde_json::json!({
+                "type": ty_name,
+                "variant": variant,
+                "payload": payload_json
+            })
         }
     }
 
@@ -1755,14 +1976,15 @@ impl TryInto {
                 };
 
                 Ok(if valid {
-                    Self::make_result_ok(
-                        ctx,
-                        Payload::Tagged(
-                            TypeId::DATA_STATUS,
-                            variant_idx,
-                            SmallVec::new(),
-                        ),
-                    )
+                    let status_id = ctx.arena.add_typed(
+                        Payload::Variant {
+                            tag: variant_idx,
+                            vals: SmallVec::new(),
+                        },
+                        ctx.runtime_types.meta_data_status(),
+                        ctx.span,
+                    );
+                    Self::make_result_ok_id(status_id)
                 } else {
                     Self::make_result_err(
                         ctx,
@@ -1780,6 +2002,20 @@ impl TryInto {
                 let msg = format!("cannot read {src} as {tgt}");
                 Ok(Self::make_result_err(ctx, &msg))
             }
+        }
+    }
+
+    pub(crate) fn try_into_value(
+        ctx: &mut ClassCtx<'_>,
+        val: &Value,
+        target: &Ty,
+    ) -> Result<Payload> {
+        match target {
+            Ty::Json => Ok(Self::make_result_ok(
+                ctx,
+                Payload::Json(Arc::new(Into::jsonify_value(ctx, val))),
+            )),
+            _ => Self::try_into(ctx, &val.payload, target),
         }
     }
 
@@ -1813,7 +2049,11 @@ impl TryInto {
 
     /// Create a `Result.Ok(val)` value.
     fn make_result_ok(ctx: &mut ClassCtx<'_>, val: Payload) -> Payload {
-        let val_id = ctx.arena.add_typed(val, ValueMeta::untyped(), ctx.span);
+        let val_id = ctx.add(val);
+        Self::make_result_ok_id(val_id)
+    }
+
+    fn make_result_ok_id(val_id: ValueId) -> Payload {
         Payload::ok(val_id)
     }
 
@@ -1849,6 +2089,12 @@ impl Display {
         Ok(Payload::String(id))
     }
 
+    pub(crate) fn display_value(ctx: &mut ClassCtx<'_>, v: &Value) -> Payload {
+        let s = Self::format_value(ctx, v);
+        let id = ctx.arena.intern(&s);
+        Payload::String(id)
+    }
+
     /// Format a value as valid RUMPS syntax.
     ///
     /// Returns the string directly; for the class method wrapper that returns
@@ -1882,16 +2128,16 @@ impl Display {
             Payload::Array(elems) => {
                 let items = elems
                     .iter()
-                    .filter_map(|id| ctx.arena.get(*id))
-                    .map(|v| Self::format(ctx, v))
+                    .filter_map(|id| ctx.arena.value(*id))
+                    .map(|v| Self::format_value(ctx, v))
                     .join(", ");
                 format!("[ {items} ]")
             }
             Payload::Tuple(elems) => {
                 let items = elems
                     .iter()
-                    .filter_map(|id| ctx.arena.get(*id))
-                    .map(|v| Self::format(ctx, v))
+                    .filter_map(|id| ctx.arena.value(*id))
+                    .map(|v| Self::format_value(ctx, v))
                     .join(", ");
                 let trail = if elems.len() == 1 { "," } else { "" };
                 format!("({items}{trail})")
@@ -1903,8 +2149,8 @@ impl Display {
                         let key = ctx.arena.get_str(*k).unwrap_or("?");
                         let val = ctx
                             .arena
-                            .get(*vid)
-                            .map(|v| Self::format(ctx, v))
+                            .value(*vid)
+                            .map(|v| Self::format_value(ctx, v))
                             .unwrap_or_else(|| "?".to_owned());
                         format!("{key}: {val}")
                     })
@@ -1918,8 +2164,8 @@ impl Display {
                         let key = Self::format_map_key(ctx, k);
                         let val = ctx
                             .arena
-                            .get(*vid)
-                            .map(|v| Self::format(ctx, v))
+                            .value(*vid)
+                            .map(|v| Self::format_value(ctx, v))
                             .unwrap_or_else(|| "?".to_owned());
                         format!("{key} => {val}")
                     })
@@ -1928,24 +2174,8 @@ impl Display {
             }
             Payload::Time(t) => t.to_rfc3339(),
             Payload::Json(j) => j.to_string(),
-            Payload::Tagged(ty_id, idx, payloads) => {
-                let ty_name =
-                    ctx.registry.type_name(*ty_id, ctx.arena).unwrap_or("?");
-                let var_name = ctx
-                    .registry
-                    .variant_name(*ty_id, *idx, ctx.arena)
-                    .unwrap_or("?");
-
-                if payloads.is_empty() {
-                    format!("{ty_name}.{var_name}")
-                } else {
-                    let args = payloads
-                        .iter()
-                        .filter_map(|id| ctx.arena.get(*id))
-                        .map(|v| Self::format(ctx, v))
-                        .join(", ");
-                    format!("{ty_name}.{var_name}({args})")
-                }
+            Payload::Variant { tag, vals } => {
+                Self::format_variant(ctx, None, *tag, vals)
             }
             Payload::Closure { .. } => {
                 typechecked!("Display", "Display (not Closure)")
@@ -1987,11 +2217,51 @@ impl Display {
                 let name = ctx.arena.get_str(*name_id).unwrap_or("?");
                 let subs = sub_ids
                     .iter()
-                    .filter_map(|id| ctx.arena.get(*id))
-                    .map(|v| Self::format(ctx, v))
+                    .filter_map(|id| ctx.arena.value(*id))
+                    .map(|v| Self::format_value(ctx, v))
                     .join(", ");
                 format!("{prefix}{name}{{{subs}}}")
             }
+        }
+    }
+
+    pub(crate) fn format_value(ctx: &ClassCtx<'_>, v: &Value) -> String {
+        match &v.payload {
+            Payload::Variant { tag, vals } => Self::format_variant(
+                ctx,
+                ctx.value_variant_base_type(v),
+                *tag,
+                vals,
+            ),
+            payload => Self::format(ctx, payload),
+        }
+    }
+
+    fn format_variant(
+        ctx: &ClassCtx<'_>,
+        type_id: Option<TypeId>,
+        tag: u8,
+        vals: &[ValueId],
+    ) -> String {
+        let ty_name = type_id
+            .and_then(|type_id| ctx.registry.type_name(type_id, ctx.arena))
+            .unwrap_or("Variant");
+        let var_name = type_id
+            .and_then(|type_id| {
+                ctx.registry.variant_name(type_id, tag, ctx.arena)
+            })
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| tag.to_string());
+
+        if vals.is_empty() {
+            format!("{ty_name}.{var_name}")
+        } else {
+            let args = vals
+                .iter()
+                .filter_map(|id| ctx.arena.value(*id))
+                .map(|v| Self::format_value(ctx, v))
+                .join(", ");
+            format!("{ty_name}.{var_name}({args})")
         }
     }
 
@@ -2039,30 +2309,39 @@ impl Mappable {
             ResultErr(Payload),
             Other,
         }
-        let kind = match ctx.arena.get(src) {
+        let src_ty = ctx.value_base_type(src);
+        let kind = match ctx.arena.payload(src) {
             Some(Payload::Array(elems)) if elems.is_empty() => Kind::EmptyArray,
             Some(Payload::Array(elems)) => Kind::Array(elems[0]),
             // Option.Some(v) -> map inner
-            Some(Payload::Tagged(ty, 1, payloads)) if *ty == TypeId::OPTION => {
-                Kind::OptionSome(
-                    *payloads
-                        .first()
-                        .unwrap_or_else(|| invariant!("Some has payload")),
-                )
-            }
+            Some(Payload::Variant {
+                tag: 1,
+                vals: payloads,
+            }) if src_ty == Some(TypeId::OPTION) => Kind::OptionSome(
+                *payloads
+                    .first()
+                    .unwrap_or_else(|| invariant!("Some has payload")),
+            ),
             // Option.None -> return None
-            Some(Payload::Tagged(ty, 0, _)) if *ty == TypeId::OPTION => {
+            Some(Payload::Variant { tag: 0, .. })
+                if src_ty == Some(TypeId::OPTION) =>
+            {
                 Kind::OptionNone
             }
             // Result.Ok(v) -> map inner
-            Some(Payload::Tagged(ty, 0, payloads)) if *ty == TypeId::RESULT => {
+            Some(Payload::Variant {
+                tag: 0,
+                vals: payloads,
+            }) if src_ty == Some(TypeId::RESULT) => {
                 let inner = *payloads
                     .first()
                     .unwrap_or_else(|| invariant!("Ok has payload"));
                 Kind::ResultOk(inner)
             }
             // Result.Err(e) -> return unchanged
-            Some(v @ Payload::Tagged(ty, 1, _)) if *ty == TypeId::RESULT => {
+            Some(v @ Payload::Variant { tag: 1, .. })
+                if src_ty == Some(TypeId::RESULT) =>
+            {
                 Kind::ResultErr(v.clone())
             }
             _ => Kind::Other,
@@ -2124,7 +2403,7 @@ impl Filterable {
             .get(1)
             .unwrap_or_else(|| typechecked!("Filterable:filter", "2 args"));
 
-        match ctx.arena.get(src) {
+        match ctx.arena.payload(src) {
             Some(Payload::Array(elems)) if elems.is_empty() => Ok(
                 MethodResult::Done(Payload::Array(Arc::new(SmallVec::new()))),
             ),
@@ -2173,7 +2452,7 @@ impl Foldable {
             Range(i64, i64),
             Other,
         }
-        let kind = match ctx.arena.get(src) {
+        let kind = match ctx.arena.payload(src) {
             Some(Payload::Array(elems)) if elems.is_empty() => Kind::EmptyArray,
             Some(Payload::Array(elems)) => Kind::Array(elems[0]),
             Some(Payload::Range {
@@ -2192,12 +2471,7 @@ impl Foldable {
         };
         match kind {
             Kind::EmptyArray | Kind::EmptyRange => {
-                let v = ctx
-                    .arena
-                    .get(init)
-                    .cloned()
-                    .unwrap_or_else(|| invariant!("init in arena"));
-                Ok(MethodResult::Done(v))
+                Ok(MethodResult::DoneValue(init))
             }
             Kind::Array(first) => Ok(MethodResult::Invoke(Continuation {
                 callee: fn_id,
@@ -2296,13 +2570,19 @@ impl Chainable {
             .get(1)
             .unwrap_or_else(|| typechecked!("Chainable:chain", "2 args"));
 
-        match ctx.arena.get(src) {
+        let src_ty = ctx.value_base_type(src);
+        match ctx.arena.payload(src) {
             // Option.None -> None
-            Some(Payload::Tagged(ty, 0, _)) if *ty == TypeId::OPTION => {
+            Some(Payload::Variant { tag: 0, .. })
+                if src_ty == Some(TypeId::OPTION) =>
+            {
                 Ok(MethodResult::Done(Payload::none()))
             }
             // Option.Some(v) -> invoke fn(v)
-            Some(Payload::Tagged(ty, 1, payloads)) if *ty == TypeId::OPTION => {
+            Some(Payload::Variant {
+                tag: 1,
+                vals: payloads,
+            }) if src_ty == Some(TypeId::OPTION) => {
                 let inner = payloads
                     .first()
                     .copied()
@@ -2316,7 +2596,10 @@ impl Chainable {
                 }))
             }
             // Result.Ok(v) -> invoke fn(v)
-            Some(Payload::Tagged(ty, 0, payloads)) if *ty == TypeId::RESULT => {
+            Some(Payload::Variant {
+                tag: 0,
+                vals: payloads,
+            }) if src_ty == Some(TypeId::RESULT) => {
                 let inner = payloads
                     .first()
                     .copied()
@@ -2330,12 +2613,18 @@ impl Chainable {
                 }))
             }
             // Result.Err(e) -> propagate error unchanged
-            Some(Payload::Tagged(ty, 1, payloads)) if *ty == TypeId::RESULT => {
+            Some(Payload::Variant {
+                tag: 1,
+                vals: payloads,
+            }) if src_ty == Some(TypeId::RESULT) => {
                 let err = payloads
                     .first()
                     .copied()
                     .unwrap_or_else(|| invariant!("Err has payload"));
-                Ok(MethodResult::Done(Payload::Tagged(*ty, 1, smallvec![err])))
+                Ok(MethodResult::Done(Payload::Variant {
+                    tag: 1,
+                    vals: smallvec![err],
+                }))
             }
             _ => typechecked!("Chainable:chain", "Option or Result"),
         }
@@ -2367,21 +2656,24 @@ impl Bimappable {
             Other,
         }
 
-        let kind = match ctx.arena.get(src) {
-            Some(Payload::Tagged(ty, 0, payloads)) if *ty == TypeId::RESULT => {
-                Kind::ResultOk(
-                    *payloads
-                        .first()
-                        .unwrap_or_else(|| invariant!("Ok has payload")),
-                )
-            }
-            Some(Payload::Tagged(ty, 1, payloads)) if *ty == TypeId::RESULT => {
-                Kind::ResultErr(
-                    *payloads
-                        .first()
-                        .unwrap_or_else(|| invariant!("Err has payload")),
-                )
-            }
+        let src_ty = ctx.value_base_type(src);
+        let kind = match ctx.arena.payload(src) {
+            Some(Payload::Variant {
+                tag: 0,
+                vals: payloads,
+            }) if src_ty == Some(TypeId::RESULT) => Kind::ResultOk(
+                *payloads
+                    .first()
+                    .unwrap_or_else(|| invariant!("Ok has payload")),
+            ),
+            Some(Payload::Variant {
+                tag: 1,
+                vals: payloads,
+            }) if src_ty == Some(TypeId::RESULT) => Kind::ResultErr(
+                *payloads
+                    .first()
+                    .unwrap_or_else(|| invariant!("Err has payload")),
+            ),
             Some(Payload::Tuple(elems)) => {
                 let a = *elems
                     .first()

@@ -28,9 +28,10 @@ use super::infer::{ClassContext, Constraint};
 use super::instance::{Instance, InstanceRegistry};
 use super::ty::{Rename, Ty, TyArena, TyId, TyVar, TypeClass};
 use super::uf::UnionFind;
+use super::TypeDeclAccess;
 use crate::ast::{Ast, AstTypeExpr};
 use crate::intern::{QualifiedName, StringId};
-use crate::value::{TypeDef, TypeExprArena, TypeId, TypeRegistry};
+use crate::value::{TypeDef, TypeId, TypeRegistry};
 use crate::{ClassId, Span};
 
 /// Result of a unification attempt.
@@ -51,8 +52,6 @@ pub(super) struct SolveCtx<'a> {
     pub(super) errors: &'a mut Vec<TypeError>,
     /// AST reference for alias expansion and field type resolution.
     pub(super) ast: &'a mut Ast,
-    /// Type expression arena for converting `TypeExprId -> TyId`.
-    pub(super) type_exprs: &'a TypeExprArena,
     /// Current module path (for module-aware type name resolution).
     pub(super) current_module: &'a Option<QualifiedName>,
     /// Current class context (for associated type resolution).
@@ -133,7 +132,6 @@ impl SolveCtx<'_> {
             errors: self.errors,
             current_module: self.current_module,
             class_context: self.class_context,
-            type_exprs: self.type_exprs,
             rewrite_ast: false,
         }
     }
@@ -200,17 +198,19 @@ impl SolveCtx<'_> {
             _ => None?,
         };
         match self.registry.get_def(type_id) {
-            Some(TypeDef::Alias {
-                type_params,
-                target,
-                ..
-            }) => {
+            Some(TypeDef::Alias { type_params, .. }) => {
+                let target = self
+                    .registry
+                    .alias_target(TypeDeclAccess::new(), type_id)
+                    .unwrap_or_else(|| {
+                        typechecked!("alias target", "registered")
+                    });
                 // Don't expand if target is an object type; let
                 // `unify_named_with_object` handle it for proper
                 // required-field checking
                 let is_obj = self
                     .ast
-                    .get_type_expr(*target)
+                    .get_type_expr(target)
                     .is_some_and(|te| matches!(te, AstTypeExpr::Object(_)));
                 if is_obj {
                     None
@@ -220,7 +220,6 @@ impl SolveCtx<'_> {
                         .zip(args.iter())
                         .map(|(p, a)| (*p, *a))
                         .collect();
-                    let target = *target;
                     Some(self.convert_ctx().ast_type_to_ty(target, &subst))
                 }
             }
@@ -1046,13 +1045,14 @@ impl SolveCtx<'_> {
         let def = self.registry.get_def(type_id);
 
         match def {
-            Some(TypeDef::Alias {
-                type_params,
-                target,
-                ..
-            }) => {
+            Some(TypeDef::Alias { type_params, .. }) => {
+                let target = self
+                    .registry
+                    .alias_target(TypeDeclAccess::new(), type_id)
+                    .unwrap_or_else(|| {
+                        typechecked!("alias target", "registered")
+                    });
                 // Check if target is an object type
-                let target = *target;
                 let type_params = type_params.clone();
                 match self.ast.get_type_expr(target).cloned() {
                     Some(AstTypeExpr::Object(alias_fields)) => {
@@ -2720,14 +2720,15 @@ impl SolveCtx<'_> {
                 let type_args: SmallVec<[TyId; 4]> = type_args.clone();
                 let def = self.registry.get_def(type_id);
                 match def {
-                    Some(TypeDef::Alias {
-                        type_params,
-                        target,
-                        ..
-                    }) => {
+                    Some(TypeDef::Alias { type_params, .. }) => {
+                        let target = self
+                            .registry
+                            .alias_target(TypeDeclAccess::new(), type_id)
+                            .unwrap_or_else(|| {
+                                typechecked!("alias target", "registered")
+                            });
                         let params: SmallVec<[StringId; 2]> =
                             type_params.clone();
-                        let target = *target;
                         match self.ast.get_type_expr(target).cloned() {
                             Some(AstTypeExpr::Object(alias_fields)) => {
                                 // Find field in alias object

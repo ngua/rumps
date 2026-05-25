@@ -25,6 +25,7 @@ use crate::typecheck::instance::{self, Instance};
 use crate::typecheck::ty::{
     ClassShape, Rename, Scheme, Ty, TyArena, TyId, TyVar, TypeClass,
 };
+use crate::typecheck::TypeDeclAccess;
 use crate::value::{TypeDef, TypeId};
 use crate::{ClassId, Span};
 
@@ -617,6 +618,7 @@ impl InferCtx<'_> {
         let fn_ty = self
             .ty_arena
             .func(param_tys.iter().copied().collect(), actual_ret);
+        self.interp.function_types.insert(body, fn_ty);
         let ty_vars = self.uf.free_vars(fn_ty, &self.ty_arena);
         // Include all declared type params (they may only appear in constraints,
         // not in the function type itself; e.g. `T` in `[T, F: Fallible[T]]`)
@@ -700,6 +702,7 @@ impl InferCtx<'_> {
             Some(id) => {
                 let ann_ty =
                     self.convert().ast_type_to_ty(*id, &IndexMap::new());
+                self.interp.ast_type_map.insert(*id, ann_ty);
 
                 // Clone to avoid borrow issues with mutable self
                 let rhs_expr = self.ast.get_expr(rhs).cloned();
@@ -804,7 +807,7 @@ impl InferCtx<'_> {
         // Record for post-solve union narrowing check. At this point
         // `rhs_ty` may be a type variable (e.g. from a function call);
         // we defer the check until constraint solving resolves it.
-        self.let_annotations.push((rhs_ty, ann_ty, span));
+        self.let_annotations.push((rhs, rhs_ty, ann_ty, span));
 
         // Extensible records: if rhs is an object and annotation
         // is an alias to object, keep the full object type to
@@ -812,9 +815,12 @@ impl InferCtx<'_> {
         let ann_shape = self.ty_arena.get(ann_ty).clone();
         let is_obj_alias = matches!(ann_shape, Ty::Named(id, _)
         if self.registry.get_def(id).is_some_and(|def| match def {
-            TypeDef::Alias { target, .. } => self
+            TypeDef::Alias { .. } => self
+                .registry
+                .alias_target(TypeDeclAccess::new(), id)
+                .and_then(|target| self
                 .ast
-                .get_type_expr(*target)
+                .get_type_expr(target))
                 .is_some_and(|te| matches!(te, AstTypeExpr::Object(_))),
             _ => false,
         }));
@@ -828,6 +834,29 @@ impl InferCtx<'_> {
                 && matches!(ann_shape, Ty::Named(id, _) if id == TypeId::REF));
 
         Some(if use_rhs_ty { rhs_ty } else { ann_ty })
+    }
+
+    pub(super) fn union_member_repr(
+        &mut self,
+        rhs: TyId,
+        ann: TyId,
+    ) -> Option<TyId> {
+        match self.ty_arena.get(rhs) {
+            Ty::Var(v) if self.numeric_vars.contains(v) => {
+                self.expand_union_members(ann).and_then(|members| {
+                    members.iter().copied().find(|&member| {
+                        self.types_compatible(TyArena::INT, member)
+                    })
+                })
+            }
+            Ty::Var(_) => None,
+            _ => self.expand_union_members(ann).and_then(|members| {
+                members
+                    .iter()
+                    .copied()
+                    .find(|&member| self.types_compatible(rhs, member))
+            }),
+        }
     }
 
     /// Bind variables from a binding pattern to types in the environment.
@@ -1495,6 +1524,11 @@ impl InferCtx<'_> {
         if expected_ret_ty != TyArena::UNKNOWN {
             self.unify(ret_ty, expected_ret_ty, inst_span);
         }
+
+        let fn_ty = self
+            .ty_arena
+            .func(param_tys.iter().copied().collect(), ret_ty);
+        self.interp.function_types.insert(method.body, fn_ty);
 
         self.env.pop_scope();
     }

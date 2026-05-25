@@ -27,9 +27,10 @@
 use smallvec::SmallVec;
 
 use super::Interpreter;
+use crate::ast::ExprId;
 use crate::intern::{QualifiedName, StringId};
 use crate::io::IoContext;
-use crate::value::Payload;
+use crate::value::{Payload, Value};
 use crate::{Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
@@ -58,7 +59,43 @@ impl<I: IoContext> Interpreter<'_, I> {
             self.module_path(segments)
         } else {
             // Fall back to type + variant interpretation
-            self.type_variant_path(segments, span)
+            self.type_variant_path(None, segments, span)
+        }
+    }
+
+    pub(super) fn path_value(
+        &mut self,
+        expr_id: ExprId,
+        segments: &[StringId],
+        span: Span,
+    ) -> Result<Value> {
+        if self.env.has_module(
+            *segments
+                .first()
+                .unwrap_or_else(|| typechecked!("path", "non-empty")),
+        ) {
+            if let Some(const_id) = self.env.get_module_const(segments) {
+                Ok(self
+                    .env
+                    .consts
+                    .value(const_id)
+                    .cloned()
+                    .unwrap_or_else(|| invariant!("ConstId in consts map")))
+            } else if let Some(const_id) =
+                self.env.get_user_module_const(segments)
+            {
+                Ok(self
+                    .arena
+                    .value(const_id)
+                    .cloned()
+                    .unwrap_or_else(|| invariant!("ValueId in arena")))
+            } else {
+                self.path(segments, span)
+                    .map(|payload| self.value_for_expr(expr_id, payload))
+            }
+        } else {
+            self.type_variant_path(Some(expr_id), segments, span)
+                .map(|payload| self.value_for_expr(expr_id, payload))
         }
     }
 
@@ -78,7 +115,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Ok(self
                 .env
                 .consts
-                .get(const_id)
+                .payload(const_id)
                 .cloned()
                 .unwrap_or_else(|| invariant!("ConstId in consts map")))
         }
@@ -94,7 +131,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         {
             Ok(self
                 .arena
-                .get(const_id)
+                .payload(const_id)
                 .cloned()
                 .unwrap_or_else(|| invariant!("ValueId in arena")))
         } else {
@@ -110,6 +147,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// runtime via `type` declarations.
     fn type_variant_path(
         &mut self,
+        expr_id: Option<ExprId>,
         segments: &[StringId],
         _span: Span,
     ) -> Result<Payload> {
@@ -120,6 +158,20 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .registry
                     .lookup(&QualifiedName::local(*ty_name))
                     .unwrap_or_else(|| typechecked!("type path", "known type"));
+                if let Some(id) = expr_id {
+                    let meta = self.expr_meta(id);
+                    let checked_type_id = self
+                        .checked
+                        .types
+                        .to_type_id(meta.repr)
+                        .or_else(|| self.checked.types.to_type_id(meta.ty))
+                        .unwrap_or_else(|| {
+                            typechecked!("type path", "checked type metadata")
+                        });
+                    if checked_type_id != type_id {
+                        typechecked!("type path", "checked type metadata")
+                    }
+                }
 
                 // Typechecker validates variant names
                 let v = self
@@ -128,9 +180,15 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .unwrap_or_else(|| {
                         typechecked!("type path", "known variant")
                     });
+                if v.arity != 0 {
+                    typechecked!("type path", "zero-arity variant")
+                }
 
                 let idx = v.idx;
-                Ok(Payload::Tagged(type_id, idx, smallvec::SmallVec::new()))
+                Ok(Payload::Variant {
+                    tag: idx,
+                    vals: smallvec::SmallVec::new(),
+                })
             }
             // Typechecker validates path structure
             _ => typechecked!("type path", "two segments"),

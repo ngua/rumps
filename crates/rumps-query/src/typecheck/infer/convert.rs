@@ -11,6 +11,7 @@ use crate::ast::AstTypeExpr;
 use crate::typecheck::convert::ConvertCtx;
 use crate::typecheck::error::TypeError;
 use crate::typecheck::ty::{Ty, TyArena, TyId};
+use crate::typecheck::TypeDeclAccess;
 use crate::value::TypeDef;
 use crate::Span;
 
@@ -25,7 +26,6 @@ impl InferCtx<'_> {
             errors: &mut self.errors,
             current_module: &self.current_module,
             class_context: &self.class_context,
-            type_exprs: self.type_exprs,
             rewrite_ast: true,
         }
     }
@@ -301,13 +301,14 @@ impl InferCtx<'_> {
                 let field_id = self.env.intern(field);
                 let def = self.registry.get_def(type_id);
                 match def {
-                    Some(TypeDef::Alias {
-                        type_params,
-                        target,
-                        ..
-                    }) => {
+                    Some(TypeDef::Alias { type_params, .. }) => {
+                        let target = self
+                            .registry
+                            .alias_target(TypeDeclAccess::new(), type_id)
+                            .unwrap_or_else(|| {
+                                typechecked!("alias target", "registered")
+                            });
                         // Check if target is an object type
-                        let target = *target;
                         let params: smallvec::SmallVec<[_; 2]> =
                             type_params.clone();
                         match self.ast.get_type_expr(target).cloned() {

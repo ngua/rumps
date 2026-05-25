@@ -7,11 +7,12 @@
 //!
 //! # Clone cost
 //!
-//! Cloning a [`Payload`] is always O(1). Scalar variants are `Copy`-sized, and
-//! all collection variants (`Array`, `Object`, `Tuple`, `Map`, `Json`) wrap
-//! their heap data in `Arc`, so a clone is just a refcount bump. This means
-//! patterns like `self.eval(expr).await?` (which returns `Result<Payload>`) are
-//! cheap even for large collections.
+//! Cloning a [`Value`] is shallow for large heap-backed data. Scalar payload
+//! variants are `Copy`-sized, and collection variants (`Array`, `Object`,
+//! `Tuple`, `Map`) plus `Json` wrap their heap data in `Arc`, so cloning large
+//! collections is a refcount bump. Variants, refs, partial applications, and
+//! callables may copy small inline vectors of `ValueId` or metadata, but they do
+//! not deep-copy nested values.
 //!
 //! For mutation sites that need owned inner data (e.g. `Array.push`), use the
 //! `take_array` / `take_map` accessors on [`ValueArena`]; these use
@@ -41,7 +42,7 @@ use crate::ast::{
     TypeParam,
 };
 use crate::intern::{QualifiedName, StringId, StringInterner};
-use crate::typecheck::{RuntimeTyId, Ty, TyArena, TyId};
+use crate::typecheck::{RuntimeTyId, TypeDeclAccess};
 use crate::Span;
 
 /// A hashable key for `Map` values.
@@ -78,17 +79,6 @@ impl MapKey {
             Self::Float(f) => Payload::Float(*f),
             Self::Char(c) => Payload::Char(*c),
             Self::String(sid) => Payload::String(*sid),
-        }
-    }
-
-    /// Get the `TypeId` for this key.
-    pub(crate) fn type_id(&self) -> TypeId {
-        match self {
-            Self::Bool(_) => TypeId::BOOL,
-            Self::Int(_) => TypeId::INT,
-            Self::Float(_) => TypeId::FLOAT,
-            Self::Char(_) => TypeId::CHAR,
-            Self::String(_) => TypeId::STRING,
         }
     }
 }
@@ -193,13 +183,7 @@ impl TypeId {
     ///
     /// A database reference that can be either local or global.
     pub(crate) const REF: Self = Self(27);
-    /// Placeholder type for uninferred type parameters; compatible with any type.
-    /// Used for empty arrays (unknown element type) and partial variant types
-    /// (e.g., `Option.None` has unknown `T`, `Result.Ok(v)` has unknown `E`).
-    /// Note: This is NOT a registered type; it's a marker used in type expressions.
-    pub(crate) const UNKNOWN: Self = Self(u32::MAX);
-
-    /// User-accessible builtin `TypeId`s (excludes `OBJECT` and `UNKNOWN`).
+    /// User-accessible builtin `TypeId`s, excludes `OBJECT`.
     ///
     /// Must be kept in sync with `name()`.
     pub(crate) const ALL_BUILTINS: &[Self] = &[
@@ -233,7 +217,7 @@ impl TypeId {
     ];
 
     /// Returns the canonical name for builtin types, or `None` for
-    /// non-user-accessible types (`OBJECT`, `UNKNOWN`) and user-defined types.
+    /// non-user-accessible types (`OBJECT`) and user-defined types.
     pub(crate) const fn name(self) -> Option<&'static str> {
         match self.0 {
             0 => Some("Bool"),
@@ -348,8 +332,7 @@ impl fmt::Display for ClassId {
 /// parallel for error messages (e.g., "type mismatch: value created at line 5").
 #[derive(Clone, Debug)]
 pub(crate) struct ValueArena {
-    values: Vec<Payload>,
-    metas: Vec<Option<ValueMeta>>,
+    values: Vec<Value>,
     value_spans: Vec<Span>,
     /// Shared with `TypeEnv` so type lookups use consistent `StringId`s.
     pub(crate) strings: StringInterner,
@@ -366,7 +349,6 @@ impl ValueArena {
     pub(crate) fn new() -> Self {
         Self {
             values: Vec::new(),
-            metas: Vec::new(),
             value_spans: Vec::new(),
             strings: StringInterner::new(),
         }
@@ -376,41 +358,62 @@ impl ValueArena {
     pub(crate) fn with_interner(interner: StringInterner) -> Self {
         Self {
             values: Vec::new(),
-            metas: Vec::new(),
             value_spans: Vec::new(),
             strings: interner,
         }
     }
 
-    /// Add a value with explicit type metadata.
-    pub(crate) fn add_typed(
-        &mut self,
-        v: Payload,
-        meta: ValueMeta,
-        span: Span,
-    ) -> ValueId {
+    /// Add a typed value.
+    pub(crate) fn add(&mut self, v: Value, span: Span) -> ValueId {
         let id = ValueId(self.values.len() as u32);
         self.values.push(v);
-        self.metas.push(Some(meta));
         self.value_spans.push(span);
         id
     }
 
-    /// Get the type metadata for a value.
-    pub(crate) fn meta(&self, id: ValueId) -> Option<ValueMeta> {
-        self.metas.get(id.idx()).copied().flatten()
+    /// Add a payload with explicit type metadata.
+    pub(crate) fn add_typed(
+        &mut self,
+        payload: Payload,
+        meta: ValueMeta,
+        span: Span,
+    ) -> ValueId {
+        self.add(
+            Value {
+                ty: meta.ty,
+                repr: meta.repr,
+                payload,
+            },
+            span,
+        )
     }
 
-    /// Set or update the type metadata for a value.
-    pub(crate) fn set_meta(&mut self, id: ValueId, meta: ValueMeta) {
-        if let Some(slot) = self.metas.get_mut(id.idx()) {
-            *slot = Some(meta);
-        }
+    /// Get the type metadata for a value.
+    pub(crate) fn meta(&self, id: ValueId) -> Option<ValueMeta> {
+        self.values.get(id.idx()).map(|v| ValueMeta {
+            ty: v.ty,
+            repr: v.repr,
+        })
     }
 
     /// Get a value by ID.
-    pub(crate) fn get(&self, id: ValueId) -> Option<&Payload> {
+    pub(crate) fn get(&self, id: ValueId) -> Option<&Value> {
         self.values.get(id.idx())
+    }
+
+    /// Get a value by ID.
+    pub(crate) fn value(&self, id: ValueId) -> Option<&Value> {
+        self.get(id)
+    }
+
+    /// Get a payload by ID.
+    pub(crate) fn payload(&self, id: ValueId) -> Option<&Payload> {
+        self.values.get(id.idx()).map(|v| &v.payload)
+    }
+
+    /// Get the semantic type for a value.
+    pub(crate) fn ty(&self, id: ValueId) -> Option<RuntimeTyId> {
+        self.values.get(id.idx()).map(|v| v.ty)
     }
 
     /// Get the span of a value.
@@ -444,7 +447,7 @@ impl ValueArena {
         &self,
         id: ValueId,
     ) -> Option<&SmallVec<[ValueId; 4]>> {
-        match self.get(id)? {
+        match self.payload(id)? {
             Payload::Array(elems) => Some(elems),
             _ => None,
         }
@@ -459,7 +462,7 @@ impl ValueArena {
         &self,
         id: ValueId,
     ) -> Option<SmallVec<[ValueId; 4]>> {
-        match self.get(id)? {
+        match self.payload(id)? {
             Payload::Array(elems) => Some(Arc::unwrap_or_clone(elems.clone())),
             _ => None,
         }
@@ -472,7 +475,7 @@ impl ValueArena {
         &self,
         id: ValueId,
     ) -> Option<&IndexMap<StringId, ValueId>> {
-        match self.get(id)? {
+        match self.payload(id)? {
             Payload::Object(map) => Some(map),
             _ => None,
         }
@@ -485,7 +488,7 @@ impl ValueArena {
         &self,
         id: ValueId,
     ) -> Option<&SmallVec<[ValueId; 4]>> {
-        match self.get(id)? {
+        match self.payload(id)? {
             Payload::Tuple(elems) => Some(elems),
             _ => None,
         }
@@ -495,7 +498,7 @@ impl ValueArena {
     ///
     /// Returns `None` if the value doesn't exist or isn't a string.
     pub(crate) fn get_string_id(&self, id: ValueId) -> Option<StringId> {
-        match self.get(id)? {
+        match self.payload(id)? {
             Payload::String(sid) => Some(*sid),
             _ => None,
         }
@@ -508,7 +511,7 @@ impl ValueArena {
         &self,
         id: ValueId,
     ) -> Option<&IndexMap<MapKey, ValueId>> {
-        match self.get(id)? {
+        match self.payload(id)? {
             Payload::Map(entries) => Some(entries),
             _ => None,
         }
@@ -523,7 +526,7 @@ impl ValueArena {
         &self,
         id: ValueId,
     ) -> Option<IndexMap<MapKey, ValueId>> {
-        match self.get(id)? {
+        match self.payload(id)? {
             Payload::Map(entries) => {
                 Some(Arc::unwrap_or_clone(entries.clone()))
             }
@@ -596,8 +599,8 @@ impl CapturedEnv {
 /// avoiding allocation and enabling O(1) string comparison.
 ///
 /// Collection variants (`Array`, `Object`, `Tuple`, `Map`) and `Json`/`Closure`
-/// wrap their heap data in `Arc`, so cloning a `Payload` is always O(1). Callers
-/// that need owned inner data should use `Arc::unwrap_or_clone()`.
+/// wrap their heap data in `Arc`, so cloning large nested data is shallow.
+/// Callers that need owned inner data should use `Arc::unwrap_or_clone()`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Payload {
     /// The unit value; represents "no meaningful value".
@@ -670,12 +673,14 @@ pub(crate) enum Payload {
     /// pre-compiled regex by its cache index.
     Regex(u32),
 
-    /// A tagged value (sum type variant).
+    /// A sum type variant.
     ///
-    /// - `TypeId`: the base type (e.g., `Option`, `Result`, `Ordering`)
-    /// - `u8`: the variant index (e.g., `0` for `None`, `1` for `Some`)
-    /// - `SmallVec`: the payload values (most variants have 0-4)
-    Tagged(TypeId, u8, SmallVec<[ValueId; 4]>),
+    /// Type identity lives on `Value.ty`; payload data keeps only the variant
+    /// tag and child values.
+    Variant {
+        tag: u8,
+        vals: SmallVec<[ValueId; 4]>,
+    },
 
     /// A closure (anonymous function) with captured environment.
     ///
@@ -683,7 +688,8 @@ pub(crate) enum Payload {
     /// The body is an AST expression ID; the interpreter evaluates it
     /// with the captured environment restored when the closure is called.
     Closure {
-        params: SmallVec<[StringId; 4]>,
+        params: SmallVec<[(StringId, RuntimeTyId); 4]>,
+        ret: RuntimeTyId,
         body: ExprId,
         env: Arc<CapturedEnv>,
     },
@@ -695,7 +701,8 @@ pub(crate) enum Payload {
     /// higher-order functions.
     Function {
         name: StringId,
-        params: SmallVec<[StringId; 4]>,
+        params: SmallVec<[(StringId, RuntimeTyId); 4]>,
+        ret: RuntimeTyId,
         body: ExprId,
     },
 
@@ -716,9 +723,8 @@ pub(crate) enum Payload {
     ///
     /// - `class`: the class name (e.g., `"Filterable"`)
     /// - `method`: the method name (e.g., `"filter"`)
-    /// - `expr_id`: for convert methods (`wrap`, `into`, `try-into`), the
-    ///   expression ID of the `ClassMethodRef` so the interpreter can look up
-    ///   the target type from `convert_targets`
+    /// - `expr_id`: the expression ID of the `ClassMethodRef` so the
+    ///   interpreter can look up checked expression metadata
     ClassMethodFn {
         class: StringId,
         method: StringId,
@@ -808,7 +814,7 @@ impl Payload {
                     .iter()
                     .filter_map(|(name_id, val_id)| {
                         let name = arena.get_str(*name_id)?;
-                        let val = arena.get(*val_id)?;
+                        let val = arena.payload(*val_id)?;
                         let ty = val.type_name(reg, arena);
                         Some(format!("{name}: {ty}"))
                     })
@@ -821,16 +827,7 @@ impl Payload {
             Self::Json(_) => Cow::Borrowed("Json"),
             Self::FilePath(_) => Cow::Borrowed("FilePath"),
             Self::Regex(_) => Cow::Borrowed("Regex"),
-            Self::Tagged(ty, _, _) => Cow::Borrowed(
-                reg.get_def(*ty)
-                    .map(|def| match def {
-                        TypeDef::Builtin(b) => b.name(),
-                        TypeDef::Sum { .. } => "Tagged",
-                        TypeDef::Alias { .. } => "Alias",
-                        TypeDef::Union { .. } => "Union",
-                    })
-                    .unwrap_or("Unknown"),
-            ),
+            Self::Variant { .. } => Cow::Borrowed("Variant"),
             Self::Closure { .. } => Cow::Borrowed("Closure"),
             Self::Function { .. } => Cow::Borrowed("Function"),
             Self::ModuleFn { .. } => Cow::Borrowed("ModuleFn"),
@@ -846,91 +843,57 @@ impl Payload {
 
     /// Create an `Option.None` value.
     pub(crate) fn none() -> Self {
-        Self::Tagged(TypeId::OPTION, 0, SmallVec::new())
+        Self::Variant {
+            tag: 0,
+            vals: SmallVec::new(),
+        }
     }
 
     /// Create an `Option.Some(v)` value.
     pub(crate) fn some(v: ValueId) -> Self {
-        Self::Tagged(TypeId::OPTION, 1, smallvec![v])
+        Self::Variant {
+            tag: 1,
+            vals: smallvec![v],
+        }
     }
 
     /// Create a `Result.Ok(v)` value.
     pub(crate) fn ok(v: ValueId) -> Self {
-        Self::Tagged(TypeId::RESULT, 0, smallvec![v])
+        Self::Variant {
+            tag: 0,
+            vals: smallvec![v],
+        }
     }
 
     /// Create a `Result.Err(e)` value.
     pub(crate) fn err(e: ValueId) -> Self {
-        Self::Tagged(TypeId::RESULT, 1, smallvec![e])
+        Self::Variant {
+            tag: 1,
+            vals: smallvec![e],
+        }
     }
 
     /// Create an `Ordering.Lt` value.
     pub(crate) fn lt() -> Self {
-        Self::Tagged(TypeId::ORDERING, 0, SmallVec::new())
+        Self::Variant {
+            tag: 0,
+            vals: SmallVec::new(),
+        }
     }
 
     /// Create an `Ordering.Eq` value.
     pub(crate) fn eq_ord() -> Self {
-        Self::Tagged(TypeId::ORDERING, 1, SmallVec::new())
+        Self::Variant {
+            tag: 1,
+            vals: SmallVec::new(),
+        }
     }
 
     /// Create an `Ordering.Gt` value.
     pub(crate) fn gt() -> Self {
-        Self::Tagged(TypeId::ORDERING, 2, SmallVec::new())
-    }
-
-    /// Check if this is `Option.None`.
-    pub(crate) fn is_none(&self) -> bool {
-        matches!(self, Self::Tagged(ty, 0, _) if *ty == TypeId::OPTION)
-    }
-
-    /// Check if this is `Option.Some(_)`.
-    pub(crate) fn is_some(&self) -> bool {
-        matches!(self, Self::Tagged(ty, 1, _) if *ty == TypeId::OPTION)
-    }
-
-    /// Check if this is `Result.Ok(_)`.
-    pub(crate) fn is_ok(&self) -> bool {
-        matches!(self, Self::Tagged(ty, 0, _) if *ty == TypeId::RESULT)
-    }
-
-    /// Check if this is `Result.Err(_)`.
-    pub(crate) fn is_err(&self) -> bool {
-        matches!(self, Self::Tagged(ty, 1, _) if *ty == TypeId::RESULT)
-    }
-
-    /// Get the simplified base `TypeId` for this value.
-    ///
-    /// Returns the primitive type id for scalars. For tagged values, returns
-    /// the base type directly (e.g., `Option` or `Result`).
-    /// Returns `UNKNOWN` for closures and functions.
-    pub(crate) fn base_type(&self) -> TypeId {
-        match self {
-            Self::Unit => TypeId::UNIT,
-            Self::Bool(_) => TypeId::BOOL,
-            Self::Int(_) => TypeId::INT,
-            Self::Word(_) => TypeId::WORD,
-            Self::Float(_) => TypeId::FLOAT,
-            Self::Char(_) => TypeId::CHAR,
-            Self::String(_) => TypeId::STRING,
-            Self::Array(..) => TypeId::ARRAY,
-            Self::Object(_) => TypeId::OBJECT,
-            Self::Tuple(..) => TypeId::TUPLE,
-            Self::Map(..) => TypeId::MAP,
-            Self::Time(_) => TypeId::TIME,
-            Self::Json(_) => TypeId::JSON,
-            Self::FilePath(_) => TypeId::FILEPATH,
-            Self::Regex(_) => TypeId::REGEX,
-            Self::Tagged(ty, _, _) => *ty,
-            Self::Closure { .. }
-            | Self::Function { .. }
-            | Self::ModuleFn { .. }
-            | Self::ModuleConst { .. }
-            | Self::ClassMethodFn { .. }
-            | Self::PartialApp { .. } => TypeId::UNKNOWN,
-            Self::Range { .. } => TypeId::RANGE,
-            Self::Ref(..) => TypeId::REF,
-            Self::ForeverContinuation | Self::LoopContinue(_) => TypeId::UNIT,
+        Self::Variant {
+            tag: 2,
+            vals: SmallVec::new(),
         }
     }
 }
@@ -989,9 +952,26 @@ pub(crate) struct VariantDef {
     pub(crate) name: StringId,
     pub(crate) idx: u8,
     pub(crate) arity: u8,
-    /// Payload types for this variant (AST type expression IDs).
-    /// Used by type checker to get payload types for pattern matching.
-    pub(crate) payloads: SmallVec<[AstTypeExprId; 2]>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct VariantTypeDecl {
+    name: StringId,
+    payloads: SmallVec<[AstTypeExprId; 2]>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum TypeDeclMeta {
+    None,
+    Sum {
+        variants: SmallVec<[VariantTypeDecl; 4]>,
+    },
+    Alias {
+        target: AstTypeExprId,
+    },
+    Union {
+        member_exprs: SmallVec<[AstTypeExprId; 8]>,
+    },
 }
 
 /// A type definition.
@@ -1006,13 +986,9 @@ pub(crate) enum TypeDef {
     /// Transparent type alias.
     ///
     /// `newtype I = Int` makes `I` fully interchangeable with `Int`.
-    /// The target is stored as an AST type expression to support
-    /// type parameters; resolution happens at usage site with substitution.
     Alias {
         name: StringId,
         type_params: SmallVec<[StringId; 2]>,
-        /// The target type (AST expression, not resolved).
-        target: AstTypeExprId,
     },
     /// Named union type definition.
     ///
@@ -1025,42 +1001,7 @@ pub(crate) enum TypeDef {
         type_params: SmallVec<[StringId; 2]>,
         /// Member base types.
         members: SmallVec<[TypeId; 8]>,
-        /// Original member type expressions, preserving type arguments.
-        member_exprs: SmallVec<[AstTypeExprId; 8]>,
     },
-}
-
-/// Index into the type expression arena.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[repr(transparent)]
-pub(crate) struct TypeExprId(u32);
-
-impl TypeExprId {
-    const fn idx(self) -> usize {
-        self.0 as usize
-    }
-}
-
-/// A type expression for annotations (not stored in values; used for validation).
-///
-/// Examples: `Int`, `Array[String]`, `Result[Int, String]`, `(Int) -> Int`
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum TypeExpr {
-    Named(TypeId),
-    App(TypeId, SmallVec<[TypeExprId; 2]>),
-    /// Function type: `(params...) -> return`
-    Fn(SmallVec<[TypeExprId; 4]>, TypeExprId),
-    /// Tuple type: `(Int, String, Bool)`
-    Tuple(SmallVec<[TypeExprId; 4]>),
-    /// Union type: `Int | String | Bool`
-    ///
-    /// A value matches a union if it matches ANY member type.
-    Union(SmallVec<[TypeExprId; 4]>),
-    /// Structural object type: `{ field: Type, ... }`
-    ///
-    /// Anonymous structural object type. A value matches if it has at least
-    /// the specified fields with matching types (extensible record semantics).
-    Object(IndexMap<StringId, TypeExprId>),
 }
 
 /// A named function definition stored in the function registry.
@@ -1070,499 +1011,9 @@ enum TypeExpr {
 #[derive(Clone, Debug)]
 pub(crate) struct FunctionDef {
     pub(crate) name: StringId,
-    pub(crate) params: SmallVec<[StringId; 4]>,
+    pub(crate) params: SmallVec<[(StringId, RuntimeTyId); 4]>,
+    pub(crate) ret: RuntimeTyId,
     pub(crate) body: ExprId,
-}
-
-/// Arena for type expressions.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct TypeExprArena {
-    exprs: Vec<TypeExpr>,
-}
-
-impl TypeExprArena {
-    pub(crate) fn new() -> Self {
-        Self { exprs: Vec::new() }
-    }
-
-    fn add(&mut self, expr: TypeExpr) -> TypeExprId {
-        let id = TypeExprId(self.exprs.len() as u32);
-        self.exprs.push(expr);
-        id
-    }
-
-    fn get(&self, id: TypeExprId) -> Option<&TypeExpr> {
-        self.exprs.get(id.idx())
-    }
-
-    /// Get the base `TypeId` from a type expression.
-    ///
-    /// For `Named(T)` returns `T`; for `App(T, params)` returns `T`.
-    /// For `Fn`, `Tuple`, `Union`, and `Object` returns `None` (compound types
-    /// have no single base).
-    pub(crate) fn base_type(&self, id: TypeExprId) -> Option<TypeId> {
-        self.get(id).and_then(|expr| match expr {
-            TypeExpr::Named(ty) | TypeExpr::App(ty, _) => Some(*ty),
-            TypeExpr::Fn(..)
-            | TypeExpr::Tuple(..)
-            | TypeExpr::Union(..)
-            | TypeExpr::Object(..) => None,
-        })
-    }
-
-    /// Get type arguments from a parameterized type expression.
-    ///
-    /// For `App(T, params)` returns `Some(&params)`; for `Named(T)` returns `None`.
-    pub(crate) fn type_args(
-        &self,
-        id: TypeExprId,
-    ) -> Option<&SmallVec<[TypeExprId; 2]>> {
-        self.get(id).and_then(|expr| match expr {
-            TypeExpr::App(_, params) => Some(params),
-            _ => None,
-        })
-    }
-
-    /// Add a simple named type expression.
-    pub(crate) fn named(&mut self, ty: TypeId) -> TypeExprId {
-        self.add(TypeExpr::Named(ty))
-    }
-
-    /// Add a parameterized type expression (e.g., `Result[Int, String]`).
-    pub(crate) fn app(
-        &mut self,
-        ty: TypeId,
-        params: SmallVec<[TypeExprId; 2]>,
-    ) -> TypeExprId {
-        self.add(TypeExpr::App(ty, params))
-    }
-
-    /// Get function type parts: `(params, return_type)`.
-    ///
-    /// Returns `None` if the type expression is not a function type.
-    pub(crate) fn fn_parts(
-        &self,
-        id: TypeExprId,
-    ) -> Option<(&SmallVec<[TypeExprId; 4]>, TypeExprId)> {
-        self.get(id).and_then(|expr| match expr {
-            TypeExpr::Fn(params, ret) => Some((params, *ret)),
-            _ => None,
-        })
-    }
-
-    /// Check if a type expression is a function type.
-    pub(crate) fn is_fn(&self, id: TypeExprId) -> bool {
-        self.get(id).is_some_and(|e| matches!(e, TypeExpr::Fn(..)))
-    }
-
-    /// Check if two type expressions are structurally equal.
-    pub(crate) fn eq(&self, a: TypeExprId, b: TypeExprId) -> bool {
-        self.get(a)
-            .zip(self.get(b))
-            .is_some_and(|(ta, tb)| self.exprs_eq(ta, tb))
-    }
-
-    /// Structural equality of type expressions.
-    ///
-    /// `UNKNOWN` is compatible with any type (used for uninferred type params).
-    fn exprs_eq(&self, a: &TypeExpr, b: &TypeExpr) -> bool {
-        match (a, b) {
-            // UNKNOWN is compatible with anything (uninferred type parameter)
-            (TypeExpr::Named(TypeId::UNKNOWN), _)
-            | (_, TypeExpr::Named(TypeId::UNKNOWN)) => true,
-            (TypeExpr::Named(ta), TypeExpr::Named(tb)) => ta == tb,
-            (TypeExpr::App(ta, pa), TypeExpr::App(tb, pb)) => {
-                ta == tb
-                    && pa.len() == pb.len()
-                    && pa.iter().zip(pb.iter()).all(|(a, b)| self.eq(*a, *b))
-            }
-            (TypeExpr::Fn(pa, ra), TypeExpr::Fn(pb, rb)) => {
-                pa.len() == pb.len()
-                    && pa.iter().zip(pb.iter()).all(|(a, b)| self.eq(*a, *b))
-                    && self.eq(*ra, *rb)
-            }
-            (TypeExpr::Tuple(ea), TypeExpr::Tuple(eb)) => {
-                ea.len() == eb.len()
-                    && ea.iter().zip(eb.iter()).all(|(a, b)| self.eq(*a, *b))
-            }
-            (TypeExpr::Union(ma), TypeExpr::Union(mb)) => {
-                ma.len() == mb.len()
-                    && ma.iter().zip(mb.iter()).all(|(a, b)| self.eq(*a, *b))
-            }
-            (TypeExpr::Object(fa), TypeExpr::Object(fb)) => {
-                fa.len() == fb.len()
-                    && fa.iter().all(|(k, va)| {
-                        fb.get(k).is_some_and(|vb| self.eq(*va, *vb))
-                    })
-            }
-            _ => false,
-        }
-    }
-
-    /// Format a type expression for display.
-    ///
-    /// - `name_fn`: converts `TypeId` to a type name string
-    /// - `str_fn`: converts `StringId` to a string (for object field names)
-    pub(crate) fn format<F, S>(
-        &self,
-        id: TypeExprId,
-        name_fn: F,
-        str_fn: S,
-    ) -> Option<String>
-    where
-        F: Fn(TypeId) -> String + Copy,
-        S: Fn(StringId) -> String + Copy,
-    {
-        self.get(id)
-            .map(|expr| self.format_expr(expr, name_fn, str_fn))
-    }
-
-    fn format_expr<F, S>(
-        &self,
-        expr: &TypeExpr,
-        name_fn: F,
-        str_fn: S,
-    ) -> String
-    where
-        F: Fn(TypeId) -> String + Copy,
-        S: Fn(StringId) -> String + Copy,
-    {
-        match expr {
-            TypeExpr::Named(ty) => name_fn(*ty),
-            TypeExpr::App(ty, params) => {
-                let name = name_fn(*ty);
-                let args = params
-                    .iter()
-                    .filter_map(|p| self.format(*p, name_fn, str_fn))
-                    .join(", ");
-                format!("{name}[{args}]")
-            }
-            TypeExpr::Fn(params, ret) => {
-                let args = params
-                    .iter()
-                    .filter_map(|p| self.format(*p, name_fn, str_fn))
-                    .join(", ");
-                let ret_str = self
-                    .format(*ret, name_fn, str_fn)
-                    .unwrap_or_else(|| "?".to_owned());
-                format!("({args}) -> {ret_str}")
-            }
-            TypeExpr::Tuple(elems) => {
-                let parts = elems
-                    .iter()
-                    .filter_map(|p| self.format(*p, name_fn, str_fn))
-                    .join(", ");
-                // Single-element tuples need trailing comma: `(Int,)`
-                let trail = if elems.len() == 1 { "," } else { "" };
-                format!("({parts}{trail})")
-            }
-            TypeExpr::Union(members) => {
-                let parts = members
-                    .iter()
-                    .filter_map(|p| self.format(*p, name_fn, str_fn))
-                    .join(" | ");
-                parts
-            }
-            TypeExpr::Object(fields) => {
-                let parts = fields
-                    .iter()
-                    .map(|(k, v)| {
-                        let name = str_fn(*k);
-                        let ty = self
-                            .format(*v, name_fn, str_fn)
-                            .unwrap_or_else(|| "?".to_owned());
-                        format!("{name}: {ty}")
-                    })
-                    .join(", ");
-                format!("{{ {parts} }}")
-            }
-        }
-    }
-
-    /// Add a function type expression (e.g., `(Int, Int) -> Int`).
-    pub(crate) fn fn_type(
-        &mut self,
-        params: SmallVec<[TypeExprId; 4]>,
-        ret: TypeExprId,
-    ) -> TypeExprId {
-        self.add(TypeExpr::Fn(params, ret))
-    }
-
-    /// Add a tuple type expression (e.g., `(Int, String, Bool)`).
-    pub(crate) fn tuple(
-        &mut self,
-        elems: SmallVec<[TypeExprId; 4]>,
-    ) -> TypeExprId {
-        self.add(TypeExpr::Tuple(elems))
-    }
-
-    /// Get tuple element types if this is a tuple type.
-    pub(crate) fn tuple_elems(
-        &self,
-        id: TypeExprId,
-    ) -> Option<&SmallVec<[TypeExprId; 4]>> {
-        self.get(id).and_then(|expr| match expr {
-            TypeExpr::Tuple(elems) => Some(elems),
-            _ => None,
-        })
-    }
-
-    /// Check if a type expression is a tuple type.
-    pub(crate) fn is_tuple(&self, id: TypeExprId) -> bool {
-        self.get(id)
-            .is_some_and(|e| matches!(e, TypeExpr::Tuple(..)))
-    }
-
-    /// Add a union type expression (e.g., `Int | String | Bool`).
-    pub(crate) fn union(
-        &mut self,
-        members: SmallVec<[TypeExprId; 4]>,
-    ) -> TypeExprId {
-        self.add(TypeExpr::Union(members))
-    }
-
-    /// Get union member types if this is a union type.
-    pub(crate) fn union_members(
-        &self,
-        id: TypeExprId,
-    ) -> Option<&SmallVec<[TypeExprId; 4]>> {
-        self.get(id).and_then(|expr| match expr {
-            TypeExpr::Union(members) => Some(members),
-            _ => None,
-        })
-    }
-
-    /// Check if a type expression is a union type.
-    pub(crate) fn is_union(&self, id: TypeExprId) -> bool {
-        self.get(id)
-            .is_some_and(|e| matches!(e, TypeExpr::Union(..)))
-    }
-
-    /// Add a structural object type expression (e.g., `{ name: String, age: Int }`).
-    pub(crate) fn object(
-        &mut self,
-        fields: IndexMap<StringId, TypeExprId>,
-    ) -> TypeExprId {
-        self.add(TypeExpr::Object(fields))
-    }
-
-    /// Get object field types if this is a structural object type.
-    pub(crate) fn object_fields(
-        &self,
-        id: TypeExprId,
-    ) -> Option<&IndexMap<StringId, TypeExprId>> {
-        self.get(id).and_then(|expr| match expr {
-            TypeExpr::Object(fields) => Some(fields),
-            _ => None,
-        })
-    }
-
-    /// Check if a type expression is a structural object type.
-    pub(crate) fn is_object(&self, id: TypeExprId) -> bool {
-        self.get(id)
-            .is_some_and(|e| matches!(e, TypeExpr::Object(..)))
-    }
-
-    /// Convert a resolved static type to a runtime type expression.
-    ///
-    /// Used after type checking to create runtime type tags for:
-    /// - Runtime `is` checks (compare value's type tag against annotation)
-    /// - Runtime `as` casts (verify cast is valid)
-    /// - Error messages with concrete types
-    ///
-    /// # Panics
-    ///
-    /// Panics if `ty` contains unresolved type variables (`Var`, `Unknown`, `Error`).
-    /// These should be resolved during constraint solving before calling this.
-    #[allow(dead_code)]
-    pub(crate) fn intern_ty(&mut self, id: TyId, ta: &TyArena) -> TypeExprId {
-        match ta.get(id) {
-            Ty::Bool => self.named(TypeId::BOOL),
-            Ty::Int => self.named(TypeId::INT),
-            Ty::Word => self.named(TypeId::WORD),
-            Ty::Float => self.named(TypeId::FLOAT),
-            Ty::Char => self.named(TypeId::CHAR),
-            Ty::String => self.named(TypeId::STRING),
-            Ty::Unit => self.named(TypeId::UNIT),
-            Ty::Time => self.named(TypeId::TIME),
-            Ty::Range => self.named(TypeId::RANGE),
-            Ty::Json => self.named(TypeId::JSON),
-            Ty::Ordering => self.named(TypeId::ORDERING),
-            Ty::DataStatus => self.named(TypeId::DATA_STATUS),
-            Ty::FilePath => self.named(TypeId::FILEPATH),
-            Ty::Path => self.named(TypeId::PATH),
-            Ty::Regex => self.named(TypeId::REGEX),
-            Ty::RuntimeError => self.named(TypeId::ERROR),
-            Ty::Local => self.named(TypeId::LOCAL),
-            Ty::Global => self.named(TypeId::GLOBAL),
-            Ty::Array(elem) => {
-                let elem_id = self.intern_ty(*elem, ta);
-                self.app(TypeId::ARRAY, smallvec![elem_id])
-            }
-            Ty::Option(inner) => {
-                let inner_id = self.intern_ty(*inner, ta);
-                self.app(TypeId::OPTION, smallvec![inner_id])
-            }
-            Ty::Result(ok, err) => {
-                let ok_id = self.intern_ty(*ok, ta);
-                let err_id = self.intern_ty(*err, ta);
-                self.app(TypeId::RESULT, smallvec![ok_id, err_id])
-            }
-            Ty::Map(k, v) => {
-                let k_id = self.intern_ty(*k, ta);
-                let v_id = self.intern_ty(*v, ta);
-                self.app(TypeId::MAP, smallvec![k_id, v_id])
-            }
-            Ty::Tuple(elems) => {
-                let elems = elems.clone();
-                let elem_ids: SmallVec<[_; 4]> =
-                    elems.iter().map(|&e| self.intern_ty(e, ta)).collect();
-                self.tuple(elem_ids)
-            }
-            Ty::Named(type_id, params) => {
-                if params.is_empty() {
-                    self.named(*type_id)
-                } else {
-                    let params = params.clone();
-                    let param_ids: SmallVec<[_; 2]> =
-                        params.iter().map(|&p| self.intern_ty(p, ta)).collect();
-                    self.app(*type_id, param_ids)
-                }
-            }
-            Ty::Fn(params, ret) => {
-                let params = params.clone();
-                let ret = *ret;
-                let param_ids: SmallVec<[_; 4]> =
-                    params.iter().map(|&p| self.intern_ty(p, ta)).collect();
-                let ret_id = self.intern_ty(ret, ta);
-                self.fn_type(param_ids, ret_id)
-            }
-            Ty::Object(fields) => {
-                let fields = fields.clone();
-                let converted: IndexMap<StringId, TypeExprId> = fields
-                    .iter()
-                    .map(|(&k, &t)| (k, self.intern_ty(t, ta)))
-                    .collect();
-                self.object(converted)
-            }
-            Ty::Union(_, members) => {
-                let members = members.clone();
-                let member_ids: SmallVec<[_; 4]> =
-                    members.iter().map(|&m| self.intern_ty(m, ta)).collect();
-                self.union(member_ids)
-            }
-            Ty::Var(_)
-            | Ty::Apply(_, _)
-            | Ty::AssocType(_, _, _)
-            | Ty::Unknown
-            | Ty::Error => {
-                unreachable!("intern_ty called on unresolved type: {id:?}")
-            }
-        }
-    }
-
-    /// Convert a `Ty` to a runtime `TypeExprId`, substituting `UNKNOWN` for
-    /// unresolved type variables.
-    ///
-    /// Use this when the type may contain type variables (e.g., from generics
-    /// that haven't been monomorphized). For empty containers, the element
-    /// type doesn't matter at runtime.
-    pub(crate) fn intern_ty_lenient(
-        &mut self,
-        id: TyId,
-        ta: &TyArena,
-    ) -> TypeExprId {
-        match ta.get(id) {
-            Ty::Bool => self.named(TypeId::BOOL),
-            Ty::Int => self.named(TypeId::INT),
-            Ty::Word => self.named(TypeId::WORD),
-            Ty::Float => self.named(TypeId::FLOAT),
-            Ty::Char => self.named(TypeId::CHAR),
-            Ty::String => self.named(TypeId::STRING),
-            Ty::Unit => self.named(TypeId::UNIT),
-            Ty::Time => self.named(TypeId::TIME),
-            Ty::Range => self.named(TypeId::RANGE),
-            Ty::Json => self.named(TypeId::JSON),
-            Ty::Ordering => self.named(TypeId::ORDERING),
-            Ty::DataStatus => self.named(TypeId::DATA_STATUS),
-            Ty::FilePath => self.named(TypeId::FILEPATH),
-            Ty::Path => self.named(TypeId::PATH),
-            Ty::Regex => self.named(TypeId::REGEX),
-            Ty::RuntimeError => self.named(TypeId::ERROR),
-            Ty::Local => self.named(TypeId::LOCAL),
-            Ty::Global => self.named(TypeId::GLOBAL),
-            Ty::Array(elem) => {
-                let elem_id = self.intern_ty_lenient(*elem, ta);
-                self.app(TypeId::ARRAY, smallvec![elem_id])
-            }
-            Ty::Option(inner) => {
-                let inner_id = self.intern_ty_lenient(*inner, ta);
-                self.app(TypeId::OPTION, smallvec![inner_id])
-            }
-            Ty::Result(ok, err) => {
-                let ok_id = self.intern_ty_lenient(*ok, ta);
-                let err_id = self.intern_ty_lenient(*err, ta);
-                self.app(TypeId::RESULT, smallvec![ok_id, err_id])
-            }
-            Ty::Map(k, v) => {
-                let k_id = self.intern_ty_lenient(*k, ta);
-                let v_id = self.intern_ty_lenient(*v, ta);
-                self.app(TypeId::MAP, smallvec![k_id, v_id])
-            }
-            Ty::Tuple(elems) => {
-                let elems = elems.clone();
-                let elem_ids: SmallVec<[_; 4]> = elems
-                    .iter()
-                    .map(|&e| self.intern_ty_lenient(e, ta))
-                    .collect();
-                self.tuple(elem_ids)
-            }
-            Ty::Named(type_id, params) => {
-                if params.is_empty() {
-                    self.named(*type_id)
-                } else {
-                    let params = params.clone();
-                    let param_ids: SmallVec<[_; 2]> = params
-                        .iter()
-                        .map(|&p| self.intern_ty_lenient(p, ta))
-                        .collect();
-                    self.app(*type_id, param_ids)
-                }
-            }
-            Ty::Fn(params, ret) => {
-                let params = params.clone();
-                let ret = *ret;
-                let param_ids: SmallVec<[_; 4]> = params
-                    .iter()
-                    .map(|&p| self.intern_ty_lenient(p, ta))
-                    .collect();
-                let ret_id = self.intern_ty_lenient(ret, ta);
-                self.fn_type(param_ids, ret_id)
-            }
-            Ty::Object(fields) => {
-                let fields = fields.clone();
-                let converted: IndexMap<StringId, TypeExprId> = fields
-                    .iter()
-                    .map(|(&k, &t)| (k, self.intern_ty_lenient(t, ta)))
-                    .collect();
-                self.object(converted)
-            }
-            Ty::Union(_, members) => {
-                let members = members.clone();
-                let member_ids: SmallVec<[_; 4]> = members
-                    .iter()
-                    .map(|&m| self.intern_ty_lenient(m, ta))
-                    .collect();
-                self.union(member_ids)
-            }
-            // Unresolved types become UNKNOWN
-            Ty::Var(_)
-            | Ty::Apply(_, _)
-            | Ty::AssocType(_, _, _)
-            | Ty::Unknown
-            | Ty::Error => self.named(TypeId::UNKNOWN),
-        }
-    }
 }
 
 /// Registry of all type definitions.
@@ -1573,6 +1024,7 @@ impl TypeExprArena {
 #[derive(Clone, Debug)]
 pub(crate) struct TypeRegistry {
     defs: Vec<TypeDef>,
+    decls: Vec<TypeDeclMeta>,
     by_name: HashMap<QualifiedName, TypeId>,
 }
 
@@ -1587,6 +1039,7 @@ impl TypeRegistry {
     pub(crate) fn new(arena: &mut ValueArena) -> Self {
         let mut reg = Self {
             defs: Vec::new(),
+            decls: Vec::new(),
             by_name: HashMap::new(),
         };
         reg.register_builtins(arena);
@@ -1598,14 +1051,67 @@ impl TypeRegistry {
         def: TypeDef,
         name: QualifiedName,
     ) -> TypeId {
+        self.register_with_decl(def, TypeDeclMeta::None, name)
+    }
+
+    fn register_with_decl(
+        &mut self,
+        def: TypeDef,
+        decl: TypeDeclMeta,
+        name: QualifiedName,
+    ) -> TypeId {
         let id = TypeId(self.defs.len() as u32);
         self.by_name.insert(name, id);
         self.defs.push(def);
+        self.decls.push(decl);
         id
     }
 
     pub(crate) fn get_def(&self, id: TypeId) -> Option<&TypeDef> {
         self.defs.get(id.idx())
+    }
+
+    pub(crate) fn alias_target(
+        &self,
+        _access: TypeDeclAccess,
+        id: TypeId,
+    ) -> Option<AstTypeExprId> {
+        self.decls.get(id.idx()).and_then(|decl| match decl {
+            TypeDeclMeta::Alias { target } => Some(*target),
+            TypeDeclMeta::None
+            | TypeDeclMeta::Sum { .. }
+            | TypeDeclMeta::Union { .. } => None,
+        })
+    }
+
+    pub(crate) fn union_member_exprs(
+        &self,
+        _access: TypeDeclAccess,
+        id: TypeId,
+    ) -> Option<&SmallVec<[AstTypeExprId; 8]>> {
+        self.decls.get(id.idx()).and_then(|decl| match decl {
+            TypeDeclMeta::Union { member_exprs } => Some(member_exprs),
+            TypeDeclMeta::None
+            | TypeDeclMeta::Sum { .. }
+            | TypeDeclMeta::Alias { .. } => None,
+        })
+    }
+
+    pub(crate) fn variant_payloads(
+        &self,
+        _access: TypeDeclAccess,
+        ty: TypeId,
+        name: StringId,
+    ) -> Option<&SmallVec<[AstTypeExprId; 2]>> {
+        self.decls.get(ty.idx()).and_then(|decl| match decl {
+            TypeDeclMeta::Sum { variants } => variants
+                .iter()
+                .find(|v| v.name == name)
+                .map(|v| &v.payloads),
+            TypeDeclMeta::None
+            | TypeDeclMeta::Alias { .. }
+            | TypeDeclMeta::Union { .. } => None,
+        })
     }
 
     /// Look up a type by its qualified name.
@@ -1727,6 +1233,7 @@ impl TypeRegistry {
         // Object at index 5: registered internally but NOT user-accessible.
         // Users should use structural object types: `{ field: Type, ... }`
         self.defs.push(TypeDef::Builtin(BuiltinType::Object));
+        self.decls.push(TypeDeclMeta::None);
         // NOTE: No by_name insert; users cannot reference "Object" in annotations.
 
         // Option[T] at index 6
@@ -1744,15 +1251,11 @@ impl TypeRegistry {
                         name: none_name,
                         idx: 0,
                         arity: 0,
-                        payloads: SmallVec::new(),
                     },
                     VariantDef {
                         name: some_name,
                         idx: 1,
                         arity: 1,
-                        // Builtin types don't use AST type expressions for payloads;
-                        // the type checker handles Option/Result specially via Ty::Option/Ty::Result
-                        payloads: SmallVec::new(),
                     },
                 ],
             },
@@ -1777,15 +1280,11 @@ impl TypeRegistry {
                         name: ok_name,
                         idx: 0,
                         arity: 1,
-                        // Builtin: type checker handles Result specially
-                        payloads: SmallVec::new(),
                     },
                     VariantDef {
                         name: err_name,
                         idx: 1,
                         arity: 1,
-                        // Builtin: type checker handles Result specially
-                        payloads: SmallVec::new(),
                     },
                 ],
             },
@@ -1803,8 +1302,7 @@ impl TypeRegistry {
             invariant!("Char registered at expected index");
         }
 
-        // Tuple at index 9 (registered for type lookup, though Tuple types use
-        // TypeExpr::Tuple rather than TypeExpr::App)
+        // Tuple at index 9; registered for type lookup.
         let tuple_name = arena.intern("Tuple");
         let tup = self
             .register(TypeDef::Builtin(BuiltinType::Tuple), tuple_name.into());
@@ -1867,7 +1365,6 @@ impl TypeRegistry {
                 name: storable_name,
                 type_params: SmallVec::new(),
                 members: storable_members,
-                member_exprs: SmallVec::new(),
             },
             storable_name.into(),
         );
@@ -1888,7 +1385,6 @@ impl TypeRegistry {
                 name: scalar_name,
                 type_params: SmallVec::new(),
                 members: scalar_members,
-                member_exprs: SmallVec::new(),
             },
             scalar_name.into(),
         );
@@ -1911,19 +1407,16 @@ impl TypeRegistry {
                         name: lt_name,
                         idx: 0,
                         arity: 0,
-                        payloads: SmallVec::new(),
                     },
                     VariantDef {
                         name: eq_name,
                         idx: 1,
                         arity: 0,
-                        payloads: SmallVec::new(),
                     },
                     VariantDef {
                         name: gt_name,
                         idx: 2,
                         arity: 0,
-                        payloads: SmallVec::new(),
                     },
                 ],
             },
@@ -1957,15 +1450,11 @@ impl TypeRegistry {
                         name: file_name,
                         idx: 0,
                         arity: 1,
-                        // Builtin: type checker handles Path specially
-                        payloads: SmallVec::new(),
                     },
                     VariantDef {
                         name: dir_name,
                         idx: 1,
                         arity: 1,
-                        // Builtin: type checker handles Path specially
-                        payloads: SmallVec::new(),
                     },
                 ],
             },
@@ -1999,25 +1488,21 @@ impl TypeRegistry {
                         name: no_data,
                         idx: 0,
                         arity: 0,
-                        payloads: SmallVec::new(),
                     },
                     VariantDef {
                         name: has_value,
                         idx: 1,
                         arity: 0,
-                        payloads: SmallVec::new(),
                     },
                     VariantDef {
                         name: has_descendants,
                         idx: 2,
                         arity: 0,
-                        payloads: SmallVec::new(),
                     },
                     VariantDef {
                         name: both,
                         idx: 3,
                         arity: 0,
-                        payloads: SmallVec::new(),
                     },
                 ],
             },
@@ -2042,7 +1527,6 @@ impl TypeRegistry {
                 name: subscript_name,
                 type_params: SmallVec::new(),
                 members: subscript_members,
-                member_exprs: SmallVec::new(),
             },
             subscript_name.into(),
         );
@@ -2066,25 +1550,21 @@ impl TypeRegistry {
                         name: runtime_name,
                         idx: 0,
                         arity: 1,
-                        payloads: SmallVec::new(),
                     },
                     VariantDef {
                         name: raise_name,
                         idx: 1,
                         arity: 1,
-                        payloads: SmallVec::new(),
                     },
                     VariantDef {
                         name: type_name,
                         idx: 2,
                         arity: 1,
-                        payloads: SmallVec::new(),
                     },
                     VariantDef {
                         name: coerce_name,
                         idx: 3,
                         arity: 1,
-                        payloads: SmallVec::new(),
                     },
                 ],
             },
@@ -2129,7 +1609,6 @@ impl TypeRegistry {
                 name: ref_name,
                 type_params: SmallVec::new(),
                 members: ref_members,
-                member_exprs: SmallVec::new(),
             },
             ref_name.into(),
         );
@@ -2242,15 +1721,25 @@ impl TypeRegistry {
                 name: v.name,
                 idx: idx as u8,
                 arity: v.payloads.len() as u8,
+            })
+            .collect();
+
+        let variant_decls: SmallVec<[VariantTypeDecl; 4]> = variants
+            .iter()
+            .map(|v| VariantTypeDecl {
+                name: v.name,
                 payloads: v.payloads.clone(),
             })
             .collect();
 
-        self.register(
+        self.register_with_decl(
             TypeDef::Sum {
                 name: name_id,
                 type_params: type_param_ids,
                 variants: variant_defs,
+            },
+            TypeDeclMeta::Sum {
+                variants: variant_decls,
             },
             qn.clone(),
         );
@@ -2277,11 +1766,13 @@ impl TypeRegistry {
             .map(|m| resolve_member_type(ctx.ast, self, *m))
             .collect();
 
-        self.register(
+        self.register_with_decl(
             TypeDef::Union {
                 name: name_id,
                 type_params: type_param_ids,
                 members,
+            },
+            TypeDeclMeta::Union {
                 member_exprs: ast_members.iter().copied().collect(),
             },
             qn.clone(),
@@ -2305,12 +1796,12 @@ impl TypeRegistry {
         let type_param_ids: SmallVec<[StringId; 2]> =
             type_params.iter().map(|tp| tp.name).collect();
 
-        self.register(
+        self.register_with_decl(
             TypeDef::Alias {
                 name: name_id,
                 type_params: type_param_ids,
-                target,
             },
+            TypeDeclMeta::Alias { target },
             qn.clone(),
         );
     }
@@ -2326,7 +1817,7 @@ impl TypeRegistry {
 
 /// Resolve an AST type expression to a base `TypeId` for union member registration.
 ///
-/// Union members are stored as `TypeId`s (not `TypeExprId`s), so we only need
+/// Union members are stored as `TypeId`s, so we only need
 /// the base type name lookup.
 fn resolve_member_type(
     ast: &Ast,
@@ -2364,11 +1855,31 @@ pub(crate) struct ValueMeta {
     pub(crate) repr: RuntimeTyId,
 }
 
-impl ValueMeta {
-    pub(crate) fn untyped() -> Self {
-        Self {
-            ty: RuntimeTyId::UNKNOWN,
-            repr: RuntimeTyId::UNKNOWN,
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::typecheck::TyArena;
+
+    const _: fn(&mut ValueArena, Value, Span) -> ValueId = ValueArena::add;
+    const _: fn(&mut ValueArena, Payload, ValueMeta, Span) -> ValueId =
+        ValueArena::add_typed;
+
+    #[test]
+    fn phase_11_value_arena_stores_full_value_metadata() {
+        let mut vals = ValueArena::new();
+        let ty = RuntimeTyId::from(TyArena::INT);
+        let repr = RuntimeTyId::from(TyArena::FLOAT);
+        let id = vals.add(
+            Value {
+                ty,
+                repr,
+                payload: Payload::Int(7),
+            },
+            Span::default(),
+        );
+
+        assert_eq!(vals.ty(id), Some(ty));
+        assert_eq!(vals.meta(id), Some(ValueMeta { ty, repr }));
+        assert_eq!(vals.get(id).map(|v| v.repr), Some(repr));
     }
 }

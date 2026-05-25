@@ -2,14 +2,16 @@
 
 use async_recursion::async_recursion;
 use ordered_float::OrderedFloat;
+use smallvec::SmallVec;
 
-use super::class::ClassCtx;
+use super::call::ClassDispatch;
+use super::class::{self, ClassCtx};
 use super::Interpreter;
 use crate::ast::{BinOp, ExprId, UnOp};
 use crate::intern::StringId;
 use crate::io::IoContext;
 use crate::typecheck::Ty;
-use crate::value::{Payload, ValueMeta};
+use crate::value::{Payload, TypeId, Value};
 use crate::{ClassId, Error, Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
@@ -155,6 +157,90 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
+    pub(super) fn apply_ord_binop(
+        &mut self,
+        left: &Value,
+        op: BinOp,
+        right: &Value,
+        span: Span,
+    ) -> Result<Payload> {
+        match (&left.payload, &right.payload, op) {
+            (Payload::Int(a), Payload::Int(b), BinOp::Lt) => {
+                Ok(Payload::Bool(a < b))
+            }
+            (Payload::Int(a), Payload::Int(b), BinOp::Gt) => {
+                Ok(Payload::Bool(a > b))
+            }
+            (Payload::Int(a), Payload::Int(b), BinOp::Le) => {
+                Ok(Payload::Bool(a <= b))
+            }
+            (Payload::Int(a), Payload::Int(b), BinOp::Ge) => {
+                Ok(Payload::Bool(a >= b))
+            }
+            (_, _, BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge) => {
+                let mut ctx = ClassCtx {
+                    arena: &mut self.arena,
+                    runtime_types: &mut self.checked.types,
+                    registry: &self.registry,
+                    regex_cache: &self.checked.regex_cache,
+                    span,
+                };
+                let ord = class::Ord::compare_values(&mut ctx, left, right);
+                match ord {
+                    Payload::Int(n) => Ok(Payload::Bool(match op {
+                        BinOp::Lt => n < 0,
+                        BinOp::Gt => n > 0,
+                        BinOp::Le => n <= 0,
+                        BinOp::Ge => n >= 0,
+                        _ => typechecked!("comparison", "Ord operator"),
+                    })),
+                    _ => typechecked!("compare result", "Int"),
+                }
+            }
+            _ => typechecked!("comparison", "Ord operator"),
+        }
+    }
+
+    pub(super) fn apply_value_binop(
+        &mut self,
+        left: &Value,
+        op: BinOp,
+        right: &Value,
+        span: Span,
+    ) -> Result<Payload> {
+        match op {
+            BinOp::Eq | BinOp::Ne => {
+                let mut ctx = ClassCtx {
+                    arena: &mut self.arena,
+                    runtime_types: &mut self.checked.types,
+                    registry: &self.registry,
+                    regex_cache: &self.checked.regex_cache,
+                    span,
+                };
+                match class::Eq::eq_values(&mut ctx, left, right) {
+                    Payload::Bool(b) if matches!(op, BinOp::Ne) => {
+                        Ok(Payload::Bool(!b))
+                    }
+                    payload => Ok(payload),
+                }
+            }
+            BinOp::Concat => {
+                let mut ctx = ClassCtx {
+                    arena: &mut self.arena,
+                    runtime_types: &mut self.checked.types,
+                    registry: &self.registry,
+                    regex_cache: &self.checked.regex_cache,
+                    span,
+                };
+                class::Monoid::concat_values(&mut ctx, left, right)
+            }
+            BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
+                self.apply_ord_binop(left, op, right, span)
+            }
+            _ => typechecked!("value binop", "Eq, Ord, or Monoid"),
+        }
+    }
+
     /// Dispatch a binary class method.
     fn dispatch_binary(
         &mut self,
@@ -166,8 +252,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<Payload> {
         let mut ctx = ClassCtx {
             arena: &mut self.arena,
-            ty_arena: &self.ty_arena,
-            runtime_types: &self.checked.types,
+            runtime_types: &mut self.checked.types,
             registry: &self.registry,
             regex_cache: &self.checked.regex_cache,
             span,
@@ -178,55 +263,71 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Dispatch a binary operator through user-defined class instance.
     ///
-    /// Called when the typechecker recorded a user instance for this binary
-    /// expression in `instance_calls`. Maps the operator to its class and
-    /// method, then dispatches through `dispatch_class_method` which handles
-    /// user instance lookup and invocation.
+    /// Maps the operator to its class and method, then dispatches through
+    /// class method dispatch.
     #[async_recursion]
     pub(super) async fn dispatch_binop_user(
         &mut self,
         id: ExprId,
-        left: &Payload,
+        left: Value,
         op: BinOp,
-        right: &Payload,
+        right: Value,
         span: Span,
-    ) -> Result<Payload> {
+    ) -> Result<Value> {
         let (class, method_str) = op.class_dispatch().unwrap_or_else(|| {
             typechecked!("binop user dispatch", "class-dispatched op")
         });
         let method = self.arena.intern(method_str);
 
-        let l = self
-            .arena
-            .add_typed(left.clone(), ValueMeta::untyped(), span);
-        let r = self
-            .arena
-            .add_typed(right.clone(), ValueMeta::untyped(), span);
+        let l = self.add_value(left, span);
+        let r = self.add_value(right, span);
         let result = self
-            .dispatch_class_method(Some(id), class, method, &[l, r], span)
+            .dispatch_class_method_value(ClassDispatch {
+                dispatch_expr_id: Some(id),
+                output_expr_id: Some(id),
+                class,
+                method,
+                args: SmallVec::from_slice(&[l, r]),
+                span,
+            })
             .await?;
 
         // Post-process for operators that transform the class method result.
-        // User `compare` returns `Ordering` (Tagged discriminant: `0`=Lt, `1`=Eq, `2`=Gt).
+        // User `compare` returns `Ordering`; tags are `0`=Lt, `1`=Eq, `2`=Gt.
+        let result_ty = self
+            .checked
+            .types
+            .to_type_id(result.repr)
+            .or_else(|| self.checked.types.to_type_id(result.ty));
         match op {
-            BinOp::Ne => match result {
-                Payload::Bool(b) => Ok(Payload::Bool(!b)),
+            BinOp::Ne => match result.payload {
+                Payload::Bool(b) => {
+                    Ok(self.value_for_expr(id, Payload::Bool(!b)))
+                }
                 _ => typechecked!("!=", "Bool"),
             },
-            BinOp::Lt => match result {
-                Payload::Tagged(_, d, _) => Ok(Payload::Bool(d == 0)),
+            BinOp::Lt => match (result_ty, result.payload) {
+                (Some(TypeId::ORDERING), Payload::Variant { tag, .. }) => {
+                    Ok(self.value_for_expr(id, Payload::Bool(tag == 0)))
+                }
                 _ => typechecked!("compare result", "Ordering"),
             },
-            BinOp::Gt => match result {
-                Payload::Tagged(_, d, _) => Ok(Payload::Bool(d == 2)),
+            BinOp::Gt => match (result_ty, result.payload) {
+                (Some(TypeId::ORDERING), Payload::Variant { tag, .. }) => {
+                    Ok(self.value_for_expr(id, Payload::Bool(tag == 2)))
+                }
                 _ => typechecked!("compare result", "Ordering"),
             },
-            BinOp::Le => match result {
-                Payload::Tagged(_, d, _) => Ok(Payload::Bool(d <= 1)),
+            BinOp::Le => match (result_ty, result.payload) {
+                (Some(TypeId::ORDERING), Payload::Variant { tag, .. }) => {
+                    Ok(self.value_for_expr(id, Payload::Bool(tag <= 1)))
+                }
                 _ => typechecked!("compare result", "Ordering"),
             },
-            BinOp::Ge => match result {
-                Payload::Tagged(_, d, _) => Ok(Payload::Bool(d >= 1)),
+            BinOp::Ge => match (result_ty, result.payload) {
+                (Some(TypeId::ORDERING), Payload::Variant { tag, .. }) => {
+                    Ok(self.value_for_expr(id, Payload::Bool(tag >= 1)))
+                }
                 _ => typechecked!("compare result", "Ordering"),
             },
             _ => Ok(result),
@@ -265,13 +366,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             }),
             UnOp::Wrap => {
                 // Look up target type (defaulted to `Option[T]` during constraint solving)
-                let ty_id = self
-                    .checked
-                    .exprs
-                    .get(&id)
-                    .map(|info| info.ty.raw())
-                    .unwrap_or_else(|| typechecked!("?", "resolved wrap type"));
-                let ty = self.ty_arena.get(ty_id).clone();
+                let ty_id = self.checked.expr(id).ty;
+                let ty = self.checked.types.get(ty_id).clone();
                 let mid = self.arena.intern("wrap");
                 self.dispatch_convert(ClassId::WRAPPABLE, mid, &v, &ty, span)
             }
@@ -288,8 +384,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<Payload> {
         let mut ctx = ClassCtx {
             arena: &mut self.arena,
-            ty_arena: &self.ty_arena,
-            runtime_types: &self.checked.types,
+            runtime_types: &mut self.checked.types,
             registry: &self.registry,
             regex_cache: &self.checked.regex_cache,
             span,
@@ -308,14 +403,40 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<Payload> {
         let mut ctx = ClassCtx {
             arena: &mut self.arena,
-            ty_arena: &self.ty_arena,
-            runtime_types: &self.checked.types,
+            runtime_types: &mut self.checked.types,
             registry: &self.registry,
             regex_cache: &self.checked.regex_cache,
             span,
         };
         self.class_methods
             .dispatch_convert(kind, mid, &mut ctx, v, target)
+    }
+
+    /// Dispatch a conversion class method with full value metadata.
+    pub(super) fn dispatch_convert_value(
+        &mut self,
+        kind: ClassId,
+        mid: StringId,
+        v: &Value,
+        target: &Ty,
+        span: Span,
+    ) -> Result<Payload> {
+        let mut ctx = ClassCtx {
+            arena: &mut self.arena,
+            runtime_types: &mut self.checked.types,
+            registry: &self.registry,
+            regex_cache: &self.checked.regex_cache,
+            span,
+        };
+        match kind {
+            ClassId::INTO => class::Into::into_value(&mut ctx, v, target),
+            ClassId::TRY_INTO => {
+                class::TryInto::try_into_value(&mut ctx, v, target)
+            }
+            _ => self
+                .class_methods
+                .dispatch_convert(kind, mid, &mut ctx, &v.payload, target),
+        }
     }
 
     /// Dispatch `Ord:compare` and apply a predicate to the result.
@@ -371,8 +492,8 @@ impl<I: IoContext> Interpreter<'_, I> {
         lhs: ExprId,
         rhs: ExprId,
     ) -> Result<Payload> {
-        let lhs_val = self.eval(lhs).await?;
-        let rhs_val = self.eval(rhs).await?;
+        let lhs_val = self.eval_payload(lhs).await?;
+        let rhs_val = self.eval_payload(rhs).await?;
 
         // Coerce LHS to raw string (Stringable constraint verified by typechecker)
         let text = self.coerce_to_str(&lhs_val);

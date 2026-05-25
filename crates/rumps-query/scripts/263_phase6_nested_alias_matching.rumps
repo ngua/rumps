@@ -1,0 +1,32 @@
+newtype Id = Int
+union MaybeId = Id | String
+newtype Inner = { id: Id }
+union MaybeInner = Inner | String
+newtype Person = { inner: Inner }
+
+fun main() {
+  write 1 is Id
+  write 1 is MaybeId
+  write { id: 1 } is { id: Id }
+  write { id: 1, extra: true } is MaybeInner
+  write { id: 1, extra: true } is Inner
+  write { inner: { id: 1, extra: true }, extra: "x" } is Person
+  write { inner: { id: "bad" } } is Person
+
+  let read-person = { "inner": { "id": 7 } } read Person
+  write read-person is Result.Ok(_)
+  write read-person!.inner.id
+
+  let read-id = "8" read Id
+  write read-id is Result.Ok(_)
+  write read-id! is Id
+
+  let read-inners = [{ "id": 9 }] as Json read Array[Inner]
+  write read-inners is Result.Ok(_)
+  write read-inners![0].id
+
+  let read-opt = { "id": 10 } as Json read Option[Inner]
+  write read-opt is Result.Ok(_)
+  write read-opt! is Option.Some(_)
+  write read-opt!!.id
+}

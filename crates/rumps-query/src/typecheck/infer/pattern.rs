@@ -15,6 +15,7 @@ use crate::ast::{
 use crate::intern::{QualifiedName, StringId};
 use crate::typecheck::error::TypeError;
 use crate::typecheck::ty::{Scheme, Ty, TyArena, TyId};
+use crate::typecheck::TypeDeclAccess;
 use crate::value::{TypeDef, TypeId};
 use crate::Span;
 
@@ -90,8 +91,17 @@ impl InferCtx<'_> {
                         .map(|(p, &a)| (*p, a))
                         .collect();
 
-                    var_def
-                        .payloads
+                    let payloads = self
+                        .registry
+                        .variant_payloads(
+                            TypeDeclAccess::new(),
+                            type_id,
+                            var_def.name,
+                        )
+                        .cloned()
+                        .unwrap_or_default();
+
+                    payloads
                         .iter()
                         .map(|ty_id| {
                             self.convert().ast_type_to_ty(*ty_id, &subst)

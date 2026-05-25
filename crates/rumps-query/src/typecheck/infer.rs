@@ -41,7 +41,7 @@ use super::instance::{Instance, InstanceRegistry};
 use super::ty::{Rename, Scheme, Ty, TyArena, TyId, TyVar, TypeClass};
 use super::uf::UnionFind;
 use super::unify::SolveCtx;
-use super::TypecheckOutput;
+use super::{CheckedExprAux, CheckedExprInfo, TypecheckOutput};
 use crate::ast::{
     self, AssocTypeDef, AstClassConstraints, AstTypeExprId, ExprId,
     InstanceMethodDef, Stmt, StmtId, TxnId, TypeParam,
@@ -49,7 +49,7 @@ use crate::ast::{
 use crate::env::Environment;
 use crate::error::Result;
 use crate::intern::{self, QualifiedName, StringId, StringInterner};
-use crate::value::{self, TypeExprArena, TypeId, TypeRegistry};
+use crate::value::{self, TypeId, TypeRegistry};
 use crate::{ClassId, Error, Span};
 
 /// Resolve all `TyId` values in a map through the union-find.
@@ -70,69 +70,18 @@ pub(super) struct InterpreterOutput {
     /// Regex literals are compiled here; invalid patterns produce type errors.
     /// The interpreter retrieves compiled patterns by index.
     pub(super) regex_cache: Vec<regex::Regex>,
-    /// Mapping from regex expression IDs to cache indices.
-    ///
-    /// When interpreting an `Expr::Regex`, look up the cache index here.
-    pub(super) regex_indices: HashMap<ExprId, u32>,
-    /// Mapping from mempty expression IDs to their inferred types.
-    ///
-    /// Populated during inference with type variables; resolved after
-    /// substitution to concrete `Monoid` types. The interpreter uses
-    /// this to produce the correct empty value.
-    pub(super) mempty_types: HashMap<ExprId, TyId>,
-    /// Mapping from numeric literal expression IDs to their inferred types.
-    ///
-    /// Populated during inference with type variables; resolved after
-    /// substitution to concrete `Numeric` types (`Int`, `Word`, `Float`, etc...).
-    /// The interpreter uses this to convert numeric literals to the
-    /// correct runtime value type.
-    pub(super) numeric_types: HashMap<ExprId, TyId>,
-    /// Mapping from conversion expression IDs to their target types.
-    ///
-    /// Populated when `Into::into` or `TryInto::try_into` methods are called.
-    /// The interpreter uses this to dispatch the correct conversion.
-    pub(super) convert_targets: HashMap<ExprId, TyId>,
-    /// Mapping from wrap expression IDs to their target `Wrappable` types.
-    ///
-    /// Populated during inference for `?` (wrap) operators; resolved after
-    /// substitution to concrete `Option[T]`, `Result[T, E]`, or other
-    /// monadic types.
-    ///
-    /// The interpreter uses this to produce the correct wrapper type.
-    pub(super) wrap_types: HashMap<ExprId, TyId>,
-    /// Resolved output types for `Bimappable:bimap` calls.
-    ///
-    /// The interpreter uses this to construct the correct output container
-    /// type (e.g., `Result[C, D]` or `(C, D)`) after applying both functions.
-    pub(super) bimap_output_types: HashMap<ExprId, TyId>,
-    /// Mapping from class method call expression IDs to their receiver's `TypeId`.
-    ///
-    /// Populated when a class method is called on a newtype or union type.
-    /// The interpreter uses this to dispatch to user-defined class instances,
-    /// since these types don't carry their `TypeId` in the runtime value
-    /// (unlike `type`/sum types which use `Value::Tagged`).
-    pub(super) instance_calls: HashMap<ExprId, TypeId>,
-    /// Resolved function names for parameterized user class method calls.
-    ///
-    /// When a parameterized class has multiple instances for the same type
-    /// (e.g., `MyInto[A] for X` and `MyInto[B] for X`), the generic
-    /// `(ClassId, TypeId, method)` lookup is ambiguous. This map records
-    /// the specific generated function name for each call site.
-    pub(super) resolved_instance_fns: HashMap<ExprId, StringId>,
-    /// Resolved class names for naked class method calls/refs.
-    ///
-    /// Maps each `NakedClassMethod`/`NakedClassMethodRef` expression to the
-    /// `StringId` of the class that was resolved during type checking.
-    pub(super) naked_method_classes: HashMap<ExprId, StringId>,
+    /// Per-expression runtime metadata overrides.
+    pub(super) expr_metadata: HashMap<ExprId, CheckedExprInfo>,
+    /// Expressions widened into a union with their concrete member type.
+    pub(super) union_value_reprs: HashMap<ExprId, TyId>,
+    /// Function and closure types keyed by body expression.
+    pub(super) function_types: HashMap<ExprId, TyId>,
     /// Mapping from AST type expression IDs to their resolved `TyId`s.
     ///
     /// Populated for `IS` type patterns, `AS` casts, `READ` conversions, and
     /// match `IS` arms so the interpreter can look up the target type as a
-    /// `RuntimeTyId` without going through the `TypeExprArena`.
+    /// `RuntimeTyId`.
     pub(super) ast_type_map: HashMap<AstTypeExprId, TyId>,
-    /// Maps `read` target `AstTypeExprId`s to their expanded underlying `TyId`
-    /// when the target is an alias type.
-    pub(super) alias_expansions: HashMap<AstTypeExprId, TyId>,
     /// Maps solved alias `TyId`s to their expanded underlying `TyId`s.
     ///
     /// Populated for `read` targets so runtime object-field reads can resolve
@@ -144,32 +93,22 @@ impl InterpreterOutput {
     fn new() -> Self {
         Self {
             regex_cache: Vec::new(),
-            regex_indices: HashMap::new(),
-            mempty_types: HashMap::new(),
-            numeric_types: HashMap::new(),
-            convert_targets: HashMap::new(),
-            wrap_types: HashMap::new(),
-            bimap_output_types: HashMap::new(),
-            instance_calls: HashMap::new(),
-            resolved_instance_fns: HashMap::new(),
-            naked_method_classes: HashMap::new(),
+            expr_metadata: HashMap::new(),
+            union_value_reprs: HashMap::new(),
+            function_types: HashMap::new(),
             ast_type_map: HashMap::new(),
-            alias_expansions: HashMap::new(),
             alias_type_expansions: HashMap::new(),
         }
     }
 
     /// Resolve all type-variable-bearing maps through the union-find.
     fn resolve(&mut self, uf: &mut UnionFind, arena: &mut TyArena) {
-        resolve_map(&mut self.mempty_types, uf, arena);
-        resolve_map(&mut self.numeric_types, uf, arena);
-        resolve_map(&mut self.convert_targets, uf, arena);
-        resolve_map(&mut self.wrap_types, uf, arena);
-        resolve_map(&mut self.bimap_output_types, uf, arena);
-        self.ast_type_map
+        self.expr_metadata
             .values_mut()
-            .for_each(|ty| *ty = uf.resolve(*ty, arena));
-        self.alias_expansions
+            .for_each(|info| info.resolve(uf, arena));
+        resolve_map(&mut self.union_value_reprs, uf, arena);
+        resolve_map(&mut self.function_types, uf, arena);
+        self.ast_type_map
             .values_mut()
             .for_each(|ty| *ty = uf.resolve(*ty, arena));
         self.alias_type_expansions = mem::take(&mut self.alias_type_expansions)
@@ -178,6 +117,120 @@ impl InterpreterOutput {
                 (uf.resolve(alias, arena), uf.resolve(expanded, arena))
             })
             .collect();
+    }
+
+    pub(super) fn set_expr_ty(&mut self, id: ExprId, ty: TyId) {
+        self.expr_metadata.entry(id).or_default().ty = Some(ty);
+    }
+
+    pub(super) fn set_concrete_expr_ty(&mut self, id: ExprId, ty: TyId) {
+        let info = self.expr_metadata.entry(id).or_default();
+        info.ty = Some(ty);
+        info.concrete = true;
+    }
+
+    pub(super) fn set_regex_index(&mut self, id: ExprId, idx: u32) {
+        let info = self.expr_metadata.entry(id).or_default();
+        info.ty = Some(TyArena::REGEX);
+        info.aux = CheckedExprAux::RegexIndex(idx);
+    }
+
+    pub(super) fn set_hof_call(&mut self, id: ExprId, out: TyId) {
+        let info = self.expr_metadata.entry(id).or_default();
+        info.ty = Some(out);
+        info.aux = match info.aux {
+            CheckedExprAux::InstanceCall { .. } => info.aux,
+            CheckedExprAux::HofCall { class, .. } => {
+                CheckedExprAux::HofCall { out, class }
+            }
+            CheckedExprAux::NakedMethod { class } => CheckedExprAux::HofCall {
+                out,
+                class: Some(class),
+            },
+            _ => CheckedExprAux::HofCall { out, class: None },
+        };
+    }
+
+    pub(super) fn set_instance_call(&mut self, id: ExprId, recv: TyId) {
+        let info = self.expr_metadata.entry(id).or_default();
+        info.aux = match info.aux {
+            CheckedExprAux::InstanceCall { fun, class, .. } => {
+                CheckedExprAux::InstanceCall {
+                    recv: Some(recv),
+                    fun,
+                    class,
+                }
+            }
+            CheckedExprAux::NakedMethod { class } => {
+                CheckedExprAux::InstanceCall {
+                    recv: Some(recv),
+                    fun: None,
+                    class: Some(class),
+                }
+            }
+            CheckedExprAux::HofCall { class, .. } => {
+                CheckedExprAux::InstanceCall {
+                    recv: Some(recv),
+                    fun: None,
+                    class,
+                }
+            }
+            _ => CheckedExprAux::InstanceCall {
+                recv: Some(recv),
+                fun: None,
+                class: None,
+            },
+        };
+    }
+
+    pub(super) fn set_instance_fun(&mut self, id: ExprId, fun: StringId) {
+        let info = self.expr_metadata.entry(id).or_default();
+        info.aux = match info.aux {
+            CheckedExprAux::InstanceCall { recv, class, .. } => {
+                CheckedExprAux::InstanceCall {
+                    recv,
+                    fun: Some(fun),
+                    class,
+                }
+            }
+            CheckedExprAux::NakedMethod { class } => {
+                CheckedExprAux::InstanceCall {
+                    recv: None,
+                    fun: Some(fun),
+                    class: Some(class),
+                }
+            }
+            CheckedExprAux::HofCall { class, .. } => {
+                CheckedExprAux::InstanceCall {
+                    recv: None,
+                    fun: Some(fun),
+                    class,
+                }
+            }
+            _ => CheckedExprAux::InstanceCall {
+                recv: None,
+                fun: Some(fun),
+                class: None,
+            },
+        };
+    }
+
+    pub(super) fn set_naked_method(&mut self, id: ExprId, class: StringId) {
+        let info = self.expr_metadata.entry(id).or_default();
+        info.aux = match info.aux {
+            CheckedExprAux::InstanceCall { recv, fun, .. } => {
+                CheckedExprAux::InstanceCall {
+                    recv,
+                    fun,
+                    class: Some(class),
+                }
+            }
+            CheckedExprAux::HofCall { out, .. } => CheckedExprAux::HofCall {
+                out,
+                class: Some(class),
+            },
+            _ => CheckedExprAux::NakedMethod { class },
+        };
     }
 }
 
@@ -861,8 +914,6 @@ pub(crate) struct InferCtx<'a> {
     pub(super) ast: &'a mut ast::Ast,
     /// Registry of user-defined and builtin types.
     pub(super) registry: &'a TypeRegistry,
-    /// Arena of type expressions (for converting `TypeExprId -> Ty`).
-    pub(super) type_exprs: &'a TypeExprArena,
     /// Runtime environment; used to look up module function type schemes.
     pub(super) runtime_env: &'a Environment,
     /// Scoped type environment (variable -> scheme bindings).
@@ -887,20 +938,20 @@ pub(crate) struct InferCtx<'a> {
     /// Deferred instance call candidates to resolve after constraint solving.
     ///
     /// During inference, class method calls on types that are still type
-    /// variables are recorded here. After `resolve_all_types`, we resolve the types
-    /// and populate `instance_calls` for any user instances found.
-    deferred_instance_calls: Vec<(ExprId, TyId, ClassId)>,
+    /// variables are recorded here. After `resolve_all_types`, we resolve the
+    /// types and attach `ExprAux::InstanceCall` for any user instances found.
+    deferred_inst_calls: Vec<(ExprId, TyId, ClassId)>,
     /// Deferred parameterized user class method calls.
     ///
     /// `(ExprId, ClassId, method, receiver_ty, class_arg_ty)`. After constraint
     /// solving, the class_arg_ty resolves to a concrete type; we look up the
-    /// matching instance and record its function name in `resolved_instance_fns`.
+    /// matching instance and attach its function name to expression metadata.
     deferred_param_calls: Vec<(ExprId, ClassId, StringId, TyId, TyId)>,
     /// Deferred user HKT class method calls.
     ///
     /// When multiple tuple instances exist for the same HKT class (e.g.,
-    /// `MyMap for (T,)` and `MyMap for (T,U,)`), `resolved_instance_fns`
-    /// must map each call site to the correct arity-specific function.
+    /// `MyMap for (T,)` and `MyMap for (T,U,)`), each call site gets the
+    /// correct arity-specific function in expression metadata.
     deferred_hkt_user_calls: Vec<(ExprId, ClassId, StringId, TyId)>,
     /// Type variables created for integer literals, for defaulting to `Int`.
     ///
@@ -955,10 +1006,12 @@ pub(crate) struct InferCtx<'a> {
     pub(super) poly_param_vars: HashSet<TyVar>,
     /// Recorded `let` annotations for post-solve union narrowing validation.
     ///
-    /// Each entry is `(rhs_ty, ann_ty, span)`. After constraint solving resolves
-    /// type variables, these are checked: if `rhs_ty` resolved to a union and
-    /// `ann_ty` did not, the annotation illegally narrows a union type.
-    let_annotations: Vec<(TyId, TyId, Span)>,
+    /// Each entry is `(rhs_expr, rhs_ty, ann_ty, span)`. After constraint
+    /// solving resolves type variables, these are checked: if `rhs_ty`
+    /// resolved to a union and `ann_ty` did not, the annotation illegally
+    /// narrows a union type. Union annotations also record the resolved member
+    /// representation for runtime metadata.
+    let_annotations: Vec<(ExprId, TyId, TyId, Span)>,
     /// Hoisting and forward-reference tracking state.
     pub(super) hoist: HoistState,
 }
@@ -968,14 +1021,12 @@ impl<'a> InferCtx<'a> {
     ///
     /// The `strings` interner should be shared with the `TypeRegistry` so
     /// type name lookups produce consistent `StringId`s. The `runtime_env`
-    /// is used to look up module function type schemes. The `type_exprs`
-    /// arena is used to convert `TypeExprId` to `Ty` for user-defined unions.
+    /// is used to look up module function type schemes.
     /// Set `interactive` to `true` to allow top-level expressions without
     /// requiring a `main` function.
     pub(crate) fn new(
         ast: &'a mut ast::Ast,
         registry: &'a TypeRegistry,
-        type_exprs: &'a TypeExprArena,
         runtime_env: &'a Environment,
         strings: StringInterner,
         interactive: bool,
@@ -988,7 +1039,6 @@ impl<'a> InferCtx<'a> {
         Self {
             ast,
             registry,
-            type_exprs,
             runtime_env,
             env,
             instance_registry: InstanceRegistry::new(),
@@ -998,7 +1048,7 @@ impl<'a> InferCtx<'a> {
             expr_types: HashMap::new(),
             errors: Vec::new(),
             interp: InterpreterOutput::new(),
-            deferred_instance_calls: Vec::new(),
+            deferred_inst_calls: Vec::new(),
             deferred_param_calls: Vec::new(),
             deferred_hkt_user_calls: Vec::new(),
             numeric_vars: Vec::new(),
@@ -1193,7 +1243,6 @@ impl<'a> InferCtx<'a> {
             env: &self.env,
             errors: &mut self.errors,
             ast: self.ast,
-            type_exprs: self.type_exprs,
             current_module: &self.current_module,
             class_context: &self.class_context,
             hkt_var_classes: HashMap::new(),
@@ -1208,17 +1257,72 @@ impl<'a> InferCtx<'a> {
     pub(crate) fn resolve_all_types(&mut self) {
         resolve_map(&mut self.expr_types, &mut self.uf, &mut self.ty_arena);
         self.interp.resolve(&mut self.uf, &mut self.ty_arena);
+        self.collect_runtime_alias_expansions();
     }
 
-    /// Resolve deferred instance calls after constraint solving.
+    fn collect_runtime_alias_expansions(&mut self) {
+        let tys: Vec<TyId> = self
+            .expr_types
+            .values()
+            .copied()
+            .chain(
+                self.interp
+                    .expr_metadata
+                    .values()
+                    .flat_map(CheckedExprInfo::ty_ids),
+            )
+            .chain(self.interp.union_value_reprs.values().copied())
+            .chain(self.interp.ast_type_map.values().copied())
+            .collect();
+
+        tys.into_iter().for_each(|ty| {
+            self.collect_alias_expansions(ty, &mut HashSet::new())
+        });
+    }
+
+    fn checked_expr_type_id(&mut self, tid: TypeId) -> TyId {
+        self.ty_arena.named(tid, SmallVec::new())
+    }
+
+    fn set_instance_call(&mut self, expr: ExprId, tid: TypeId) {
+        let ty = self.checked_expr_type_id(tid);
+        self.interp.set_instance_call(expr, ty);
+    }
+
+    fn metadata_has_unresolved(&self, info: &CheckedExprInfo) -> bool {
+        info.concrete
+            && info.ty.is_some_and(|ty| {
+                matches!(self.ty_arena.get(ty), Ty::Var(_) | Ty::Unknown)
+            })
+    }
+
+    fn missing_annotation_ids(&self) -> Vec<ExprId> {
+        let expr_ids: HashSet<ExprId> = self
+            .expr_types
+            .iter()
+            .filter(|(_, &ty)| Self::has_unresolved_vars(ty, &self.ty_arena))
+            .map(|(&id, _)| id)
+            .collect();
+        let meta_ids = self
+            .interp
+            .expr_metadata
+            .iter()
+            .filter(|(_, info)| self.metadata_has_unresolved(info))
+            .filter(|(&id, _)| !expr_ids.contains(&id))
+            .map(|(&id, _)| id)
+            .collect::<Vec<_>>();
+        expr_ids.into_iter().chain(meta_ids).collect()
+    }
+
+    /// Resolve deferred instance dispatch after constraint solving.
     ///
     /// After constraint solving and type resolution, type variables are resolved
-    /// to concrete types. This method iterates through deferred instance call
-    /// candidates, resolves their types, and populates `instance_calls` for
-    /// any that have user-defined instances.
-    pub(crate) fn resolve_deferred_instance_calls(&mut self) {
+    /// to concrete types. This method iterates through deferred dispatch
+    /// candidates, resolves their types, and attaches call metadata for any
+    /// that have user-defined instances.
+    pub(crate) fn resolve_deferred_inst_calls(&mut self) {
         // Take ownership to avoid borrow issues
-        let deferred = mem::take(&mut self.deferred_instance_calls);
+        let deferred = mem::take(&mut self.deferred_inst_calls);
 
         deferred.into_iter().for_each(|(expr_id, ty, kind)| {
             let resolved = self.uf.resolve(ty, &mut self.ty_arena);
@@ -1247,7 +1351,7 @@ impl<'a> InferCtx<'a> {
 
             if let Some(tid) = type_id {
                 if self.instance_registry.lookup(kind, tid).is_some() {
-                    self.interp.instance_calls.insert(expr_id, tid);
+                    self.set_instance_call(expr_id, tid);
                 }
             }
         });
@@ -1282,9 +1386,7 @@ impl<'a> InferCtx<'a> {
                             .and_then(|i| i.methods.get(&method).copied())
                             .into_iter()
                             .for_each(|fn_id| {
-                                self.interp
-                                    .resolved_instance_fns
-                                    .insert(eid, fn_id);
+                                self.interp.set_instance_fun(eid, fn_id);
                             });
                     }
                 }
@@ -1308,9 +1410,7 @@ impl<'a> InferCtx<'a> {
                         .and_then(|i| i.methods.get(&method).copied())
                         .into_iter()
                         .for_each(|fn_id| {
-                            self.interp
-                                .resolved_instance_fns
-                                .insert(eid, fn_id);
+                            self.interp.set_instance_fun(eid, fn_id);
                         });
                 }
             }
@@ -1324,7 +1424,7 @@ impl<'a> InferCtx<'a> {
     /// to narrow a union via annotation. This requires `match`/`is` instead.
     pub(crate) fn check_let_union_narrowing(&mut self) {
         mem::take(&mut self.let_annotations).into_iter().for_each(
-            |(rhs, ann, span)| {
+            |(expr, rhs, ann, span)| {
                 let rhs = self.uf.resolve(rhs, &mut self.ty_arena);
                 let ann = self.uf.resolve(ann, &mut self.ty_arena);
                 if matches!(self.ty_arena.get(rhs), Ty::Union(..))
@@ -1339,6 +1439,9 @@ impl<'a> InferCtx<'a> {
                         span,
                     });
                 }
+                if let Some(member) = self.union_member_repr(rhs, ann) {
+                    self.interp.union_value_reprs.insert(expr, member);
+                }
             },
         );
     }
@@ -1347,31 +1450,9 @@ impl<'a> InferCtx<'a> {
     /// `Ty::Var` or `Ty::Unknown` indicates incomplete inference. This emits
     /// `MissingAnnotation` errors for such cases.
     pub(crate) fn check_remaining_unknowns(&mut self) {
-        self.expr_types
-            .iter()
-            .filter(|(_, &ty)| Self::has_unresolved_vars(ty, &self.ty_arena))
-            .map(|(id, _)| {
-                self.ast.expr_span(*id).unwrap_or_else(|| Span::new(0, 0))
-            })
-            .collect::<Vec<_>>()
+        self.missing_annotation_ids()
             .into_iter()
-            .for_each(|span| {
-                self.errors.push(TypeError::MissingAnnotation(span));
-            });
-
-        // Mempty expressions require concrete monoid types; any remaining
-        // `Ty::Var` or `Ty::Unknown` means we cannot produce the empty value.
-        self.interp
-            .mempty_types
-            .iter()
-            .filter(|(_, &ty)| {
-                matches!(self.ty_arena.get(ty), Ty::Var(_) | Ty::Unknown)
-            })
-            .map(|(id, _)| {
-                self.ast.expr_span(*id).unwrap_or_else(|| Span::new(0, 0))
-            })
-            .collect::<Vec<_>>()
-            .into_iter()
+            .map(|id| self.ast.expr_span(id).unwrap_or_else(|| Span::new(0, 0)))
             .for_each(|span| {
                 self.errors.push(TypeError::MissingAnnotation(span));
             });
@@ -1456,8 +1537,8 @@ impl<'a> InferCtx<'a> {
         // Resolve all type variables through the union-find
         self.resolve_all_types();
 
-        // Resolve deferred instance calls (now that types are resolved)
-        self.resolve_deferred_instance_calls();
+        // Resolve deferred instance dispatch (now that types are resolved)
+        self.resolve_deferred_inst_calls();
 
         // Resolve parameterized user class method call function names
         self.resolve_deferred_param_calls();
@@ -1470,6 +1551,8 @@ impl<'a> InferCtx<'a> {
         // Check for illegal union narrowing via let annotations
         self.check_let_union_narrowing();
 
+        self.collect_literal_union_reprs();
+
         // Check for remaining unresolved type variables
         self.check_remaining_unknowns();
 
@@ -1477,6 +1560,77 @@ impl<'a> InferCtx<'a> {
         self.validate_main_entry_point(stmts);
 
         self.into_output(registry, arena)
+    }
+
+    fn collect_literal_union_reprs(&mut self) {
+        let exprs: Vec<_> =
+            self.expr_types.iter().map(|(&id, &ty)| (id, ty)).collect();
+        exprs.into_iter().for_each(|(id, ty)| {
+            if matches!(self.ty_arena.get(ty), Ty::Union(_, _)) {
+                if let Some(member) = self.expr_union_member(id, ty) {
+                    self.interp.union_value_reprs.insert(id, member);
+                }
+            }
+        });
+    }
+
+    fn expr_union_member(&self, id: ExprId, union: TyId) -> Option<TyId> {
+        self.ast.get_expr(id).and_then(|expr| match expr {
+            ast::Expr::Literal(lit) => self.literal_union_member(lit, union),
+            ast::Expr::Annotate(inner, _) => {
+                self.expr_union_member(*inner, union)
+            }
+            ast::Expr::Json(_) => {
+                self.union_member_matching(union, TyArena::JSON)
+            }
+            _ => None,
+        })
+    }
+
+    fn literal_union_member(
+        &self,
+        lit: &ast::Literal,
+        union: TyId,
+    ) -> Option<TyId> {
+        match lit {
+            ast::Literal::Bool(_) => {
+                self.union_member_matching(union, TyArena::BOOL)
+            }
+            ast::Literal::Numeric(ast::NumericLit::Int(_)) => {
+                [TyArena::INT, TyArena::WORD, TyArena::FLOAT]
+                    .into_iter()
+                    .find_map(|ty| self.union_member_matching(union, ty))
+            }
+            ast::Literal::Numeric(ast::NumericLit::Float(_)) => {
+                self.union_member_matching(union, TyArena::FLOAT)
+            }
+            ast::Literal::Char(_) => {
+                self.union_member_matching(union, TyArena::CHAR)
+            }
+            ast::Literal::String(_) => {
+                self.union_member_matching(union, TyArena::STRING)
+            }
+            ast::Literal::Null => {
+                self.union_member_matching(union, TyArena::JSON)
+            }
+            ast::Literal::Unit => {
+                self.union_member_matching(union, TyArena::UNIT)
+            }
+        }
+    }
+
+    fn union_member_matching(
+        &self,
+        union: TyId,
+        candidate: TyId,
+    ) -> Option<TyId> {
+        match self.ty_arena.get(union) {
+            Ty::Union(_, members) => members
+                .iter()
+                .copied()
+                .find(|member| self.types_compatible(candidate, *member)),
+            _ => None,
+        }
     }
 
     /// Consume the context, returning `TypecheckOutput` on success or
@@ -1502,19 +1656,12 @@ impl<'a> InferCtx<'a> {
             Ok(TypecheckOutput {
                 ty_arena: self.ty_arena,
                 regex_cache: self.interp.regex_cache,
-                regex_indices: self.interp.regex_indices,
-                mempty_types: self.interp.mempty_types,
-                numeric_types: self.interp.numeric_types,
-                convert_targets: self.interp.convert_targets,
-                wrap_types: self.interp.wrap_types,
-                bimap_output_types: self.interp.bimap_output_types,
-                instance_calls: self.interp.instance_calls,
-                resolved_instance_fns: self.interp.resolved_instance_fns,
+                expr_metadata: self.interp.expr_metadata,
+                union_value_reprs: self.interp.union_value_reprs,
+                function_types: self.interp.function_types,
                 class_registry: self.env.class_registry,
-                naked_method_classes: self.interp.naked_method_classes,
                 expr_types: self.expr_types,
                 ast_type_map: self.interp.ast_type_map,
-                alias_expansions: self.interp.alias_expansions,
                 alias_type_expansions: self.interp.alias_type_expansions,
             })
         }

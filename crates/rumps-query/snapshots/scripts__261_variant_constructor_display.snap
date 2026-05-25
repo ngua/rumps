@@ -1,0 +1,26 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+assertion_line: 38
+description: "; Variants keep user-facing constructor behavior.\n\nfun main() {\n  let some = Option.Some(1)\n  let none: Option[Int] = Option.None\n\n  ; `as String` for variants must be legal and render constructor syntax.\n  write some as String\n  write none as String\n\n  ; HOF pass-through branches must keep the output type metadata.\n  let mapped-none = Option.map(none, x => \"{x}\")\n  write mapped-none\n  write mapped-none as String\n\n  let err: Result[Int, String] = Result.Err(\"bad\")\n  let mapped-err = Result.map(err, x => \"{x}\")\n  write mapped-err\n  write mapped-err as String\n\n  let union-err: Result[Int, String] | Option[Int] = Result.Err(\"wide\")\n  let mapped-union-err = Result.map(union-err, x => \"{x}\")\n  write mapped-union-err\n  write mapped-union-err as String\n\n  let ok: Result[Int, String] = Result.Ok(7)\n  let mapped-ok = Result.map-err(ok, e => String.length(e))\n  write mapped-ok\n  write mapped-ok as String\n\n  let union-ok: Result[Int, String] | Option[Int] = Result.Ok(8)\n  let mapped-union-ok = Result.map-err(union-ok, e => String.length(e))\n  write mapped-union-ok\n  write mapped-union-ok as String\n\n  let union-some: Option[Int] | Array[Int] = Option.Some(5)\n  let union-none: Option[Int] | Array[Int] = Option.None: Option[Int]\n  write Option.unwrap-or(union-some, 0)\n  write Option.unwrap-or(union-none, 0)\n  write Option.flatten(Option.Some(union-some))\n  write Option.note(\"missing\", union-none)\n  write Result.unwrap-or(union-ok, 0)\n  write Result.flatten(Result.Ok(union-ok))\n  write Result.hush(union-err)\n  write Array.sort([union-ok, union-err])\n\n  ; JSON serialization should keep nested Option semantics before storage.\n  @set meta{1} ({ present: some, missing: none } as Json)\n  write @get meta{1}\n}\n"
+---
+"Option.Some(1)"
+"Option.None"
+Option.None
+"Option.None"
+Result.Err("bad")
+"Result.Err("bad")"
+Result.Err("wide")
+"Result.Err("wide")"
+Result.Ok(7)
+"Result.Ok(7)"
+Result.Ok(8)
+"Result.Ok(8)"
+5
+0
+Option.Some(5)
+Result.Err("missing")
+8
+Result.Ok(8)
+Option.None
+[ Result.Err("wide"), Result.Ok(8) ]
+Option.Some({"missing":null,"present":1})

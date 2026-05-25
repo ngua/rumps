@@ -32,7 +32,6 @@ pub(crate) use instance::{Instance, InstanceRegistry};
 pub(crate) use runtime_types::{
     CheckedProgram, ExprAux, ExprInfo, RuntimeTyId, RuntimeTypes,
 };
-use smallvec::SmallVec;
 pub(crate) use ty::{
     ClassDef, ClassRegistry, ClassShape, Scheme, Ty, TyArena, TyId, TyVar,
     TypeClass,
@@ -40,65 +39,117 @@ pub(crate) use ty::{
 
 use crate::ast::{AstTypeExprId, ExprId};
 use crate::intern::StringId;
-use crate::TypeId;
+
+/// Capability required to read AST-backed declaration metadata from `TypeRegistry`.
+#[derive(Clone, Copy)]
+pub(crate) struct TypeDeclAccess(());
+
+impl TypeDeclAccess {
+    fn new() -> Self {
+        Self(())
+    }
+}
 
 /// Output from type checking.
 ///
-/// Contains runtime metadata needed by the interpreter: compiled regex
-/// patterns, type information for polymorphic expressions, and instance
-/// dispatch tables.
+/// Contains runtime metadata needed by the interpreter.
 pub(crate) struct TypecheckOutput {
     /// Type arena; owns all interned types referenced by `TyId` handles.
     pub(crate) ty_arena: TyArena,
-    /// Compiled regex patterns, indexed by `regex_indices`.
+    /// Compiled regex patterns, indexed by `ExprAux::RegexIndex`.
     pub(crate) regex_cache: Vec<regex::Regex>,
-    /// Mapping from regex expression IDs to cache indices.
-    pub(crate) regex_indices: HashMap<ExprId, u32>,
-    /// Resolved types for `MEMPTY` expressions (monoid identity values).
-    pub(crate) mempty_types: HashMap<ExprId, TyId>,
-    /// Resolved types for numeric literals (defaulted to `Int` if ambiguous).
-    pub(crate) numeric_types: HashMap<ExprId, TyId>,
-    /// Target types for `Into::into` and `TryInto::try_into` conversions.
-    pub(crate) convert_targets: HashMap<ExprId, TyId>,
-    /// Target types for `?` (wrap) operators on `Wrappable` types.
-    pub(crate) wrap_types: HashMap<ExprId, TyId>,
-    /// Resolved output types for `Bimappable:bimap` calls.
-    pub(crate) bimap_output_types: HashMap<ExprId, TyId>,
-    /// Type IDs for class method calls on user-defined types.
-    ///
-    /// Used to dispatch to user-defined class instances at runtime.
-    pub(crate) instance_calls: HashMap<ExprId, TypeId>,
-    /// Resolved function names for ambiguous parameterized class method calls.
-    pub(crate) resolved_instance_fns: HashMap<ExprId, StringId>,
+    /// Per-expression runtime metadata overrides produced during typecheck.
+    pub(crate) expr_metadata: HashMap<ExprId, CheckedExprInfo>,
+    /// Expressions widened into a union with their concrete member type.
+    pub(crate) union_value_reprs: HashMap<ExprId, TyId>,
+    /// Function and closure types keyed by body expression.
+    pub(crate) function_types: HashMap<ExprId, TyId>,
     /// Class registry; carries class definitions indexed by `ClassId`.
     pub(crate) class_registry: ClassRegistry,
-    /// Resolved class names for naked (`:method`) class method expressions.
-    pub(crate) naked_method_classes: HashMap<ExprId, StringId>,
     /// Resolved types for all expressions, populated from `InferCtx.expr_types`.
     pub(crate) expr_types: HashMap<ExprId, TyId>,
     /// Mapping from AST type expression IDs to their resolved `TyId`s.
     ///
     /// Populated for `IS` type patterns, `AS` casts, `READ` conversions, and
-    /// match `IS` arms so the interpreter can look up the target type as a
-    /// `RuntimeTyId` without going through the `TypeExprArena`.
+    /// match `IS` arms so the interpreter can look up the target runtime type.
     pub(crate) ast_type_map: HashMap<AstTypeExprId, TyId>,
-    /// Maps `read` target `AstTypeExprId`s to their expanded underlying `TyId`
-    /// when the target is an alias type.
-    pub(crate) alias_expansions: HashMap<AstTypeExprId, TyId>,
     /// Maps solved alias `TyId`s to their expanded underlying `TyId`s.
     pub(crate) alias_type_expansions: HashMap<TyId, TyId>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct CheckedExprInfo {
+    pub(super) ty: Option<TyId>,
+    pub(super) repr: Option<TyId>,
+    pub(super) concrete: bool,
+    pub(super) aux: CheckedExprAux,
+}
+
+impl Default for CheckedExprInfo {
+    fn default() -> Self {
+        Self {
+            ty: None,
+            repr: None,
+            concrete: false,
+            aux: CheckedExprAux::None,
+        }
+    }
+}
+
+impl CheckedExprInfo {
+    pub(super) fn resolve(
+        &mut self,
+        uf: &mut uf::UnionFind,
+        arena: &mut TyArena,
+    ) {
+        self.ty = self.ty.map(|ty| uf.resolve(ty, arena));
+        self.repr = self.repr.map(|ty| uf.resolve(ty, arena));
+        self.aux.resolve(uf, arena);
+    }
+
+    pub(super) fn ty_ids(&self) -> impl Iterator<Item = TyId> {
+        self.ty.into_iter().chain(self.repr)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum CheckedExprAux {
+    None,
+    RegexIndex(u32),
+    HofCall {
+        out: TyId,
+        class: Option<StringId>,
+    },
+    InstanceCall {
+        recv: Option<TyId>,
+        fun: Option<StringId>,
+        class: Option<StringId>,
+    },
+    NakedMethod {
+        class: StringId,
+    },
+}
+
+impl CheckedExprAux {
+    fn resolve(&mut self, uf: &mut uf::UnionFind, arena: &mut TyArena) {
+        match self {
+            Self::HofCall { out, .. } => {
+                *out = uf.resolve(*out, arena);
+            }
+            Self::InstanceCall { recv, .. } => {
+                *recv = recv.map(|ty| uf.resolve(ty, arena));
+            }
+            Self::None | Self::RegexIndex(_) | Self::NakedMethod { .. } => {}
+        }
+    }
 }
 
 impl TypecheckOutput {
     /// Build a `CheckedProgram` from this output.
     ///
-    /// Clones the type arena while `TypecheckOutput` still owns it for
-    /// migration-only interpreter helpers, then collects per-expression
-    /// metadata into a unified `HashMap<ExprId, ExprInfo>`.
+    /// Clones the type arena into `RuntimeTypes`, then collects
+    /// per-expression metadata into a unified `HashMap<ExprId, ExprInfo>`.
     pub(crate) fn to_checked(&self) -> CheckedProgram {
-        let mut arena = self.ty_arena.clone();
-
-        // Base layer: all expression types from `expr_types`
         let mut exprs: HashMap<ExprId, ExprInfo> = self
             .expr_types
             .iter()
@@ -107,131 +158,71 @@ impl TypecheckOutput {
                     id,
                     ExprInfo {
                         ty: RuntimeTyId::from(ty),
+                        repr: None,
                         aux: ExprAux::None,
                     },
                 )
             })
             .collect();
 
-        self.numeric_types.iter().for_each(|(&id, &ty)| {
-            exprs.insert(
-                id,
-                ExprInfo {
-                    ty: RuntimeTyId::from(ty),
-                    aux: ExprAux::None,
-                },
-            );
-        });
-
-        self.mempty_types.iter().for_each(|(&id, &ty)| {
-            exprs.insert(
-                id,
-                ExprInfo {
-                    ty: RuntimeTyId::from(ty),
-                    aux: ExprAux::None,
-                },
-            );
-        });
-
-        self.wrap_types.iter().for_each(|(&id, &ty)| {
-            exprs.insert(
-                id,
-                ExprInfo {
-                    ty: RuntimeTyId::from(ty),
-                    aux: ExprAux::None,
-                },
-            );
-        });
-
-        self.convert_targets.iter().for_each(|(&id, &ty)| {
-            exprs.insert(
-                id,
-                ExprInfo {
-                    ty: RuntimeTyId::from(ty),
-                    aux: ExprAux::None,
-                },
-            );
-        });
-
-        self.bimap_output_types.iter().for_each(|(&id, &ty)| {
-            exprs.insert(
-                id,
-                ExprInfo {
-                    ty: RuntimeTyId::from(ty),
-                    aux: ExprAux::HofCall {
-                        out: RuntimeTyId::from(ty),
-                    },
-                },
-            );
-        });
-
-        self.regex_indices.iter().for_each(|(&id, &idx)| {
-            exprs.insert(
-                id,
-                ExprInfo {
-                    ty: RuntimeTyId::from(TyArena::REGEX),
-                    aux: ExprAux::RegexIndex(idx),
-                },
-            );
-        });
-
-        self.instance_calls.iter().for_each(|(&id, &tid)| {
-            let recv = RuntimeTyId::from(arena.named(tid, SmallVec::new()));
-            let fun = self.resolved_instance_fns.get(&id).copied();
-            let ty = exprs
-                .get(&id)
-                .map_or(RuntimeTyId::from(TyArena::UNKNOWN), |e| e.ty);
-            exprs.insert(
-                id,
-                ExprInfo {
-                    ty,
-                    aux: ExprAux::InstanceCall { recv, fun },
-                },
-            );
-        });
-
-        self.resolved_instance_fns.iter().for_each(|(&id, &fun)| {
-            if !self.instance_calls.contains_key(&id) {
-                let ty = exprs
-                    .get(&id)
-                    .map_or(RuntimeTyId::from(TyArena::UNKNOWN), |e| e.ty);
-                exprs.insert(
-                    id,
-                    ExprInfo {
-                        ty,
-                        aux: ExprAux::InstanceCall {
-                            recv: RuntimeTyId::UNKNOWN,
-                            fun: Some(fun),
-                        },
-                    },
-                );
+        self.expr_metadata.iter().for_each(|(&id, meta)| {
+            let info = exprs.entry(id).or_insert_with(|| ExprInfo {
+                ty: RuntimeTyId::from(meta.ty.unwrap_or_else(|| {
+                    typechecked!(
+                        "expression metadata",
+                        "resolved expression type"
+                    )
+                })),
+                repr: None,
+                aux: ExprAux::None,
+            });
+            if let Some(ty) = meta.ty {
+                info.ty = RuntimeTyId::from(ty);
             }
+            if let Some(repr) = meta.repr {
+                info.repr = Some(RuntimeTyId::from(repr));
+            }
+            info.aux = match meta.aux {
+                CheckedExprAux::None => ExprAux::None,
+                CheckedExprAux::RegexIndex(idx) => ExprAux::RegexIndex(idx),
+                CheckedExprAux::HofCall { out, class } => ExprAux::HofCall {
+                    out: RuntimeTyId::from(out),
+                    class,
+                },
+                CheckedExprAux::InstanceCall { recv, fun, class } => {
+                    ExprAux::InstanceCall {
+                        recv: RuntimeTyId::from(
+                            recv.unwrap_or(TyArena::UNKNOWN),
+                        ),
+                        fun,
+                        class,
+                    }
+                }
+                CheckedExprAux::NakedMethod { class } => {
+                    ExprAux::NakedMethod { class }
+                }
+            };
         });
 
-        self.naked_method_classes.iter().for_each(|(&id, &class)| {
-            let ty = exprs
-                .get(&id)
-                .map_or(RuntimeTyId::from(TyArena::UNKNOWN), |e| e.ty);
-            exprs.insert(
-                id,
-                ExprInfo {
-                    ty,
-                    aux: ExprAux::NakedMethod { class },
-                },
-            );
+        self.union_value_reprs.iter().for_each(|(&id, &repr)| {
+            let info = exprs.get_mut(&id).unwrap_or_else(|| {
+                typechecked!("union value", "resolved expression type")
+            });
+            info.repr = Some(RuntimeTyId::from(repr));
         });
+
+        let function_types = self
+            .function_types
+            .iter()
+            .map(|(&id, &ty)| (id, RuntimeTyId::from(ty)))
+            .collect();
 
         let ast_type_map = self
             .ast_type_map
             .iter()
             .map(|(&id, &ty)| (id, RuntimeTyId::from(ty)))
             .collect();
-        let alias_expansions = self
-            .alias_expansions
-            .iter()
-            .map(|(&id, &ty)| (id, RuntimeTyId::from(ty)))
-            .collect();
-        let alias_type_expansions = self
+        let alias_type_expansions: HashMap<RuntimeTyId, RuntimeTyId> = self
             .alias_type_expansions
             .iter()
             .map(|(&alias, &expanded)| {
@@ -240,13 +231,48 @@ impl TypecheckOutput {
             .collect();
 
         CheckedProgram {
-            types: RuntimeTypes::new(arena),
+            types: RuntimeTypes::new(
+                self.ty_arena.clone(),
+                alias_type_expansions.clone(),
+            ),
             exprs,
             regex_cache: self.regex_cache.clone(),
             class_registry: self.class_registry.clone(),
+            function_types,
             ast_type_map,
-            alias_expansions,
-            alias_type_expansions,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::intern::StringInterner;
+
+    #[test]
+    fn phase_11_checked_program_preserves_regex_cache_and_class_registry() {
+        let mut strings = StringInterner::new();
+        let mut arena = TyArena::new();
+        let class_registry =
+            ClassRegistry::builtins(&mut |s| strings.intern(s), &mut arena);
+        let class = strings.intern("Numeric");
+        let output = TypecheckOutput {
+            ty_arena: arena,
+            regex_cache: vec![regex::Regex::new("abc").unwrap()],
+            expr_metadata: HashMap::new(),
+            union_value_reprs: HashMap::new(),
+            function_types: HashMap::new(),
+            class_registry,
+            expr_types: HashMap::new(),
+            ast_type_map: HashMap::new(),
+            alias_type_expansions: HashMap::new(),
+        };
+        let checked = output.to_checked();
+
+        assert_eq!(
+            checked.regex_cache.first().map(regex::Regex::as_str),
+            Some("abc")
+        );
+        assert!(checked.class_registry.lookup_by_name(class).is_some());
     }
 }

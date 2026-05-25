@@ -1,0 +1,6 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+assertion_line: 38
+description: "; Result.Err unwrap messages preserve constructor display.\n\nfun main() {\n  let err: Result[Int, Option[Int]] = Result.Err(Option.Some(1))\n  write err!\n}\n"
+---
+ERROR: runtime error at 146..150: cannot unwrap Result.Err: Option.Some(1)

@@ -3,7 +3,7 @@
 use super::Interpreter;
 use crate::ast::{ExprId, StmtId, TransactionExpr, TxnId};
 use crate::io::IoContext;
-use crate::value::Payload;
+use crate::value::{Payload, Value};
 use crate::{Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
@@ -31,7 +31,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             builder = builder.conflict(conflict);
         }
         if let Some(timeout_id) = txn_expr.modifiers.timeout {
-            let timeout_val = self.eval(timeout_id).await?;
+            let timeout_val = self.eval_payload(timeout_id).await?;
             let ms = match timeout_val {
                 Payload::Int(n) => n as u64,
                 _ => typechecked!("timeout", "Int"),
@@ -69,41 +69,39 @@ impl<I: IoContext> Interpreter<'_, I> {
         ms: Option<u64>,
         span: Span,
     ) -> Result<Payload> {
-        // Start the transaction
-        let txn = match builder.start().await {
-            Ok(t) => t,
+        match builder.start().await {
             Err(e) => {
                 let msg = format!("failed to start transaction: {e}");
-                return Ok(self.make_result_err(&msg, span));
+                Ok(self.make_result_err(&msg, span))
             }
-        };
+            Ok(txn) => {
+                // Get retry count before cloning
+                let retries = txn.retry_count();
 
-        // Get retry count before cloning
-        let retries = txn.retry_count();
+                // Insert into the transaction map
+                self.txns.insert(id, txn.clone());
 
-        // Insert into the transaction map
-        self.txns.insert(id, txn.clone());
+                // Enter new scope for local bindings
+                self.env.scopes.push();
 
-        // Enter new scope for local bindings
-        self.env.scopes.push();
+                // Execute body (with timeout if specified); timeout -> Err
+                let body_result =
+                    txn.timed(ms, self.execute_txn_stmts(stmts, expr)).await;
 
-        // Execute body (with timeout if specified); timeout -> Err
-        let body_result =
-            txn.timed(ms, self.execute_txn_stmts(stmts, expr)).await;
+                // Pop scope
+                self.env.scopes.pop();
 
-        // Pop scope
-        self.env.scopes.pop();
+                // Remove from the transaction map and finish
+                let txn = self.txns.remove(&id).unwrap_or_else(|| {
+                    typechecked!("transaction", "TxnId in map")
+                });
 
-        // Remove from the transaction map and finish
-        let txn = self
-            .txns
-            .remove(&id)
-            .unwrap_or_else(|| typechecked!("transaction", "TxnId in map"));
-
-        // Commit (or rollback on body error)
-        match txn.finish_with_retry(body_result, retries).await {
-            Ok(val) => Ok(self.make_result_ok(val, span)),
-            Err(e) => Ok(self.make_result_err(&e.to_string(), span)),
+                // Commit (or rollback on body error)
+                match txn.finish_with_retry(body_result, retries).await {
+                    Ok(val) => Ok(self.make_result_ok_value(val, span)),
+                    Err(e) => Ok(self.make_result_err(&e.to_string(), span)),
+                }
+            }
         }
     }
 
@@ -112,10 +110,13 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         stmts: &[StmtId],
         expr: Option<ExprId>,
-    ) -> Result<Payload> {
+    ) -> Result<Value> {
         self.stmts(stmts).await?;
         match expr {
-            None => Ok(Payload::Unit),
+            None => Ok(self.value_from_meta(
+                Payload::Unit,
+                self.checked.types.meta_unit(),
+            )),
             Some(id) => self.eval(id).await,
         }
     }

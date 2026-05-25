@@ -14,9 +14,10 @@ use super::error::TypeError;
 use super::infer::ClassContext;
 use super::ty::{Ty, TyArena, TyId, TypeClass};
 use super::uf::UnionFind;
+use super::TypeDeclAccess;
 use crate::ast::{Ast, AstTypeExpr, AstTypeExprId, Visibility};
 use crate::intern::{QualifiedName, StringId};
-use crate::value::{TypeDef, TypeExprArena, TypeExprId, TypeId, TypeRegistry};
+use crate::value::{TypeDef, TypeId, TypeRegistry};
 use crate::{ClassId, Span};
 
 /// Shared context for AST-to-`TyId` conversion.
@@ -34,7 +35,6 @@ pub(super) struct ConvertCtx<'a> {
     pub(super) errors: &'a mut Vec<TypeError>,
     pub(super) current_module: &'a Option<QualifiedName>,
     pub(super) class_context: &'a Option<ClassContext>,
-    pub(super) type_exprs: &'a TypeExprArena,
     /// If `true`, `ast_type_to_ty` rewrites the AST when it module-qualifies
     /// an unqualified name. Set by `InferCtx` (inference phase); cleared by
     /// `SolveCtx` (solve phase; names already resolved).
@@ -116,22 +116,6 @@ impl ConvertCtx<'_> {
             || self.resolve_type_name(name).is_some()
     }
 
-    /// Convert a runtime `TypeExprId` to a `TyId`.
-    fn type_expr_to_ty(&mut self, id: TypeExprId) -> TyId {
-        let base = self.type_exprs.base_type(id);
-        let arg_ids: SmallVec<[TypeExprId; 4]> = self
-            .type_exprs
-            .type_args(id)
-            .map(|a| a.iter().copied().collect())
-            .unwrap_or_default();
-        base.map_or(TyArena::UNKNOWN, |base| {
-            let args: SmallVec<[TyId; 4]> =
-                arg_ids.iter().map(|&p| self.type_expr_to_ty(p)).collect();
-            let base_ty = self.type_id_to_ty(base);
-            self.apply_type_args(base_ty, args)
-        })
-    }
-
     /// Convert a `TypeId` to a primitive `TyId`, `Ty::Union`, or `Ty::Named`.
     ///
     /// Builtin and user-defined unions are expanded to
@@ -163,20 +147,21 @@ impl ConvertCtx<'_> {
             TypeId::SCALAR => self.ty_arena.scalar(),
             TypeId::SUBSCRIPT => self.ty_arena.subscript(),
             _ => match self.registry.get_def(id) {
-                Some(TypeDef::Union {
-                    members,
-                    member_exprs,
-                    ..
-                }) => {
+                Some(TypeDef::Union { members, .. }) => {
                     let members = members.clone();
-                    let member_exprs = member_exprs.clone();
-                    let member_tys = if member_exprs.is_empty() {
-                        members.iter().map(|&m| self.type_id_to_ty(m)).collect()
-                    } else {
+                    let member_exprs = self
+                        .registry
+                        .union_member_exprs(TypeDeclAccess::new(), id)
+                        .cloned();
+                    let member_tys = if let Some(member_exprs) =
+                        member_exprs.filter(|ms| !ms.is_empty())
+                    {
                         member_exprs
                             .iter()
                             .map(|&m| self.ast_type_to_ty(m, &IndexMap::new()))
                             .collect()
+                    } else {
+                        members.iter().map(|&m| self.type_id_to_ty(m)).collect()
                     };
                     self.ty_arena.alloc(Ty::Union(Some(id), member_tys))
                 }
@@ -415,14 +400,22 @@ impl ConvertCtx<'_> {
                                         .and_then(|def| match def {
                                             TypeDef::Union {
                                                 type_params,
-                                                member_exprs,
                                                 ..
-                                            } if !member_exprs.is_empty() => {
-                                                Some((
-                                                    type_params.clone(),
-                                                    member_exprs.clone(),
-                                                ))
-                                            }
+                                            } => self
+                                                .registry
+                                                .union_member_exprs(
+                                                    TypeDeclAccess::new(),
+                                                    type_id,
+                                                )
+                                                .filter(|member_exprs| {
+                                                    !member_exprs.is_empty()
+                                                })
+                                                .map(|member_exprs| {
+                                                    (
+                                                        type_params.clone(),
+                                                        member_exprs.clone(),
+                                                    )
+                                                }),
                                             _ => None,
                                         });
                                     match union {

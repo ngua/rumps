@@ -8,7 +8,8 @@ use super::Interpreter;
 use crate::ast::ExprId;
 use crate::intern::{QualifiedName, StringId};
 use crate::io::IoContext;
-use crate::value::{Payload, ValueId, ValueMeta};
+use crate::typecheck::RuntimeTyId;
+use crate::value::{Payload, Value, ValueId};
 use crate::{ClassId, Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
@@ -49,8 +50,30 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Create a `Result.Ok(v)` value.
     pub(super) fn make_result_ok(&mut self, v: Payload, span: Span) -> Payload {
-        let val_id = self.arena.add_typed(v, ValueMeta::untyped(), span);
+        let val_id = self.add_payload(v, span);
         Payload::ok(val_id)
+    }
+
+    /// Create a `Result.Ok(v)` value, preserving existing runtime metadata.
+    pub(super) fn make_result_ok_value(
+        &mut self,
+        v: Value,
+        span: Span,
+    ) -> Payload {
+        let val_id = self.add_value(v, span);
+        Payload::ok(val_id)
+    }
+
+    /// Create a `Result.Ok(v)` value with explicit metadata for `v`.
+    pub(super) fn make_result_ok_typed(
+        &mut self,
+        v: Payload,
+        ty: RuntimeTyId,
+        span: Span,
+    ) -> Payload {
+        let meta = self.checked.types.meta(ty);
+        let value = self.value_from_meta(v, meta);
+        self.make_result_ok_value(value, span)
     }
 
     /// Create a `Result.Err(msg)` value.
@@ -68,6 +91,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     #[async_recursion]
     pub(super) async fn variant(
         &mut self,
+        expr_id: ExprId,
         ty_name: &QualifiedName,
         var_name: StringId,
         args: &[ExprId],
@@ -78,6 +102,18 @@ impl<I: IoContext> Interpreter<'_, I> {
             .registry
             .lookup(ty_name)
             .unwrap_or_else(|| typechecked!("variant", "known type"));
+        let meta = self.expr_meta(expr_id);
+        let checked_type_id = self
+            .checked
+            .types
+            .to_type_id(meta.repr)
+            .or_else(|| self.checked.types.to_type_id(meta.ty))
+            .unwrap_or_else(|| {
+                typechecked!("variant", "checked type metadata")
+            });
+        if checked_type_id != type_id {
+            typechecked!("variant", "checked type metadata")
+        }
 
         // Typechecker validates variant names
         let var_def = self
@@ -93,7 +129,10 @@ impl<I: IoContext> Interpreter<'_, I> {
         let idx = var_def.idx;
         let payloads = self.eval_variant_args(args, span).await?;
 
-        Ok(Payload::Tagged(type_id, idx, payloads))
+        Ok(Payload::Variant {
+            tag: idx,
+            vals: payloads,
+        })
     }
 
     /// Evaluate variant arguments and return their `ValueId`s.
@@ -107,8 +146,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             None => Ok(SmallVec::new()),
             Some((head, tail)) => {
                 let val = self.eval(*head).await?;
-                let meta = self.expr_meta(*head);
-                let val_id = self.arena.add_typed(val, meta, span);
+                let val_id = self.add_value(val, span);
                 let mut rest = self.eval_variant_args(tail, span).await?;
                 let mut vals = SmallVec::new();
                 vals.push(val_id);
@@ -123,19 +161,13 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Dispatches to `Monoid:identity` with the inferred type to produce
     /// the appropriate empty value.
     pub(super) fn mempty(&mut self, id: ExprId, span: Span) -> Result<Payload> {
-        let ty_id = self
-            .checked
-            .exprs
-            .get(&id)
-            .map(|info| info.ty.raw())
-            .unwrap_or_else(|| typechecked!("mempty", "resolved type"));
-        let ty = self.ty_arena.get(ty_id).clone();
+        let ty_id = self.checked.expr(id).ty;
+        let ty = self.checked.types.get(ty_id).clone();
 
         let mid = self.arena.intern("identity");
         let mut ctx = ClassCtx {
             arena: &mut self.arena,
-            ty_arena: &self.ty_arena,
-            runtime_types: &self.checked.types,
+            runtime_types: &mut self.checked.types,
             registry: &self.registry,
             regex_cache: &self.checked.regex_cache,
             span,

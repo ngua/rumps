@@ -57,8 +57,13 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::env::{PrimCtx, PrimResult};
 use crate::interpreter::convert::escape_str;
-use crate::value::{MapKey, Payload, TypeId, ValueArena, ValueId, ValueMeta};
+use crate::typecheck::{RuntimeTyId, RuntimeTypes};
+use crate::value::{MapKey, Payload, TypeId, Value, ValueArena, ValueId};
 use crate::{Result, StringId};
+
+fn meta_type_id(tys: &RuntimeTypes, v: &Value) -> Option<TypeId> {
+    tys.to_type_id(v.repr).or_else(|| tys.to_type_id(v.ty))
+}
 
 /// Shared utilities for primitive function implementations.
 ///
@@ -110,7 +115,7 @@ pub(crate) trait Prim {
     ///
     /// Type checker guarantees value is numeric.
     fn to_float(ctx: &PrimCtx<'_>, id: ValueId) -> f64 {
-        ctx.arena.get(id).map_or_else(
+        ctx.arena.payload(id).map_or_else(
             || typechecked!("to_float", "ValueId"),
             |v| match v {
                 Payload::Int(n) => *n as f64,
@@ -124,7 +129,7 @@ pub(crate) trait Prim {
     ///
     /// Type checker guarantees value is `Int`.
     fn to_int(ctx: &PrimCtx<'_>, id: ValueId) -> i64 {
-        ctx.arena.get(id).map_or_else(
+        ctx.arena.payload(id).map_or_else(
             || typechecked!("to_int", "ValueId"),
             |v| match v {
                 Payload::Int(n) => *n,
@@ -161,11 +166,7 @@ impl Array {
                 .unwrap_or_else(|| typechecked!("Array.push", "Array"));
 
             e.push(args[1]);
-            Ok(ctx.arena.add_typed(
-                Payload::Array(Arc::new(e)),
-                ValueMeta::untyped(),
-                ctx.span,
-            ))
+            Ok(ctx.add(Payload::Array(Arc::new(e))))
         })
     }
 
@@ -184,11 +185,7 @@ impl Array {
                 .unwrap_or_else(|| typechecked!("Array.pop", "Array"));
 
             e.pop();
-            Ok(ctx.arena.add_typed(
-                Payload::Array(Arc::new(e)),
-                ValueMeta::untyped(),
-                ctx.span,
-            ))
+            Ok(ctx.add(Payload::Array(Arc::new(e))))
         })
     }
 
@@ -229,11 +226,7 @@ impl Array {
 
             let tail: SmallVec<[ValueId; 4]> =
                 elems.get(1..).map(SmallVec::from_slice).unwrap_or_default();
-            Ok(ctx.arena.add_typed(
-                Payload::Array(Arc::new(tail)),
-                ValueMeta::untyped(),
-                ctx.span,
-            ))
+            Ok(ctx.add(Payload::Array(Arc::new(tail))))
         })
     }
 
@@ -265,21 +258,22 @@ impl Array {
             Float(OrderedFloat<f64>),
             Char(char),
             String(&'a str),
-            /// Tagged value: (sort_priority, recursive payloads)
+            /// Variant value: (sort_priority, recursive payloads)
             ///
             /// Priority from `sort_priority`, then recursive payload keys.
-            Tagged(u8, Vec<Self>),
+            Variant(u8, Vec<Self>),
             Tuple(Vec<Self>),
             Array(Vec<Self>),
             Object(Vec<(&'a str, Self)>),
         }
 
         impl<'a> SortKey<'a> {
-            fn from_payload(
-                v: &Payload,
+            fn from_value(
+                v: &'a Value,
                 arena: &'a ValueArena,
+                tys: &RuntimeTypes,
             ) -> Option<Self> {
-                match v {
+                match &v.payload {
                     Payload::Bool(b) => Some(Self::Bool(*b)),
                     Payload::Int(n) => Some(Self::Int(*n)),
                     // Word sorts as Int (coerced)
@@ -290,25 +284,26 @@ impl Array {
                         arena.get_str(*sid).map(Self::String)
                     }
 
-                    Payload::Tagged(ty, idx, payloads) => {
-                        let priority = Self::sort_priority(ty, *idx);
-                        let sub_keys: Option<Vec<SortKey<'a>>> = payloads
+                    Payload::Variant { tag, vals } => {
+                        let priority =
+                            Self::sort_priority(tys, v.repr, v.ty, *tag);
+                        let sub_keys: Option<Vec<SortKey<'a>>> = vals
                             .iter()
                             .map(|vid| {
-                                arena.get(*vid).and_then(|pv| {
-                                    Self::from_payload(pv, arena)
+                                arena.value(*vid).and_then(|pv| {
+                                    Self::from_value(pv, arena, tys)
                                 })
                             })
                             .collect();
-                        sub_keys.map(|keys| Self::Tagged(priority, keys))
+                        sub_keys.map(|keys| Self::Variant(priority, keys))
                     }
 
                     Payload::Tuple(elems) => {
                         let sub_keys: Option<Vec<SortKey<'a>>> = elems
                             .iter()
                             .map(|vid| {
-                                arena.get(*vid).and_then(|ev| {
-                                    Self::from_payload(ev, arena)
+                                arena.value(*vid).and_then(|ev| {
+                                    Self::from_value(ev, arena, tys)
                                 })
                             })
                             .collect();
@@ -319,8 +314,8 @@ impl Array {
                         let sub_keys: Option<Vec<SortKey<'a>>> = elems
                             .iter()
                             .map(|vid| {
-                                arena.get(*vid).and_then(|ev| {
-                                    Self::from_payload(ev, arena)
+                                arena.value(*vid).and_then(|ev| {
+                                    Self::from_value(ev, arena, tys)
                                 })
                             })
                             .collect();
@@ -332,8 +327,8 @@ impl Array {
                             .iter()
                             .map(|(k, vid)| {
                                 arena.get_str(*k).and_then(|key_str| {
-                                    arena.get(*vid).and_then(|val| {
-                                        Self::from_payload(val, arena)
+                                    arena.value(*vid).and_then(|val| {
+                                        Self::from_value(val, arena, tys)
                                             .map(|sk| (key_str, sk))
                                     })
                                 })
@@ -370,8 +365,15 @@ impl Array {
             /// For Option and Result, we want `Some > None` and `Ok > Err`
             /// semantically. Declaration order is `None, Some` and `Ok, Err`,
             /// so Option already sorts correctly but Result needs inversion.
-            fn sort_priority(ty: &TypeId, idx: u8) -> u8 {
-                if *ty == TypeId::RESULT {
+            fn sort_priority(
+                tys: &RuntimeTypes,
+                repr: RuntimeTyId,
+                ty: RuntimeTyId,
+                idx: u8,
+            ) -> u8 {
+                let type_id =
+                    tys.to_type_id(repr).or_else(|| tys.to_type_id(ty));
+                if type_id.is_some_and(|id| id == TypeId::RESULT) {
                     1 - idx
                 } else {
                     idx
@@ -391,15 +393,19 @@ impl Array {
                 .map(|vid| {
                     // Type checker guarantees array elements are comparable
                     ctx.arena
-                        .get(*vid)
+                        .value(*vid)
                         .ok_or_else(|| {
                             ctx.runtime_error("Array.sort: invalid element")
                         })
                         .map(|v| {
-                            let k = SortKey::from_payload(v, ctx.arena)
-                                .unwrap_or_else(|| {
-                                    typechecked!("Array.sort", "Comparable")
-                                });
+                            let k = SortKey::from_value(
+                                v,
+                                ctx.arena,
+                                ctx.runtime_types,
+                            )
+                            .unwrap_or_else(|| {
+                                typechecked!("Array.sort", "Comparable")
+                            });
                             (*vid, k)
                         })
                 })
@@ -409,11 +415,7 @@ impl Array {
 
             let sorted: SmallVec<[ValueId; 4]> =
                 pairs.into_iter().map(|(vid, _)| vid).collect();
-            Ok(ctx.arena.add_typed(
-                Payload::Array(Arc::new(sorted)),
-                ValueMeta::untyped(),
-                ctx.span,
-            ))
+            Ok(ctx.add(Payload::Array(Arc::new(sorted))))
         })
     }
 
@@ -433,7 +435,7 @@ impl Array {
 
             let start = ctx
                 .arena
-                .get(args[1])
+                .payload(args[1])
                 .and_then(|v| match v {
                     Payload::Int(n) => Some(*n),
                     _ => None,
@@ -444,7 +446,7 @@ impl Array {
 
             let end = ctx
                 .arena
-                .get(args[2])
+                .payload(args[2])
                 .and_then(|v| match v {
                     Payload::Int(n) => Some(*n),
                     _ => None,
@@ -460,11 +462,7 @@ impl Array {
                 .map(SmallVec::from_slice)
                 .unwrap_or_default();
 
-            Ok(ctx.arena.add_typed(
-                Payload::Array(Arc::new(sliced)),
-                ValueMeta::untyped(),
-                ctx.span,
-            ))
+            Ok(ctx.add(Payload::Array(Arc::new(sliced))))
         })
     }
 
@@ -489,11 +487,7 @@ impl Array {
 
             // Type checker guarantees both arrays have matching element types
             combined.extend(elems_b.iter().copied());
-            Ok(ctx.arena.add_typed(
-                Payload::Array(Arc::new(combined)),
-                ValueMeta::untyped(),
-                ctx.span,
-            ))
+            Ok(ctx.add(Payload::Array(Arc::new(combined))))
         })
     }
 
@@ -525,15 +519,11 @@ impl Array {
                 .iter()
                 .map(|(a, b)| {
                     let tup = Payload::Tuple(Arc::new(smallvec![*a, *b]));
-                    ctx.arena.add_typed(tup, ValueMeta::untyped(), ctx.span)
+                    ctx.add(tup)
                 })
                 .collect();
 
-            Ok(ctx.arena.add_typed(
-                Payload::Array(Arc::new(pairs)),
-                ValueMeta::untyped(),
-                ctx.span,
-            ))
+            Ok(ctx.add(Payload::Array(Arc::new(pairs))))
         })
     }
 
@@ -557,7 +547,7 @@ impl Array {
             ) = pairs
                 .iter()
                 .map(|id| {
-                    ctx.arena.get(*id).unwrap_or_else(|| {
+                    ctx.arena.payload(*id).unwrap_or_else(|| {
                         typechecked!("Array.unzip", "valid id")
                     })
                 })
@@ -567,22 +557,14 @@ impl Array {
                 })
                 .unzip();
 
-            let arr_a_id = ctx.arena.add_typed(
-                Payload::Array(Arc::new(firsts)),
-                ValueMeta::untyped(),
-                ctx.span,
-            );
-            let arr_b_id = ctx.arena.add_typed(
-                Payload::Array(Arc::new(seconds)),
-                ValueMeta::untyped(),
-                ctx.span,
-            );
+            let arr_a_id = ctx.add(Payload::Array(Arc::new(firsts)));
+            let arr_b_id = ctx.add(Payload::Array(Arc::new(seconds)));
 
-            Ok(ctx.arena.add_typed(
-                Payload::Tuple(Arc::new(smallvec![arr_a_id, arr_b_id])),
-                ValueMeta::untyped(),
-                ctx.span,
-            ))
+            Ok(
+                ctx.add(Payload::Tuple(Arc::new(smallvec![
+                    arr_a_id, arr_b_id
+                ]))),
+            )
         })
     }
 
@@ -603,11 +585,7 @@ impl Array {
             let result: SmallVec<[ValueId; 4]> =
                 Itertools::intersperse(elems.iter().copied(), sep).collect();
 
-            Ok(ctx.arena.add_typed(
-                Payload::Array(Arc::new(result)),
-                ValueMeta::untyped(),
-                ctx.span,
-            ))
+            Ok(ctx.add(Payload::Array(Arc::new(result))))
         })
     }
 }
@@ -753,11 +731,7 @@ impl Str {
                 })
                 .collect();
 
-            Ok(ctx.arena.add_typed(
-                Payload::Array(Arc::new(parts)),
-                ValueMeta::untyped(),
-                ctx.span,
-            ))
+            Ok(ctx.add(Payload::Array(Arc::new(parts))))
         })
     }
 
@@ -822,7 +796,7 @@ impl Str {
 
             let start = ctx
                 .arena
-                .get(args[1])
+                .payload(args[1])
                 .and_then(|v| match v {
                     Payload::Int(n) => Some(*n),
                     _ => None,
@@ -833,7 +807,7 @@ impl Str {
 
             let end = ctx
                 .arena
-                .get(args[2])
+                .payload(args[2])
                 .and_then(|v| match v {
                     Payload::Int(n) => Some(*n),
                     _ => None,
@@ -975,7 +949,7 @@ impl Math {
         Box::pin(async move {
             let v = ctx
                 .arena
-                .get(args[0])
+                .payload(args[0])
                 .ok_or_else(|| ctx.runtime_error("Math.abs: invalid value"))?;
 
             let result = match v {
@@ -985,7 +959,7 @@ impl Math {
                 _ => typechecked!("Math.abs", "Numeric"),
             };
 
-            Ok(ctx.arena.add_typed(result, ValueMeta::untyped(), ctx.span))
+            Ok(ctx.add(result))
         })
     }
 
@@ -997,8 +971,10 @@ impl Math {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let result = match (ctx.arena.get(args[0]), ctx.arena.get(args[1]))
-            {
+            let result = match (
+                ctx.arena.payload(args[0]),
+                ctx.arena.payload(args[1]),
+            ) {
                 (Some(Payload::Int(x)), Some(Payload::Int(y))) => {
                     Payload::Int((*x).min(*y))
                 }
@@ -1011,7 +987,7 @@ impl Math {
                 _ => typechecked!("Math.min", "same Numeric type"),
             };
 
-            Ok(ctx.arena.add_typed(result, ValueMeta::untyped(), ctx.span))
+            Ok(ctx.add(result))
         })
     }
 
@@ -1023,8 +999,10 @@ impl Math {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let result = match (ctx.arena.get(args[0]), ctx.arena.get(args[1]))
-            {
+            let result = match (
+                ctx.arena.payload(args[0]),
+                ctx.arena.payload(args[1]),
+            ) {
                 (Some(Payload::Int(x)), Some(Payload::Int(y))) => {
                     Payload::Int((*x).max(*y))
                 }
@@ -1037,7 +1015,7 @@ impl Math {
                 _ => typechecked!("Math.max", "same Numeric type"),
             };
 
-            Ok(ctx.arena.add_typed(result, ValueMeta::untyped(), ctx.span))
+            Ok(ctx.add(result))
         })
     }
 
@@ -1372,11 +1350,7 @@ impl Random {
                 .unwrap_or_else(|| typechecked!("Random.shuffle", "Array"));
 
             e.shuffle(&mut rand::thread_rng());
-            Ok(ctx.arena.add_typed(
-                Payload::Array(Arc::new(e)),
-                ValueMeta::untyped(),
-                ctx.span,
-            ))
+            Ok(ctx.add(Payload::Array(Arc::new(e))))
         })
     }
 
@@ -1413,11 +1387,7 @@ impl Random {
                     .choose_multiple(&mut rand::thread_rng(), n)
                     .copied()
                     .collect();
-                let arr = ctx.arena.add_typed(
-                    Payload::Array(Arc::new(sampled)),
-                    ValueMeta::untyped(),
-                    ctx.span,
-                );
+                let arr = ctx.add(Payload::Array(Arc::new(sampled)));
                 Ok(ctx.result_ok(arr))
             }
         })
@@ -1457,7 +1427,7 @@ impl Map {
     ) -> PrimResult<'a> {
         Box::pin(async move {
             let map = Payload::Map(Arc::new(IndexMap::new()));
-            Ok(ctx.arena.add_typed(map, ValueMeta::untyped(), ctx.span))
+            Ok(ctx.add(map))
         })
     }
 
@@ -1499,22 +1469,10 @@ impl Map {
             let key_vals: SmallVec<[MapKey; 8]> =
                 entries.keys().cloned().collect();
 
-            let keys: SmallVec<[ValueId; 4]> = key_vals
-                .iter()
-                .map(|k| {
-                    ctx.arena.add_typed(
-                        k.to_payload(),
-                        ValueMeta::untyped(),
-                        ctx.span,
-                    )
-                })
-                .collect();
+            let keys: SmallVec<[ValueId; 4]> =
+                key_vals.iter().map(|k| ctx.add(k.to_payload())).collect();
 
-            Ok(ctx.arena.add_typed(
-                Payload::Array(Arc::new(keys)),
-                ValueMeta::untyped(),
-                ctx.span,
-            ))
+            Ok(ctx.add(Payload::Array(Arc::new(keys))))
         })
     }
 
@@ -1533,11 +1491,7 @@ impl Map {
 
             let vals: SmallVec<[ValueId; 4]> =
                 entries.values().copied().collect();
-            Ok(ctx.arena.add_typed(
-                Payload::Array(Arc::new(vals)),
-                ValueMeta::untyped(),
-                ctx.span,
-            ))
+            Ok(ctx.add(Payload::Array(Arc::new(vals))))
         })
     }
 
@@ -1561,22 +1515,14 @@ impl Map {
             let tuples: SmallVec<[ValueId; 4]> = entry_pairs
                 .iter()
                 .map(|(k, v_id)| {
-                    let k_id = ctx.arena.add_typed(
-                        k.to_payload(),
-                        ValueMeta::untyped(),
-                        ctx.span,
-                    );
+                    let k_id = ctx.add(k.to_payload());
                     let tuple =
                         Payload::Tuple(Arc::new(smallvec![k_id, *v_id]));
-                    ctx.arena.add_typed(tuple, ValueMeta::untyped(), ctx.span)
+                    ctx.add(tuple)
                 })
                 .collect();
 
-            Ok(ctx.arena.add_typed(
-                Payload::Array(Arc::new(tuples)),
-                ValueMeta::untyped(),
-                ctx.span,
-            ))
+            Ok(ctx.add(Payload::Array(Arc::new(tuples))))
         })
     }
 
@@ -1590,7 +1536,7 @@ impl Map {
         Box::pin(async move {
             let key = ctx
                 .arena
-                .get(args[1])
+                .payload(args[1])
                 .ok_or_else(|| ctx.runtime_error("invalid key value id"))?;
 
             let map_key = MapKey::from_payload(key).unwrap_or_else(|| {
@@ -1624,7 +1570,7 @@ impl Map {
         Box::pin(async move {
             let key = ctx
                 .arena
-                .get(args[1])
+                .payload(args[1])
                 .ok_or_else(|| ctx.runtime_error("invalid key value id"))?;
 
             let map_key = MapKey::from_payload(key).unwrap_or_else(|| {
@@ -1658,7 +1604,7 @@ impl Map {
             // Get key value and convert to MapKey first
             let key = ctx
                 .arena
-                .get(args[1])
+                .payload(args[1])
                 .ok_or_else(|| ctx.runtime_error("invalid key value id"))?;
 
             let map_key = MapKey::from_payload(key).unwrap_or_else(|| {
@@ -1676,11 +1622,7 @@ impl Map {
 
             e.insert(map_key, args[2]);
 
-            Ok(ctx.arena.add_typed(
-                Payload::Map(Arc::new(e)),
-                ValueMeta::untyped(),
-                ctx.span,
-            ))
+            Ok(ctx.add(Payload::Map(Arc::new(e))))
         })
     }
 
@@ -1694,7 +1636,7 @@ impl Map {
         Box::pin(async move {
             let key = ctx
                 .arena
-                .get(args[1])
+                .payload(args[1])
                 .ok_or_else(|| ctx.runtime_error("invalid key value id"))?;
 
             let map_key = MapKey::from_payload(key).unwrap_or_else(|| {
@@ -1711,11 +1653,7 @@ impl Map {
 
             e.shift_remove(&map_key);
 
-            Ok(ctx.arena.add_typed(
-                Payload::Map(Arc::new(e)),
-                ValueMeta::untyped(),
-                ctx.span,
-            ))
+            Ok(ctx.add(Payload::Map(Arc::new(e))))
         })
     }
 
@@ -1740,11 +1678,7 @@ impl Map {
             // Type checker guarantees compatible map types
             merged.extend(entries_b.iter().map(|(k, v)| (k.clone(), *v)));
 
-            Ok(ctx.arena.add_typed(
-                Payload::Map(Arc::new(merged)),
-                ValueMeta::untyped(),
-                ctx.span,
-            ))
+            Ok(ctx.add(Payload::Map(Arc::new(merged))))
         })
     }
 
@@ -1765,14 +1699,14 @@ impl Map {
 
             // Type checker guarantees array elements are 2-tuples
             arr.iter().for_each(|id| {
-                let val = ctx.arena.get(*id).unwrap_or_else(|| {
+                let val = ctx.arena.payload(*id).unwrap_or_else(|| {
                     typechecked!("Map.from-entries", "ValueId")
                 });
 
                 match val {
                     Payload::Tuple(elems) if elems.len() == 2 => {
                         let k_val =
-                            ctx.arena.get(elems[0]).unwrap_or_else(|| {
+                            ctx.arena.payload(elems[0]).unwrap_or_else(|| {
                                 typechecked!("Map.from-entries", "key ValueId")
                             });
                         let map_key = MapKey::from_payload(k_val)
@@ -1788,11 +1722,7 @@ impl Map {
                 }
             });
 
-            Ok(ctx.arena.add_typed(
-                Payload::Map(Arc::new(entries)),
-                ValueMeta::untyped(),
-                ctx.span,
-            ))
+            Ok(ctx.add(Payload::Map(Arc::new(entries))))
         })
     }
 }
@@ -2061,7 +1991,7 @@ impl Time {
         Box::pin(async move {
             let us = ctx
                 .arena
-                .get(args[0])
+                .payload(args[0])
                 .and_then(|v| match v {
                     Payload::Int(n) => Some(*n),
                     _ => None,
@@ -2087,7 +2017,7 @@ impl Time {
     ) -> DateTime<Utc> {
         // Type checker guarantees value is Time
         ctx.arena
-            .get(id)
+            .payload(id)
             .and_then(|v| match v {
                 Payload::Time(t) => Some(*t),
                 _ => None,
@@ -2100,7 +2030,7 @@ impl Time {
     /// Type checker guarantees value is numeric.
     fn get_float(ctx: &PrimCtx<'_>, id: ValueId) -> f64 {
         ctx.arena
-            .get(id)
+            .payload(id)
             .and_then(|v| match v {
                 Payload::Float(f) => Some(f.0),
                 Payload::Int(n) => Some(*n as f64),
@@ -2127,30 +2057,21 @@ impl Opt {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let opt = ctx.arena.get(args[0]).cloned().ok_or_else(|| {
+            let opt = ctx.arena.value(args[0]).cloned().ok_or_else(|| {
                 ctx.runtime_error("Option.unwrap-or: invalid value")
             })?;
+            let opt_ty = meta_type_id(ctx.runtime_types, &opt);
 
-            let is_some = opt.is_some();
-            let is_none = opt.is_none();
-
-            match (is_some, is_none) {
-                (true, false) => {
+            match (opt_ty, opt.payload) {
+                (Some(TypeId::OPTION), Payload::Variant { tag: 1, vals }) => {
                     // Option.Some(v) - return the inner value
-                    match opt {
-                        Payload::Tagged(_, _, ref payloads) => {
-                            payloads.first().copied().ok_or_else(|| {
-                                ctx.runtime_error(
-                                    "Option.unwrap-or: Some has no payload",
-                                )
-                            })
-                        }
-                        _ => Err(ctx.runtime_error(
-                            "Option.unwrap-or: expected Tagged value",
-                        )),
-                    }
+                    vals.first().copied().ok_or_else(|| {
+                        ctx.runtime_error(
+                            "Option.unwrap-or: Some has no payload",
+                        )
+                    })
                 }
-                (false, true) => {
+                (Some(TypeId::OPTION), Payload::Variant { tag: 0, .. }) => {
                     // Option.None - return the default
                     Ok(args[1])
                 }
@@ -2169,26 +2090,21 @@ impl Opt {
     ) -> PrimResult<'a> {
         Box::pin(async move {
             let opt =
-                ctx.arena.get(args[0]).cloned().unwrap_or_else(|| {
+                ctx.arena.value(args[0]).cloned().unwrap_or_else(|| {
                     typechecked!("Option.flatten", "valid arg")
                 });
+            let opt_ty = meta_type_id(ctx.runtime_types, &opt);
 
-            let is_some = opt.is_some();
-            let is_none = opt.is_none();
-
-            match (is_some, is_none) {
-                (true, false) => {
+            match (opt_ty, opt.payload) {
+                (Some(TypeId::OPTION), Payload::Variant { tag: 1, vals }) => {
                     // Option.Some(inner) - return the inner Option
-                    match opt {
-                        Payload::Tagged(_, _, ref payloads) => {
-                            Ok(*payloads.first().unwrap_or_else(|| {
-                                typechecked!("Option.flatten", "Some payload")
-                            }))
-                        }
-                        _ => typechecked!("Option.flatten", "Tagged"),
-                    }
+                    Ok(*vals.first().unwrap_or_else(|| {
+                        typechecked!("Option.flatten", "Some payload")
+                    }))
                 }
-                (false, true) => Ok(ctx.option_none()),
+                (Some(TypeId::OPTION), Payload::Variant { tag: 0, .. }) => {
+                    Ok(ctx.option_none())
+                }
                 _ => typechecked!("Option.flatten", "Option"),
             }
         })
@@ -2203,28 +2119,20 @@ impl Opt {
     ) -> PrimResult<'a> {
         Box::pin(async move {
             let opt =
-                ctx.arena.get(args[1]).cloned().unwrap_or_else(|| {
+                ctx.arena.value(args[1]).cloned().unwrap_or_else(|| {
                     typechecked!("Option.note", "valid arg")
                 });
+            let opt_ty = meta_type_id(ctx.runtime_types, &opt);
 
-            let is_some = opt.is_some();
-            let is_none = opt.is_none();
-
-            match (is_some, is_none) {
-                (true, false) => {
+            match (opt_ty, opt.payload) {
+                (Some(TypeId::OPTION), Payload::Variant { tag: 1, vals }) => {
                     // Option.Some(v) -> Result.Ok(v)
-                    match opt {
-                        Payload::Tagged(_, _, ref payloads) => {
-                            let inner =
-                                *payloads.first().unwrap_or_else(|| {
-                                    typechecked!("Option.note", "Some payload")
-                                });
-                            Ok(ctx.result_ok(inner))
-                        }
-                        _ => typechecked!("Option.note", "Tagged"),
-                    }
+                    let inner = *vals.first().unwrap_or_else(|| {
+                        typechecked!("Option.note", "Some payload")
+                    });
+                    Ok(ctx.result_ok(inner))
                 }
-                (false, true) => {
+                (Some(TypeId::OPTION), Payload::Variant { tag: 0, .. }) => {
                     // Option.None -> Result.Err(e)
                     Ok(ctx.result_err(args[0]))
                 }
@@ -2251,30 +2159,19 @@ impl Res {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let res = ctx.arena.get(args[0]).cloned().ok_or_else(|| {
+            let res = ctx.arena.value(args[0]).cloned().ok_or_else(|| {
                 ctx.runtime_error("Result.unwrap-or: invalid value")
             })?;
+            let res_ty = meta_type_id(ctx.runtime_types, &res);
 
-            let is_ok = res.is_ok();
-            let is_err = res.is_err();
-
-            match (is_ok, is_err) {
-                (true, false) => {
+            match (res_ty, res.payload) {
+                (Some(TypeId::RESULT), Payload::Variant { tag: 0, vals }) => {
                     // Result.Ok(v) - return the inner value
-                    match res {
-                        Payload::Tagged(_, _, ref payloads) => {
-                            payloads.first().copied().ok_or_else(|| {
-                                ctx.runtime_error(
-                                    "Result.unwrap-or: Ok has no payload",
-                                )
-                            })
-                        }
-                        _ => Err(ctx.runtime_error(
-                            "Result.unwrap-or: expected Tagged value",
-                        )),
-                    }
+                    vals.first().copied().ok_or_else(|| {
+                        ctx.runtime_error("Result.unwrap-or: Ok has no payload")
+                    })
                 }
-                (false, true) => {
+                (Some(TypeId::RESULT), Payload::Variant { tag: 1, .. }) => {
                     // Result.Err - return the default
                     Ok(args[1])
                 }
@@ -2293,26 +2190,21 @@ impl Res {
     ) -> PrimResult<'a> {
         Box::pin(async move {
             let res =
-                ctx.arena.get(args[0]).cloned().unwrap_or_else(|| {
+                ctx.arena.value(args[0]).cloned().unwrap_or_else(|| {
                     typechecked!("Result.flatten", "valid arg")
                 });
+            let res_ty = meta_type_id(ctx.runtime_types, &res);
 
-            let is_ok = res.is_ok();
-            let is_err = res.is_err();
-
-            match (is_ok, is_err) {
-                (true, false) => {
+            match (res_ty, res.payload) {
+                (Some(TypeId::RESULT), Payload::Variant { tag: 0, vals }) => {
                     // Result.Ok(inner) - return the inner Result
-                    match res {
-                        Payload::Tagged(_, _, ref payloads) => {
-                            Ok(*payloads.first().unwrap_or_else(|| {
-                                typechecked!("Result.flatten", "Ok payload")
-                            }))
-                        }
-                        _ => typechecked!("Result.flatten", "Tagged"),
-                    }
+                    Ok(*vals.first().unwrap_or_else(|| {
+                        typechecked!("Result.flatten", "Ok payload")
+                    }))
                 }
-                (false, true) => Ok(args[0]),
+                (Some(TypeId::RESULT), Payload::Variant { tag: 1, .. }) => {
+                    Ok(args[0])
+                }
                 _ => typechecked!("Result.flatten", "Result"),
             }
         })
@@ -2327,28 +2219,20 @@ impl Res {
     ) -> PrimResult<'a> {
         Box::pin(async move {
             let res =
-                ctx.arena.get(args[0]).cloned().unwrap_or_else(|| {
+                ctx.arena.value(args[0]).cloned().unwrap_or_else(|| {
                     typechecked!("Result.hush", "valid arg")
                 });
+            let res_ty = meta_type_id(ctx.runtime_types, &res);
 
-            let is_ok = res.is_ok();
-            let is_err = res.is_err();
-
-            match (is_ok, is_err) {
-                (true, false) => {
+            match (res_ty, res.payload) {
+                (Some(TypeId::RESULT), Payload::Variant { tag: 0, vals }) => {
                     // Result.Ok(v) -> Option.Some(v)
-                    match res {
-                        Payload::Tagged(_, _, ref payloads) => {
-                            let inner =
-                                *payloads.first().unwrap_or_else(|| {
-                                    typechecked!("Result.hush", "Ok payload")
-                                });
-                            Ok(ctx.option_some(inner))
-                        }
-                        _ => typechecked!("Result.hush", "Tagged"),
-                    }
+                    let inner = *vals.first().unwrap_or_else(|| {
+                        typechecked!("Result.hush", "Ok payload")
+                    });
+                    Ok(ctx.option_some(inner))
                 }
-                (false, true) => {
+                (Some(TypeId::RESULT), Payload::Variant { tag: 1, .. }) => {
                     // Result.Err(_) -> Option.None
                     Ok(ctx.option_none())
                 }
@@ -2502,7 +2386,7 @@ impl Directory {
     /// Helper: extract path string from a `Payload::FilePath`.
     fn get_path_str(ctx: &PrimCtx<'_>, id: ValueId) -> String {
         ctx.arena
-            .get(id)
+            .payload(id)
             .and_then(|v| match v {
                 Payload::FilePath(sid) => ctx.arena.get_str(*sid),
                 _ => None,
@@ -2520,8 +2404,11 @@ impl Directory {
             ctx.span,
         );
         ctx.arena.add_typed(
-            Payload::Tagged(TypeId::PATH, 0, smallvec![fp_id]),
-            ValueMeta::untyped(),
+            Payload::Variant {
+                tag: 0,
+                vals: smallvec![fp_id],
+            },
+            ctx.runtime_types.meta_path(),
             ctx.span,
         )
     }
@@ -2535,8 +2422,11 @@ impl Directory {
             ctx.span,
         );
         ctx.arena.add_typed(
-            Payload::Tagged(TypeId::PATH, 1, smallvec![fp_id]),
-            ValueMeta::untyped(),
+            Payload::Variant {
+                tag: 1,
+                vals: smallvec![fp_id],
+            },
+            ctx.runtime_types.meta_path(),
             ctx.span,
         )
     }
@@ -2575,11 +2465,7 @@ impl Directory {
                 }
             }
 
-            Ok(ctx.arena.add_typed(
-                Payload::Array(Arc::new(paths)),
-                ValueMeta::untyped(),
-                ctx.span,
-            ))
+            Ok(ctx.add(Payload::Array(Arc::new(paths))))
         })
     }
 
@@ -2591,7 +2477,7 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let obj = ctx.arena.get(args[0]).cloned().ok_or_else(|| {
+            let obj = ctx.arena.payload(args[0]).cloned().ok_or_else(|| {
                 ctx.runtime_error("Io.Directory.move-path: invalid object")
             })?;
 
@@ -2640,7 +2526,7 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let obj = ctx.arena.get(args[0]).cloned().ok_or_else(|| {
+            let obj = ctx.arena.payload(args[0]).cloned().ok_or_else(|| {
                 ctx.runtime_error("Io.Directory.copy-path: invalid object")
             })?;
 
@@ -2840,7 +2726,7 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let obj = ctx.arena.get(args[0]).cloned().ok_or_else(|| {
+            let obj = ctx.arena.payload(args[0]).cloned().ok_or_else(|| {
                 ctx.runtime_error("Io.Directory.write-file: invalid object")
             })?;
 
@@ -2897,7 +2783,7 @@ impl Directory {
         Box::pin(async move {
             use tokio::io::AsyncWriteExt;
 
-            let obj = ctx.arena.get(args[0]).cloned().ok_or_else(|| {
+            let obj = ctx.arena.payload(args[0]).cloned().ok_or_else(|| {
                 ctx.runtime_error("Io.Directory.append-file: invalid object")
             })?;
 
@@ -3071,7 +2957,7 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let obj = ctx.arena.get(args[0]).cloned().ok_or_else(|| {
+            let obj = ctx.arena.payload(args[0]).cloned().ok_or_else(|| {
                 ctx.runtime_error("Io.Directory.set-env: invalid object")
             })?;
 
@@ -3236,9 +3122,10 @@ impl Directory {
         Box::pin(async move {
             let base_str = Self::get_path_str(ctx, args[0]);
 
-            let parts = ctx.arena.get(args[1]).cloned().ok_or_else(|| {
-                ctx.runtime_error("Io.Directory.join: invalid array")
-            })?;
+            let parts =
+                ctx.arena.payload(args[1]).cloned().ok_or_else(|| {
+                    ctx.runtime_error("Io.Directory.join: invalid array")
+                })?;
 
             // Collect all parts as owned strings first
             let part_strs: Vec<String> = match parts {
@@ -3351,17 +3238,17 @@ impl Prelude {
         Box::pin(async move {
             let haystack = ctx
                 .arena
-                .get(args[0])
+                .payload(args[0])
                 .cloned()
                 .unwrap_or_else(|| typechecked!("contains", "haystack"));
             let needle = ctx
                 .arena
-                .get(args[1])
+                .payload(args[1])
                 .cloned()
                 .unwrap_or_else(|| typechecked!("contains", "needle"));
             let found = match &haystack {
                 Payload::Array(elems) => elems.iter().any(|eid| {
-                    ctx.arena.get(*eid).is_some_and(|v| *v == needle)
+                    ctx.arena.payload(*eid).is_some_and(|v| *v == needle)
                 }),
                 Payload::Range {
                     start,
@@ -3398,7 +3285,7 @@ impl Prelude {
         Box::pin(async move {
             let v = ctx
                 .arena
-                .get(args[0])
+                .payload(args[0])
                 .cloned()
                 .unwrap_or_else(|| typechecked!("reverse", "value"));
             let res = match v {
@@ -3429,7 +3316,7 @@ impl Prelude {
                 }
                 _ => typechecked!("reverse", "Array or Range"),
             };
-            Ok(ctx.arena.add_typed(res, ValueMeta::untyped(), ctx.span))
+            Ok(ctx.add(res))
         })
     }
 }

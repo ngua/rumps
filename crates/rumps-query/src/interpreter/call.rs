@@ -1,18 +1,71 @@
 //! Function and closure calling.
 
+use std::ops::ControlFlow;
+
 use async_recursion::async_recursion;
 use smallvec::SmallVec;
 
-use super::class::{ClassCtx, MethodFn};
+use super::class::{self, ClassCtx, MethodFn};
 use super::hof::{self, HofMethodFn, HofResult, MethodResult};
 use super::Interpreter;
 use crate::ast::{Expr, ExprId};
 use crate::env::{PrimCtx, PrimFn};
 use crate::intern::{QualifiedName, StringId};
 use crate::io::IoContext;
-use crate::typecheck::ExprAux;
-use crate::value::{CapturedEnv, FunctionDef, Payload, ValueId, ValueMeta};
-use crate::{ClassId, Result, Span};
+use crate::typecheck::{ExprAux, RuntimeTyId, Ty, TyArena};
+use crate::value::{
+    CapturedEnv, FunctionDef, MapKey, Payload, TypeId, Value, ValueId,
+    ValueMeta,
+};
+use crate::{ClassId, Error, Result, Span};
+
+struct FnCall<'a> {
+    call_id: ExprId,
+    name: StringId,
+    params: &'a [(StringId, RuntimeTyId)],
+    ret: RuntimeTyId,
+    body: ExprId,
+    args: &'a [ExprId],
+    span: Span,
+}
+
+struct ClosureCall<'a> {
+    call_id: ExprId,
+    params: &'a [(StringId, RuntimeTyId)],
+    ret: RuntimeTyId,
+    body: ExprId,
+    env: &'a CapturedEnv,
+    args: &'a [ExprId],
+    span: Span,
+}
+
+#[derive(Clone)]
+pub(super) struct ClassDispatch {
+    pub(super) dispatch_expr_id: Option<ExprId>,
+    pub(super) output_expr_id: Option<ExprId>,
+    pub(super) class: ClassId,
+    pub(super) method: StringId,
+    pub(super) args: SmallVec<[ValueId; 4]>,
+    pub(super) span: Span,
+}
+
+#[derive(Clone)]
+struct ClassMethodInvoke {
+    class: StringId,
+    method: StringId,
+    dispatch_expr_id: Option<ExprId>,
+    output_expr_id: Option<ExprId>,
+    args: SmallVec<[ValueId; 4]>,
+    span: Span,
+}
+
+#[derive(Clone, Copy)]
+enum OutputMeta {
+    Expr(ExprId),
+    Ty(RuntimeTyId),
+    Meta(ValueMeta),
+    Payload,
+}
 
 impl<I: IoContext> Interpreter<'_, I> {
     /// Pipeline operator implementation.
@@ -22,17 +75,21 @@ impl<I: IoContext> Interpreter<'_, I> {
     #[async_recursion]
     pub(super) async fn pipeline(
         &mut self,
-        left: Payload,
+        call_id: ExprId,
+        left: Value,
         right: Payload,
         span: Span,
-    ) -> Result<Payload> {
+    ) -> Result<Value> {
         // Intern left value as argument
-        let arg_id = self.arena.add_typed(left, ValueMeta::untyped(), span);
+        let arg_id = self.add_value(left, span);
 
         // Handle PartialApp via resolve to avoid nesting
         if let Payload::PartialApp { callee, ref bound } = right {
             self.resolve_partial_app(callee, bound, &[arg_id], span)
                 .await
+                .map(|value| {
+                    self.value_with_context_meta(value, self.expr_meta(call_id))
+                })
         // `right.clone()` is unavoidable here: `maybe_partial_app` takes
         // ownership, but the fallthrough `match right` below also consumes
         // `right`. In practice the clone is cheap since callable values
@@ -40,11 +97,13 @@ impl<I: IoContext> Interpreter<'_, I> {
         } else if let Some(partial) =
             self.maybe_partial_app(right.clone(), &[arg_id], span)
         {
-            Ok(partial)
+            Ok(self.value_for_expr(call_id, partial))
         } else {
             // Full application (arity == 1); dispatch as before
             match right {
-                Payload::Closure { params, body, env } => {
+                Payload::Closure {
+                    params, body, env, ..
+                } => {
                     self.invoke_closure(&params, body, &env, &[arg_id], span)
                         .await
                 }
@@ -52,22 +111,34 @@ impl<I: IoContext> Interpreter<'_, I> {
                     self.invoke_function(&params, body, &[arg_id], span).await
                 }
                 Payload::ModuleFn { path } => {
-                    self.invoke_module_fn(&path, &[arg_id], span).await
-                }
-                Payload::ClassMethodFn {
-                    class,
-                    method,
-                    expr_id,
-                } => {
-                    self.invoke_class_method_fn(
-                        class,
-                        method,
-                        expr_id,
+                    self.invoke_module_fn_for_expr(
+                        call_id,
+                        &path,
                         &[arg_id],
                         span,
                     )
                     .await
                 }
+                Payload::ClassMethodFn {
+                    class,
+                    method,
+                    expr_id,
+                } => self
+                    .invoke_class_method_fn_value(ClassMethodInvoke {
+                        class,
+                        method,
+                        dispatch_expr_id: expr_id,
+                        output_expr_id: Some(call_id),
+                        args: SmallVec::from_slice(&[arg_id]),
+                        span,
+                    })
+                    .await
+                    .map(|value| {
+                        self.value_with_context_meta(
+                            value,
+                            self.expr_meta(call_id),
+                        )
+                    }),
                 // Type checker guarantees rhs is callable
                 _ => typechecked!("|>", "Callable"),
             }
@@ -78,12 +149,12 @@ impl<I: IoContext> Interpreter<'_, I> {
     #[async_recursion]
     pub(super) async fn invoke_closure(
         &mut self,
-        params: &[StringId],
+        params: &[(StringId, RuntimeTyId)],
         body: ExprId,
         env: &CapturedEnv,
         args: &[ValueId],
         span: Span,
-    ) -> Result<Payload> {
+    ) -> Result<Value> {
         // Type checker guarantees arity matches
         if params.len() != args.len() {
             typechecked!("closure call", "correct arity")
@@ -108,13 +179,13 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Invoke a named function with pre-evaluated arguments.
     #[async_recursion]
-    async fn invoke_function(
+    pub(super) async fn invoke_function(
         &mut self,
-        params: &[StringId],
+        params: &[(StringId, RuntimeTyId)],
         body: ExprId,
         args: &[ValueId],
         span: Span,
-    ) -> Result<Payload> {
+    ) -> Result<Value> {
         // Type checker guarantees arity matches
         if params.len() != args.len() {
             typechecked!("function call", "correct arity")
@@ -143,10 +214,11 @@ impl<I: IoContext> Interpreter<'_, I> {
     #[async_recursion]
     pub(super) async fn call(
         &mut self,
+        call_id: ExprId,
         callee: ExprId,
         args: &[ExprId],
         span: Span,
-    ) -> Result<Payload> {
+    ) -> Result<Value> {
         let callee_expr = self
             .ast
             .get_expr(callee)
@@ -155,7 +227,9 @@ impl<I: IoContext> Interpreter<'_, I> {
 
         // For variable callees, use name-based resolution (functions first)
         match callee_expr {
-            Expr::Var(ref name) => self.call_by_name(*name, args, span).await,
+            Expr::Var(ref name) => {
+                self.call_by_name(call_id, *name, args, span).await
+            }
             // Check if this is a variant constructor for a user-defined type
             Expr::Field(base_id, ref var_name) => {
                 let maybe_variant =
@@ -173,17 +247,19 @@ impl<I: IoContext> Interpreter<'_, I> {
 
                 if let Some((ty_qn, var_id)) = maybe_variant {
                     // Handle as variant constructor
-                    self.variant(&ty_qn, var_id, args, span).await
+                    self.variant(call_id, &ty_qn, var_id, args, span)
+                        .await
+                        .map(|payload| self.value_for_expr(call_id, payload))
                 } else {
                     // Evaluate callee expression and call the result
-                    let callee_val = self.eval(callee).await?;
-                    self.call_value(callee_val, args, span).await
+                    let callee_val = self.eval_payload(callee).await?;
+                    self.call_value(call_id, callee_val, args, span).await
                 }
             }
             _ => {
                 // Evaluate callee expression and call the result
-                let callee_val = self.eval(callee).await?;
-                self.call_value(callee_val, args, span).await
+                let callee_val = self.eval_payload(callee).await?;
+                self.call_value(call_id, callee_val, args, span).await
             }
         }
     }
@@ -199,10 +275,11 @@ impl<I: IoContext> Interpreter<'_, I> {
     #[async_recursion]
     async fn call_by_name(
         &mut self,
+        call_id: ExprId,
         name: StringId,
         args: &[ExprId],
         span: Span,
-    ) -> Result<Payload> {
+    ) -> Result<Value> {
         // Clone function def to avoid borrow issues with async
         let func_def = self.functions.get(&name).cloned();
         let scope_val = func_def.as_ref().map_or_else(
@@ -210,17 +287,27 @@ impl<I: IoContext> Interpreter<'_, I> {
                 self.env
                     .scopes
                     .lookup(name)
-                    .and_then(|val_id| self.arena.get(val_id).cloned())
+                    .and_then(|val_id| self.arena.payload(val_id).cloned())
             },
             |_| None,
         );
 
         match (func_def, scope_val) {
             (Some(def), _) => {
-                self.call_function(name, &def.params, def.body, args, span)
-                    .await
+                self.call_function(FnCall {
+                    call_id,
+                    name,
+                    params: &def.params,
+                    ret: def.ret,
+                    body: def.body,
+                    args,
+                    span,
+                })
+                .await
             }
-            (None, Some(callee)) => self.call_value(callee, args, span).await,
+            (None, Some(callee)) => {
+                self.call_value(call_id, callee, args, span).await
+            }
             // Type checker / resolver guarantees function exists
             (None, None) => typechecked!("call_by_name", "defined function"),
         }
@@ -243,7 +330,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         // Create context and call primitive
         let mut ctx = PrimCtx {
             arena: &mut self.arena,
-            runtime_types: &self.checked.types,
+            runtime_types: &mut self.checked.types,
             io: &mut self.io,
             span,
         };
@@ -252,7 +339,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         // Look up and clone the result value
         Ok(self
             .arena
-            .get(result_id)
+            .payload(result_id)
             .cloned()
             .unwrap_or_else(|| invariant!("ValueId in arena")))
     }
@@ -267,20 +354,24 @@ impl<I: IoContext> Interpreter<'_, I> {
         path: &[StringId],
         args: &[ValueId],
         span: Span,
-    ) -> Result<Payload> {
+    ) -> Result<Value> {
         // Higher-order functions (those that invoke closures/functions passed as
         // arguments) are dispatched via `module_hofs` registry. The `PrimFn`
         // signature only receives values; it has no access to the interpreter's
         // closure invocation machinery (`invoke_callable`). See `primitives.rs`
         // module docs for details.
         if let Some((hof, result)) = self.module_hofs.lookup(path) {
-            let v = self.run_hof_trampoline(None, hof, args, span).await?;
+            let value = self
+                .run_hof_trampoline(OutputMeta::Payload, hof, args, span)
+                .await?;
             // Some HoFs (e.g. `foreach`) delegate to another HoF but discard
             // the produced value, evaluating to `Unit` instead.
-            Ok(match result {
-                HofResult::Keep => v,
-                HofResult::Discard => Payload::Unit,
-            })
+            match result {
+                HofResult::Keep => Ok(value),
+                HofResult::Discard => {
+                    Ok(self.value_from_payload(Payload::Unit))
+                }
+            }
         } else if let Some(fn_def) = self.env.get_user_module_fn(path).cloned()
         {
             // User-defined module function
@@ -296,6 +387,24 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
+    #[async_recursion]
+    async fn invoke_module_fn_for_expr(
+        &mut self,
+        expr_id: ExprId,
+        path: &[StringId],
+        args: &[ValueId],
+        span: Span,
+    ) -> Result<Value> {
+        let is_user_fn = self.env.get_user_module_fn(path).is_some();
+        let value = self.invoke_module_fn(path, args, span).await?;
+        if is_user_fn {
+            Ok(value)
+        } else {
+            let meta = self.expr_meta(expr_id);
+            Ok(self.value_with_context_meta(value, meta))
+        }
+    }
+
     /// Invoke a user-defined module function.
     ///
     /// Binds all sibling functions and constants at call time, enabling
@@ -308,7 +417,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         fn_def: &FunctionDef,
         args: &[ValueId],
         span: Span,
-    ) -> Result<Payload> {
+    ) -> Result<Value> {
         // Type checker guarantees arity matches
         if fn_def.params.len() != args.len() {
             typechecked!("user module call", "correct arity")
@@ -335,9 +444,10 @@ impl<I: IoContext> Interpreter<'_, I> {
             let val = Payload::Function {
                 name: sibling.name,
                 params: sibling.params.clone(),
+                ret: sibling.ret,
                 body: sibling.body,
             };
-            let val_id = self.arena.add_typed(val, ValueMeta::untyped(), span);
+            let val_id = self.add_payload(val, span);
             self.env.scopes.bind(name, val_id);
         });
 
@@ -370,7 +480,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         method: StringId,
         args: &SmallVec<[ExprId; 4]>,
         span: Span,
-    ) -> Result<Payload> {
+    ) -> Result<Value> {
         let arg_ids = self.eval_args(args).await?;
 
         let cmf = Payload::ClassMethodFn {
@@ -379,7 +489,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             expr_id: Some(expr_id),
         };
         if let Some(partial) = self.maybe_partial_app(cmf, &arg_ids, span) {
-            Ok(partial)
+            Ok(self.value_for_expr(expr_id, partial))
         } else {
             let kind = self
                 .checked
@@ -388,13 +498,14 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .unwrap_or_else(|| {
                     typechecked!("class method class", "known class")
                 });
-            self.dispatch_class_method(
-                Some(expr_id),
-                kind,
+            self.dispatch_class_method_value(ClassDispatch {
+                dispatch_expr_id: Some(expr_id),
+                output_expr_id: Some(expr_id),
+                class: kind,
                 method,
-                &arg_ids,
+                args: arg_ids.into(),
                 span,
-            )
+            })
             .await
         }
     }
@@ -414,29 +525,48 @@ impl<I: IoContext> Interpreter<'_, I> {
         args: &[ValueId],
         span: Span,
     ) -> Result<Payload> {
+        self.invoke_class_method_fn_value(ClassMethodInvoke {
+            class,
+            method,
+            dispatch_expr_id: expr_id,
+            output_expr_id: None,
+            args: SmallVec::from_slice(args),
+            span,
+        })
+        .await
+        .map(|value| value.payload)
+    }
+
+    #[async_recursion]
+    async fn invoke_class_method_fn_value(
+        &mut self,
+        invoke: ClassMethodInvoke,
+    ) -> Result<Value> {
         let kind = self
             .checked
             .class_registry
-            .lookup_by_name(class)
+            .lookup_by_name(invoke.class)
             .unwrap_or_else(|| {
                 typechecked!("invoke_class_method_fn", "known class")
             });
 
-        self.dispatch_class_method(expr_id, kind, method, args, span)
-            .await
+        self.dispatch_class_method_value(ClassDispatch {
+            dispatch_expr_id: invoke.dispatch_expr_id,
+            output_expr_id: invoke.output_expr_id,
+            class: kind,
+            method: invoke.method,
+            args: invoke.args,
+            span: invoke.span,
+        })
+        .await
     }
 
     /// Dispatch a class method call.
     ///
-    /// Unified entry point for all class methods. Dispatch order:
-    /// 1. `ExprAux::InstanceCall` metadata (exact recv type + optional resolved fn)
-    /// 2. `ValueMeta.ty` from the receiver arg (via arena metadata)
-    /// 3. `Payload::Tagged` on first arg (fallback for generic contexts)
-    /// 4. `ValueMeta.repr` from the receiver arg
-    /// 5. Builtin/HOF dispatch
+    /// Unified entry point for all class methods.
     ///
-    /// The `expr_id` parameter is used by nullary methods (like `Monoid:identity`)
-    /// to look up the inferred type, and for user instance dispatch.
+    /// The `expr_id` parameter is used by nullary methods like
+    /// `Monoid:identity` to look up the inferred type.
     #[async_recursion]
     pub(super) async fn dispatch_class_method(
         &mut self,
@@ -446,112 +576,111 @@ impl<I: IoContext> Interpreter<'_, I> {
         args: &[ValueId],
         span: Span,
     ) -> Result<Payload> {
-        // Resolved parameterized instance function from the typechecker.
-        // When `fun` is `Some`, the typechecker guarantees `recv` matches the
-        // type discovered by the priority chain below, so pairing `resolved_fn`
-        // with a priority 2/3 type (rather than only priority 1) is safe.
-        let resolved_fn = expr_id.and_then(|id| {
-            self.checked
-                .exprs
-                .get(&id)
-                .and_then(|info| match &info.aux {
-                    ExprAux::InstanceCall { fun, .. } => *fun,
-                    _ => None,
-                })
+        self.dispatch_class_method_value(ClassDispatch {
+            dispatch_expr_id: expr_id,
+            output_expr_id: expr_id,
+            class,
+            method,
+            args: SmallVec::from_slice(args),
+            span,
+        })
+        .await
+        .map(|value| value.payload)
+    }
+
+    #[async_recursion]
+    pub(super) async fn dispatch_class_method_value(
+        &mut self,
+        dispatch: ClassDispatch,
+    ) -> Result<Value> {
+        let inst = dispatch.dispatch_expr_id.and_then(|id| {
+            match &self.checked.expr(id).aux {
+                ExprAux::InstanceCall { recv, fun, .. } => Some((*recv, *fun)),
+                _ => None,
+            }
         });
 
-        // Priority 1: `ExprAux::InstanceCall` recv type
-        // Priority 2: `ValueMeta.ty` from receiver arg
-        // Priority 3: `Payload::Tagged` on first arg (generic/legacy contexts)
-        let user_type_id = expr_id
-            .and_then(|id| {
-                self.checked
-                    .exprs
-                    .get(&id)
-                    .and_then(|info| match &info.aux {
-                        ExprAux::InstanceCall { recv, .. } => {
-                            self.checked.types.base_type(*recv)
-                        }
-                        _ => None,
-                    })
-            })
-            .or_else(|| {
-                args.first()
-                    .and_then(|&id| self.arena.meta(id))
-                    .and_then(|m| self.checked.types.base_type(m.ty))
-            })
-            .or_else(|| {
-                args.first()
-                    .and_then(|id| self.arena.get(*id))
-                    .and_then(|v| match v {
-                        Payload::Tagged(ty_id, _, _) => Some(*ty_id),
-                        _ => None,
-                    })
+        if let Some((recv, fun)) = inst {
+            let fn_name = fun.or_else(|| {
+                self.checked.types.to_type_id(recv).and_then(|tid| {
+                    self.user_instances.lookup_method(
+                        dispatch.class,
+                        tid,
+                        dispatch.method,
+                    )
+                })
             });
-
-        // If we have a user type, check for user instance
-        if let Some(type_id) = user_type_id {
-            if let Some(fn_name) = resolved_fn.or_else(|| {
-                self.user_instances.lookup_method(class, type_id, method)
-            }) {
-                let func_def = self.functions.get(&fn_name).cloned();
-                if let Some(def) = func_def {
-                    self.invoke_function(&def.params, def.body, args, span)
-                        .await
-                } else {
-                    typechecked!("user instance method", "registered function")
+            match fn_name {
+                Some(name) => {
+                    self.invoke_user_instance_fn(name, dispatch).await
                 }
+                None => {
+                    typechecked!("class instance dispatch", "resolved method")
+                }
+            }
+        } else if let Some(tid) = dispatch
+            .args
+            .first()
+            .and_then(|&id| self.arena.value(id))
+            .and_then(|v| self.checked.types.to_type_id(v.ty))
+        {
+            if let Some(name) = self.user_instances.lookup_method(
+                dispatch.class,
+                tid,
+                dispatch.method,
+            ) {
+                self.invoke_user_instance_fn(name, dispatch).await
             } else {
-                // No user instance for ty; try repr then builtin
-                self.dispatch_via_repr_or_builtin(
-                    expr_id, class, method, args, span,
-                )
-                .await
+                self.dispatch_via_repr_or_builtin(dispatch).await
             }
         } else {
-            // No ty-based type; try repr then builtin
-            self.dispatch_via_repr_or_builtin(
-                expr_id, class, method, args, span,
-            )
-            .await
+            self.dispatch_via_repr_or_builtin(dispatch).await
         }
     }
 
-    /// Try `ValueMeta.repr` for user instance, then fall back to builtin
-    /// dispatch.
     #[async_recursion]
     async fn dispatch_via_repr_or_builtin(
         &mut self,
-        expr_id: Option<ExprId>,
-        class: ClassId,
-        method: StringId,
-        args: &[ValueId],
-        span: Span,
-    ) -> Result<Payload> {
-        // Priority 4: `ValueMeta.repr` from receiver arg
-        let repr_ty = args
+        dispatch: ClassDispatch,
+    ) -> Result<Value> {
+        let repr_ty = dispatch
+            .args
             .first()
-            .and_then(|&id| self.arena.meta(id))
-            .and_then(|m| self.checked.types.base_type(m.repr));
+            .and_then(|&id| self.arena.value(id))
+            .and_then(|v| self.checked.types.to_type_id(v.repr));
 
         if let Some(type_id) = repr_ty {
-            if let Some(fn_name) =
-                self.user_instances.lookup_method(class, type_id, method)
-            {
-                let func_def = self.functions.get(&fn_name).cloned();
-                if let Some(def) = func_def {
-                    self.invoke_function(&def.params, def.body, args, span)
-                        .await
-                } else {
-                    typechecked!("user instance method", "registered function")
-                }
+            if let Some(fn_name) = self.user_instances.lookup_method(
+                dispatch.class,
+                type_id,
+                dispatch.method,
+            ) {
+                self.invoke_user_instance_fn(fn_name, dispatch).await
             } else {
-                self.dispatch_builtin_or_hof(expr_id, class, method, args, span)
-                    .await
+                self.dispatch_builtin_or_hof(dispatch).await
             }
         } else {
-            self.dispatch_builtin_or_hof(expr_id, class, method, args, span)
-                .await
+            self.dispatch_builtin_or_hof(dispatch).await
+        }
+    }
+
+    #[async_recursion]
+    async fn invoke_user_instance_fn(
+        &mut self,
+        name: StringId,
+        dispatch: ClassDispatch,
+    ) -> Result<Value> {
+        let def = self.functions.get(&name).cloned();
+        if let Some(def) = def {
+            self.invoke_function(
+                &def.params,
+                def.body,
+                &dispatch.args,
+                dispatch.span,
+            )
+            .await
+        } else {
+            typechecked!("user instance method", "registered function")
         }
     }
 
@@ -561,20 +690,298 @@ impl<I: IoContext> Interpreter<'_, I> {
     #[async_recursion]
     async fn dispatch_builtin_or_hof(
         &mut self,
+        dispatch: ClassDispatch,
+    ) -> Result<Value> {
+        // Check for HOF first (requires async)
+        let output = self.class_output_meta(
+            dispatch.output_expr_id,
+            dispatch.dispatch_expr_id,
+            dispatch.class,
+        );
+        if let Some(result) = self.dispatch_forwarding_builtin_class_method(
+            dispatch.output_expr_id,
+            dispatch.class,
+            dispatch.method,
+            &dispatch.args,
+            dispatch.span,
+        ) {
+            result
+        } else if let Some(MethodFn::Hof(f)) =
+            self.class_methods.lookup(dispatch.class, dispatch.method)
+        {
+            self.run_hof_trampoline(output, f, &dispatch.args, dispatch.span)
+                .await
+        } else {
+            self.dispatch_builtin_class_method(
+                dispatch.dispatch_expr_id,
+                dispatch.class,
+                dispatch.method,
+                &dispatch.args,
+                dispatch.span,
+            )
+            .map(|payload| {
+                let output = self.refine_variant_output(
+                    output,
+                    &payload,
+                    &dispatch.args,
+                );
+                self.value_for_output(output, payload)
+            })
+        }
+    }
+
+    fn refine_variant_output(
+        &self,
+        output: OutputMeta,
+        payload: &Payload,
+        args: &[ValueId],
+    ) -> OutputMeta {
+        match (output, payload) {
+            (OutputMeta::Expr(id), Payload::Variant { .. })
+                if self
+                    .checked
+                    .types
+                    .to_type_id(self.expr_meta(id).ty)
+                    .is_none() =>
+            {
+                let expr_ty = self.expr_meta(id).ty;
+                args.iter()
+                    .filter_map(|arg| self.arena.meta(*arg))
+                    .find(|meta| {
+                        self.checked.types.to_type_id(meta.repr).is_some()
+                    })
+                    .map_or(output, |meta| {
+                        OutputMeta::Meta(
+                            self.checked.types.union_meta(expr_ty, meta.repr),
+                        )
+                    })
+            }
+            _ => output,
+        }
+    }
+
+    fn class_output_meta(
+        &mut self,
+        output_expr_id: Option<ExprId>,
+        dispatch_expr_id: Option<ExprId>,
+        class: ClassId,
+    ) -> OutputMeta {
+        match output_expr_id {
+            Some(id) => {
+                let info = self.checked.expr(id);
+                match &info.aux {
+                    ExprAux::HofCall { out, .. } => OutputMeta::Ty(*out),
+                    _ => OutputMeta::Expr(id),
+                }
+            }
+            None => dispatch_expr_id
+                .map(|id| {
+                    let meta = self.checked_expr_meta(id);
+                    self.callable_ret(meta.ty).unwrap_or_else(|| {
+                        if class == ClassId::TRY_INTO {
+                            self.checked.types.result(
+                                meta.ty,
+                                RuntimeTyId::from(TyArena::STRING),
+                            )
+                        } else {
+                            meta.ty
+                        }
+                    })
+                })
+                .map_or(OutputMeta::Payload, OutputMeta::Ty),
+        }
+    }
+
+    fn callable_ret(&self, ty: RuntimeTyId) -> Option<RuntimeTyId> {
+        match self.checked.types.get(ty) {
+            Ty::Fn(_, ret) => Some(RuntimeTyId::from(*ret)),
+            _ => None,
+        }
+    }
+
+    fn value_for_output(
+        &mut self,
+        output: OutputMeta,
+        payload: Payload,
+    ) -> Value {
+        match output {
+            OutputMeta::Expr(id) => self.value_for_expr(id, payload),
+            OutputMeta::Ty(ty) => {
+                let meta = self.checked.types.meta(ty);
+                self.value_from_meta(payload, meta)
+            }
+            OutputMeta::Meta(meta) => self.value_from_meta(payload, meta),
+            OutputMeta::Payload => self.value_from_payload(payload),
+        }
+    }
+
+    fn value_for_output_value(
+        &mut self,
+        output: OutputMeta,
+        value: Value,
+    ) -> Value {
+        match output {
+            OutputMeta::Expr(id) => {
+                self.value_with_context_meta(value, self.expr_meta(id))
+            }
+            OutputMeta::Ty(ty) => {
+                let meta = match self.checked.types.get(ty) {
+                    Ty::Union(_, _) => {
+                        self.checked.types.union_meta(ty, value.repr)
+                    }
+                    _ => self.checked.types.meta(ty),
+                };
+                self.value_with_context_meta(value, meta)
+            }
+            OutputMeta::Meta(meta) => self.value_with_context_meta(value, meta),
+            OutputMeta::Payload => value,
+        }
+    }
+
+    fn value_for_optional_expr(
+        &mut self,
         expr_id: Option<ExprId>,
+        payload: Payload,
+    ) -> Value {
+        match expr_id {
+            Some(id) => self.value_for_expr(id, payload),
+            None => self.value_from_payload(payload),
+        }
+    }
+
+    fn dispatch_forwarding_builtin_class_method(
+        &mut self,
+        output_expr_id: Option<ExprId>,
         class: ClassId,
         method: StringId,
         args: &[ValueId],
         span: Span,
-    ) -> Result<Payload> {
-        // Check for HOF first (requires async)
-        if let Some(MethodFn::Hof(f)) = self.class_methods.lookup(class, method)
-        {
-            self.run_hof_trampoline(expr_id, f, args, span).await
+    ) -> Option<Result<Value>> {
+        let unwrap = self.arena.intern("unwrap");
+        let index = self.arena.intern("index");
+        if class == ClassId::FALLIBLE && method == unwrap {
+            Some(self.fallible_unwrap_value(args, span))
+        } else if class == ClassId::INDEXABLE && method == index {
+            Some(self.indexable_index_value(output_expr_id, args, span))
         } else {
-            self.dispatch_builtin_class_method(
-                expr_id, class, method, args, span,
-            )
+            None
+        }
+    }
+
+    fn fallible_unwrap_value(
+        &mut self,
+        args: &[ValueId],
+        span: Span,
+    ) -> Result<Value> {
+        let recv = *args
+            .first()
+            .unwrap_or_else(|| typechecked!("unwrap", "1 arg"));
+        let recv_ty = self.arena.meta(recv).and_then(|m| {
+            self.checked
+                .types
+                .to_type_id(m.repr)
+                .or_else(|| self.checked.types.to_type_id(m.ty))
+        });
+        match self.arena.payload(recv).cloned() {
+            Some(Payload::Variant { tag: 1, vals })
+                if recv_ty.is_some_and(|ty| ty == TypeId::OPTION) =>
+            {
+                vals.first()
+                    .and_then(|id| self.arena.value(*id).cloned())
+                    .ok_or_else(|| {
+                        typechecked!("unwrap", "Option.Some payload")
+                    })
+            }
+            Some(Payload::Variant { tag: 0, .. })
+                if recv_ty.is_some_and(|ty| ty == TypeId::OPTION) =>
+            {
+                Err(Error::runtime(span, "cannot unwrap Option.None"))
+            }
+            Some(Payload::Variant { tag: 0, vals })
+                if recv_ty.is_some_and(|ty| ty == TypeId::RESULT) =>
+            {
+                vals.first()
+                    .and_then(|id| self.arena.value(*id).cloned())
+                    .ok_or_else(|| typechecked!("unwrap", "Result.Ok payload"))
+            }
+            Some(Payload::Variant { tag: 1, .. })
+                if recv_ty.is_some_and(|ty| ty == TypeId::RESULT) =>
+            {
+                Err(Error::runtime(span, "cannot unwrap Result.Err"))
+            }
+            _ => typechecked!("unwrap", "Fallible"),
+        }
+    }
+
+    fn indexable_index_value(
+        &mut self,
+        output_expr_id: Option<ExprId>,
+        args: &[ValueId],
+        span: Span,
+    ) -> Result<Value> {
+        let base_id = *args
+            .first()
+            .unwrap_or_else(|| typechecked!("Indexable:index", "2 args"));
+        let idx_id = *args
+            .get(1)
+            .unwrap_or_else(|| typechecked!("Indexable:index", "2 args"));
+        let base = self
+            .arena
+            .payload(base_id)
+            .cloned()
+            .unwrap_or_else(|| invariant!("index base in arena"));
+        let idx = self
+            .arena
+            .payload(idx_id)
+            .cloned()
+            .unwrap_or_else(|| invariant!("index arg in arena"));
+
+        match (&base, &idx) {
+            (Payload::Array(elems), Payload::Int(i)) => {
+                let index = if *i < 0 {
+                    elems.len().checked_sub((-*i) as usize)
+                } else {
+                    Some(*i as usize)
+                };
+                index
+                    .and_then(|idx| elems.get(idx))
+                    .and_then(|id| self.arena.value(*id).cloned())
+                    .ok_or_else(|| {
+                        Error::runtime(
+                            span,
+                            format!("array index {i} out of bounds"),
+                        )
+                    })
+            }
+            (Payload::Map(entries), key) => entries
+                .get(
+                    &MapKey::from_payload(key)
+                        .unwrap_or_else(|| typechecked!("Map key", "Scalar")),
+                )
+                .and_then(|id| self.arena.value(*id).cloned())
+                .ok_or_else(|| {
+                    Error::runtime(span, format!("map key not found: {key:?}"))
+                }),
+            (Payload::String(sid), Payload::Int(i)) => {
+                let s = self.arena.get_str(*sid).unwrap_or("");
+                let len = s.chars().count() as i64;
+                let index = if *i < 0 { len + *i } else { *i };
+                s.chars()
+                    .nth(index as usize)
+                    .map(|c| {
+                        self.value_for_optional_expr(
+                            output_expr_id,
+                            Payload::Char(c),
+                        )
+                    })
+                    .ok_or_else(|| {
+                        Error::runtime(
+                            span,
+                            format!("string index {i} out of bounds"),
+                        )
+                    })
+            }
+            _ => typechecked!("Indexable:index", "Array, Map, or String"),
         }
     }
 
@@ -592,19 +999,72 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<Payload> {
         let val = |i: usize| {
             self.arena
-                .get(args[i])
+                .payload(args[i])
                 .cloned()
                 .unwrap_or_else(|| invariant!("class method arg in arena"))
         };
 
         match self.class_methods.lookup(class, method) {
+            Some(MethodFn::Binary(_)) if class == ClassId::ORD => {
+                let left =
+                    self.arena.value(args[0]).cloned().unwrap_or_else(|| {
+                        invariant!("class method arg in arena")
+                    });
+                let right =
+                    self.arena.value(args[1]).cloned().unwrap_or_else(|| {
+                        invariant!("class method arg in arena")
+                    });
+                let mut ctx = ClassCtx {
+                    arena: &mut self.arena,
+                    runtime_types: &mut self.checked.types,
+                    registry: &self.registry,
+                    regex_cache: &self.checked.regex_cache,
+                    span,
+                };
+                Ok(class::Ord::compare_values(&mut ctx, &left, &right))
+            }
+            Some(MethodFn::Binary(_)) if class == ClassId::EQ => {
+                let left =
+                    self.arena.value(args[0]).cloned().unwrap_or_else(|| {
+                        invariant!("class method arg in arena")
+                    });
+                let right =
+                    self.arena.value(args[1]).cloned().unwrap_or_else(|| {
+                        invariant!("class method arg in arena")
+                    });
+                let mut ctx = ClassCtx {
+                    arena: &mut self.arena,
+                    runtime_types: &mut self.checked.types,
+                    registry: &self.registry,
+                    regex_cache: &self.checked.regex_cache,
+                    span,
+                };
+                Ok(class::Eq::eq_values(&mut ctx, &left, &right))
+            }
+            Some(MethodFn::Binary(_)) if class == ClassId::MONOID => {
+                let left =
+                    self.arena.value(args[0]).cloned().unwrap_or_else(|| {
+                        invariant!("class method arg in arena")
+                    });
+                let right =
+                    self.arena.value(args[1]).cloned().unwrap_or_else(|| {
+                        invariant!("class method arg in arena")
+                    });
+                let mut ctx = ClassCtx {
+                    arena: &mut self.arena,
+                    runtime_types: &mut self.checked.types,
+                    registry: &self.registry,
+                    regex_cache: &self.checked.regex_cache,
+                    span,
+                };
+                class::Monoid::concat_values(&mut ctx, &left, &right)
+            }
             Some(MethodFn::Binary(_)) => {
                 let left = val(0);
                 let right = val(1);
                 let mut ctx = ClassCtx {
                     arena: &mut self.arena,
-                    ty_arena: &self.ty_arena,
-                    runtime_types: &self.checked.types,
+                    runtime_types: &mut self.checked.types,
                     registry: &self.registry,
                     regex_cache: &self.checked.regex_cache,
                     span,
@@ -612,12 +1072,39 @@ impl<I: IoContext> Interpreter<'_, I> {
                 self.class_methods
                     .dispatch_binary(class, method, &mut ctx, &left, &right)
             }
+            Some(MethodFn::Unary(_)) if class == ClassId::DISPLAY => {
+                let v =
+                    self.arena.value(args[0]).cloned().unwrap_or_else(|| {
+                        invariant!("class method arg in arena")
+                    });
+                let mut ctx = ClassCtx {
+                    arena: &mut self.arena,
+                    runtime_types: &mut self.checked.types,
+                    registry: &self.registry,
+                    regex_cache: &self.checked.regex_cache,
+                    span,
+                };
+                Ok(class::Display::display_value(&mut ctx, &v))
+            }
+            Some(MethodFn::Unary(_)) if class == ClassId::FALLIBLE => {
+                let v =
+                    self.arena.value(args[0]).cloned().unwrap_or_else(|| {
+                        invariant!("class method arg in arena")
+                    });
+                let mut ctx = ClassCtx {
+                    arena: &mut self.arena,
+                    runtime_types: &mut self.checked.types,
+                    registry: &self.registry,
+                    regex_cache: &self.checked.regex_cache,
+                    span,
+                };
+                class::Fallible::unwrap_value(&mut ctx, &v)
+            }
             Some(MethodFn::Unary(_)) => {
                 let v = val(0);
                 let mut ctx = ClassCtx {
                     arena: &mut self.arena,
-                    ty_arena: &self.ty_arena,
-                    runtime_types: &self.checked.types,
+                    runtime_types: &mut self.checked.types,
                     registry: &self.registry,
                     regex_cache: &self.checked.regex_cache,
                     span,
@@ -629,19 +1116,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let id = expr_id.unwrap_or_else(|| {
                     typechecked!("nullary class method", "expression id")
                 });
-                let ty_id = self
-                    .checked
-                    .exprs
-                    .get(&id)
-                    .map(|info| info.ty.raw())
-                    .unwrap_or_else(|| {
-                        typechecked!("nullary class method", "resolved type")
-                    });
-                let ty = self.ty_arena.get(ty_id).clone();
+                let ty_id = self.checked.expr(id).ty;
+                let ty = self.checked.types.get(ty_id).clone();
                 let mut ctx = ClassCtx {
                     arena: &mut self.arena,
-                    ty_arena: &self.ty_arena,
-                    runtime_types: &self.checked.types,
+                    runtime_types: &mut self.checked.types,
                     registry: &self.registry,
                     regex_cache: &self.checked.regex_cache,
                     span,
@@ -650,32 +1129,31 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .dispatch_nullary(class, method, &mut ctx, &ty)
             }
             Some(MethodFn::Convert(_)) => {
-                let v = val(0);
+                let v =
+                    self.arena.value(args[0]).cloned().unwrap_or_else(|| {
+                        invariant!("class method arg in arena")
+                    });
                 let id = expr_id.unwrap_or_else(|| {
                     typechecked!("convert class method", "expression id")
                 });
-                let ty_id = self
-                    .checked
-                    .exprs
-                    .get(&id)
-                    .map(|info| info.ty.raw())
-                    .unwrap_or_else(|| {
-                        typechecked!(
-                            "convert class method",
-                            "resolved target type"
-                        )
-                    });
-                let ty = self.ty_arena.get(ty_id).clone();
+                let ty_id = self.checked.expr(id).ty;
+                let ty = self.checked.types.get(ty_id).clone();
                 let mut ctx = ClassCtx {
                     arena: &mut self.arena,
-                    ty_arena: &self.ty_arena,
-                    runtime_types: &self.checked.types,
+                    runtime_types: &mut self.checked.types,
                     registry: &self.registry,
                     regex_cache: &self.checked.regex_cache,
                     span,
                 };
-                self.class_methods
-                    .dispatch_convert(class, method, &mut ctx, &v, &ty)
+                match class {
+                    ClassId::INTO => class::Into::into_value(&mut ctx, &v, &ty),
+                    ClassId::TRY_INTO => {
+                        class::TryInto::try_into_value(&mut ctx, &v, &ty)
+                    }
+                    _ => self.class_methods.dispatch_convert(
+                        class, method, &mut ctx, &v.payload, &ty,
+                    ),
+                }
             }
             Some(MethodFn::Hof(_)) => {
                 // HOFs need async; caller should use dispatch_class_method
@@ -692,40 +1170,64 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// The trampoline keeps stack depth O(1) regardless of input size.
     async fn run_hof_trampoline(
         &mut self,
-        _expr_id: Option<ExprId>,
+        output: OutputMeta,
         starter: HofMethodFn,
         args: &[ValueId],
         span: Span,
-    ) -> Result<Payload> {
+    ) -> Result<Value> {
         let mut ctx = ClassCtx {
             arena: &mut self.arena,
-            ty_arena: &self.ty_arena,
-            runtime_types: &self.checked.types,
+            runtime_types: &mut self.checked.types,
             registry: &self.registry,
             regex_cache: &self.checked.regex_cache,
             span,
         };
-        let mut result = starter(&mut ctx, args)?;
+        let result = starter(&mut ctx, args)?;
 
-        // Trampoline loop; see doc comment for why we use `loop` here.
-        loop {
+        // Trampoline loop; see doc comment for why we avoid recursion here.
+        let mut flow = ControlFlow::Continue(result);
+        while let ControlFlow::Continue(result) = flow {
             match result {
-                MethodResult::Done(v) => break Ok(v),
+                MethodResult::Done(v) => {
+                    let output = self.refine_variant_output(output, &v, args);
+                    flow = ControlFlow::Break(self.value_for_output(output, v));
+                }
+                MethodResult::DoneValue(id) => {
+                    let value =
+                        self.arena.value(id).cloned().unwrap_or_else(|| {
+                            invariant!("HoF result in arena")
+                        });
+                    let output = self.refine_variant_output(
+                        output,
+                        &value.payload,
+                        args,
+                    );
+                    flow = ControlFlow::Break(
+                        self.value_for_output_value(output, value),
+                    );
+                }
                 MethodResult::Invoke(cont) => {
                     let call_result = self
                         .invoke_callable(cont.callee, &cont.args, span)
                         .await?;
                     let mut ctx = ClassCtx {
                         arena: &mut self.arena,
-                        ty_arena: &self.ty_arena,
-                        runtime_types: &self.checked.types,
+                        runtime_types: &mut self.checked.types,
                         registry: &self.registry,
                         regex_cache: &self.checked.regex_cache,
                         span,
                     };
-                    result = hof::resume(&mut ctx, cont, call_result)?;
+                    flow = ControlFlow::Continue(hof::resume(
+                        &mut ctx,
+                        cont,
+                        call_result,
+                    )?);
                 }
             }
+        }
+        match flow {
+            ControlFlow::Break(value) => Ok(value),
+            ControlFlow::Continue(_) => invariant!("HoF trampoline completed"),
         }
     }
 
@@ -741,25 +1243,48 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<ValueId> {
         let callee = self
             .arena
-            .get(callee_id)
+            .value(callee_id)
             .cloned()
             .unwrap_or_else(|| invariant!("ValueId in arena"));
+        let callee_ty = callee.ty;
 
-        match callee {
-            Payload::Closure { params, body, env } => {
+        match callee.payload {
+            Payload::Closure {
+                params,
+                ret,
+                body,
+                env,
+            } => {
                 let result = self
                     .invoke_closure(&params, body, &env, args, span)
                     .await?;
-                Ok(self.arena.add_typed(result, ValueMeta::untyped(), span))
+                let meta = self.checked.types.meta(ret);
+                Ok(self.add_value(
+                    self.value_with_context_meta(result, meta),
+                    span,
+                ))
             }
-            Payload::Function { params, body, .. } => {
+            Payload::Function {
+                params, ret, body, ..
+            } => {
                 let result =
                     self.invoke_function(&params, body, args, span).await?;
-                Ok(self.arena.add_typed(result, ValueMeta::untyped(), span))
+                let meta = self.checked.types.meta(ret);
+                Ok(self.add_value(
+                    self.value_with_context_meta(result, meta),
+                    span,
+                ))
             }
             Payload::ModuleFn { path } => {
                 let result = self.invoke_module_fn(&path, args, span).await?;
-                Ok(self.arena.add_typed(result, ValueMeta::untyped(), span))
+                let result = self.callable_ret(callee_ty).map_or(
+                    result.clone(),
+                    |ret| {
+                        let meta = self.checked.types.meta(ret);
+                        self.value_with_context_meta(result, meta)
+                    },
+                );
+                Ok(self.add_value(result, span))
             }
             Payload::ClassMethodFn {
                 class,
@@ -767,15 +1292,36 @@ impl<I: IoContext> Interpreter<'_, I> {
                 expr_id,
             } => {
                 let result = self
-                    .invoke_class_method_fn(class, method, expr_id, args, span)
+                    .invoke_class_method_fn_value(ClassMethodInvoke {
+                        class,
+                        method,
+                        dispatch_expr_id: expr_id,
+                        output_expr_id: None,
+                        args: SmallVec::from_slice(args),
+                        span,
+                    })
                     .await?;
-                Ok(self.arena.add_typed(result, ValueMeta::untyped(), span))
+                let result = self.callable_ret(callee_ty).map_or(
+                    result.clone(),
+                    |ret| {
+                        let meta = self.checked.types.meta(ret);
+                        self.value_with_context_meta(result, meta)
+                    },
+                );
+                Ok(self.add_value(result, span))
             }
             Payload::PartialApp { callee, bound } => {
                 let result = self
                     .resolve_partial_app(callee, &bound, args, span)
                     .await?;
-                Ok(self.arena.add_typed(result, ValueMeta::untyped(), span))
+                let result = self.callable_ret(callee_ty).map_or(
+                    result.clone(),
+                    |ret| {
+                        let meta = self.checked.types.meta(ret);
+                        self.value_with_context_meta(result, meta)
+                    },
+                );
+                Ok(self.add_value(result, span))
             }
             // Type checker guarantees callee is callable
             _ => typechecked!("invoke_callable", "Callable"),
@@ -789,12 +1335,12 @@ impl<I: IoContext> Interpreter<'_, I> {
         prim: PrimFn,
         args: &[ValueId],
         span: Span,
-    ) -> Result<Payload> {
+    ) -> Result<Value> {
         let arg_ids: SmallVec<[ValueId; 4]> = args.iter().copied().collect();
 
         let mut ctx = PrimCtx {
             arena: &mut self.arena,
-            runtime_types: &self.checked.types,
+            runtime_types: &mut self.checked.types,
             io: &mut self.io,
             span,
         };
@@ -802,7 +1348,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
         Ok(self
             .arena
-            .get(result_id)
+            .value(result_id)
             .cloned()
             .unwrap_or_else(|| invariant!("ValueId in arena")))
     }
@@ -811,16 +1357,45 @@ impl<I: IoContext> Interpreter<'_, I> {
     #[async_recursion]
     async fn call_value(
         &mut self,
+        call_id: ExprId,
         callee: Payload,
         args: &[ExprId],
         span: Span,
-    ) -> Result<Payload> {
+    ) -> Result<Value> {
         match callee {
-            Payload::Closure { params, body, env } => {
-                self.call_closure(&params, body, &env, args, span).await
+            Payload::Closure {
+                params,
+                ret,
+                body,
+                env,
+            } => {
+                self.call_closure(ClosureCall {
+                    call_id,
+                    params: &params,
+                    ret,
+                    body,
+                    env: &env,
+                    args,
+                    span,
+                })
+                .await
             }
-            Payload::Function { name, params, body } => {
-                self.call_function(name, &params, body, args, span).await
+            Payload::Function {
+                name,
+                params,
+                ret,
+                body,
+            } => {
+                self.call_function(FnCall {
+                    call_id,
+                    name,
+                    params: &params,
+                    ret,
+                    body,
+                    args,
+                    span,
+                })
+                .await
             }
             Payload::ModuleFn { path } => {
                 let vals = self.eval_args(args).await?;
@@ -829,9 +1404,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                     &vals,
                     span,
                 ) {
-                    Ok(partial)
+                    Ok(self.value_for_expr(call_id, partial))
                 } else {
-                    self.invoke_module_fn(&path, &vals, span).await
+                    self.invoke_module_fn_for_expr(call_id, &path, &vals, span)
+                        .await
                 }
             }
             Payload::ClassMethodFn {
@@ -849,12 +1425,23 @@ impl<I: IoContext> Interpreter<'_, I> {
                     &vals,
                     span,
                 ) {
-                    Ok(partial)
+                    Ok(self.value_for_expr(call_id, partial))
                 } else {
-                    self.invoke_class_method_fn(
-                        class, method, expr_id, &vals, span,
-                    )
+                    self.invoke_class_method_fn_value(ClassMethodInvoke {
+                        class,
+                        method,
+                        dispatch_expr_id: expr_id,
+                        output_expr_id: Some(call_id),
+                        args: SmallVec::from_slice(&vals),
+                        span,
+                    })
                     .await
+                    .map(|value| {
+                        self.value_with_context_meta(
+                            value,
+                            self.expr_meta(call_id),
+                        )
+                    })
                 }
             }
             // FOREVER continuation: calling it signals loop continuation
@@ -864,13 +1451,20 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .first()
                     .unwrap_or_else(|| typechecked!("continuation", "1 arg"));
                 let new_state = self.eval(*new_state_expr).await?;
-                let meta = self.expr_meta(*new_state_expr);
-                let state_id = self.arena.add_typed(new_state, meta, span);
-                Ok(Payload::LoopContinue(state_id))
+                let state_id = self.add_value(new_state, span);
+                Ok(self
+                    .value_for_expr(call_id, Payload::LoopContinue(state_id)))
             }
             Payload::PartialApp { callee, bound } => {
                 let vals = self.eval_args(args).await?;
-                self.resolve_partial_app(callee, &bound, &vals, span).await
+                self.resolve_partial_app(callee, &bound, &vals, span)
+                    .await
+                    .map(|value| {
+                        self.value_with_context_meta(
+                            value,
+                            self.expr_meta(call_id),
+                        )
+                    })
             }
             // Type checker guarantees callee is callable
             _ => typechecked!("call", "Callable"),
@@ -878,58 +1472,55 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Call a named function with expression arguments.
-    #[async_recursion]
-    pub(super) async fn call_function(
-        &mut self,
-        name: StringId,
-        params: &[StringId],
-        body: ExprId,
-        args: &[ExprId],
-        span: Span,
-    ) -> Result<Payload> {
-        if args.len() > params.len() {
+    async fn call_function(&mut self, c: FnCall<'_>) -> Result<Value> {
+        if c.args.len() > c.params.len() {
             typechecked!("call_function", "correct arity")
         }
-        let vals = self.eval_args(args).await?;
-        if vals.len() < params.len() {
+        let vals = self.eval_args(c.args).await?;
+        if vals.len() < c.params.len() {
             let f = Payload::Function {
-                name,
-                params: params.iter().copied().collect(),
-                body,
+                name: c.name,
+                params: c.params.iter().copied().collect(),
+                ret: c.ret,
+                body: c.body,
             };
-            Ok(self.maybe_partial_app(f, &vals, span).unwrap_or_else(|| {
-                invariant!("partial app when under-applied")
-            }))
+            let partial =
+                self.maybe_partial_app(f, &vals, c.span).unwrap_or_else(|| {
+                    invariant!("partial app when under-applied")
+                });
+            Ok(self.value_for_expr(c.call_id, partial))
         } else {
-            self.invoke_function(params, body, &vals, span).await
+            let value = self
+                .invoke_function(c.params, c.body, &vals, c.span)
+                .await?;
+            Ok(self.value_with_context_meta(value, self.expr_meta(c.call_id)))
         }
     }
 
     /// Call a closure with expression arguments.
-    #[async_recursion]
-    pub(super) async fn call_closure(
-        &mut self,
-        params: &[StringId],
-        body: ExprId,
-        env: &CapturedEnv,
-        args: &[ExprId],
-        span: Span,
-    ) -> Result<Payload> {
-        if args.len() > params.len() {
+    async fn call_closure(&mut self, c: ClosureCall<'_>) -> Result<Value> {
+        if c.args.len() > c.params.len() {
             typechecked!("call_closure", "correct arity")
         }
-        let vals = self.eval_args(args).await?;
-        if vals.len() < params.len() {
-            let c = Payload::Closure {
-                params: params.iter().copied().collect(),
-                body,
-                env: env.clone().into(),
+        let vals = self.eval_args(c.args).await?;
+        if vals.len() < c.params.len() {
+            let closure = Payload::Closure {
+                params: c.params.iter().copied().collect(),
+                ret: c.ret,
+                body: c.body,
+                env: c.env.clone().into(),
             };
-            Ok(self.maybe_partial_app(c, &vals, span).unwrap_or_else(|| {
-                invariant!("partial app when under-applied")
-            }))
+            let partial = self
+                .maybe_partial_app(closure, &vals, c.span)
+                .unwrap_or_else(|| {
+                    invariant!("partial app when under-applied")
+                });
+            Ok(self.value_for_expr(c.call_id, partial))
         } else {
-            self.invoke_closure(params, body, env, &vals, span).await
+            let value = self
+                .invoke_closure(c.params, c.body, c.env, &vals, c.span)
+                .await?;
+            Ok(self.value_with_context_meta(value, self.expr_meta(c.call_id)))
         }
     }
 
@@ -947,23 +1538,25 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .or_else(|| {
                     self.env
                         .get_module_fn_type(path)
-                        .and_then(|s| s.arity(&self.ty_arena))
+                        .and_then(|s| self.checked.types.scheme_arity(s))
                 }),
-            Payload::ClassMethodFn { class, method, .. } => self
-                .checked
-                .class_registry
-                .lookup_by_name(*class)
-                .and_then(|kind| {
-                    self.checked
-                        .class_registry
-                        .get(kind)
-                        .method(*method, Span::default())
-                        .ok()
-                        .and_then(|spec| spec.scheme().arity(&self.ty_arena))
-                }),
+            Payload::ClassMethodFn { class, method, .. } => {
+                self.checked.class_registry.lookup_by_name(*class).and_then(
+                    |kind| {
+                        self.checked
+                            .class_registry
+                            .get(kind)
+                            .method(*method, Span::default())
+                            .ok()
+                            .and_then(|spec| {
+                                self.checked.types.scheme_arity(spec.scheme())
+                            })
+                    },
+                )
+            }
             Payload::PartialApp { callee, bound } => self
                 .arena
-                .get(*callee)
+                .payload(*callee)
                 .and_then(|c| self.callable_arity(c))
                 .map(|n| n.saturating_sub(bound.len())),
             _ => None,
@@ -983,8 +1576,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Option<Payload> {
         let arity = self.callable_arity(&callee)?;
         if args.len() < arity && !args.is_empty() {
-            let callee_id =
-                self.arena.add_typed(callee, ValueMeta::untyped(), span);
+            let callee_id = self.add_payload(callee, span);
             Some(Payload::PartialApp {
                 callee: callee_id,
                 bound: args.iter().copied().collect(),
@@ -1005,13 +1597,13 @@ impl<I: IoContext> Interpreter<'_, I> {
         bound: &[ValueId],
         new_args: &[ValueId],
         span: Span,
-    ) -> Result<Payload> {
+    ) -> Result<Value> {
         let all_args: SmallVec<[ValueId; 4]> =
             bound.iter().chain(new_args.iter()).copied().collect();
 
         let callee = self
             .arena
-            .get(callee_id)
+            .payload(callee_id)
             .cloned()
             .unwrap_or_else(|| invariant!("PartialApp callee in arena"));
 
@@ -1022,13 +1614,16 @@ impl<I: IoContext> Interpreter<'_, I> {
         if all_args.len() > arity {
             typechecked!("resolve_partial_app", "args <= arity")
         } else if all_args.len() < arity {
-            Ok(Payload::PartialApp {
+            let partial = Payload::PartialApp {
                 callee: callee_id,
                 bound: all_args,
-            })
+            };
+            Ok(self.value_from_payload(partial))
         } else {
             match callee {
-                Payload::Closure { params, body, env } => {
+                Payload::Closure {
+                    params, body, env, ..
+                } => {
                     self.invoke_closure(&params, body, &env, &all_args, span)
                         .await
                 }
@@ -1043,9 +1638,14 @@ impl<I: IoContext> Interpreter<'_, I> {
                     method,
                     expr_id,
                 } => {
-                    self.invoke_class_method_fn(
-                        class, method, expr_id, &all_args, span,
-                    )
+                    self.invoke_class_method_fn_value(ClassMethodInvoke {
+                        class,
+                        method,
+                        dispatch_expr_id: expr_id,
+                        output_expr_id: None,
+                        args: SmallVec::from_slice(&all_args),
+                        span,
+                    })
                     .await
                 }
                 _ => typechecked!("resolve_partial_app", "Callable callee"),
@@ -1074,8 +1674,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Some((head, tail)) => {
                 let span = self.ast.expr_span(*head).unwrap_or_default();
                 let val = self.eval(*head).await?;
-                let meta = self.expr_meta(*head);
-                let val_id = self.arena.add_typed(val, meta, span);
+                let val_id = self.add_value(val, span);
                 acc.push(val_id);
                 self.eval_args_rec(tail, acc).await
             }
@@ -1087,12 +1686,29 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Type checking has already validated all argument types at call sites.
     pub(super) fn bind_params(
         &mut self,
-        params: &[StringId],
+        params: &[(StringId, RuntimeTyId)],
         args: &[ValueId],
-        _span: Span,
+        span: Span,
     ) {
-        params.iter().zip(args.iter()).for_each(|(name, val_id)| {
-            self.env.scopes.bind(*name, *val_id);
-        });
+        params
+            .iter()
+            .zip(args.iter())
+            .for_each(|((name, ty), val_id)| {
+                let id = match self.checked.types.get(*ty) {
+                    Ty::Union(_, _) => {
+                        let val =
+                            self.arena.value(*val_id).cloned().unwrap_or_else(
+                                || invariant!("parameter value in arena"),
+                            );
+                        let meta = self.checked.types.union_meta(*ty, val.repr);
+                        self.add_value(
+                            self.value_with_context_meta(val, meta),
+                            span,
+                        )
+                    }
+                    _ => *val_id,
+                };
+                self.env.scopes.bind(*name, id);
+            });
     }
 }

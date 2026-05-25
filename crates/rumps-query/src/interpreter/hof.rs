@@ -8,6 +8,7 @@
 //!
 //! HoF methods return [`MethodResult`] which is either:
 //! - `Done(Payload)`: the method completed synchronously
+//! - `DoneValue(ValueId)`: the method completed by forwarding an existing value
 //! - `Invoke(Continuation)`: the method needs to call a closure and resume
 //!
 //! The trampoline loop in `call.rs` handles the async closure invocation:
@@ -28,8 +29,9 @@ use std::sync::Arc;
 
 use smallvec::{smallvec, SmallVec};
 
-use super::class::{ClassCtx, Mappable};
+use super::class::ClassCtx;
 use crate::intern::{StringId, StringInterner};
+use crate::typecheck::{RuntimeTyId, Ty};
 use crate::value::{Payload, TypeId, ValueId};
 use crate::Result;
 
@@ -37,6 +39,8 @@ use crate::Result;
 pub(crate) enum MethodResult {
     /// Method completed synchronously with a value.
     Done(Payload),
+    /// Method completed by forwarding a value already stored in the arena.
+    DoneValue(ValueId),
     /// Method needs to invoke a callable and continue.
     Invoke(Continuation),
 }
@@ -70,6 +74,13 @@ pub(crate) enum HofState {
         /// Variant tag (`1` for Some, `0` for Ok).
         tag: u8,
     },
+    /// `Option.map` over `Some`; wraps the result back into `Option`.
+    MapOption,
+    /// `Result.map` over `Ok`; wraps the result back into `Result.Ok`.
+    MapResult {
+        /// Original `Err` type.
+        err_ty: RuntimeTyId,
+    },
     /// `Filterable:filter` over array.
     FilterArray {
         source: ValueId,
@@ -99,13 +110,20 @@ pub(crate) enum HofState {
         idx: usize,
         acc: SmallVec<[ValueId; 4]>,
     },
+    /// `Prelude.foreach` over an array; discards each invocation result.
+    ForeachArray { source: ValueId, idx: usize },
+    /// `Prelude.foreach` over a single-value container.
+    ForeachOnce,
     /// `Array.sort-by` merge sort; stack-based to avoid recursion.
     SortBy {
         source: ValueId,
         stack: Vec<SortFrame>,
     },
     /// `Result.map-err`; wraps mapped error back into `Result.Err`.
-    ResultMapErr,
+    ResultMapErr {
+        /// Original `Ok` type.
+        ok_ty: RuntimeTyId,
+    },
     /// `Bimappable:bimap` over a 2-element container (tuple).
     BimapTuple {
         /// Second function to apply (`g`).
@@ -156,6 +174,36 @@ pub(crate) enum SortFrame {
 pub(crate) type HofMethodFn =
     fn(&mut ClassCtx<'_>, &[ValueId]) -> Result<MethodResult>;
 
+fn callable_ret_ty(
+    ctx: &ClassCtx<'_>,
+    id: ValueId,
+    label: &str,
+) -> RuntimeTyId {
+    ctx.arena
+        .ty(id)
+        .and_then(|ty| match ctx.runtime_types.get(ty) {
+            Ty::Fn(_, ret) => Some(RuntimeTyId::from(*ret)),
+            _ => None,
+        })
+        .unwrap_or_else(|| typechecked!(label, "callable metadata"))
+}
+
+fn result_tys(
+    ctx: &ClassCtx<'_>,
+    id: ValueId,
+) -> Option<(RuntimeTyId, RuntimeTyId)> {
+    ctx.arena
+        .meta(id)
+        .map(|meta| meta.repr)
+        .or_else(|| ctx.arena.ty(id))
+        .and_then(|ty| match ctx.runtime_types.get(ty) {
+            Ty::Result(ok, err) => {
+                Some((RuntimeTyId::from(*ok), RuntimeTyId::from(*err)))
+            }
+            _ => None,
+        })
+}
+
 /// Resume a HoF continuation with the result of a closure invocation.
 ///
 /// Called by the trampoline loop after each `invoke_callable`.
@@ -169,7 +217,7 @@ pub(crate) fn resume(
             acc.push(result);
             let IterKind::Array { source, idx } = kind;
             let next_idx = idx + 1;
-            match ctx.arena.get(source) {
+            match ctx.arena.payload(source) {
                 Some(Payload::Array(elems)) if next_idx >= elems.len() => {
                     Ok(MethodResult::Done(Payload::Array(Arc::new(acc))))
                 }
@@ -189,9 +237,44 @@ pub(crate) fn resume(
                 _ => invariant!("MapIter Array source must be Array"),
             }
         }
-        HofState::MapContainer { ctor_ty, tag } => Ok(MethodResult::Done(
-            Payload::Tagged(ctor_ty, tag, smallvec![result]),
-        )),
+        HofState::MapContainer { ctor_ty: _, tag } => {
+            Ok(MethodResult::Done(Payload::Variant {
+                tag,
+                vals: smallvec![result],
+            }))
+        }
+        HofState::MapOption => {
+            let elem =
+                ctx.arena.meta(result).map(|m| m.ty).unwrap_or_else(|| {
+                    typechecked!("Option.map", "result meta")
+                });
+            let ty = ctx.runtime_types.option(elem);
+            let id = ctx.arena.add_typed(
+                Payload::Variant {
+                    tag: 1,
+                    vals: smallvec![result],
+                },
+                ctx.runtime_types.meta(ty),
+                ctx.span,
+            );
+            Ok(MethodResult::DoneValue(id))
+        }
+        HofState::MapResult { err_ty } => {
+            let ok_ty =
+                ctx.arena.meta(result).map(|m| m.ty).unwrap_or_else(|| {
+                    typechecked!("Result.map", "result meta")
+                });
+            let ty = ctx.runtime_types.result(ok_ty, err_ty);
+            let id = ctx.arena.add_typed(
+                Payload::Variant {
+                    tag: 0,
+                    vals: smallvec![result],
+                },
+                ctx.runtime_types.meta(ty),
+                ctx.span,
+            );
+            Ok(MethodResult::DoneValue(id))
+        }
         HofState::FilterArray {
             source,
             idx,
@@ -200,12 +283,12 @@ pub(crate) fn resume(
         } => {
             // Check if predicate returned true
             let keep =
-                matches!(ctx.arena.get(result), Some(Payload::Bool(true)));
+                matches!(ctx.arena.payload(result), Some(Payload::Bool(true)));
             if keep {
                 acc.push(pending);
             }
             let next_idx = idx + 1;
-            match ctx.arena.get(source) {
+            match ctx.arena.payload(source) {
                 Some(Payload::Array(elems)) if next_idx >= elems.len() => {
                     Ok(MethodResult::Done(Payload::Array(Arc::new(acc))))
                 }
@@ -231,14 +314,9 @@ pub(crate) fn resume(
             acc: _,
         } => {
             let next_idx = idx + 1;
-            match ctx.arena.get(source) {
+            match ctx.arena.payload(source) {
                 Some(Payload::Array(elems)) if next_idx >= elems.len() => {
-                    let v = ctx
-                        .arena
-                        .get(result)
-                        .cloned()
-                        .unwrap_or_else(|| invariant!("result in arena"));
-                    Ok(MethodResult::Done(v))
+                    Ok(MethodResult::DoneValue(result))
                 }
                 Some(Payload::Array(elems)) => {
                     Ok(MethodResult::Invoke(Continuation {
@@ -258,12 +336,7 @@ pub(crate) fn resume(
             let _ = acc;
             // `current` is the next value to process.
             if current >= end {
-                let v = ctx
-                    .arena
-                    .get(result)
-                    .cloned()
-                    .unwrap_or_else(|| invariant!("result in arena"));
-                Ok(MethodResult::Done(v))
+                Ok(MethodResult::DoneValue(result))
             } else {
                 let int_id = ctx.arena.add_typed(
                     Payload::Int(current),
@@ -281,36 +354,14 @@ pub(crate) fn resume(
                 }))
             }
         }
-        HofState::Chain { wrapper } => {
-            let inner = ctx
-                .arena
-                .get(result)
-                .cloned()
-                .unwrap_or_else(|| invariant!("result in arena"));
-            let v = match (wrapper, &inner) {
-                // If result is already None, propagate it
-                (ChainWrapper::OptionSome, Payload::Tagged(ty, 0, _))
-                    if *ty == TypeId::OPTION =>
-                {
-                    Payload::none()
-                }
-                (ChainWrapper::OptionSome, _) => inner,
-                (ChainWrapper::ResultOk, Payload::Tagged(ty, 1, _))
-                    if *ty == TypeId::RESULT =>
-                {
-                    inner // Already Err, propagate
-                }
-                (ChainWrapper::ResultOk, _) => inner,
-                (ChainWrapper::ResultErr(e), _) => {
-                    // Original was Err; result doesn't matter, return Err
-                    ctx.arena
-                        .get(e)
-                        .cloned()
-                        .unwrap_or_else(|| invariant!("err in arena"))
-                }
-            };
-            Ok(MethodResult::Done(v))
-        }
+        HofState::Chain { wrapper } => match wrapper {
+            ChainWrapper::OptionSome | ChainWrapper::ResultOk => {
+                Ok(MethodResult::DoneValue(result))
+            }
+            ChainWrapper::ResultErr(e) => {
+                Ok(MethodResult::Done(Payload::err(e)))
+            }
+        },
         HofState::ZipWith {
             arr_a,
             arr_b,
@@ -321,7 +372,7 @@ pub(crate) fn resume(
             acc.push(result);
             let next_idx = idx + 1;
             let (elems_a, elems_b) =
-                match (ctx.arena.get(arr_a), ctx.arena.get(arr_b)) {
+                match (ctx.arena.payload(arr_a), ctx.arena.payload(arr_b)) {
                     (Some(Payload::Array(a)), Some(Payload::Array(b))) => {
                         (a.clone(), b.clone())
                     }
@@ -342,13 +393,49 @@ pub(crate) fn resume(
                 }))
             }
         }
+        HofState::ForeachArray { source, idx } => {
+            let next_idx = idx + 1;
+            match ctx.arena.payload(source) {
+                Some(Payload::Array(elems)) => match elems.get(next_idx) {
+                    Some(next_elem) => Ok(MethodResult::Invoke(Continuation {
+                        callee: cont.callee,
+                        args: smallvec![*next_elem],
+                        state: HofState::ForeachArray {
+                            source,
+                            idx: next_idx,
+                        },
+                    })),
+                    None => Ok(MethodResult::Done(Payload::Unit)),
+                },
+                _ => invariant!("ForeachArray source must be Array"),
+            }
+        }
+        HofState::ForeachOnce => Ok(MethodResult::Done(Payload::Unit)),
         HofState::SortBy { source, stack } => {
             resume_sort_by(ctx, cont.callee, source, stack, Some(result))
         }
-        HofState::ResultMapErr => Ok(MethodResult::Done(Payload::err(result))),
-        HofState::BimapResult { tag } => Ok(MethodResult::Done(
-            Payload::Tagged(TypeId::RESULT, tag, smallvec![result]),
-        )),
+        HofState::ResultMapErr { ok_ty } => {
+            let err_ty =
+                ctx.arena.meta(result).map(|m| m.ty).unwrap_or_else(|| {
+                    typechecked!("Result.map-err", "result meta")
+                });
+            let ty = ctx.runtime_types.result(ok_ty, err_ty);
+            let id = ctx.arena.add_typed(
+                Payload::Variant {
+                    tag: 1,
+                    vals: smallvec![result],
+                },
+                ctx.runtime_types.meta(ty),
+                ctx.span,
+            );
+            Ok(MethodResult::DoneValue(id))
+        }
+        HofState::BimapResult { tag } => {
+            Ok(MethodResult::Done(Payload::Variant {
+                tag,
+                vals: smallvec![result],
+            }))
+        }
         HofState::BimapTuple {
             second_fn,
             second_elem,
@@ -383,7 +470,7 @@ pub(crate) fn resume_sort_by(
     cmp_result: Option<ValueId>,
 ) -> Result<MethodResult> {
     // Get source array elements
-    let elems = match ctx.arena.get(source) {
+    let elems = match ctx.arena.payload(source) {
         Some(Payload::Array(e)) => e.clone(),
         _ => invariant!("SortBy source must be Array"),
     };
@@ -401,8 +488,19 @@ pub(crate) fn resume_sort_by(
                 mut merged,
             }) => {
                 // Check comparison result (expecting Ordering value)
-                let take_left = match ctx.arena.get(result) {
-                    Some(Payload::Tagged(_, tag, _)) => *tag <= 1, // Less or Equal
+                let take_left = match ctx.arena.value(result) {
+                    Some(v)
+                        if ctx
+                            .runtime_types
+                            .to_type_id(v.repr)
+                            .or_else(|| ctx.runtime_types.to_type_id(v.ty))
+                            .is_some_and(|ty| ty == TypeId::ORDERING) =>
+                    {
+                        match &v.payload {
+                            Payload::Variant { tag, .. } => *tag <= 1,
+                            _ => true,
+                        }
+                    }
                     _ => true, // Default to left on unexpected
                 };
                 if take_left {
@@ -612,9 +710,12 @@ impl ModuleHofs {
         self.register(result, map_err, ResultHof::map_err, k);
         self.register(array, zip_with, ArrayHof::zip_with, k);
         self.register(array, sort_by, ArrayHof::sort_by, k);
-        // `Prelude::foreach` reuses `Mappable:map` but discards the mapped
-        // collection, evaluating to `Unit` instead.
-        self.register(prelude, foreach, Mappable::map, HofResult::Discard);
+        self.register(
+            prelude,
+            foreach,
+            PreludeHof::foreach,
+            HofResult::Discard,
+        );
     }
 }
 
@@ -633,8 +734,54 @@ impl OptionHof {
         let fn_id = *args
             .get(1)
             .unwrap_or_else(|| typechecked!("Option.map", "2 args"));
-        // Delegate to Mappable::map with swapped argument order
-        Mappable::map(ctx, &[fn_id, opt])
+
+        enum Kind {
+            Some(ValueId),
+            None(RuntimeTyId),
+            Other,
+        }
+
+        let out_ty = callable_ret_ty(ctx, fn_id, "Option.map");
+        let opt_ty = ctx.arena.meta(opt).and_then(|m| {
+            ctx.runtime_types
+                .to_type_id(m.repr)
+                .or_else(|| ctx.runtime_types.to_type_id(m.ty))
+        });
+        let kind = match ctx.arena.payload(opt) {
+            Some(Payload::Variant { tag: 1, vals })
+                if opt_ty.is_some_and(|ty| ty == TypeId::OPTION) =>
+            {
+                Kind::Some(
+                    *vals
+                        .first()
+                        .unwrap_or_else(|| invariant!("Some has payload")),
+                )
+            }
+            Some(Payload::Variant { tag: 0, .. })
+                if opt_ty.is_some_and(|ty| ty == TypeId::OPTION) =>
+            {
+                Kind::None(out_ty)
+            }
+            _ => Kind::Other,
+        };
+
+        match kind {
+            Kind::Some(inner) => Ok(MethodResult::Invoke(Continuation {
+                callee: fn_id,
+                args: smallvec![inner],
+                state: HofState::MapOption,
+            })),
+            Kind::None(elem) => {
+                let ty = ctx.runtime_types.option(elem);
+                let id = ctx.arena.add_typed(
+                    Payload::none(),
+                    ctx.runtime_types.meta(ty),
+                    ctx.span,
+                );
+                Ok(MethodResult::DoneValue(id))
+            }
+            Kind::Other => typechecked!("Option.map", "Option"),
+        }
     }
 }
 
@@ -642,7 +789,7 @@ impl OptionHof {
 pub(crate) struct ResultHof;
 
 impl ResultHof {
-    /// `Result.map(res, fn)` - delegates to `Mappable:map` with swapped args.
+    /// `Result.map(res, fn)` - maps the value if Ok, passes through Err.
     pub(crate) fn map(
         ctx: &mut ClassCtx<'_>,
         args: &[ValueId],
@@ -653,8 +800,62 @@ impl ResultHof {
         let fn_id = *args
             .get(1)
             .unwrap_or_else(|| typechecked!("Result.map", "2 args"));
-        // Delegate to Mappable::map with swapped argument order
-        Mappable::map(ctx, &[fn_id, res])
+
+        enum Kind {
+            Ok(ValueId, RuntimeTyId),
+            Err(ValueId, RuntimeTyId, RuntimeTyId),
+            Other,
+        }
+
+        let out_ty = callable_ret_ty(ctx, fn_id, "Result.map");
+        let tys = result_tys(ctx, res);
+        let res_ty = ctx.arena.meta(res).and_then(|m| {
+            ctx.runtime_types
+                .to_type_id(m.repr)
+                .or_else(|| ctx.runtime_types.to_type_id(m.ty))
+        });
+        let kind = match (tys, ctx.arena.payload(res)) {
+            (Some((_, err_ty)), Some(Payload::Variant { tag: 0, vals }))
+                if res_ty.is_some_and(|ty| ty == TypeId::RESULT) =>
+            {
+                Kind::Ok(
+                    *vals
+                        .first()
+                        .unwrap_or_else(|| invariant!("Ok has payload")),
+                    err_ty,
+                )
+            }
+            (Some((_, err_ty)), Some(Payload::Variant { tag: 1, vals }))
+                if res_ty.is_some_and(|ty| ty == TypeId::RESULT) =>
+            {
+                Kind::Err(
+                    *vals
+                        .first()
+                        .unwrap_or_else(|| invariant!("Err has payload")),
+                    out_ty,
+                    err_ty,
+                )
+            }
+            _ => Kind::Other,
+        };
+
+        match kind {
+            Kind::Ok(inner, err_ty) => Ok(MethodResult::Invoke(Continuation {
+                callee: fn_id,
+                args: smallvec![inner],
+                state: HofState::MapResult { err_ty },
+            })),
+            Kind::Err(err, ok_ty, err_ty) => {
+                let ty = ctx.runtime_types.result(ok_ty, err_ty);
+                let id = ctx.arena.add_typed(
+                    Payload::err(err),
+                    ctx.runtime_types.meta(ty),
+                    ctx.span,
+                );
+                Ok(MethodResult::DoneValue(id))
+            }
+            Kind::Other => typechecked!("Result.map", "Result"),
+        }
     }
 
     /// `Result.map-err(res, fn)` - maps the error if Err, passes through Ok.
@@ -670,33 +871,142 @@ impl ResultHof {
             .unwrap_or_else(|| typechecked!("Result.map-err", "2 args"));
 
         enum Kind {
-            Ok(Payload),
-            Err(ValueId),
+            Ok(ValueId, RuntimeTyId, RuntimeTyId),
+            Err(ValueId, RuntimeTyId),
             Other,
         }
-        let kind = match ctx.arena.get(res) {
+        let out_ty = callable_ret_ty(ctx, fn_id, "Result.map-err");
+        let tys = result_tys(ctx, res);
+        let res_ty = ctx.arena.meta(res).and_then(|m| {
+            ctx.runtime_types
+                .to_type_id(m.repr)
+                .or_else(|| ctx.runtime_types.to_type_id(m.ty))
+        });
+        let kind = match (tys, ctx.arena.payload(res)) {
             // Result.Ok(v) -> return unchanged
-            Some(v @ Payload::Tagged(ty, 0, _)) if *ty == TypeId::RESULT => {
-                Kind::Ok(v.clone())
+            (Some((ok_ty, _)), Some(Payload::Variant { tag: 0, vals }))
+                if res_ty.is_some_and(|ty| ty == TypeId::RESULT) =>
+            {
+                Kind::Ok(
+                    *vals
+                        .first()
+                        .unwrap_or_else(|| invariant!("Ok has payload")),
+                    ok_ty,
+                    out_ty,
+                )
             }
             // Result.Err(e) -> map error
-            Some(Payload::Tagged(ty, 1, payloads)) if *ty == TypeId::RESULT => {
-                let inner = *payloads
+            (Some((ok_ty, _)), Some(Payload::Variant { tag: 1, vals }))
+                if res_ty.is_some_and(|ty| ty == TypeId::RESULT) =>
+            {
+                let inner = *vals
                     .first()
                     .unwrap_or_else(|| invariant!("Err has payload"));
-                Kind::Err(inner)
+                Kind::Err(inner, ok_ty)
             }
             _ => Kind::Other,
         };
 
         match kind {
-            Kind::Ok(v) => Ok(MethodResult::Done(v)),
-            Kind::Err(inner) => Ok(MethodResult::Invoke(Continuation {
+            Kind::Ok(ok, ok_ty, err_ty) => {
+                let ty = ctx.runtime_types.result(ok_ty, err_ty);
+                let id = ctx.arena.add_typed(
+                    Payload::ok(ok),
+                    ctx.runtime_types.meta(ty),
+                    ctx.span,
+                );
+                Ok(MethodResult::DoneValue(id))
+            }
+            Kind::Err(inner, ok_ty) => Ok(MethodResult::Invoke(Continuation {
                 callee: fn_id,
                 args: smallvec![inner],
-                state: HofState::ResultMapErr,
+                state: HofState::ResultMapErr { ok_ty },
             })),
             Kind::Other => typechecked!("Result.map-err", "Result"),
+        }
+    }
+}
+
+/// HoF starters for `Prelude` module functions.
+pub(crate) struct PreludeHof;
+
+impl PreludeHof {
+    /// `Prelude.foreach(fn, src)` - invokes `fn` for effects and returns `Unit`.
+    pub(crate) fn foreach(
+        ctx: &mut ClassCtx<'_>,
+        args: &[ValueId],
+    ) -> Result<MethodResult> {
+        let fn_id = *args
+            .first()
+            .unwrap_or_else(|| typechecked!("Prelude.foreach", "2 args"));
+        let src = *args
+            .get(1)
+            .unwrap_or_else(|| typechecked!("Prelude.foreach", "2 args"));
+
+        enum Kind {
+            Empty,
+            Array(ValueId),
+            Once(ValueId),
+            Other,
+        }
+
+        let src_ty = ctx.arena.meta(src).and_then(|m| {
+            ctx.runtime_types
+                .to_type_id(m.repr)
+                .or_else(|| ctx.runtime_types.to_type_id(m.ty))
+        });
+        let kind = match ctx.arena.payload(src) {
+            Some(Payload::Array(elems)) => match elems.first() {
+                Some(first) => Kind::Array(*first),
+                None => Kind::Empty,
+            },
+            Some(Payload::Variant { tag: 1, vals })
+                if src_ty.is_some_and(|ty| ty == TypeId::OPTION) =>
+            {
+                Kind::Once(
+                    *vals
+                        .first()
+                        .unwrap_or_else(|| invariant!("Some has payload")),
+                )
+            }
+            Some(Payload::Variant { tag: 0, .. })
+                if src_ty.is_some_and(|ty| ty == TypeId::OPTION) =>
+            {
+                Kind::Empty
+            }
+            Some(Payload::Variant { tag: 0, vals })
+                if src_ty.is_some_and(|ty| ty == TypeId::RESULT) =>
+            {
+                Kind::Once(
+                    *vals
+                        .first()
+                        .unwrap_or_else(|| invariant!("Ok has payload")),
+                )
+            }
+            Some(Payload::Variant { tag: 1, .. })
+                if src_ty.is_some_and(|ty| ty == TypeId::RESULT) =>
+            {
+                Kind::Empty
+            }
+            _ => Kind::Other,
+        };
+
+        match kind {
+            Kind::Empty => Ok(MethodResult::Done(Payload::Unit)),
+            Kind::Array(first) => Ok(MethodResult::Invoke(Continuation {
+                callee: fn_id,
+                args: smallvec![first],
+                state: HofState::ForeachArray {
+                    source: src,
+                    idx: 0,
+                },
+            })),
+            Kind::Once(inner) => Ok(MethodResult::Invoke(Continuation {
+                callee: fn_id,
+                args: smallvec![inner],
+                state: HofState::ForeachOnce,
+            })),
+            Kind::Other => typechecked!("Prelude.foreach", "Mappable"),
         }
     }
 }
@@ -725,7 +1035,7 @@ impl ArrayHof {
             NonEmpty(ValueId, ValueId), // first_a, first_b
             Other,
         }
-        let kind = match (ctx.arena.get(arr_a), ctx.arena.get(arr_b)) {
+        let kind = match (ctx.arena.payload(arr_a), ctx.arena.payload(arr_b)) {
             (Some(Payload::Array(a)), Some(Payload::Array(b))) => {
                 match (a.first(), b.first()) {
                     (Some(&first_a), Some(&first_b)) => {
@@ -771,7 +1081,7 @@ impl ArrayHof {
             .get(1)
             .unwrap_or_else(|| typechecked!("Array.sort-by", "2 args"));
 
-        match ctx.arena.get(arr) {
+        match ctx.arena.payload(arr) {
             Some(Payload::Array(elems)) if elems.len() <= 1 => {
                 // Already sorted
                 Ok(MethodResult::Done(Payload::Array(elems.clone())))

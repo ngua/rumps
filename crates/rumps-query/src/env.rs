@@ -33,7 +33,7 @@ use smallvec::{smallvec, SmallVec};
 use crate::ast::{BinOp, Intrinsic, PostfixOp, UnOp};
 use crate::intern::{StringId, StringInterner};
 use crate::io::IoContext;
-use crate::typecheck::RuntimeTypes;
+use crate::typecheck::{RuntimeTyId, RuntimeTypes};
 use crate::value::{
     CapturedEnv, FunctionDef, Payload, ValueArena, ValueId, ValueMeta,
 };
@@ -132,7 +132,7 @@ pub(crate) type PrimResult<'a> = BoxFuture<'a, Result<ValueId>>;
 /// reporting.
 pub(crate) struct PrimCtx<'a> {
     pub(crate) arena: &'a mut ValueArena,
-    pub(crate) runtime_types: &'a RuntimeTypes,
+    pub(crate) runtime_types: &'a mut RuntimeTypes,
     // Required for `Io.*` operations to work correctly, i.e. use the I/O
     // abstraction used elsewhere
     pub(crate) io: &'a mut dyn IoContext,
@@ -143,25 +143,55 @@ impl PrimCtx<'_> {
     /// Create a `Result.Ok(v)` value from a `ValueId` already in the arena.
     pub(crate) fn result_ok(&mut self, v: ValueId) -> ValueId {
         let ok = Payload::ok(v);
-        self.arena.add_typed(ok, ValueMeta::untyped(), self.span)
+        let ok_ty = self
+            .arena
+            .meta(v)
+            .map(|m| m.ty)
+            .unwrap_or_else(|| RuntimeTyId::from(TyArena::UNIT));
+        let err_ty = RuntimeTyId::from(TyArena::STRING);
+        let ty = self.runtime_types.result(ok_ty, err_ty);
+        self.arena
+            .add_typed(ok, self.runtime_types.meta(ty), self.span)
     }
 
     /// Create a `Result.Err(msg)` value from a `ValueId` already in the arena.
     pub(crate) fn result_err(&mut self, msg: ValueId) -> ValueId {
         let err = Payload::err(msg);
-        self.arena.add_typed(err, ValueMeta::untyped(), self.span)
+        let ok_ty = RuntimeTyId::from(TyArena::UNIT);
+        let err_ty = self
+            .arena
+            .meta(msg)
+            .map(|m| m.ty)
+            .unwrap_or_else(|| RuntimeTyId::from(TyArena::STRING));
+        let ty = self.runtime_types.result(ok_ty, err_ty);
+        self.arena
+            .add_typed(err, self.runtime_types.meta(ty), self.span)
     }
 
     /// Create an `Option.Some(v)` value from a `ValueId` already in the arena.
     pub(crate) fn option_some(&mut self, v: ValueId) -> ValueId {
         let some = Payload::some(v);
-        self.arena.add_typed(some, ValueMeta::untyped(), self.span)
+        let elem = self
+            .arena
+            .meta(v)
+            .map(|m| m.ty)
+            .unwrap_or_else(|| RuntimeTyId::from(TyArena::UNIT));
+        let ty = self.runtime_types.option(elem);
+        self.arena
+            .add_typed(some, self.runtime_types.meta(ty), self.span)
     }
 
     /// Create an `Option.None` value.
     pub(crate) fn option_none(&mut self) -> ValueId {
         let none = Payload::none();
-        self.arena.add_typed(none, ValueMeta::untyped(), self.span)
+        let ty = self.runtime_types.option(RuntimeTyId::from(TyArena::UNIT));
+        self.arena
+            .add_typed(none, self.runtime_types.meta(ty), self.span)
+    }
+
+    pub(crate) fn add(&mut self, v: Payload) -> ValueId {
+        let meta = self.runtime_types.meta_for_payload(self.arena, &v);
+        self.arena.add_typed(v, meta, self.span)
     }
 
     /// Create a runtime error with span information.
@@ -1269,7 +1299,10 @@ impl Environment {
         .for_each(|&(name, val)| {
             let id = self.consts.add_typed(
                 Payload::Float(OrderedFloat(val)),
-                ValueMeta::untyped(),
+                ValueMeta {
+                    ty: RuntimeTyId::from(TyArena::FLOAT),
+                    repr: RuntimeTyId::from(TyArena::FLOAT),
+                },
                 Span::MODULE_CONST,
             );
             let name_id = self.consts.strings.intern(name);

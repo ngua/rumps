@@ -9,7 +9,7 @@ use smallvec::SmallVec;
 use super::Interpreter;
 use crate::ast::{DbRef, ExprId, Intrinsic, RefTarget, SubscriptElem, TxnId};
 use crate::io::IoContext;
-use crate::value::{Payload, TypeId, ValueId, ValueMeta};
+use crate::value::{Payload, ValueId};
 use crate::{Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
@@ -82,13 +82,13 @@ impl<I: IoContext> Interpreter<'_, I> {
             Some((head, tail)) => {
                 match head {
                     SubscriptElem::Elem(id) => {
-                        let val = self.eval(*id).await?;
+                        let val = self.eval_payload(*id).await?;
                         let meta = self.expr_meta(*id);
                         let val_id = self.arena.add_typed(val, meta, span);
                         acc.push(val_id);
                     }
                     SubscriptElem::Spread(id) => {
-                        let val = self.eval(*id).await?;
+                        let val = self.eval_payload(*id).await?;
                         match &val {
                             Payload::Array(elems) => {
                                 elems.iter().for_each(|elem_id| {
@@ -120,7 +120,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 Ok((name, key))
             }
             RefTarget::Expr(e) => {
-                let val = self.eval(*e).await?;
+                let val = self.eval_payload(*e).await?;
                 match &val {
                     Payload::Ref(is_global, name_id, sub_ids) => {
                         let name_str = self
@@ -137,9 +137,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                             .iter()
                             .map(|vid| {
                                 let v =
-                                    self.arena.get(*vid).unwrap_or_else(|| {
-                                        invariant!("Ref subscript in arena")
-                                    });
+                                    self.arena.payload(*vid).unwrap_or_else(
+                                        || invariant!("Ref subscript in arena"),
+                                    );
                                 self.subscript(v)
                             })
                             .collect::<Vec<_>>();
@@ -197,7 +197,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<Payload> {
         let (name, key) = self.resolve_ref_target(rt).await?;
         let val = self.eval(expr_id).await?;
-        let storage_val = self.store(&val);
+        let storage_val = self.store_value(&val);
 
         // Global writes require transaction (typechecked); locals go direct
         let res = if name.is_global() {
@@ -273,18 +273,17 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
         .unwrap_or(DataStatus::NoData);
 
-        // Convert DataStatus to Tagged variant
+        // Convert `DataStatus` to a runtime variant.
         let variant_idx = match status {
             DataStatus::NoData => 0,
             DataStatus::HasValue => 1,
             DataStatus::HasDescendants => 2,
             DataStatus::Both => 3,
         };
-        Ok(Payload::Tagged(
-            TypeId::DATA_STATUS,
-            variant_idx,
-            SmallVec::new(),
-        ))
+        Ok(Payload::Variant {
+            tag: variant_idx,
+            vals: SmallVec::new(),
+        })
     }
 
     /// `@order` primitive; returns the next subscript at a given level.
@@ -365,8 +364,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             None => Ok(self.make_none()),
             Some(k) => {
                 let arr = self.key_to_array(k, span);
-                let arr_id =
-                    self.arena.add_typed(arr, ValueMeta::untyped(), span);
+                let arr_id = self.add_payload(arr, span);
                 Ok(self.make_some(arr_id))
             }
         }
@@ -410,19 +408,19 @@ impl<I: IoContext> Interpreter<'_, I> {
             Some((head, tail)) => {
                 match head {
                     SubscriptElem::Elem(id) => {
-                        let val = self.eval(*id).await?;
+                        let val = self.eval_payload(*id).await?;
                         let sub = self.subscript(&val);
                         acc.push(sub);
                     }
                     SubscriptElem::Spread(id) => {
-                        let val = self.eval(*id).await?;
+                        let val = self.eval_payload(*id).await?;
                         // Extract subscripts from the array
                         match &val {
                             Payload::Array(elems) => {
                                 elems.iter().for_each(|elem_id| {
                                     let elem = self
                                         .arena
-                                        .get(*elem_id)
+                                        .payload(*elem_id)
                                         .unwrap_or_else(|| {
                                             invariant!("ValueId in arena")
                                         });

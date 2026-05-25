@@ -80,6 +80,9 @@ fun main() {
   ; =============================================================================
 
   write Option.Some("foo\nbar") raw
+  write [Option.Some(1)] raw
+  write {value: Option.Some(1)} raw
+  write (Option.Some(1),) raw
 
   ; =============================================================================
   ; String.escape function

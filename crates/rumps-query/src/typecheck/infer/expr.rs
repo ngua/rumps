@@ -25,6 +25,7 @@ use crate::typecheck::ty::{
     ClassShape, MethodSpec, Rename, Scheme, TrackKind, Ty, TyArena, TyId,
     TyVar, TypeClass,
 };
+use crate::typecheck::TypeDeclAccess;
 use crate::value::{TypeDef, TypeId};
 use crate::{ClassId, Span};
 
@@ -120,7 +121,12 @@ impl InferCtx<'_> {
             }
 
             // JSON literals
-            Expr::Json(_) => TyArena::JSON,
+            Expr::Json(fields) => {
+                fields.iter().for_each(|(_, expr)| {
+                    self.expr(*expr);
+                });
+                TyArena::JSON
+            }
 
             // Closures: (x, y) => body or [T](x: T) -> T => body
             Expr::Closure {
@@ -166,7 +172,7 @@ impl InferCtx<'_> {
             }
 
             // Type cast: `expr as Type`
-            Expr::As(inner, ty_id) => self.as_cast(*inner, *ty_id, span),
+            Expr::As(inner, ty_id) => self.as_cast(id, *inner, *ty_id, span),
 
             // Fallible conversion: `expr read Type`
             Expr::Read(inner, ty_id) => self.read_conv(*inner, *ty_id, span),
@@ -177,7 +183,9 @@ impl InferCtx<'_> {
             }
 
             // Type annotation: `(expr) : Type`
-            Expr::Annotate(inner, ty_id) => self.annotate(*inner, *ty_id, span),
+            Expr::Annotate(inner, ty_id) => {
+                self.annotate(id, *inner, *ty_id, span)
+            }
 
             // Module path: `Module.function` or `Module.constant`
             Expr::Path(segments) => {
@@ -252,7 +260,7 @@ impl InferCtx<'_> {
                 // Compile and cache the regex pattern; invalid patterns
                 // produce a type error during compile_regex
                 self.compile_regex(pattern, span)
-                    .map(|idx| self.interp.regex_indices.insert(id, idx));
+                    .map(|idx| self.interp.set_regex_index(id, idx));
                 TyArena::REGEX
             }
 
@@ -331,7 +339,7 @@ impl InferCtx<'_> {
                     class: TypeClass::simple(ClassId::MONOID),
                     span,
                 });
-                self.interp.mempty_types.insert(id, tv);
+                self.interp.set_concrete_expr_ty(id, tv);
                 tv
             }
 
@@ -527,7 +535,6 @@ impl InferCtx<'_> {
                                     track: TrackKind::Mempty,
                                     ..
                                 } => {
-                                    // Monoid:identity needs mempty_types tracking.
                                     let tv = if let Some(&ty_id) =
                                         type_args.first()
                                     {
@@ -543,7 +550,7 @@ impl InferCtx<'_> {
                                         ),
                                         span,
                                     });
-                                    self.interp.mempty_types.insert(id, tv);
+                                    self.interp.set_concrete_expr_ty(id, tv);
                                     self.ty_arena.func(smallvec![], tv)
                                 }
 
@@ -551,17 +558,21 @@ impl InferCtx<'_> {
                                     track: TrackKind::Convert,
                                     ..
                                 } => {
-                                    // Convert methods need convert_targets.
                                     // Type arg is required (checked above).
-                                    let target_ty_id = type_args[0];
+                                    let target_ty_id = *type_args
+                                        .first()
+                                        .unwrap_or_else(|| {
+                                            typechecked!(
+                                                "convert method",
+                                                "type argument"
+                                            )
+                                        });
                                     let target_ty =
                                         self.convert().ast_type_to_ty(
                                             target_ty_id,
                                             &empty_subst,
                                         );
-                                    self.interp
-                                        .convert_targets
-                                        .insert(id, target_ty);
+                                    self.interp.set_expr_ty(id, target_ty);
 
                                     let input_var = self.fresh_var();
                                     let input_ty =
@@ -623,16 +634,20 @@ impl InferCtx<'_> {
                                     track: TrackKind::ConvertResultInner,
                                     ..
                                 } => {
-                                    // TryInto:try-into needs convert_targets.
-                                    let target_ty_id = type_args[0];
+                                    let target_ty_id = *type_args
+                                        .first()
+                                        .unwrap_or_else(|| {
+                                            typechecked!(
+                                                "try-into method",
+                                                "type argument"
+                                            )
+                                        });
                                     let target_ty =
                                         self.convert().ast_type_to_ty(
                                             target_ty_id,
                                             &empty_subst,
                                         );
-                                    self.interp
-                                        .convert_targets
-                                        .insert(id, target_ty);
+                                    self.interp.set_expr_ty(id, target_ty);
 
                                     let input_var = self.fresh_var();
                                     let input_ty =
@@ -689,7 +704,7 @@ impl InferCtx<'_> {
     ) -> TyId {
         match self.resolve_naked_method(method, span) {
             Some((k, class_name)) => {
-                self.interp.naked_method_classes.insert(id, class_name);
+                self.interp.set_naked_method(id, class_name);
                 self.call_class_method_generic(id, k, method, args, span)
             }
             None => TyArena::ERROR,
@@ -705,7 +720,7 @@ impl InferCtx<'_> {
     ) -> TyId {
         match self.resolve_naked_method(method, span) {
             Some((_k, class_name)) => {
-                self.interp.naked_method_classes.insert(id, class_name);
+                self.interp.set_naked_method(id, class_name);
                 let empty = SmallVec::new();
                 self.class_method_ref(id, class_name, &empty, method, span)
             }
@@ -919,10 +934,10 @@ impl InferCtx<'_> {
                                         )
                                         .is_some() =>
                                 {
-                                    self.interp.instance_calls.insert(id, tid);
+                                    self.set_instance_call(id, tid);
                                 }
                                 _ => {
-                                    self.deferred_instance_calls
+                                    self.deferred_inst_calls
                                         .push((id, ty, kind));
                                 }
                             }
@@ -959,7 +974,7 @@ impl InferCtx<'_> {
 
                     // Track output type for `bimap` calls
                     if kind == ClassId::BIMAPPABLE {
-                        self.interp.bimap_output_types.insert(id, ret);
+                        self.interp.set_hof_call(id, ret);
                     }
 
                     // Handle tracking for runtime dispatch
@@ -967,10 +982,10 @@ impl InferCtx<'_> {
                         MethodSpec::Standard(_) => {}
                         MethodSpec::Tracked { track, .. } => match track {
                             TrackKind::Mempty => {
-                                self.interp.mempty_types.insert(id, ret);
+                                self.interp.set_concrete_expr_ty(id, ret);
                             }
                             TrackKind::Convert => {
-                                self.interp.convert_targets.insert(id, ret);
+                                self.interp.set_expr_ty(id, ret);
                             }
                             TrackKind::ConvertResultInner => {
                                 // Return type is `Result[T, E]`; track inner `T`
@@ -986,7 +1001,7 @@ impl InferCtx<'_> {
                                         TyArena::ERROR
                                     }
                                 };
-                                self.interp.convert_targets.insert(id, inner);
+                                self.interp.set_expr_ty(id, inner);
                             }
                         },
                     }
@@ -1045,8 +1060,7 @@ impl InferCtx<'_> {
                     class: TypeClass::simple(ClassId::NUMERIC),
                     span,
                 });
-                // Record for interpreter to convert to correct runtime type
-                self.interp.numeric_types.insert(id, ty);
+                self.interp.set_expr_ty(id, ty);
                 ty
             }
             // Float literals are NOT polymorphic; always Float
@@ -1266,10 +1280,10 @@ impl InferCtx<'_> {
                             .check_instance_available(kind, tid, span)
                             .is_some() =>
                     {
-                        self.interp.instance_calls.insert(id, tid);
+                        self.set_instance_call(id, tid);
                     }
                     _ => {
-                        self.deferred_instance_calls.push((id, lhs_ty, kind));
+                        self.deferred_inst_calls.push((id, lhs_ty, kind));
                     }
                 }
             }
@@ -1291,10 +1305,10 @@ impl InferCtx<'_> {
                             .check_instance_available(kind, tid, span)
                             .is_some() =>
                     {
-                        self.interp.instance_calls.insert(id, tid);
+                        self.set_instance_call(id, tid);
                     }
                     _ => {
-                        self.deferred_instance_calls.push((id, lhs_ty, kind));
+                        self.deferred_inst_calls.push((id, lhs_ty, kind));
                     }
                 }
             }
@@ -1319,9 +1333,8 @@ impl InferCtx<'_> {
         let scheme = op.def(&mut self.ty_arena).ty;
         let result = self.apply_op_scheme(&scheme, &[operand_ty], span);
 
-        // Track wrap types for interpreter dispatch
         if matches!(op, UnOp::Wrap) {
-            self.interp.wrap_types.insert(id, result);
+            self.interp.set_expr_ty(id, result);
 
             // Track Wrappable instance for `?` dispatch on user types.
             // Check the result type (e.g. `Box[T]`) for a Wrappable instance.
@@ -1338,10 +1351,10 @@ impl InferCtx<'_> {
                             .check_instance_available(kind, tid, span)
                             .is_some() =>
                     {
-                        self.interp.instance_calls.insert(id, tid);
+                        self.set_instance_call(id, tid);
                     }
                     _ => {
-                        self.deferred_instance_calls.push((id, result, kind));
+                        self.deferred_inst_calls.push((id, result, kind));
                     }
                 }
             }
@@ -1501,9 +1514,15 @@ impl InferCtx<'_> {
                         let spread_ok =
                             self.registry.get_def(ty_id).and_then(|def| {
                                 match def {
-                                    TypeDef::Alias { target, .. } => self
-                                        .ast
-                                        .get_type_expr(*target)
+                                    TypeDef::Alias { .. } => self
+                                        .registry
+                                        .alias_target(
+                                            TypeDeclAccess::new(),
+                                            ty_id,
+                                        )
+                                        .and_then(|target| {
+                                            self.ast.get_type_expr(target)
+                                        })
                                         .and_then(|te| match te {
                                             AstTypeExpr::Object(fields) => {
                                                 Some(fields.clone())
@@ -2166,6 +2185,7 @@ impl InferCtx<'_> {
 
         let param_sv: SmallVec<[TyId; 4]> = param_tys.into_iter().collect();
         let fn_ty = self.ty_arena.func(param_sv, ret_ty);
+        self.interp.function_types.insert(body, fn_ty);
 
         // If there are type params, store the scheme for let binding generalization
         if !type_params.is_empty() {
@@ -2625,8 +2645,17 @@ impl InferCtx<'_> {
                                             .map(|(p, &a)| (*p, a))
                                             .collect();
 
-                                    var_def
-                                        .payloads
+                                    let payloads = self
+                                        .registry
+                                        .variant_payloads(
+                                            TypeDeclAccess::new(),
+                                            type_id,
+                                            var_def.name,
+                                        )
+                                        .cloned()
+                                        .unwrap_or_default();
+
+                                    payloads
                                         .iter()
                                         .zip(arg_tys.iter())
                                         .for_each(|(expected_id, &got)| {
@@ -2714,8 +2743,12 @@ impl InferCtx<'_> {
                     self.sum_type_with_fresh_args(type_id);
 
                 // Build parameter types by substituting type params
-                let param_tys: SmallVec<[TyId; 4]> = vd
-                    .payloads
+                let payloads = self
+                    .registry
+                    .variant_payloads(TypeDeclAccess::new(), type_id, vd.name)
+                    .cloned()
+                    .unwrap_or_default();
+                let param_tys: SmallVec<[TyId; 4]> = payloads
                     .iter()
                     .map(|&te_id| {
                         self.convert().ast_type_to_ty(te_id, &type_arg_map)
@@ -2795,10 +2828,10 @@ impl InferCtx<'_> {
                             .check_instance_available(kind, tid, span)
                             .is_some() =>
                     {
-                        self.interp.instance_calls.insert(id, tid);
+                        self.set_instance_call(id, tid);
                     }
                     _ => {
-                        self.deferred_instance_calls.push((id, inner_ty, kind));
+                        self.deferred_inst_calls.push((id, inner_ty, kind));
                     }
                 }
             }
@@ -2995,9 +3028,15 @@ impl InferCtx<'_> {
                             .registry
                             .get_def(type_id)
                             .is_some_and(|def| match def {
-                                TypeDef::Alias { target, .. } => self
-                                    .ast
-                                    .get_type_expr(*target)
+                                TypeDef::Alias { .. } => self
+                                    .registry
+                                    .alias_target(
+                                        TypeDeclAccess::new(),
+                                        type_id,
+                                    )
+                                    .and_then(|target| {
+                                        self.ast.get_type_expr(target)
+                                    })
                                     .is_some_and(|te| {
                                         matches!(te, AstTypeExpr::Object(_))
                                     }),
@@ -3040,6 +3079,7 @@ impl InferCtx<'_> {
     /// `(-2.9) as Int` are properly constrained.
     fn as_cast(
         &mut self,
+        id: ExprId,
         inner_id: ExprId,
         ty_id: AstTypeExprId,
         span: Span,
@@ -3073,6 +3113,9 @@ impl InferCtx<'_> {
         // Error recovery: return Error type if either side is Error
         if inner_ty == TyArena::ERROR || target_ty == TyArena::ERROR {
             TyArena::ERROR
+        } else if matches!(self.ty_arena.get(target_ty), Ty::Union(..)) {
+            self.interp.union_value_reprs.insert(id, inner_ty);
+            target_ty
         } else {
             target_ty
         }
@@ -3096,8 +3139,8 @@ impl InferCtx<'_> {
         self.interp.ast_type_map.insert(ty_id, target_ty);
 
         // For alias types, store the expanded underlying type so the
-        // interpreter can resolve `read Person` to `read { name: String, age: Int }`
-        self.expand_alias_for_read(ty_id, target_ty);
+        // interpreter can resolve `read` targets without reading AST types.
+        self.expand_alias_for_read(target_ty);
 
         // Emit TryInto constraint for validation
         self.constrain(Constraint::Class {
@@ -3110,17 +3153,19 @@ impl InferCtx<'_> {
     }
 
     /// If `ty` is `Ty::Named(id, args)` and `id` is an alias, expand it and
-    /// store the mapping in `alias_expansions` keyed by `AstTypeExprId`.
-    fn expand_alias_for_read(&mut self, ast_ty: AstTypeExprId, ty: TyId) {
-        self.collect_read_alias_expansions(ty, &mut HashSet::new());
+    /// store the solved alias mapping.
+    fn expand_alias_for_read(&mut self, ty: TyId) {
+        self.collect_alias_expansions(ty, &mut HashSet::new());
         if let Ty::Named(type_id, args) = self.ty_arena.get(ty).clone() {
-            if let Some(TypeDef::Alias {
-                target,
-                type_params,
-                ..
-            }) = self.registry.get_def(type_id)
+            if let Some(TypeDef::Alias { type_params, .. }) =
+                self.registry.get_def(type_id)
             {
-                let target = *target;
+                let target = self
+                    .registry
+                    .alias_target(TypeDeclAccess::new(), type_id)
+                    .unwrap_or_else(|| {
+                        typechecked!("alias target", "registered")
+                    });
                 let type_params = type_params.clone();
                 let subst: IndexMap<StringId, TyId> = type_params
                     .iter()
@@ -3128,17 +3173,13 @@ impl InferCtx<'_> {
                     .map(|(&p, &a)| (p, a))
                     .collect();
                 let expanded = self.convert().ast_type_to_ty(target, &subst);
-                self.interp.alias_expansions.insert(ast_ty, expanded);
                 self.interp.alias_type_expansions.insert(ty, expanded);
-                self.collect_read_alias_expansions(
-                    expanded,
-                    &mut HashSet::new(),
-                );
+                self.collect_alias_expansions(expanded, &mut HashSet::new());
             }
         }
     }
 
-    fn collect_read_alias_expansions(
+    pub(super) fn collect_alias_expansions(
         &mut self,
         ty: TyId,
         seen: &mut HashSet<TyId>,
@@ -3148,11 +3189,10 @@ impl InferCtx<'_> {
                 Ty::Named(type_id, args) => {
                     let alias = self.registry.get_def(type_id).and_then(
                         |def| match def {
-                            TypeDef::Alias {
-                                target,
-                                type_params,
-                                ..
-                            } => Some((*target, type_params.clone())),
+                            TypeDef::Alias { type_params, .. } => self
+                                .registry
+                                .alias_target(TypeDeclAccess::new(), type_id)
+                                .map(|target| (target, type_params.clone())),
                             _ => None,
                         },
                     );
@@ -3168,36 +3208,36 @@ impl InferCtx<'_> {
                             self.interp
                                 .alias_type_expansions
                                 .insert(ty, expanded);
-                            self.collect_read_alias_expansions(expanded, seen);
+                            self.collect_alias_expansions(expanded, seen);
                         }
                         None => {
                             args.iter().for_each(|&arg| {
-                                self.collect_read_alias_expansions(arg, seen)
+                                self.collect_alias_expansions(arg, seen)
                             });
                         }
                     }
                 }
                 Ty::Array(inner) | Ty::Option(inner) => {
-                    self.collect_read_alias_expansions(inner, seen);
+                    self.collect_alias_expansions(inner, seen);
                 }
                 Ty::Result(ok, err) | Ty::Map(ok, err) => {
-                    self.collect_read_alias_expansions(ok, seen);
-                    self.collect_read_alias_expansions(err, seen);
+                    self.collect_alias_expansions(ok, seen);
+                    self.collect_alias_expansions(err, seen);
                 }
                 Ty::Tuple(elems) | Ty::Union(_, elems) => {
                     elems.iter().for_each(|&elem| {
-                        self.collect_read_alias_expansions(elem, seen)
+                        self.collect_alias_expansions(elem, seen)
                     });
                 }
                 Ty::Fn(params, ret) => {
                     params.iter().for_each(|&param| {
-                        self.collect_read_alias_expansions(param, seen)
+                        self.collect_alias_expansions(param, seen)
                     });
-                    self.collect_read_alias_expansions(ret, seen);
+                    self.collect_alias_expansions(ret, seen);
                 }
                 Ty::Object(fields) => {
                     fields.values().for_each(|&field| {
-                        self.collect_read_alias_expansions(field, seen)
+                        self.collect_alias_expansions(field, seen)
                     });
                 }
                 Ty::Var(_)
@@ -3387,6 +3427,7 @@ impl InferCtx<'_> {
     /// array rather than falling back to `Json`.
     fn annotate(
         &mut self,
+        id: ExprId,
         inner_id: ExprId,
         ty_id: AstTypeExprId,
         span: Span,
@@ -3424,6 +3465,9 @@ impl InferCtx<'_> {
                     // Default: infer then unify
                     let inner_ty = self.expr(inner_id);
                     self.unify(inner_ty, ann_ty, span);
+                    if matches!(self.ty_arena.get(ann_ty), Ty::Union(..)) {
+                        self.interp.union_value_reprs.insert(id, inner_ty);
+                    }
                     ann_ty
                 }
             }
@@ -3457,6 +3501,9 @@ impl InferCtx<'_> {
                             got: elem_ty,
                             span,
                         });
+                    } else {
+                        self.record_type(*id, expected_elem);
+                        self.interp.union_value_reprs.insert(*id, elem_ty);
                     }
                 }
             }

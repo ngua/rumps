@@ -16,7 +16,7 @@ use smallvec::SmallVec;
 use super::class::{self, ClassCtx};
 use super::Interpreter;
 use crate::io::IoContext;
-use crate::value::{MapKey, Payload, ValueMeta};
+use crate::value::{MapKey, Payload, Value, ValueId};
 use crate::Span;
 
 impl<I: IoContext> Interpreter<'_, I> {
@@ -54,7 +54,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             | Payload::Object(_)
             | Payload::Tuple(_)
             | Payload::Map(_)
-            | Payload::Tagged(_, _, _)
+            | Payload::Variant { .. }
             | Payload::Closure { .. }
             | Payload::Function { .. }
             | Payload::ModuleFn { .. }
@@ -68,6 +68,28 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             Payload::Time(t) => rumps_types::Value::String(t.to_rfc3339()),
             Payload::Ref(..) => typechecked!("store", "Storable (not Ref)"),
+        }
+    }
+
+    pub(crate) fn store_value(&mut self, v: &Value) -> rumps_types::Value {
+        match &v.payload {
+            Payload::Object(_)
+            | Payload::Array(_)
+            | Payload::Tuple(_)
+            | Payload::Map(_)
+            | Payload::Variant { .. }
+            | Payload::Closure { .. }
+            | Payload::Function { .. }
+            | Payload::ModuleFn { .. }
+            | Payload::ModuleConst { .. }
+            | Payload::Range { .. }
+            | Payload::ForeverContinuation
+            | Payload::LoopContinue(_)
+            | Payload::ClassMethodFn { .. }
+            | Payload::PartialApp { .. } => {
+                rumps_types::Value::Json(self.jsonify_value(v))
+            }
+            payload => self.store(payload),
         }
     }
 
@@ -95,6 +117,10 @@ impl<I: IoContext> Interpreter<'_, I> {
         self.stringify(v)
     }
 
+    pub(crate) fn display_value(&mut self, v: &Value) -> String {
+        self.stringify_value(v)
+    }
+
     /// Convert a value to display string with escape sequences preserved.
     ///
     /// Used for `write expr raw`. Strings are quoted and special characters
@@ -109,18 +135,20 @@ impl<I: IoContext> Interpreter<'_, I> {
             Payload::Array(elems) => {
                 let vals: Vec<_> = elems
                     .iter()
-                    .filter_map(|id| self.arena.get(*id).cloned())
+                    .filter_map(|id| self.arena.value(*id).cloned())
                     .collect();
-                let items = vals.iter().map(|v| self.display_raw(v)).join(", ");
+                let items =
+                    vals.iter().map(|v| self.display_raw_value(v)).join(", ");
                 format!("[ {items} ]")
             }
             Payload::Tuple(elems) => {
                 let len = elems.len();
                 let vals: Vec<_> = elems
                     .iter()
-                    .filter_map(|id| self.arena.get(*id).cloned())
+                    .filter_map(|id| self.arena.value(*id).cloned())
                     .collect();
-                let items = vals.iter().map(|v| self.display_raw(v)).join(", ");
+                let items =
+                    vals.iter().map(|v| self.display_raw_value(v)).join(", ");
                 let trail = if len == 1 { "," } else { "" };
                 format!("({items}{trail})")
             }
@@ -131,7 +159,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .map(|(k, vid)| {
                         let key =
                             self.arena.get_str(*k).unwrap_or("?").to_owned();
-                        let val = self.arena.get(*vid).cloned();
+                        let val = self.arena.value(*vid).cloned();
                         (key, val)
                     })
                     .collect();
@@ -139,7 +167,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .into_iter()
                     .map(|(k, v)| {
                         let vs = v
-                            .map(|v| self.display_raw(&v))
+                            .map(|v| self.display_raw_value(&v))
                             .unwrap_or_else(|| "?".to_owned());
                         format!("{k}: {vs}")
                     })
@@ -152,7 +180,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .iter()
                     .map(|(k, vid)| {
                         let key = self.stringify_map_key(k);
-                        let val = self.arena.get(*vid).cloned();
+                        let val = self.arena.value(*vid).cloned();
                         (key, val)
                     })
                     .collect();
@@ -160,34 +188,26 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .into_iter()
                     .map(|(k, v)| {
                         let vs = v
-                            .map(|v| self.display_raw(&v))
+                            .map(|v| self.display_raw_value(&v))
                             .unwrap_or_else(|| "?".to_owned());
                         format!("{k} => {vs}")
                     })
                     .join(", ");
                 format!("{{ {items} }}")
             }
-            Payload::Tagged(ty_id, idx, payloads) => {
-                let ty_name = self
-                    .registry
-                    .type_name(*ty_id, &self.arena)
-                    .unwrap_or("?")
-                    .to_owned();
-                let var_name = self
-                    .registry
-                    .variant_name(*ty_id, *idx, &self.arena)
-                    .unwrap_or("?")
-                    .to_owned();
-                if payloads.is_empty() {
-                    format!("{ty_name}.{var_name}")
+            Payload::Variant { tag, vals } => {
+                if vals.is_empty() {
+                    format!("Variant.{tag}")
                 } else {
-                    let args: Vec<_> = payloads
+                    let args: Vec<_> = vals
                         .iter()
-                        .filter_map(|id| self.arena.get(*id).cloned())
+                        .filter_map(|id| self.arena.value(*id).cloned())
                         .collect();
-                    let args_str =
-                        args.iter().map(|v| self.display_raw(v)).join(", ");
-                    format!("{ty_name}.{var_name}({args_str})")
+                    let args_str = args
+                        .iter()
+                        .map(|v| self.display_raw_value(v))
+                        .join(", ");
+                    format!("Variant.{tag}({args_str})")
                 }
             }
             Payload::Ref(is_global, name_id, sub_ids) => {
@@ -199,15 +219,61 @@ impl<I: IoContext> Interpreter<'_, I> {
                 } else {
                     let subs: Vec<_> = sub_ids
                         .iter()
-                        .filter_map(|id| self.arena.get(*id).cloned())
+                        .filter_map(|id| self.arena.value(*id).cloned())
                         .collect();
-                    let subs_str =
-                        subs.iter().map(|v| self.display_raw(v)).join(", ");
+                    let subs_str = subs
+                        .iter()
+                        .map(|v| self.display_raw_value(v))
+                        .join(", ");
                     format!("{prefix}{name}{{ {subs_str} }}")
                 }
             }
             // Non-string types delegate to normal stringify
             _ => self.stringify(v),
+        }
+    }
+
+    pub(crate) fn display_raw_value(&mut self, v: &Value) -> String {
+        match &v.payload {
+            Payload::Variant { tag, vals } => {
+                self.display_raw_variant(v, *tag, vals)
+            }
+            payload => self.display_raw(payload),
+        }
+    }
+
+    fn display_raw_variant(
+        &mut self,
+        v: &Value,
+        tag: u8,
+        vals: &[ValueId],
+    ) -> String {
+        let type_id = self
+            .checked
+            .types
+            .to_type_id(v.repr)
+            .or_else(|| self.checked.types.to_type_id(v.ty));
+        let ty_name = type_id
+            .and_then(|type_id| self.registry.type_name(type_id, &self.arena))
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| "Variant".to_owned());
+        let var_name = type_id
+            .and_then(|type_id| {
+                self.registry.variant_name(type_id, tag, &self.arena)
+            })
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| tag.to_string());
+
+        if vals.is_empty() {
+            format!("{ty_name}.{var_name}")
+        } else {
+            let values: Vec<_> = vals
+                .iter()
+                .filter_map(|id| self.arena.value(*id).cloned())
+                .collect();
+            let args =
+                values.iter().map(|v| self.display_raw_value(v)).join(", ");
+            format!("{ty_name}.{var_name}({args})")
         }
     }
 
@@ -223,6 +289,15 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
+    pub(crate) fn coerce_value_to_str(&mut self, v: &Value) -> String {
+        match &v.payload {
+            Payload::String(id) | Payload::FilePath(id) => {
+                self.arena.get_str(*id).unwrap_or("").to_owned()
+            }
+            _ => self.stringify_value(v),
+        }
+    }
+
     /// Stringify a value for display via `Display:display`.
     ///
     /// Produces valid RUMPS syntax; strings and file paths are quoted.
@@ -234,13 +309,23 @@ impl<I: IoContext> Interpreter<'_, I> {
     pub(crate) fn stringify(&mut self, v: &Payload) -> String {
         let ctx = ClassCtx {
             arena: &mut self.arena,
-            ty_arena: &self.ty_arena,
-            runtime_types: &self.checked.types,
+            runtime_types: &mut self.checked.types,
             registry: &self.registry,
             regex_cache: &self.checked.regex_cache,
             span: Span::default(),
         };
         class::Display::format(&ctx, v)
+    }
+
+    pub(crate) fn stringify_value(&mut self, v: &Value) -> String {
+        let ctx = ClassCtx {
+            arena: &mut self.arena,
+            runtime_types: &mut self.checked.types,
+            registry: &self.registry,
+            regex_cache: &self.checked.regex_cache,
+            span: Span::default(),
+        };
+        class::Display::format_value(&ctx, v)
     }
 
     /// Convert a value to JSON via `Into[Json]`.
@@ -253,13 +338,23 @@ impl<I: IoContext> Interpreter<'_, I> {
     pub(crate) fn jsonify(&mut self, v: &Payload) -> serde_json::Value {
         let ctx = ClassCtx {
             arena: &mut self.arena,
-            ty_arena: &self.ty_arena,
-            runtime_types: &self.checked.types,
+            runtime_types: &mut self.checked.types,
             registry: &self.registry,
             regex_cache: &self.checked.regex_cache,
             span: Span::default(),
         };
         class::Into::jsonify(&ctx, v)
+    }
+
+    pub(crate) fn jsonify_value(&mut self, v: &Value) -> serde_json::Value {
+        let ctx = ClassCtx {
+            arena: &mut self.arena,
+            runtime_types: &mut self.checked.types,
+            registry: &self.registry,
+            regex_cache: &self.checked.regex_cache,
+            span: Span::default(),
+        };
+        class::Into::jsonify_value(&ctx, v)
     }
 
     /// Convert a JSON value to a runtime value.
@@ -284,11 +379,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                         .into_iter()
                         .map(|v| {
                             let val = self.unjsonify(v);
-                            self.arena.add_typed(
-                                val,
-                                ValueMeta::untyped(),
-                                Span::default(),
-                            )
+                            self.add_payload(val, Span::default())
                         })
                         .collect();
                     Payload::Array(Arc::new(elems))
@@ -303,11 +394,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .map(|(k, v)| {
                         let key = self.arena.intern(&k);
                         let val = self.unjsonify(v);
-                        let val_id = self.arena.add_typed(
-                            val,
-                            ValueMeta::untyped(),
-                            Span::default(),
-                        );
+                        let val_id = self.add_payload(val, Span::default());
                         (key, val_id)
                     })
                     .collect();
@@ -342,7 +429,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             | Payload::Time(_)
             | Payload::FilePath(_)
             | Payload::Regex(_)
-            | Payload::Tagged(_, _, _)
+            | Payload::Variant { .. }
             | Payload::Closure { .. }
             | Payload::Function { .. }
             | Payload::ModuleFn { .. }

@@ -4,12 +4,11 @@
 //! there's a user-defined instance and dispatch to the generated function if so.
 //!
 //! User types can be:
-//! - `type` (sum types): represented as `Payload::Tagged`, TypeId available directly
-//! - `newtype` (type aliases): may be primitive values, TypeId from `instance_calls`
-//! - `union` (union types): member type values, TypeId from `instance_calls`
+//! - `type` (sum types): variant data with type metadata on `Value`
+//! - `newtype` (type aliases): primitive or structural representation values
+//! - `union` (union types): member representation values
 //!
-//! For `type`s, we can extract the TypeId from `Payload::Tagged`. For `newtype`s
-//! and `union`s, the typechecker records the receiver type in `instance_calls`.
+//! Dispatch uses checked expression metadata first, then value `ty` and `repr`.
 
 use std::collections::HashMap;
 
