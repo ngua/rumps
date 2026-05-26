@@ -1680,7 +1680,7 @@ impl InferCtx<'_> {
             .collect()
     }
 
-    /// Validate that all type expressions in a `type` declaration body are
+    /// Validate that all type expressions in a `variant` declaration body are
     /// fully saturated (no unsaturated type synonyms like bare `Array`).
     fn validate_type_decl_body(&mut self, tps: &[TypeParam], def: &TypeDefAst) {
         let subst = self.type_param_subst(tps);

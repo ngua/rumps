@@ -88,9 +88,9 @@ fun main() {
   write concat3(_, "a", "b")   ; "" ++ "a" ++ "b" = "ab"
   write concat3([0], _, [2])   ; [0] ++ [] ++ [2] = [0, 2]
 
-  ; Mempty as forever seed (common pattern for accumulating)
+  ; Mempty as loop seed (common pattern for accumulating)
   ; Collect squares of 1..5 into an array starting from `_` (empty array)
-  let squares = forever { i: 1, acc: _ } (state, cont) => {
+  let squares = loop { i: 1, acc: _ } (state, cont) => {
     if state.i > 5 {
       state.acc
     } else {
@@ -100,7 +100,7 @@ fun main() {
   write squares
 
   ; Build a string using `_` as initial accumulator
-  let words = forever { i: 0, s: _ } (state, cont) => {
+  let words = loop { i: 0, s: _ } (state, cont) => {
     let items = ["hello", "world", "!"]
     if state.i >= 3 {
       state.s

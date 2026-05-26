@@ -26,7 +26,7 @@ module Secrets {
   fun internal() -> Int { 100 }
 
   ; Private type
-  type Status = Pending | Done
+  variant Status = Pending | Done
 
   ; Private newtype
   newtype UserId = Int

@@ -2,7 +2,7 @@
 ;
 ; Only `Tagged[String, V]` is Wrappable/Fallible (Tag fixed to `String`).
 
-type Tagged[Tag, Val] = Tagged(Tag, Val)
+variant Tagged[Tag, Val] = Tagged(Tag, Val)
 
 class Wrappable for Tagged[String] {
   fun wrap(v: V) -> Tagged[String, V] {

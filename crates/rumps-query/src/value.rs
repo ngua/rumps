@@ -766,16 +766,16 @@ pub(crate) enum Payload {
         inclusive: bool,
     },
 
-    /// A FOREVER loop continuation pseudo-function.
+    /// A `loop` continuation pseudo-function.
     ///
     /// Not a real callable; calling this triggers loop continuation in the
     /// interpreter.
-    ForeverContinuation,
+    LoopContinuation,
 
-    /// Signal to continue a FOREVER loop with a new state.
+    /// Signal to continue a `loop` expression with a new state.
     ///
     /// This is never exposed to user code; it's an internal signal between
-    /// the continuation call and the FOREVER loop interpreter. The `ValueId`
+    /// the continuation call and the `loop` interpreter. The `ValueId`
     /// points to the new state value.
     LoopContinue(ValueId),
 
@@ -833,7 +833,7 @@ impl Payload {
             Self::ModuleFn { .. } => Cow::Borrowed("ModuleFn"),
             Self::ModuleConst { .. } => Cow::Borrowed("ModuleConst"),
             Self::Range { .. } => Cow::Borrowed("Range"),
-            Self::ForeverContinuation => Cow::Borrowed("Continuation"),
+            Self::LoopContinuation => Cow::Borrowed("Continuation"),
             Self::LoopContinue(_) => Cow::Borrowed("LoopContinue"),
             Self::Ref(..) => Cow::Borrowed("Ref"),
             Self::ClassMethodFn { .. } => Cow::Borrowed("ClassMethodFn"),
@@ -1549,7 +1549,7 @@ impl TypeRegistry {
 
     /// Pre-register user-defined types from AST before type checking.
     ///
-    /// Scans all statements for `type` and `union` declarations (including
+    /// Scans all statements for `variant` and `union` declarations (including
     /// those inside modules) and registers them so the type checker can
     /// resolve type names. Module-scoped types are registered with qualified
     /// names (e.g., `MyModule.MyType`).
@@ -1623,7 +1623,7 @@ impl TypeRegistry {
         });
     }
 
-    /// Register a single `type` declaration.
+    /// Register a single `variant` declaration.
     ///
     /// If a type with the same name already exists, it is shadowed.
     fn register_type(

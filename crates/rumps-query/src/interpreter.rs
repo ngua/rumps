@@ -83,7 +83,7 @@
 //!    `Expr::Variant` (regardless of arity).
 //!
 //! 2. **Runtime** (`field()`, `call()`): For user-defined types declared via
-//!    `type`. These are registered during interpretation, so they cannot be
+//!    `variant`. These are registered during interpretation, so they cannot be
 //!    resolved at parse time. The interpreter checks if a field access like
 //!    `Status.Pending` refers to a registered type and constructs the variant.
 //!
@@ -632,13 +632,13 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 };
                 Err(Error::raise(span, msg))
             }
-            Expr::Forever {
+            Expr::Loop {
                 seed,
                 state_param,
                 cont_param,
                 body,
             } => self
-                .forever(seed, state_param.0, cont_param.0, body, span)
+                .loop_expr(seed, state_param.0, cont_param.0, body, span)
                 .await
                 .map(Evaluated::Value),
             Expr::Transaction(ref txn) => {
@@ -1114,9 +1114,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         Ok(())
     }
 
-    /// Register a user-defined sum type declaration.
+    /// Register a user-defined variant declaration.
     ///
-    /// Processes `type Name = Variant1 | Variant2(T) | ...` and registers
+    /// Processes `variant Name = Variant1 | Variant2(T) | ...` and registers
     /// the type in the type registry if it was not pre-registered.
     fn type_decl(
         &mut self,

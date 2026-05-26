@@ -68,7 +68,7 @@ module Outer {
 fun double-id(i: Id) -> Id { i * 2 }
 
 module A {
-  +type Status = Active | Inactive
+  +variant Status = Active | Inactive
 
   module B {
     ; Can access A.Status as just `Status`
@@ -118,7 +118,7 @@ module Config {
 }
 
 module Container {
-  +type Box[T] = Full(T) | Empty
+  +variant Box[T] = Full(T) | Empty
 
   module Ops {
     ; Can use `Box` without `Container.` prefix

@@ -2,7 +2,7 @@
 ;
 ; Tests `?` (wrap) and `Chainable:chain` on user-defined `Box[T]`.
 
-type Box[T] = Full(T) | Empty
+variant Box[T] = Full(T) | Empty
 
 class Fallible for Box {
   fun unwrap(b: Box[T]) -> T {

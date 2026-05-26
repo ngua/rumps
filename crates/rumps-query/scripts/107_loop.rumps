@@ -1,9 +1,9 @@
-; Test: forever loop construct
+; Test: loop loop construct
 ; Continuation-passing style loop with explicit state
 
 fun main() {
   ; Basic: count to 5
-  let count = forever 1 (n, cont) => {
+  let count = loop 1 (n, cont) => {
     if n > 5 {
       n - 1  ; return last valid value
     } else {
@@ -13,7 +13,7 @@ fun main() {
   write count
 
   ; Sum from 1 to 10
-  let sum = forever { acc: 0, i: 1 } (state, cont) => {
+  let sum = loop { acc: 0, i: 1 } (state, cont) => {
     if state.i > 10 {
       state.acc
     } else {
@@ -23,7 +23,7 @@ fun main() {
   write sum
 
   ; Factorial of 5
-  let factorial = forever { result: 1, n: 5 } (state, cont) => {
+  let factorial = loop { result: 1, n: 5 } (state, cont) => {
     if state.n <= 1 {
       state.result
     } else {
@@ -33,7 +33,7 @@ fun main() {
   write factorial
 
   ; Early exit based on condition
-  let early = forever 0 (n, cont) => {
+  let early = loop 0 (n, cont) => {
     if n == 3 {
       "stopped at 3"
     } else {
@@ -43,7 +43,7 @@ fun main() {
   write early
 
   ; Collect even numbers from 0 to 10
-  let evens = forever { i: 0, acc: [] } (state, cont) => {
+  let evens = loop { i: 0, acc: [] } (state, cont) => {
     if state.i > 10 {
       state.acc
     } else {
@@ -62,8 +62,8 @@ fun main() {
   @set data{3} "three"
   @set data{4} "four"
 
-  ; Collect keys using @order and forever
-  let keys = forever { key: @order data{}, acc: [] } (state, cont) => {
+  ; Collect keys using @order and loop
+  let keys = loop { key: @order data{}, acc: [] } (state, cont) => {
     match state.key {
       Option.None => state.acc
       Option.Some(s) => {
@@ -78,7 +78,7 @@ fun main() {
   write keys
 
   ; Collect all values using @order
-  let vals = forever { key: @order data{}, acc: "" } (state, cont) => {
+  let vals = loop { key: @order data{}, acc: "" } (state, cont) => {
     match state.key {
       Option.None => state.acc
       Option.Some(k) => {
@@ -94,7 +94,7 @@ fun main() {
   write vals
 
   ; Large iteration count (previously caused stack overflow at ~100k)
-  let big = forever 0 (n, cont) => {
+  let big = loop 0 (n, cont) => {
     if n >= 200000 {
       n
     } else {
@@ -103,5 +103,5 @@ fun main() {
   }
   write big
 
-  write "forever test complete"
+  write "loop test complete"
 }

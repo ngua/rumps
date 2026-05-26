@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Error: duplicate class instance\n;\n; Only one instance of a class is allowed per type.\n\nTYPE Point = Point(Int, Int)\n\nCLASS Display FOR Point {\n  FUN display(p: Point) -> String {\n    MATCH p {\n      Point.Point(x, y) => { \"({x}, {y})\" }\n    }\n  }\n}\n\n; Duplicate instance - should error\nCLASS Display FOR Point {\n  FUN display(p: Point) -> String {\n    MATCH p {\n      Point.Point(x, y) => { \"Point[{x},{y}]\" }\n    }\n  }\n}\n"
+description: "; Error: duplicate class instance\n;\n; Only one instance of a class is allowed per type.\n\nvariant Point = Point(Int, Int)\n\nCLASS Display FOR Point {\n  FUN display(p: Point) -> String {\n    MATCH p {\n      Point.Point(x, y) => { \"({x}, {y})\" }\n    }\n  }\n}\n\n; Duplicate instance - should error\nCLASS Display FOR Point {\n  FUN display(p: Point) -> String {\n    MATCH p {\n      Point.Point(x, y) => { \"Point[{x},{y}]\" }\n    }\n  }\n}\n"
 ---
 ERROR: duplicate `Display` instance for type `Point`

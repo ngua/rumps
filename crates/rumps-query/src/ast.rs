@@ -1027,7 +1027,7 @@ pub(crate) enum Expr {
     /// Never returns; can unify with any expected type.
     Raise(ExprId),
 
-    /// Forever loop: `forever seed (state, cont) => body`.
+    /// Loop expression: `loop seed (state, cont) => body`.
     ///
     /// A functional looping construct using continuation-passing style:
     /// - `seed`: Initial state value
@@ -1038,7 +1038,7 @@ pub(crate) enum Expr {
     /// The continuation is a pseudo-function; calling it signals the loop should
     /// continue with the provided value as the new state. If the body evaluates
     /// without calling the continuation, the loop terminates and returns that value.
-    Forever {
+    Loop {
         seed: ExprId,
         state_param: (StringId, Option<AstTypeExprId>),
         cont_param: (StringId, Option<AstTypeExprId>),
@@ -1141,7 +1141,7 @@ pub(crate) struct TransactionModifiers {
 /// Visibility modifier for module members.
 ///
 /// Inside a module, items are private by default. Use `+` prefix to make
-/// them public (e.g., `+let`, `+fun`, `+type`).
+/// them public (e.g., `+let`, `+fun`, `+variant`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Visibility {
     /// Private; only accessible within the module (default).
@@ -1280,14 +1280,14 @@ pub(crate) enum Stmt {
         vis: Visibility,
     },
 
-    /// User-defined sum type declaration: `type Name = Variant1 | Variant2(T)`.
+    /// User-defined variant declaration: `variant Name = Variant1 | Variant2(T)`.
     ///
     /// Examples:
-    /// - `type Status = Pending | Active | Completed`
-    /// - `type Event = Click(Int, Int) | KeyPress(Char)`
-    /// - `type Either[L, R] = Left(L) | Right(R)`
+    /// - `variant Status = Pending | Active | Completed`
+    /// - `variant Event = Click(Int, Int) | KeyPress(Char)`
+    /// - `variant Either[L, R] = Left(L) | Right(R)`
     ///
-    /// The visibility is only meaningful inside modules (`+type` for public).
+    /// The visibility is only meaningful inside modules (`+variant` for public).
     Type {
         name: StringId,
         type_params: SmallVec<[TypeParam; 2]>,
@@ -1316,7 +1316,7 @@ pub(crate) enum Stmt {
     /// Union type declaration: `union Name = Type1 | Type2 | ...`.
     ///
     /// Named unions define a type that can be any of the member types.
-    /// Unlike sum types (`type`), union members are existing types, not variants.
+    /// Unlike variant declarations, union members are existing types, not variants.
     ///
     /// Examples:
     /// - `union Storable = Bool | Int | Float | Char | String | Json`
@@ -1379,7 +1379,7 @@ pub(crate) enum Stmt {
     /// User-defined class instance: `class ClassName for Type { methods }`.
     ///
     /// Implements a builtin class (`Display`, `Into`, `Ord`, etc.) for a user
-    /// type (`type`, `newtype`, or `union`).
+    /// type (`variant`, `newtype`, or `union`).
     ///
     /// Examples:
     /// - `class Display for Point { fun display(p: Point) -> String { ... } }`

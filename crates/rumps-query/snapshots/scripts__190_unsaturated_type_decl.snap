@@ -1,6 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: unsaturated type synonyms in declarations\n; Parameterized types must be fully applied in newtype, union, and type bodies\n\n; Invalid: bare `Array` in newtype (expects 1 type arg)\nnewtype Bad1 = Array\n\n; Invalid: bare `Option` in union member\nunion Bad2 = Int | Option\n\n; Invalid: bare `Map` in type variant payload\ntype Bad3 = Foo(Map)\n\n; Valid: fully applied\nnewtype Good1[T] = Array[T]\nnewtype Good2 = Array[Int]\nunion Good3 = Int | Option[String]\n\nfun main() {}\n"
+description: "; Test: unsaturated type synonyms in declarations\n; Parameterized types must be fully applied in newtype, union, and type bodies\n\n; Invalid: bare `Array` in newtype (expects 1 type arg)\nnewtype Bad1 = Array\n\n; Invalid: bare `Option` in union member\nunion Bad2 = Int | Option\n\n; Invalid: bare `Map` in type variant payload\nvariant Bad3 = Foo(Map)\n\n; Valid: fully applied\nnewtype Good1[T] = Array[T]\nnewtype Good2 = Array[Int]\nunion Good3 = Int | Option[String]\n\nfun main() {}\n"
 ---
 ERROR: type `Array` expects 1 type argument(s), got 0
 type `Option` expects 1 type argument(s), got 0

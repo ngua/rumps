@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; CLASS instance without import; should error with helpful suggestion\n\nMODULE Shapes {\n  +TYPE Circle = Circle(Float)\n\n  CLASS Display FOR Shapes.Circle {\n    FUN display(c: Shapes.Circle) -> String {\n      MATCH c {\n        Shapes.Circle.Circle(r) => { \"Circle(r={r})\" }\n      }\n    }\n  }\n}\n\n; No import; should error\nLET c = Shapes.Circle.Circle(3.14)\nWRITE Display:display(c)\n"
+description: "; CLASS instance without import; should error with helpful suggestion\n\nMODULE Shapes {\n  +variant Circle = Circle(Float)\n\n  CLASS Display FOR Shapes.Circle {\n    FUN display(c: Shapes.Circle) -> String {\n      MATCH c {\n        Shapes.Circle.Circle(r) => { \"Circle(r={r})\" }\n      }\n    }\n  }\n}\n\n; No import; should error\nLET c = Shapes.Circle.Circle(3.14)\nWRITE Display:display(c)\n"
 ---
 ERROR: no `Display` instance for `Shapes.Circle` in scope

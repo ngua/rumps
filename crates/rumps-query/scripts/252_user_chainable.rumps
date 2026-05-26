@@ -1,6 +1,6 @@
 ; User Chainable for type, newtype, and union (requires Wrappable)
 
-type Box[T] = Full(T) | Empty
+variant Box[T] = Full(T) | Empty
 newtype Maybe[T] = Option[T]
 union Opt = Option[Int] | Option[String]
 

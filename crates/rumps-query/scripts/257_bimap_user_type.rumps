@@ -1,6 +1,6 @@
 ; User-defined type implementing Bimappable
 
-type Either[A, B] = Left(A) | Right(B)
+variant Either[A, B] = Left(A) | Right(B)
 
 class Bimappable for Either {
   fun bimap(f, g, x) {

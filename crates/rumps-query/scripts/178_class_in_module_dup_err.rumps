@@ -3,7 +3,7 @@
 fun main() { }
 
 module A {
-  +type MyInt = MyInt(Int)
+  +variant MyInt = MyInt(Int)
 }
 
 module B {

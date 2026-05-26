@@ -188,7 +188,7 @@ module PolyHof {
 ; ============ Module with type definitions ============
 
 module Shapes {
-  +type Shape = Circle(Float) | Rectangle(Float, Float)
+  +variant Shape = Circle(Float) | Rectangle(Float, Float)
 
   +fun area(s: Shapes.Shape) -> Float {
     match s {
@@ -233,7 +233,7 @@ module Data {
 
 module Outer2 {
   module Inner2 {
-    +type Status = Active | Inactive
+    +variant Status = Active | Inactive
 
     +fun is-active(s: Outer2.Inner2.Status) -> Bool {
       match s {
@@ -247,7 +247,7 @@ module Outer2 {
 ; ============ Generic type in module ============
 
 module Container {
-  +type Box[T] = Wrapped(T) | Empty
+  +variant Box[T] = Wrapped(T) | Empty
 
   +fun unwrap-or[T](b: Container.Box[T], default: T) -> T {
     match b {

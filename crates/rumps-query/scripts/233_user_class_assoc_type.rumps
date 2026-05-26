@@ -1,10 +1,10 @@
-; User-defined class with associated type declarations.
+; User-defined class with associated variant declarations.
 ;
 ; Defines a `HasUnit` class with `newtype Unit` associated type
 ; and implements it for two types.
 
-type Meters = Meters(Float)
-type Seconds = Seconds(Float)
+variant Meters = Meters(Float)
+variant Seconds = Seconds(Float)
 
 class HasUnit C {
   newtype Unit

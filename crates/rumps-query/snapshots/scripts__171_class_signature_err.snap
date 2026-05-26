@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Error: wrong method signature\n;\n; The Display class requires `display(self) -> String` but we return Int.\n\nTYPE Point = Point(Int, Int)\n\nCLASS Display FOR Point {\n  FUN display(p: Point) -> Int {\n    42\n  }\n}\n"
+description: "; Error: wrong method signature\n;\n; The Display class requires `display(self) -> String` but we return Int.\n\nvariant Point = Point(Int, Int)\n\nCLASS Display FOR Point {\n  FUN display(p: Point) -> Int {\n    42\n  }\n}\n"
 ---
 ERROR: type mismatch: expected `String`, got `Int`

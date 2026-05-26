@@ -3,7 +3,7 @@
 ; Defines `MyFunctor` where the self var `F` is applied as `F[T]`,
 ; making it kind `* -> *`.
 
-type Box[T] = Box(T)
+variant Box[T] = Box(T)
 
 class MyFunctor F {
   fun fmap[A, B](x: F[A], f: (A) -> B) -> F[B]

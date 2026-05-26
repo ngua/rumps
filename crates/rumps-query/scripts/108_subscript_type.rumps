@@ -15,8 +15,8 @@ fun main() {
   write first
   write @get data{first}!
 
-  ; Chain through all keys using forever
-  let vals = forever { key: @order data{}, acc: [] } (st, cont) => {
+  ; Chain through all keys using loop
+  let vals = loop { key: @order data{}, acc: [] } (st, cont) => {
     match st.key {
       Option.None => st.acc
       Option.Some(k) => {

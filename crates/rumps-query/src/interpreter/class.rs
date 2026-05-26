@@ -1513,7 +1513,7 @@ impl Into {
             Payload::ClassMethodFn { .. } => "ClassMethodFn".to_owned(),
             Payload::PartialApp { .. } => "PartialApp".to_owned(),
             Payload::ModuleConst { .. } => "ModuleConst".to_owned(),
-            Payload::ForeverContinuation => "Continuation".to_owned(),
+            Payload::LoopContinuation => "Continuation".to_owned(),
             Payload::LoopContinue(_) => "LoopContinue".to_owned(),
             Payload::Ref(is_global, _, _) => {
                 if *is_global { "Global" } else { "Local" }.to_owned()
@@ -1697,7 +1697,7 @@ impl Into {
             | Payload::ClassMethodFn { .. }
             | Payload::ModuleConst { .. }
             | Payload::PartialApp { .. }
-            | Payload::ForeverContinuation
+            | Payload::LoopContinuation
             | Payload::LoopContinue(_) => serde_json::Value::Null,
             Payload::Ref(is_global, name_id, sub_ids) => {
                 let prefix = if *is_global { "^" } else { "" };
@@ -2210,7 +2210,7 @@ impl Display {
                     format!("{start} .. {end}")
                 }
             }
-            Payload::ForeverContinuation => "<continuation>".into(),
+            Payload::LoopContinuation => "<continuation>".into(),
             Payload::LoopContinue(_) => "<loop-continue>".into(),
             Payload::Ref(is_global, name_id, sub_ids) => {
                 let prefix = if *is_global { "^" } else { "" };

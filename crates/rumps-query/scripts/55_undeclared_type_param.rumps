@@ -2,6 +2,6 @@
 ; Payload types must reference declared type params
 
 ; This should fail: U is not declared
-type Foo[T] = Bar(U)
+variant Foo[T] = Bar(U)
 
 fun main() {}

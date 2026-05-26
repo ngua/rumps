@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Duplicate CLASS instance across modules; should error\n\nMODULE A {\n  +TYPE MyInt = MyInt(Int)\n}\n\nMODULE B {\n  CLASS Display FOR A.MyInt {\n    FUN display(x: A.MyInt) -> String { \"B\" }\n  }\n}\n\nMODULE C {\n  ; Duplicate instance for same type\n  CLASS Display FOR A.MyInt {\n    FUN display(x: A.MyInt) -> String { \"C\" }\n  }\n}\n"
+description: "; Duplicate CLASS instance across modules; should error\n\nMODULE A {\n  +variant MyInt = MyInt(Int)\n}\n\nMODULE B {\n  CLASS Display FOR A.MyInt {\n    FUN display(x: A.MyInt) -> String { \"B\" }\n  }\n}\n\nMODULE C {\n  ; Duplicate instance for same type\n  CLASS Display FOR A.MyInt {\n    FUN display(x: A.MyInt) -> String { \"C\" }\n  }\n}\n"
 ---
 ERROR: duplicate `Display` instance for type `A.MyInt`

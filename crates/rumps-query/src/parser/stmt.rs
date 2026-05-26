@@ -226,7 +226,7 @@ impl Parser {
             .or_not()
             .map(|v| v.unwrap_or_default());
 
-        vis.then_ignore(just(Token::Type))
+        vis.then_ignore(just(Token::Variant))
             .then_ignore(Self::opt_newlines())
             .then(Self::ident())
             .then(Self::type_params(interner))

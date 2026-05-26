@@ -403,7 +403,7 @@ impl InferCtx<'_> {
                     self.hoist_module(mod_path.child(*name), body, item_span);
                 }
 
-                // TYPE/union/newtype: register visibility for imports.
+                // `variant`/`union`/`newtype`: register visibility for imports.
                 // Type definitions are processed by registry; we only need
                 // to record visibility so imports can check access.
                 Some(Stmt::Type { ref name, vis, .. })

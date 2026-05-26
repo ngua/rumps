@@ -7,7 +7,7 @@
 
 fun main() { }
 
-type Point = Point(Int, Int)
+variant Point = Point(Int, Int)
 
 class Fallible for Point {
   fun unwrap(p: Point) -> Int {
@@ -17,7 +17,7 @@ class Fallible for Point {
   }
 }
 
-type Pair[A, B] = Pair(A, B)
+variant Pair[A, B] = Pair(A, B)
 
 class Fallible for Pair[Int, String] {
   fun unwrap(p: Pair[Int, String]) -> String {
@@ -27,7 +27,7 @@ class Fallible for Pair[Int, String] {
   }
 }
 
-type Triple[A, B, C] = Triple(A, B, C)
+variant Triple[A, B, C] = Triple(A, B, C)
 
 class Fallible for Triple {
   fun unwrap(t: Triple[A, B, C]) -> C {

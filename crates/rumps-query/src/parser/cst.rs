@@ -320,8 +320,8 @@ pub(crate) enum ExprKind {
     /// Never returns; can unify with any expected type.
     Raise(Box<Expr>),
 
-    /// Forever loop: `FOREVER seed (state, cont) => body`.
-    Forever {
+    /// Loop expression: `loop seed (state, cont) => body`.
+    Loop {
         seed: Box<Expr>,
         state_param: (StringId, Option<TypeExpr>),
         cont_param: (StringId, Option<TypeExpr>),
@@ -414,7 +414,7 @@ pub(crate) enum RestPattern {
 /// Visibility modifier for module members.
 ///
 /// Inside a module, items are private by default. Use `+` prefix to make
-/// them public (e.g., `+let`, `+fun`, `+type`).
+/// them public (e.g., `+let`, `+fun`, `+variant`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Visibility {
     /// Private; only accessible within the module (default).
@@ -518,9 +518,9 @@ pub(crate) enum StmtKind {
         vis: Visibility,
     },
 
-    /// User-defined sum type declaration: `type Name = Variant1 | Variant2(T)`.
+    /// User-defined variant declaration: `variant Name = Variant1 | Variant2(T)`.
     ///
-    /// The visibility is only meaningful inside modules (`+type` for public).
+    /// The visibility is only meaningful inside modules (`+variant` for public).
     Type {
         name: StringId,
         type_params: Vec<TypeParam>,
@@ -602,7 +602,7 @@ pub(crate) enum StmtKind {
     /// User-defined class instance: `class ClassName FOR Type { methods }`.
     ///
     /// Implements a builtin class (`Display`, `Into`, `Ord`, etc.) for a user
-    /// type (`type`, `newtype`, or `union`).
+    /// type (`variant`, `newtype`, or `union`).
     ///
     /// Examples:
     /// - `class Display FOR Point { fun display(p: Point) -> String { ... } }`

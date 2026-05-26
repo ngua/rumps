@@ -2,7 +2,7 @@
 ;
 ; Defines a custom `MyEq` class and implements it for `Point`.
 
-type Point = Point(Int, Int)
+variant Point = Point(Int, Int)
 
 class MyEq C {
   fun eq(a: C, b: C) -> Bool

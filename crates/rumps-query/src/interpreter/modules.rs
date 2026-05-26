@@ -144,7 +144,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Resolve a path as a type variant (for user-defined types).
     ///
     /// This handles paths like `Status.Pending` for types registered at
-    /// runtime via `type` declarations.
+    /// runtime via `variant` declarations.
     fn type_variant_path(
         &mut self,
         expr_id: Option<ExprId>,

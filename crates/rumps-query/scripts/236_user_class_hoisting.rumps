@@ -17,7 +17,7 @@ class Describe C {
   fun describe(x: C) -> String
 }
 
-type Pair = Pair(Int, Int)
+variant Pair = Pair(Int, Int)
 
 class MyEq C {
   fun eq(a: C, b: C) -> Bool

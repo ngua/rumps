@@ -1450,8 +1450,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                     })
                 }
             }
-            // FOREVER continuation: calling it signals loop continuation
-            Payload::ForeverContinuation => {
+            // `loop` continuation: calling it signals loop continuation
+            Payload::LoopContinuation => {
                 // Type checker guarantees exactly one argument
                 let new_state_expr = args
                     .first()

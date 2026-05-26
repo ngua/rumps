@@ -108,7 +108,7 @@ impl Parser {
             })
     }
 
-    fn forever_expr(
+    fn loop_expr(
         interner: &mut StringInterner,
         primary: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
@@ -137,7 +137,7 @@ impl Parser {
             .then_ignore(just(Token::RParen));
 
         // Use `primary` for seed (no postfix ops) to avoid parsing (state, cont) as call
-        just(Token::Forever)
+        just(Token::Loop)
             .ignore_then(Self::opt_newlines())
             .ignore_then(primary)
             .then_ignore(Self::opt_newlines())
@@ -148,7 +148,7 @@ impl Parser {
             .then(expr)
             .map_with_span(|((seed, (state_param, cont_param)), body), span| {
                 cst::Expr::new(
-                    cst::ExprKind::Forever {
+                    cst::ExprKind::Loop {
                         seed: Box::new(seed),
                         state_param,
                         cont_param,
@@ -784,10 +784,10 @@ impl Parser {
         // OUTPUT expr [JSON] [TO target]
         let output = Self::write_expr(interner, intrinsic_op.clone());
 
-        // FOREVER seed (state, cont) => body
+        // `loop seed (state, cont) => body`
         // Use primary for seed (no postfix ops) to avoid parsing (state, cont) as a call
-        let forever =
-            Self::forever_expr(interner, primary, intrinsic_op.clone());
+        let loop_expr =
+            Self::loop_expr(interner, primary, intrinsic_op.clone());
 
         recursive(move |unary| {
             let with_op = op.clone().then(unary.clone()).map_with_span(
@@ -839,7 +839,7 @@ impl Parser {
                 set,
                 kill,
                 raise,
-                forever.clone(),
+                loop_expr.clone(),
             ))
             .or(operand.clone())
         })

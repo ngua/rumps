@@ -46,14 +46,14 @@ class Eq for X[T] {
 
 ; Two type params, one concrete in `for_type`: `Int` must be filtered
 ; out by `is_known_type_name`, only `T` gets a fresh type var
-type W[A, B] = W(A, B)
+variant W[A, B] = W(A, B)
 
 class Eq for W[Int, T] {
   fun eq(a: W[Int, T], b: W[Int, T]) -> Bool { false }
 }
 
 ; Two type vars from `for_type` simultaneously, no where
-type P[A, B] = P(A, B)
+variant P[A, B] = P(A, B)
 
 class Eq for P[S, T] {
   fun eq(a: P[S, T], b: P[S, T]) -> Bool { false }

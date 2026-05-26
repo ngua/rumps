@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Error: user class constraint not satisfied.\n;\n; `Int` does not implement `Printable`, so passing an `Int`\n; to `show` should produce a type error.\n\ntype Color = Red | Green | Blue\n\nclass Printable C {\n  fun to-str(x: C) -> String\n}\n\nclass Printable for Color {\n  fun to-str(x: Color) -> String {\n    match x {\n      Color.Red => { \"red\" }\n      Color.Green => { \"green\" }\n      Color.Blue => { \"blue\" }\n    }\n  }\n}\n\nfun show[T: Printable](x: T) -> String {\n  Printable:to-str(x)\n}\n\nfun main() {\n  write show(42)\n}\n"
+description: "; Error: user class constraint not satisfied.\n;\n; `Int` does not implement `Printable`, so passing an `Int`\n; to `show` should produce a type error.\n\nvariant Color = Red | Green | Blue\n\nclass Printable C {\n  fun to-str(x: C) -> String\n}\n\nclass Printable for Color {\n  fun to-str(x: Color) -> String {\n    match x {\n      Color.Red => { \"red\" }\n      Color.Green => { \"green\" }\n      Color.Blue => { \"blue\" }\n    }\n  }\n}\n\nfun show[T: Printable](x: T) -> String {\n  Printable:to-str(x)\n}\n\nfun main() {\n  write show(42)\n}\n"
 ---
 ERROR: type `Int` does not satisfy `Printable` class

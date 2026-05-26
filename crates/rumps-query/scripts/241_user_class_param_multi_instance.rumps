@@ -1,8 +1,8 @@
 ; Multiple instances of a parameterized user class for the same for-type
 ; with different class args, using turbofish syntax to select the instance.
 
-type Wrapper = Wrapper(Int)
-type Label = Label(String)
+variant Wrapper = Wrapper(Int)
+variant Label = Label(String)
 
 class MyInto[T] C {
   fun convert(x: C) -> T

@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Error: missing required field in struct type\n\nTYPE Person = { name: String, age: Int }\n\n; Missing `age` field\nLET p: Person = { name: \"Alice\" }\n"
+description: "; Error: missing required field in struct type\n\nvariant Person = { name: String, age: Int }\n\n; Missing `age` field\nLET p: Person = { name: \"Alice\" }\n"
 ---
 ERROR: missing required field `age` for type `Person`

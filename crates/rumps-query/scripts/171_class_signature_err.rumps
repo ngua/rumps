@@ -4,7 +4,7 @@
 
 fun main() { }
 
-type Point = Point(Int, Int)
+variant Point = Point(Int, Int)
 
 class Display for Point {
   fun display(p: Point) -> Int {

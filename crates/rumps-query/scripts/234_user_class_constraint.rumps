@@ -3,8 +3,8 @@
 ; The `Printable` class is used in `[T: Printable]` to constrain
 ; the type parameter at call sites.
 
-type Color = Red | Green | Blue
-type Wrapper = Wrap(String)
+variant Color = Red | Green | Blue
+variant Wrapper = Wrap(String)
 
 class Printable C {
   fun to-str(x: C) -> String

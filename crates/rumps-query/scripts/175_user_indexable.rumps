@@ -29,7 +29,7 @@ fun main() {
 
 ; === Type and Class Definitions ===
 
-type StringMap = StringMap(Map[String, Int])
+variant StringMap = StringMap(Map[String, Int])
 
 class Indexable[Int] for StringMap {
   newtype Index = String

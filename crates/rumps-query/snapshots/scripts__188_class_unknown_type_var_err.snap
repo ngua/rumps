@@ -1,6 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Error: unknown type variable in CLASS body\n;\n; Only type variables from the `for_type` expression are in scope.\n; Using a different type variable `U` (not declared in `X[T]`)\n; should produce an \"unknown type\" error.\n\nFUN main() {\n  WRITE \"should not reach\"\n}\n\nNEWTYPE X[T] = Int\n\n; `U` is not declared anywhere; should fail\nCLASS Eq FOR X[T] {\n  FUN eq(a: X[U], b: X[U]) -> Bool { false }\n}\n"
+description: "; Error: unknown type variable in CLASS body\n;\n; Only type variables from the `for_type` expression are in scope.\n; Using a different type variable `U` (not declared in `X[T]`)\n; should produce an \"unknown type\" error.\n\nFUN main() {\n  WRITE \"should not reach\"\n}\n\nNEWvariant X[T] = Int\n\n; `U` is not declared anywhere; should fail\nCLASS Eq FOR X[T] {\n  FUN eq(a: X[U], b: X[U]) -> Bool { false }\n}\n"
 ---
 ERROR: unknown type `U`
 unknown type `U`

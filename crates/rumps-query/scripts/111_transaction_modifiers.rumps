@@ -99,7 +99,7 @@ fun main() {
   ; === Timeout actually triggers ===
   ; This tests that with timeout actually cancels long-running transactions
   let timed-out = transaction {
-    forever 0 (next, cont) => {
+    loop 0 (next, cont) => {
       if next > 100 {
         next
       } else {

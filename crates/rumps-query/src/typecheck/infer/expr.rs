@@ -318,13 +318,13 @@ impl InferCtx<'_> {
                 self.fresh()
             }
 
-            // Forever loop: `FOREVER seed (state, cont) => body`
-            Expr::Forever {
+            // Loop expression: `loop seed (state, cont) => body`
+            Expr::Loop {
                 seed,
                 state_param,
                 cont_param,
                 body,
-            } => self.forever(*seed, state_param, cont_param, *body, span),
+            } => self.loop_expr(*seed, state_param, cont_param, *body, span),
 
             // Transaction block: `transaction { ... }`
             Expr::Transaction(ref txn) => self.transaction(id, txn, span),
@@ -3544,9 +3544,9 @@ impl InferCtx<'_> {
         self.ty_arena.array(expected_elem)
     }
 
-    /// Infer type of `FOREVER` expression.
+    /// Infer type of `loop` expression.
     ///
-    /// `FOREVER seed (state, cont) => body` is a continuation-passing loop:
+    /// `loop seed (state, cont) => body` is a continuation-passing loop:
     /// - `seed` is the initial state value
     /// - `state` is bound to the current state in each iteration
     /// - `cont` is a pseudo-function that, when called with a new state,
@@ -3556,7 +3556,7 @@ impl InferCtx<'_> {
     /// - `state` has the same type as `seed` (or its annotation)
     /// - `cont` has type `(StateType) -> BodyType`
     /// - The overall expression returns `BodyType`
-    pub(super) fn forever(
+    pub(super) fn loop_expr(
         &mut self,
         seed: ExprId,
         state_param: &(StringId, Option<AstTypeExprId>),

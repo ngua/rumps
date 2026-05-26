@@ -1,6 +1,6 @@
 ; User Mappable for type, newtype, and union
 
-type Box[T] = Full(T) | Empty
+variant Box[T] = Full(T) | Empty
 newtype Bag[T] = Array[T]
 union Flex = Option[Int] | Array[Int]
 

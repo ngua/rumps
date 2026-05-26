@@ -1,10 +1,10 @@
 ; Test: type shadowing
 ; Declaring a type with the same name twice shadows the first definition
 
-type Status = Pending | Active
+variant Status = Pending | Active
 
 ; This shadows the previous definition
-type Status = Open | Closed
+variant Status = Open | Closed
 
 fun main() {
   ; Use the shadowed type (should have Open and Closed variants)

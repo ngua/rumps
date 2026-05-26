@@ -548,7 +548,7 @@ impl RuntimeTypes {
             Payload::Time(_) => RuntimeTyId::from(TyArena::TIME),
             Payload::Json(_) => RuntimeTyId::from(TyArena::JSON),
             Payload::Range { .. } => RuntimeTyId::from(TyArena::RANGE),
-            Payload::ForeverContinuation | Payload::LoopContinue(_) => {
+            Payload::LoopContinuation | Payload::LoopContinue(_) => {
                 RuntimeTyId::from(TyArena::UNIT)
             }
             Payload::Ref(is_global, ..) => {

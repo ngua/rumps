@@ -8,7 +8,7 @@ newtype Bad1 = Array
 union Bad2 = Int | Option
 
 ; Invalid: bare `Map` in type variant payload
-type Bad3 = Foo(Map)
+variant Bad3 = Foo(Map)
 
 ; Valid: fully applied
 newtype Good1[T] = Array[T]

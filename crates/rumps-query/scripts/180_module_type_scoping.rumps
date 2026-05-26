@@ -45,7 +45,7 @@ fun main() {
 }
 
 module Shapes {
-  +type Circle = Circle(Float)
+  +variant Circle = Circle(Float)
 
   ; Use unqualified `Circle` in class declaration
   class Display for Circle {
@@ -91,7 +91,7 @@ module Data {
 }
 
 module Container {
-  +type Box[T] = Box(T) | Empty
+  +variant Box[T] = Box(T) | Empty
 
   ; Function using unqualified parameterized type
   +fun unwrap-or[T](b: Box[T], default: T) -> T {
@@ -108,7 +108,7 @@ module Container {
 }
 
 module Mixed {
-  +type Status = Pending | Done
+  +variant Status = Pending | Done
   +newtype Id = Int
   +union Payload = Int | String
 

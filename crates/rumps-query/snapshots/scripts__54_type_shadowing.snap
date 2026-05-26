@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: type shadowing\n; Declaring a type with the same name twice shadows the first definition\n\nTYPE Status = Pending | Active\n\n; This shadows the previous definition\nTYPE Status = Open | Closed\n\n; Use the shadowed type (should have Open and Closed variants)\nLET s: Status = Status.Open\n@OUTPUT s\n"
+description: "; Test: type shadowing\n; Declaring a type with the same name twice shadows the first definition\n\nvariant Status = Pending | Active\n\n; This shadows the previous definition\nvariant Status = Open | Closed\n\n; Use the shadowed type (should have Open and Closed variants)\nLET s: Status = Status.Open\n@OUTPUT s\n"
 ---
 Status.Open

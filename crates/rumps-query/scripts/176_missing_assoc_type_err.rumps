@@ -4,7 +4,7 @@
 
 fun main() { }
 
-type MyList = MyList(Array[Int])
+variant MyList = MyList(Array[Int])
 
 ; Missing newtype Index = ... declaration; should error
 class Indexable[Int] for MyList {

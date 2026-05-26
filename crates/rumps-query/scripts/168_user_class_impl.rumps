@@ -62,7 +62,7 @@ fun main() {
 
 ; === Type and Class Definitions ===
 
-type Point = Point(Int, Int) | Origin
+variant Point = Point(Int, Int) | Origin
 
 class Display for Point {
   fun display(p: Point) -> String {
@@ -73,7 +73,7 @@ class Display for Point {
   }
 }
 
-type UserId = UserId(Int)
+variant UserId = UserId(Int)
 
 class Into[String] for UserId {
   fun into(u: UserId) -> String {
@@ -132,7 +132,7 @@ class Display for StrOrInt {
   }
 }
 
-type Pair[L, R] = Pair(L, R)
+variant Pair[L, R] = Pair(L, R)
 
 class Display for Pair[L, R] where L: Display, R: Display {
   fun display(p: Pair[L, R]) -> String {

@@ -1,8 +1,8 @@
 ; Test Array.sort with various types
 
-type Priority = Low | Medium | High
+variant Priority = Low | Medium | High
 
-type Event = Click(Int, Int) | Scroll(Int) | Resize(Int, Int)
+variant Event = Click(Int, Int) | Scroll(Int) | Resize(Int, Int)
 
 fun main() {
   ; --- Scalars ---

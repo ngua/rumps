@@ -4,7 +4,7 @@
 //! there's a user-defined instance and dispatch to the generated function if so.
 //!
 //! User types can be:
-//! - `type` (sum types): variant data with type metadata on `Value`
+//! - `variant` declarations: variant data with type metadata on `Value`
 //! - `newtype` (type aliases): primitive or structural representation values
 //! - `union` (union types): member representation values
 //!

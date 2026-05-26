@@ -7,7 +7,7 @@ fun main() {
 }
 
 module Shapes {
-  +type Circle = Circle(Float)
+  +variant Circle = Circle(Float)
 
   class Display for Shapes.Circle {
     fun display(c: Shapes.Circle) -> String {

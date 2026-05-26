@@ -60,7 +60,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             | Payload::ModuleFn { .. }
             | Payload::ModuleConst { .. }
             | Payload::Range { .. }
-            | Payload::ForeverContinuation
+            | Payload::LoopContinuation
             | Payload::LoopContinue(_)
             | Payload::ClassMethodFn { .. }
             | Payload::PartialApp { .. } => {
@@ -83,7 +83,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             | Payload::ModuleFn { .. }
             | Payload::ModuleConst { .. }
             | Payload::Range { .. }
-            | Payload::ForeverContinuation
+            | Payload::LoopContinuation
             | Payload::LoopContinue(_)
             | Payload::ClassMethodFn { .. }
             | Payload::PartialApp { .. } => {
@@ -435,7 +435,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             | Payload::ModuleFn { .. }
             | Payload::ModuleConst { .. }
             | Payload::Range { .. }
-            | Payload::ForeverContinuation
+            | Payload::LoopContinuation
             | Payload::LoopContinue(_)
             | Payload::Ref(..)
             | Payload::ClassMethodFn { .. }

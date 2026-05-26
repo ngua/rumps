@@ -48,7 +48,7 @@ pub(crate) struct TypeEnv {
         HashMap<QualifiedName, HashMap<StringId, ModuleMember>>,
     /// User module type visibility: qualified type name (e.g., `Mod.Type`) -> visibility.
     ///
-    /// Used to enforce visibility for `type`, `newtype`, `union` inside modules.
+    /// Used to enforce visibility for `variant`, `newtype`, `union` inside modules.
     user_module_type_vis: HashMap<QualifiedName, Visibility>,
     /// Imported type aliases: unqualified name -> qualified name.
     ///
@@ -134,7 +134,7 @@ impl TypeEnv {
 
     /// Register visibility for a type inside a user module.
     ///
-    /// Called for `type`, `newtype`, `union` inside `module` blocks.
+    /// Called for `variant`, `newtype`, `union` inside `module` blocks.
     pub(crate) fn register_user_module_type_vis(
         &mut self,
         qname: QualifiedName,

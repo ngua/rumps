@@ -3,7 +3,7 @@
 ; Defines `HasKey` with only a `newtype` declaration and
 ; uses the associated type via qualified `HasKey:Key` syntax.
 
-type User = User(String, Int)
+variant User = User(String, Int)
 
 class HasKey C {
   newtype Key

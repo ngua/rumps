@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Error: passing object missing required fields to function\n\nTYPE Person = { name: String, age: Int }\n\nFUN greet (p: Person) -> String {\n  \"Hello, \" ++ p.name ++ \"!\"\n}\n\n; Missing `age` field\nOUTPUT greet({ name: \"Alice\" })\n"
+description: "; Error: passing object missing required fields to function\n\nvariant Person = { name: String, age: Int }\n\nFUN greet (p: Person) -> String {\n  \"Hello, \" ++ p.name ++ \"!\"\n}\n\n; Missing `age` field\nOUTPUT greet({ name: \"Alice\" })\n"
 ---
 ERROR: missing required field `age` for type `Person`

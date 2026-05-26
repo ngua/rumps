@@ -352,7 +352,7 @@ impl Array {
                     | Payload::ModuleFn { .. }
                     | Payload::ModuleConst { .. }
                     | Payload::Range { .. }
-                    | Payload::ForeverContinuation
+                    | Payload::LoopContinuation
                     | Payload::LoopContinue(_)
                     | Payload::Ref(..)
                     | Payload::ClassMethodFn { .. }

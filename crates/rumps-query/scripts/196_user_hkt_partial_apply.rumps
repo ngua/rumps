@@ -3,7 +3,7 @@
 ; Tests `!`, `??` for a two-param type `Either[L, R]`
 ; with partial application: element type is `R` (last param).
 
-type Either[L, R] = Left(L) | Right(R)
+variant Either[L, R] = Left(L) | Right(R)
 
 ; Element type is `R` (last param); `L` is fixed
 class Wrappable for Either[T] {

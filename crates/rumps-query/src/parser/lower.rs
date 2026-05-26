@@ -46,7 +46,7 @@ pub(crate) struct LowerCtx<'a> {
     /// Stack of ids added per scope; used by `push_type_params`/`pop_type_params`
     /// to avoid cloning the `HashSet`.
     tp_stack: Vec<SmallVec<[StringId; 4]>>,
-    /// Known concrete type names (builtins + user-declared `type`/`newtype`/`union`).
+    /// Known concrete type names (builtins + user-declared `variant`/`newtype`/`union`).
     ///
     /// Used by `collect_type_vars` to distinguish type variables from concrete
     /// type constructors in `App` head position.
@@ -1087,7 +1087,7 @@ impl<'a> LowerCtx<'a> {
                 let id = self.expr(*inner)?;
                 Expr::Raise(id)
             }
-            cst::ExprKind::Forever {
+            cst::ExprKind::Loop {
                 seed,
                 state_param,
                 cont_param,
@@ -1103,7 +1103,7 @@ impl<'a> LowerCtx<'a> {
                     .map(|t| self.type_expr(t))
                     .transpose()?;
                 let body_id = self.expr(*body)?;
-                Expr::Forever {
+                Expr::Loop {
                     seed: seed_id,
                     state_param: (state_param.0, state_ty),
                     cont_param: (cont_param.0, cont_ty),
@@ -2281,7 +2281,7 @@ impl<'a> MergeCtx<'a> {
                 let new_expr = self.expr(expr, span)?;
                 Expr::Raise(new_expr)
             }
-            Expr::Forever {
+            Expr::Loop {
                 seed,
                 state_param,
                 cont_param,
@@ -2297,7 +2297,7 @@ impl<'a> MergeCtx<'a> {
                     .map(|t| self.type_expr(t, span))
                     .transpose()?;
                 let new_body = self.expr(body, span)?;
-                Expr::Forever {
+                Expr::Loop {
                     seed: new_seed,
                     state_param: (state_param.0, new_state_ty),
                     cont_param: (cont_param.0, new_cont_ty),

@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: undeclared type parameter error\n; Payload types must reference declared type params\n\n; This should fail: U is not declared\nTYPE Foo[T] = Bar(U)\n\nFUN main() {}\n"
+description: "; Test: undeclared type parameter error\n; Payload types must reference declared type params\n\n; This should fail: U is not declared\nvariant Foo[T] = Bar(U)\n\nFUN main() {}\n"
 ---
 ERROR: unknown type `U`

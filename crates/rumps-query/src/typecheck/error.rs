@@ -475,7 +475,7 @@ pub(crate) enum TypeError {
 
     /// Attempt to implement a class for a builtin type.
     ///
-    /// Users can only implement classes for their own types (`type`, `newtype`, `union`).
+    /// Users can only implement classes for their own types (`variant`, `newtype`, `union`).
     #[error("cannot implement `{class}` for builtin type `{type_id:?}`")]
     BuiltinInstanceForbidden {
         class: ClassId,
@@ -968,7 +968,7 @@ impl TypeError {
                     p.class_name(*class),
                     p.type_name(*type_id)
                 ),
-                Some("class instances can only be defined for user types (`type`, `newtype`, `union`)".to_owned()),
+                Some("class instances can only be defined for user types (`variant`, `newtype`, `union`)".to_owned()),
             ),
             Self::MissingInstanceMethod {
                 class,

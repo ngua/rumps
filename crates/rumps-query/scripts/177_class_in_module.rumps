@@ -53,7 +53,7 @@ fun main() {
 }
 
 module Shapes {
-  +type Circle = Circle(Float)
+  +variant Circle = Circle(Float)
 
   class Display for Shapes.Circle {
     fun display(c: Shapes.Circle) -> String {
@@ -91,7 +91,7 @@ module Nums {
 }
 
 module Container {
-  +type Pair[L, R] = Pair(L, R)
+  +variant Pair[L, R] = Pair(L, R)
 
   class Display for Container.Pair[L, R] where L: Display, R: Display {
     fun display(p: Container.Pair[L, R]) -> String {
@@ -107,7 +107,7 @@ module Container {
 }
 
 module Collections {
-  +type IntArray = IntArray(Array[Int])
+  +variant IntArray = IntArray(Array[Int])
 
   class Indexable[Int] for Collections.IntArray {
     newtype Index = Int
@@ -127,7 +127,7 @@ module Collections {
 }
 
 module EmptyImport {
-  +type Thing = Thing(Int)
+  +variant Thing = Thing(Int)
 
   class Display for EmptyImport.Thing {
     fun display(t: EmptyImport.Thing) -> String {

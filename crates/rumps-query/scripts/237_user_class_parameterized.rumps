@@ -3,8 +3,8 @@
 ; Defines `MyInto[T]` with a `convert` method and implements it
 ; for distinct user types.
 
-type Celsius = Celsius(Float)
-type Fahrenheit = Fahrenheit(Float)
+variant Celsius = Celsius(Float)
+variant Fahrenheit = Fahrenheit(Float)
 
 class MyInto[T] C {
   fun convert(x: C) -> T

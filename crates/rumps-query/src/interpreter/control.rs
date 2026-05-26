@@ -479,9 +479,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Evaluate a `forever` loop expression.
+    /// Evaluate a `loop` expression.
     ///
-    /// `forever seed (state, cont) => body` is a continuation-passing loop:
+    /// `loop seed (state, cont) => body` is a continuation-passing loop:
     /// - Evaluates `seed` to get initial state
     /// - Binds `state` and `cont` in scope for each iteration
     /// - If body returns `LoopContinue(new_state)`, loops with new state
@@ -491,7 +491,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// naive recursive implementation overflows the stack after ~5k iterations.
     /// Since this is tail-recursive (all state captured in `state_id`), using
     /// an explicit loop is safe and uses constant stack space.
-    pub(super) async fn forever(
+    pub(super) async fn loop_expr(
         &mut self,
         seed: ExprId,
         state_name_id: StringId,
@@ -506,7 +506,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             self.env.scopes.push();
             self.env.scopes.bind(state_name_id, state_id);
 
-            let cont_id = self.add_payload(Payload::ForeverContinuation, span);
+            let cont_id = self.add_payload(Payload::LoopContinuation, span);
             self.env.scopes.bind(cont_name_id, cont_id);
 
             let result = self.eval(body).await;

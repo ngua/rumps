@@ -26,12 +26,12 @@ module Parent {
 ; ============ Shadowing deeply nested ============
 
 module Deep {
-  +type Status = Active | Inactive
+  +variant Status = Active | Inactive
 
   module Level1 {
     module Level2 {
       ; Error: `Status` already in scope from outer module (Deep)
-      type Status = On | Off
+      variant Status = On | Off
     }
   }
 }

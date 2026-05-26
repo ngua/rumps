@@ -10,7 +10,7 @@ fun main() {
   write Display:display(bad)
 }
 
-type Pair[L, R] = Pair(L, R)
+variant Pair[L, R] = Pair(L, R)
 
 class Display for Pair[L, R] where L: Display, R: Display {
   fun display(p: Pair[L, R]) -> String {

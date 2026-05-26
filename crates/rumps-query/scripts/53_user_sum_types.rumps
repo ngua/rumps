@@ -1,25 +1,25 @@
-; User-defined sum types (type declarations)
+; User-defined sum types (variant declarations)
 
 ; Simple enumeration with no payloads
-type Status = Pending | Active | Completed | Failed
+variant Status = Pending | Active | Completed | Failed
 
 ; Sum type with payloads
-type Event = Click(Int, Int) | KeyPress(String) | Resize(Int, Int)
+variant Event = Click(Int, Int) | KeyPress(String) | Resize(Int, Int)
 
 ; Parameterized type (generic)
-type Either[L, R] = Left(L) | Right(R)
+variant Either[L, R] = Left(L) | Right(R)
 
 ; Multi-line syntax (use Outcome to avoid conflict with builtin Result)
-type Outcome[T, E] =
+variant Outcome[T, E] =
   Success(T)
   | Failure(E)
 
 ; Single type parameter
-type Maybe[T] = Just(T) | Nothing
+variant Maybe[T] = Just(T) | Nothing
 
 ; Test that keywords can be used as variant names (exercises `ident_or_contextual_kw`)
 ; `Raise`, `Catch`, `Write`, `Read` are keywords but should work as variant names
-type Action = Raise(String) | Catch(String) | Write(String) | Read(String)
+variant Action = Raise(String) | Catch(String) | Write(String) | Read(String)
 
 fun main() {
   ; Create values using the defined type

@@ -67,7 +67,7 @@ fun main() {
 }
 
 module Shapes {
-  +type Circle = Circle(Float)
+  +variant Circle = Circle(Float)
 
   class Display for Circle {
     fun display(c: Circle) -> String {
@@ -92,12 +92,12 @@ module Payload {
 }
 
 module Geometry {
-  +type Shape = Rect(Float, Float) | Circle(Float)
+  +variant Shape = Rect(Float, Float) | Circle(Float)
 }
 
 module Colors {
   +newtype RGB = (Int, Int, Int)
-  +type Color = Red | Green | Blue | Custom(RGB)
+  +variant Color = Red | Green | Blue | Custom(RGB)
 }
 
 module Multi {
@@ -107,5 +107,5 @@ module Multi {
 }
 
 module Generic {
-  +type Box[T] = Full(T) | Empty
+  +variant Box[T] = Full(T) | Empty
 }

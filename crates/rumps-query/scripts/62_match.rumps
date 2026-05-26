@@ -1,6 +1,6 @@
 ; match expression tests
 
-type Status = Pending | Active(String) | Completed
+variant Status = Pending | Active(String) | Completed
 
 fun describe(opt: Option[Int]) -> String {
   match opt {

@@ -58,10 +58,10 @@ fun main() {
   write rollback-test
   write @get ^ROLLBACK{"key"}
 
-  ; Bulk write/read test using forever inside transaction
+  ; Bulk write/read test using loop inside transaction
   let bulk-result = transaction {
     ; Write 100 values to ^BULK{0} through ^BULK{99}
-    forever 0 (n, cont) => {
+    loop 0 (n, cont) => {
       if n >= 100 {
         n
       } else {
@@ -71,7 +71,7 @@ fun main() {
     }
 
     ; Read them back and count how many exist
-    let count = forever { i: 0, found: 0 } (state, cont) => {
+    let count = loop { i: 0, found: 0 } (state, cont) => {
       if state.i >= 100 {
         state.found
       } else {
