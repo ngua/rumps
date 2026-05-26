@@ -714,6 +714,40 @@ impl Module {
                 .and_then(|m| m.get_submodule(rest)),
         }
     }
+
+    fn collect_fn_types(
+        &self,
+        prefix: &mut Vec<StringId>,
+        out: &mut HashMap<Vec<StringId>, Scheme>,
+    ) {
+        self.functions.iter().for_each(|(&name, (_, scheme))| {
+            prefix.push(name);
+            out.insert(prefix.clone(), scheme.clone());
+            let _ = prefix.pop();
+        });
+        self.submodules.iter().for_each(|(&name, m)| {
+            prefix.push(name);
+            m.collect_fn_types(prefix, out);
+            let _ = prefix.pop();
+        });
+    }
+
+    fn collect_const_types(
+        &self,
+        prefix: &mut Vec<StringId>,
+        out: &mut HashMap<Vec<StringId>, TyId>,
+    ) {
+        self.constants.iter().for_each(|(&name, (_, ty))| {
+            prefix.push(name);
+            out.insert(prefix.clone(), *ty);
+            let _ = prefix.pop();
+        });
+        self.submodules.iter().for_each(|(&name, m)| {
+            prefix.push(name);
+            m.collect_const_types(prefix, out);
+            let _ = prefix.pop();
+        });
+    }
 }
 
 /// A user-defined module containing functions and constants.
@@ -2063,5 +2097,27 @@ impl Environment {
             ],
             &mut self.consts.strings,
         )
+    }
+
+    pub(crate) fn builtin_module_fn_types(
+        &self,
+    ) -> HashMap<Vec<StringId>, Scheme> {
+        let mut out = HashMap::new();
+        self.modules.iter().for_each(|(&name, m)| {
+            let mut path = vec![name];
+            m.collect_fn_types(&mut path, &mut out);
+        });
+        out
+    }
+
+    pub(crate) fn builtin_module_const_types(
+        &self,
+    ) -> HashMap<Vec<StringId>, TyId> {
+        let mut out = HashMap::new();
+        self.modules.iter().for_each(|(&name, m)| {
+            let mut path = vec![name];
+            m.collect_const_types(&mut path, &mut out);
+        });
+        out
     }
 }

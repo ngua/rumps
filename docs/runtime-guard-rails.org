@@ -1,28 +1,42 @@
 #+TITLE: Runtime Guard Rails
 
 * Typed runtime review checks
-Run these before reviewing typed runtime changes. Each command should return no hits.
+Run these before reviewing typed runtime changes. These searches are broad on
+purpose; review any hits as runtime metadata leaks unless the hit is purely
+typecheck setup or declaration plumbing.
 
-1. No `ValueMeta::untyped` in runtime construction:
-
-#+begin_src sh
-rg "ValueMeta::untyped" crates/rumps-query/src/interpreter.rs crates/rumps-query/src/interpreter crates/rumps-query/src/env.rs crates/rumps-query/src/primitives.rs
-#+end_src
-
-2. No interpreter-owned `TyArena`:
+1. No sentinel runtime metadata fallback:
 
 #+begin_src sh
-rg "ty_arena\\s*:" crates/rumps-query/src/interpreter.rs crates/rumps-query/src/interpreter
+rg "TyArena::UNKNOWN|RuntimeTyId::UNKNOWN" crates/rumps-query/src/typecheck.rs crates/rumps-query/src/typecheck crates/rumps-query/src/interpreter.rs crates/rumps-query/src/interpreter crates/rumps-query/src/env.rs crates/rumps-query/src/primitives.rs
 #+end_src
 
-3. No runtime `TypeExprArena`:
+2. No runtime import from typecheck arenas:
 
 #+begin_src sh
-rg "TypeExprArena|\bTypeExprId\b|\benum TypeExpr\b" crates/rumps-query/src/interpreter.rs crates/rumps-query/src/interpreter crates/rumps-query/src/env.rs crates/rumps-query/src/primitives.rs crates/rumps-query/src/value.rs
+rg "import_ty|env.ty_arena" crates/rumps-query/src/interpreter.rs crates/rumps-query/src/interpreter crates/rumps-query/src/env.rs crates/rumps-query/src/primitives.rs
 #+end_src
 
-4. No `Payload::Tagged`:
+3. No runtime ~AstTypeExpr~ behavior:
+
+#+begin_src sh
+rg "AstTypeExpr|AstTypeExprId" crates/rumps-query/src/interpreter.rs crates/rumps-query/src/interpreter crates/rumps-query/src/env.rs crates/rumps-query/src/primitives.rs
+#+end_src
+
+4. Fence remaining ~TypeExpr~ plumbing:
+
+#+begin_src sh
+rg "TypeExprArena|\bTypeExprId\b|\benum TypeExpr\b" crates/rumps-query/src
+#+end_src
+
+5. No tagged payload regression:
 
 #+begin_src sh
 rg "Payload::Tagged|Tagged\(" crates/rumps-query/src
+#+end_src
+
+6. No old runtime side-map metadata:
+
+#+begin_src sh
+rg "numeric_types|mempty_types|wrap_types|bimap_output_types|convert_targets|instance_calls|resolved_instance_fns" crates/rumps-query/src
 #+end_src

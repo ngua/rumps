@@ -6,11 +6,12 @@ use smallvec::SmallVec;
 
 use super::Interpreter;
 use crate::ast::{
-    AstTypeExprId, BindingPattern, ExprId, MatchPattern, MatchPatternId,
-    RestPattern, TypePattern,
+    BindingPattern, ExprId, MatchPattern, MatchPatternId, RestPattern,
+    TypePattern,
 };
 use crate::intern::{QualifiedName, StringId};
 use crate::io::IoContext;
+use crate::typecheck::TypePatternInfo;
 use crate::value::{Payload, TypeId, Value, ValueId, VariantDef};
 use crate::{Result, Span};
 
@@ -33,20 +34,18 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         val: &Value,
         pattern: &TypePattern,
+        info: Option<&TypePatternInfo>,
         span: Span,
     ) -> Result<bool> {
         match pattern {
-            TypePattern::Type(ast_ty_id) => {
-                match self.checked.ast_type_map.get(ast_ty_id).copied() {
-                    Some(expected) => Ok(self
-                        .checked
-                        .types
-                        .matches(val.ty, val.repr, expected)),
-                    None => {
-                        typechecked!("type pattern", "in ast_type_map")
-                    }
+            TypePattern::Type(_) => match info {
+                Some(TypePatternInfo::Type(expected)) => {
+                    Ok(self.checked.types.matches(val.ty, val.repr, *expected))
                 }
-            }
+                _ => {
+                    typechecked!("type pattern", "checked target type")
+                }
+            },
             TypePattern::Variant(ref ty_name, var_name) => {
                 self.check_variant_zero_arity(val, ty_name, *var_name, span)
             }
@@ -56,25 +55,13 @@ impl<I: IoContext> Interpreter<'_, I> {
             TypePattern::VariantBind(ref ty_name, var_name, _) => {
                 self.check_variant(val, ty_name, *var_name, span)
             }
-            TypePattern::Object(fields) => {
-                let fields = fields
-                    .iter()
-                    .map(|(name, ty_id)| {
-                        self.checked
-                            .ast_type_map
-                            .get(ty_id)
-                            .copied()
-                            .map(|ty| (*name, ty))
-                            .unwrap_or_else(|| {
-                                typechecked!(
-                                    "object field type",
-                                    "in ast_type_map"
-                                )
-                            })
-                    })
-                    .collect::<Vec<_>>();
-                Ok(self.checked.types.object_matches(&self.arena, val, &fields))
-            }
+            TypePattern::Object(_) => match info {
+                Some(TypePatternInfo::Object(fields)) => Ok(self
+                    .checked
+                    .types
+                    .object_matches(&self.arena, val, fields)),
+                _ => typechecked!("object pattern", "checked field types"),
+            },
         }
     }
 
@@ -226,8 +213,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 val,
                 span,
             ),
-            MatchPattern::Is(name, ty_id) => {
-                self.try_match_is(*name, *ty_id, val_id, val, span)
+            MatchPattern::Is(name, _) => {
+                self.try_match_is(pat_id, *name, val_id, val, span)
             }
         }
     }
@@ -235,18 +222,13 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Try to match a type-narrowing pattern: `x IS Type`
     fn try_match_is(
         &mut self,
+        pat: MatchPatternId,
         name: StringId,
-        ast_ty_id: AstTypeExprId,
         val_id: Option<ValueId>,
         val: &Value,
         span: Span,
     ) -> Result<Option<Vec<(StringId, ValueId)>>> {
-        let expected = self
-            .checked
-            .ast_type_map
-            .get(&ast_ty_id)
-            .copied()
-            .unwrap_or_else(|| typechecked!("match IS", "in ast_type_map"));
+        let expected = self.checked.match_target(pat);
         let matched = self.checked.types.matches(val.ty, val.repr, expected);
         if matched {
             let val_id =

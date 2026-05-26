@@ -25,7 +25,7 @@ use crate::typecheck::ty::{
     ClassShape, MethodSpec, Rename, Scheme, TrackKind, Ty, TyArena, TyId,
     TyVar, TypeClass,
 };
-use crate::typecheck::TypeDeclAccess;
+use crate::typecheck::CheckedTypePatternInfo;
 use crate::value::{TypeDef, TypeId};
 use crate::{ClassId, Span};
 
@@ -168,14 +168,16 @@ impl InferCtx<'_> {
 
             // Type check: `expr is Pattern`
             Expr::Is(scrutinee, pattern) => {
-                self.is_check(*scrutinee, pattern, span)
+                self.is_check(id, *scrutinee, pattern, span)
             }
 
             // Type cast: `expr as Type`
             Expr::As(inner, ty_id) => self.as_cast(id, *inner, *ty_id, span),
 
             // Fallible conversion: `expr read Type`
-            Expr::Read(inner, ty_id) => self.read_conv(*inner, *ty_id, span),
+            Expr::Read(inner, ty_id) => {
+                self.read_conv(id, *inner, *ty_id, span)
+            }
 
             // Database intrinsics: `@get`, `@set`, `@kill`, `@data`, `@order`, `@query`
             Expr::Intrinsic(op, ref rt, val, _) => {
@@ -1515,11 +1517,8 @@ impl InferCtx<'_> {
                             self.registry.get_def(ty_id).and_then(|def| {
                                 match def {
                                     TypeDef::Alias { .. } => self
-                                        .registry
-                                        .alias_target(
-                                            TypeDeclAccess::new(),
-                                            ty_id,
-                                        )
+                                        .decls
+                                        .alias_target(ty_id)
                                         .and_then(|target| {
                                             self.ast.get_type_expr(target)
                                         })
@@ -2646,12 +2645,8 @@ impl InferCtx<'_> {
                                             .collect();
 
                                     let payloads = self
-                                        .registry
-                                        .variant_payloads(
-                                            TypeDeclAccess::new(),
-                                            type_id,
-                                            var_def.name,
-                                        )
+                                        .decls
+                                        .variant_payloads(type_id, var_def.name)
                                         .cloned()
                                         .unwrap_or_default();
 
@@ -2744,8 +2739,8 @@ impl InferCtx<'_> {
 
                 // Build parameter types by substituting type params
                 let payloads = self
-                    .registry
-                    .variant_payloads(TypeDeclAccess::new(), type_id, vd.name)
+                    .decls
+                    .variant_payloads(type_id, vd.name)
                     .cloned()
                     .unwrap_or_default();
                 let param_tys: SmallVec<[TyId; 4]> = payloads
@@ -2905,6 +2900,7 @@ impl InferCtx<'_> {
     /// - `Object(fields)`: structural object check
     fn is_check(
         &mut self,
+        id: ExprId,
         scrutinee_id: ExprId,
         pattern: &TypePattern,
         span: Span,
@@ -2915,7 +2911,9 @@ impl InferCtx<'_> {
             TypePattern::Type(ty_id) => {
                 let target_ty =
                     self.convert().ast_type_to_ty(*ty_id, &IndexMap::new());
-                self.interp.ast_type_map.insert(*ty_id, target_ty);
+                self.interp
+                    .is_patterns
+                    .insert(id, CheckedTypePatternInfo::Type(target_ty));
                 // Function types cannot be inspected at runtime for opaque
                 // callables (class method refs, module fn refs, partial
                 // apps); reject them here (at any depth) so the interpreter's
@@ -3029,11 +3027,8 @@ impl InferCtx<'_> {
                             .get_def(type_id)
                             .is_some_and(|def| match def {
                                 TypeDef::Alias { .. } => self
-                                    .registry
-                                    .alias_target(
-                                        TypeDeclAccess::new(),
-                                        type_id,
-                                    )
+                                    .decls
+                                    .alias_target(type_id)
                                     .and_then(|target| {
                                         self.ast.get_type_expr(target)
                                     })
@@ -3055,14 +3050,23 @@ impl InferCtx<'_> {
                 }
                 // Resolve field types (validates type expressions) and
                 // reject fn types at any depth for the same reason as above.
-                fields.iter().for_each(|(_, ty_id)| {
-                    let fty =
-                        self.convert().ast_type_to_ty(*ty_id, &IndexMap::new());
-                    self.interp.ast_type_map.insert(*ty_id, fty);
-                    if Self::type_contains_fn(fty, &self.ty_arena) {
+                let ftys = fields
+                    .iter()
+                    .map(|(name, ty_id)| {
+                        let fty = self
+                            .convert()
+                            .ast_type_to_ty(*ty_id, &IndexMap::new());
+                        (*name, fty)
+                    })
+                    .collect::<Vec<_>>();
+                ftys.iter().for_each(|(_, fty)| {
+                    if Self::type_contains_fn(*fty, &self.ty_arena) {
                         self.error(TypeError::FnTypeInPattern(span));
                     }
                 });
+                self.interp
+                    .is_patterns
+                    .insert(id, CheckedTypePatternInfo::Object(ftys));
             }
         }
 
@@ -3086,7 +3090,7 @@ impl InferCtx<'_> {
     ) -> TyId {
         let inner_ty = self.expr(inner_id);
         let target_ty = self.convert().ast_type_to_ty(ty_id, &IndexMap::new());
-        self.interp.ast_type_map.insert(ty_id, target_ty);
+        self.interp.expr_targets.insert(id, target_ty);
 
         // Emit Into constraint for validation
         self.constrain(Constraint::Class {
@@ -3130,13 +3134,14 @@ impl InferCtx<'_> {
     /// at compile time; function types, regex, and refs cannot be used with `read`.
     fn read_conv(
         &mut self,
+        id: ExprId,
         inner_id: ExprId,
         ty_id: AstTypeExprId,
         span: Span,
     ) -> TyId {
         let inner_ty = self.expr(inner_id);
         let target_ty = self.convert().ast_type_to_ty(ty_id, &IndexMap::new());
-        self.interp.ast_type_map.insert(ty_id, target_ty);
+        self.interp.expr_targets.insert(id, target_ty);
 
         // For alias types, store the expanded underlying type so the
         // interpreter can resolve `read` targets without reading AST types.
@@ -3160,10 +3165,8 @@ impl InferCtx<'_> {
             if let Some(TypeDef::Alias { type_params, .. }) =
                 self.registry.get_def(type_id)
             {
-                let target = self
-                    .registry
-                    .alias_target(TypeDeclAccess::new(), type_id)
-                    .unwrap_or_else(|| {
+                let target =
+                    self.decls.alias_target(type_id).unwrap_or_else(|| {
                         typechecked!("alias target", "registered")
                     });
                 let type_params = type_params.clone();
@@ -3190,8 +3193,8 @@ impl InferCtx<'_> {
                     let alias = self.registry.get_def(type_id).and_then(
                         |def| match def {
                             TypeDef::Alias { type_params, .. } => self
-                                .registry
-                                .alias_target(TypeDeclAccess::new(), type_id)
+                                .decls
+                                .alias_target(type_id)
                                 .map(|target| (target, type_params.clone())),
                             _ => None,
                         },
@@ -3433,7 +3436,7 @@ impl InferCtx<'_> {
         span: Span,
     ) -> TyId {
         let ann_ty = self.convert().ast_type_to_ty(ty_id, &IndexMap::new());
-        self.interp.ast_type_map.insert(ty_id, ann_ty);
+        self.interp.expr_targets.insert(id, ann_ty);
 
         // Clone inner expression to avoid borrow issues
         let inner_expr = self.ast.get_expr(inner_id).cloned();

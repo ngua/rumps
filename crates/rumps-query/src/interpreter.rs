@@ -118,10 +118,10 @@ use rumps_storage::{Database, Transaction};
 use smallvec::SmallVec;
 
 use crate::ast::{
-    Ast, AstTypeExprId, BinOp, BindingPattern, Expr, ExprId, Import,
-    ImportItem, JsonAccessKey, JsonAccessKind, Literal, NumericLit,
-    OutputFormat, OutputTarget, Stmt, StmtId, TxnId, TypeDefAst, TypeParam,
-    TypePattern, UnOp, WriteExpr,
+    Ast, BinOp, BindingPattern, Expr, ExprId, Import, ImportItem,
+    JsonAccessKey, JsonAccessKind, Literal, NumericLit, OutputFormat,
+    OutputTarget, Stmt, StmtId, TxnId, TypeDefAst, TypeParam, TypePattern,
+    UnOp, WriteExpr,
 };
 use crate::intern::{QualifiedName, StringId, StringInterner};
 use crate::io::IoContext;
@@ -355,8 +355,8 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                     .clone();
 
                 match stmt {
-                    Stmt::Let(pat, ty_ann, expr_id, _) => {
-                        self.r#let(&pat, ty_ann, expr_id, span).await?
+                    Stmt::Let(pat, _, expr_id, _) => {
+                        self.r#let(&pat, expr_id, span).await?
                     }
                     // Top-level Expr is rejected by typechecker in non-interactive mode
                     Stmt::Expr(_) => {
@@ -440,7 +440,12 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             regex_cache: Vec::new(),
             class_registry,
             function_types: HashMap::new(),
-            ast_type_map: HashMap::new(),
+            module_fns: HashMap::new(),
+            module_consts: HashMap::new(),
+            expr_targets: HashMap::new(),
+            is_patterns: HashMap::new(),
+            let_targets: HashMap::new(),
+            match_targets: HashMap::new(),
         };
         Self {
             ast,
@@ -539,14 +544,15 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::Path(ref segments) => {
                 self.path_value(id, segments, span).map(Evaluated::Value)
             }
-            Expr::Is(expr, pattern) => {
-                self.is(expr, &pattern, span).await.map(Evaluated::Payload)
+            Expr::Is(expr, pattern) => self
+                .is(id, expr, &pattern, span)
+                .await
+                .map(Evaluated::Payload),
+            Expr::As(expr, _) => {
+                self.r#as(id, expr, span).await.map(Evaluated::Value)
             }
-            Expr::As(expr, ty) => {
-                self.r#as(id, expr, ty, span).await.map(Evaluated::Value)
-            }
-            Expr::Read(expr, ty) => {
-                self.read(expr, ty, span).await.map(Evaluated::Payload)
+            Expr::Read(expr, _) => {
+                self.read(id, expr, span).await.map(Evaluated::Payload)
             }
             Expr::Block(stmts, tail) => {
                 self.block(&stmts, tail).await.map(Evaluated::Value)
@@ -728,8 +734,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             .clone();
 
         match stmt {
-            Stmt::Let(pat, ty_ann, expr_id, _) => {
-                self.r#let(&pat, ty_ann, expr_id, span).await
+            Stmt::Let(pat, _, expr_id, _) => {
+                self.r#let(&pat, expr_id, span).await
             }
             Stmt::Expr(expr_id) => {
                 // Evaluate for side effects, discard result
@@ -838,10 +844,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                             );
                         }
 
-                        Stmt::Let(ref pat, ty_ann, expr_id, _) => {
+                        Stmt::Let(ref pat, _, expr_id, _) => {
                             let val = self.eval(expr_id).await?;
-                            let val =
-                                self.value_for_binding(expr_id, ty_ann, val);
+                            let val = self.value_for_binding(expr_id, val);
                             let val_id = self.add_value(val, item_span);
                             if let BindingPattern::Var(ref const_name) = pat {
                                 module.constants.insert(*const_name, val_id);
@@ -1289,14 +1294,8 @@ impl<I: IoContext> Interpreter<'_, I> {
         value
     }
 
-    fn value_for_binding(
-        &self,
-        _expr: ExprId,
-        ty_ann: Option<AstTypeExprId>,
-        value: Value,
-    ) -> Value {
-        match ty_ann.and_then(|id| self.checked.ast_type_map.get(&id).copied())
-        {
+    fn value_for_binding(&self, expr: ExprId, value: Value) -> Value {
+        match self.checked.let_target(expr) {
             None => value,
             Some(ty) => {
                 let meta = match self.checked.types.get(ty) {
@@ -1469,9 +1468,8 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     fn module_fn_meta(&mut self, path: &[StringId]) -> ValueMeta {
-        if let Some(ty) = self.env.get_module_fn_type(path).map(|s| s.ty) {
-            let ty = self.checked.types.import_ty(&self.env.ty_arena, ty);
-            self.checked.types.meta(ty)
+        if let Some(meta) = self.checked.module_fn_meta(path) {
+            meta
         } else if let Some(def) = self.env.get_user_module_fn(path).cloned() {
             self.callable_meta(&def.params, def.ret, 0)
         } else {
@@ -1480,9 +1478,8 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     fn module_const_meta(&self, path: &[StringId]) -> ValueMeta {
-        self.env
-            .get_module_const(path)
-            .and_then(|id| self.env.consts.meta(id))
+        self.checked
+            .module_const_meta(path)
             .or_else(|| {
                 self.env
                     .get_user_module_const(path)
@@ -1862,12 +1859,14 @@ impl<I: IoContext> Interpreter<'_, I> {
     #[async_recursion]
     async fn is(
         &mut self,
+        id: ExprId,
         expr: ExprId,
         pattern: &TypePattern,
         span: Span,
     ) -> Result<Payload> {
         let val = self.eval(expr).await?;
-        let matched = self.check_pattern(&val, pattern, span)?;
+        let info = self.checked.is_patterns.get(&id).cloned();
+        let matched = self.check_pattern(&val, pattern, info.as_ref(), span)?;
         Ok(Payload::Bool(matched))
     }
 
@@ -1887,18 +1886,10 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         id: ExprId,
         expr: ExprId,
-        ast_ty: AstTypeExprId,
         span: Span,
     ) -> Result<Value> {
         let val = self.eval(expr).await?;
-        let rty = self
-            .checked
-            .ast_type_map
-            .get(&ast_ty)
-            .copied()
-            .unwrap_or_else(|| {
-                typechecked!("as", "resolved type in ast_type_map")
-            });
+        let rty = self.checked.expr_target(id, "as");
 
         if let Some(target_base) = self.checked.types.to_type_id(rty) {
             let storable = RuntimeTyId::from(typecheck::TyArena::STORABLE);
@@ -1940,19 +1931,12 @@ impl<I: IoContext> Interpreter<'_, I> {
     #[async_recursion]
     async fn read(
         &mut self,
+        id: ExprId,
         expr: ExprId,
-        ast_ty: AstTypeExprId,
         span: Span,
     ) -> Result<Payload> {
         let val = self.eval(expr).await?;
-        let rty = self
-            .checked
-            .ast_type_map
-            .get(&ast_ty)
-            .copied()
-            .unwrap_or_else(|| {
-                typechecked!("read", "resolved type in ast_type_map")
-            });
+        let rty = self.checked.expr_target(id, "read");
 
         self.read_target_value(&val, rty, span)
     }
@@ -2418,14 +2402,13 @@ impl<I: IoContext> Interpreter<'_, I> {
     async fn r#let(
         &mut self,
         pat: &BindingPattern,
-        ty_ann: Option<AstTypeExprId>,
         expr_id: ExprId,
         span: Span,
     ) -> Result<()> {
         let val = self.eval(expr_id).await?;
         match pat {
             BindingPattern::Var(name) => {
-                let val = self.value_for_binding(expr_id, ty_ann, val);
+                let val = self.value_for_binding(expr_id, val);
                 let id = self.add_value(val, span);
                 self.env.scopes.bind(*name, id);
                 Ok(())

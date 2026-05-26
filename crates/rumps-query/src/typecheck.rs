@@ -14,6 +14,7 @@
 #![allow(dead_code, unused_imports, unused_assignments)]
 
 mod convert;
+mod decl;
 mod env;
 mod error;
 mod infer;
@@ -24,6 +25,7 @@ mod uf;
 mod unify;
 
 use std::collections::HashMap;
+use std::iter;
 
 pub(crate) use env::TypeEnv;
 pub(crate) use error::{FormattedTypeError, TyPrinter, TypeError};
@@ -31,24 +33,15 @@ pub(crate) use infer::{Constraint, InferCtx};
 pub(crate) use instance::{Instance, InstanceRegistry};
 pub(crate) use runtime_types::{
     CheckedProgram, ExprAux, ExprInfo, RuntimeTyId, RuntimeTypes,
+    TypePatternInfo,
 };
 pub(crate) use ty::{
     ClassDef, ClassRegistry, ClassShape, Scheme, Ty, TyArena, TyId, TyVar,
     TypeClass,
 };
 
-use crate::ast::{AstTypeExprId, ExprId};
+use crate::ast::{ExprId, MatchPatternId};
 use crate::intern::StringId;
-
-/// Capability required to read AST-backed declaration metadata from `TypeRegistry`.
-#[derive(Clone, Copy)]
-pub(crate) struct TypeDeclAccess(());
-
-impl TypeDeclAccess {
-    fn new() -> Self {
-        Self(())
-    }
-}
 
 /// Output from type checking.
 ///
@@ -64,17 +57,56 @@ pub(crate) struct TypecheckOutput {
     pub(crate) union_value_reprs: HashMap<ExprId, TyId>,
     /// Function and closure types keyed by body expression.
     pub(crate) function_types: HashMap<ExprId, TyId>,
+    /// Builtin module function type metadata keyed by full module path.
+    pub(crate) module_fn_types: HashMap<Vec<StringId>, TyId>,
+    /// Builtin module constant type metadata keyed by full module path.
+    pub(crate) module_const_types: HashMap<Vec<StringId>, TyId>,
     /// Class registry; carries class definitions indexed by `ClassId`.
     pub(crate) class_registry: ClassRegistry,
     /// Resolved types for all expressions, populated from `InferCtx.expr_types`.
     pub(crate) expr_types: HashMap<ExprId, TyId>,
-    /// Mapping from AST type expression IDs to their resolved `TyId`s.
-    ///
-    /// Populated for `IS` type patterns, `AS` casts, `READ` conversions, and
-    /// match `IS` arms so the interpreter can look up the target runtime type.
-    pub(crate) ast_type_map: HashMap<AstTypeExprId, TyId>,
+    /// Checked target types for `as`, `read`, and annotation expressions.
+    pub(crate) expr_targets: HashMap<ExprId, TyId>,
+    /// Checked type facts for `expr is Pattern` expression patterns.
+    pub(crate) is_patterns: HashMap<ExprId, CheckedTypePatternInfo>,
+    /// Checked type annotation targets for `let` bindings, keyed by RHS expr.
+    pub(crate) let_targets: HashMap<ExprId, TyId>,
+    /// Checked target types for `name IS Type` match patterns.
+    pub(crate) match_targets: HashMap<MatchPatternId, TyId>,
     /// Maps solved alias `TyId`s to their expanded underlying `TyId`s.
     pub(crate) alias_type_expansions: HashMap<TyId, TyId>,
+}
+
+#[derive(Clone)]
+pub(super) enum CheckedTypePatternInfo {
+    Type(TyId),
+    Object(Vec<(StringId, TyId)>),
+}
+
+impl CheckedTypePatternInfo {
+    pub(super) fn resolve(
+        &mut self,
+        uf: &mut uf::UnionFind,
+        arena: &mut TyArena,
+    ) {
+        match self {
+            Self::Type(ty) => {
+                *ty = uf.resolve(*ty, arena);
+            }
+            Self::Object(fields) => {
+                fields
+                    .iter_mut()
+                    .for_each(|(_, ty)| *ty = uf.resolve(*ty, arena));
+            }
+        }
+    }
+
+    pub(super) fn ty_ids(&self) -> Box<dyn Iterator<Item = TyId> + '_> {
+        match self {
+            Self::Type(ty) => Box::new(iter::once(*ty)),
+            Self::Object(fields) => Box::new(fields.iter().map(|(_, ty)| *ty)),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -191,9 +223,7 @@ impl TypecheckOutput {
                 },
                 CheckedExprAux::InstanceCall { recv, fun, class } => {
                     ExprAux::InstanceCall {
-                        recv: RuntimeTyId::from(
-                            recv.unwrap_or(TyArena::UNKNOWN),
-                        ),
+                        recv: recv.map(RuntimeTyId::from),
                         fun,
                         class,
                     }
@@ -217,8 +247,40 @@ impl TypecheckOutput {
             .map(|(&id, &ty)| (id, RuntimeTyId::from(ty)))
             .collect();
 
-        let ast_type_map = self
-            .ast_type_map
+        let expr_targets = self
+            .expr_targets
+            .iter()
+            .map(|(&id, &ty)| (id, RuntimeTyId::from(ty)))
+            .collect();
+        let is_patterns = self
+            .is_patterns
+            .iter()
+            .map(|(&id, info)| {
+                let info = match info {
+                    CheckedTypePatternInfo::Type(ty) => {
+                        TypePatternInfo::Type(RuntimeTyId::from(*ty))
+                    }
+                    CheckedTypePatternInfo::Object(fields) => {
+                        TypePatternInfo::Object(
+                            fields
+                                .iter()
+                                .map(|(name, ty)| {
+                                    (*name, RuntimeTyId::from(*ty))
+                                })
+                                .collect(),
+                        )
+                    }
+                };
+                (id, info)
+            })
+            .collect();
+        let let_targets = self
+            .let_targets
+            .iter()
+            .map(|(&id, &ty)| (id, RuntimeTyId::from(ty)))
+            .collect();
+        let match_targets = self
+            .match_targets
             .iter()
             .map(|(&id, &ty)| (id, RuntimeTyId::from(ty)))
             .collect();
@@ -230,16 +292,36 @@ impl TypecheckOutput {
             })
             .collect();
 
+        let types =
+            RuntimeTypes::new(self.ty_arena.clone(), alias_type_expansions);
+
+        let module_fns = self
+            .module_fn_types
+            .iter()
+            .map(|(path, &ty)| {
+                (path.clone(), types.meta(RuntimeTyId::from(ty)))
+            })
+            .collect();
+        let module_consts = self
+            .module_const_types
+            .iter()
+            .map(|(path, &ty)| {
+                (path.clone(), types.meta(RuntimeTyId::from(ty)))
+            })
+            .collect();
+
         CheckedProgram {
-            types: RuntimeTypes::new(
-                self.ty_arena.clone(),
-                alias_type_expansions.clone(),
-            ),
+            types,
             exprs,
             regex_cache: self.regex_cache.clone(),
             class_registry: self.class_registry.clone(),
             function_types,
-            ast_type_map,
+            module_fns,
+            module_consts,
+            expr_targets,
+            is_patterns,
+            let_targets,
+            match_targets,
         }
     }
 }
@@ -247,7 +329,33 @@ impl TypecheckOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::{Ast, Expr, Literal, MatchPattern};
     use crate::intern::StringInterner;
+    use crate::value::ValueMeta;
+    use crate::Span;
+
+    const _: Option<TyId> = match (CheckedExprAux::InstanceCall {
+        recv: None,
+        fun: None,
+        class: None,
+    }) {
+        CheckedExprAux::InstanceCall { recv, .. } => recv,
+        _ => None,
+    };
+    const _: Option<RuntimeTyId> = match (ExprAux::InstanceCall {
+        recv: None,
+        fun: None,
+        class: None,
+    }) {
+        ExprAux::InstanceCall { recv, .. } => recv,
+        _ => None,
+    };
+    const _: fn(&CheckedProgram, &[StringId]) -> Option<ValueMeta> =
+        CheckedProgram::module_fn_meta;
+    const _: fn(&CheckedProgram, &[StringId]) -> Option<ValueMeta> =
+        CheckedProgram::module_const_meta;
+    const _: fn(&CheckedProgram, ExprId, &'static str) -> RuntimeTyId =
+        CheckedProgram::expr_target;
 
     #[test]
     fn phase_11_checked_program_preserves_regex_cache_and_class_registry() {
@@ -262,9 +370,14 @@ mod tests {
             expr_metadata: HashMap::new(),
             union_value_reprs: HashMap::new(),
             function_types: HashMap::new(),
+            module_fn_types: HashMap::new(),
+            module_const_types: HashMap::new(),
             class_registry,
             expr_types: HashMap::new(),
-            ast_type_map: HashMap::new(),
+            expr_targets: HashMap::new(),
+            is_patterns: HashMap::new(),
+            let_targets: HashMap::new(),
+            match_targets: HashMap::new(),
             alias_type_expansions: HashMap::new(),
         };
         let checked = output.to_checked();
@@ -274,5 +387,175 @@ mod tests {
             Some("abc")
         );
         assert!(checked.class_registry.lookup_by_name(class).is_some());
+    }
+
+    #[test]
+    fn phase_5_checked_instance_call_keeps_missing_recv() {
+        let mut strings = StringInterner::new();
+        let mut ast = Ast::new();
+        let mut arena = TyArena::new();
+        let class_registry =
+            ClassRegistry::builtins(&mut |s| strings.intern(s), &mut arena);
+        let id = ast
+            .add_expr(Expr::Literal(Literal::Unit), Span::new(0, 0))
+            .unwrap();
+        let fun = strings.intern("instance_fn");
+        let output = TypecheckOutput {
+            ty_arena: arena,
+            regex_cache: Vec::new(),
+            expr_metadata: HashMap::from([(
+                id,
+                CheckedExprInfo {
+                    ty: Some(TyArena::UNIT),
+                    repr: None,
+                    concrete: false,
+                    aux: CheckedExprAux::InstanceCall {
+                        recv: None,
+                        fun: Some(fun),
+                        class: None,
+                    },
+                },
+            )]),
+            union_value_reprs: HashMap::new(),
+            function_types: HashMap::new(),
+            module_fn_types: HashMap::new(),
+            module_const_types: HashMap::new(),
+            class_registry,
+            expr_types: HashMap::from([(id, TyArena::UNIT)]),
+            expr_targets: HashMap::new(),
+            is_patterns: HashMap::new(),
+            let_targets: HashMap::new(),
+            match_targets: HashMap::new(),
+            alias_type_expansions: HashMap::new(),
+        };
+        let checked = output.to_checked();
+
+        match checked.expr(id).aux {
+            ExprAux::InstanceCall { recv, .. } => {
+                assert_eq!(recv, None);
+            }
+            _ => panic!("expected instance call metadata"),
+        }
+    }
+
+    #[test]
+    fn phase_5_checked_program_owns_builtin_module_metadata() {
+        let mut strings = StringInterner::new();
+        let mut arena = TyArena::new();
+        let class_registry =
+            ClassRegistry::builtins(&mut |s| strings.intern(s), &mut arena);
+        let module = strings.intern("Math");
+        let fun = strings.intern("floor");
+        let cst = strings.intern("pi");
+        let fun_ty =
+            arena.func(smallvec::smallvec![TyArena::FLOAT], TyArena::INT);
+        let output = TypecheckOutput {
+            ty_arena: arena,
+            regex_cache: Vec::new(),
+            expr_metadata: HashMap::new(),
+            union_value_reprs: HashMap::new(),
+            function_types: HashMap::new(),
+            module_fn_types: HashMap::from([(vec![module, fun], fun_ty)]),
+            module_const_types: HashMap::from([(
+                vec![module, cst],
+                TyArena::FLOAT,
+            )]),
+            class_registry,
+            expr_types: HashMap::new(),
+            expr_targets: HashMap::new(),
+            is_patterns: HashMap::new(),
+            let_targets: HashMap::new(),
+            match_targets: HashMap::new(),
+            alias_type_expansions: HashMap::new(),
+        };
+        let checked = output.to_checked();
+
+        let fn_meta = checked.module_fn_meta(&[module, fun]);
+        assert_eq!(checked.module_fn_arity(&[module, fun]), Some(1));
+        assert_eq!(
+            fn_meta.map(|meta| meta.ty),
+            Some(RuntimeTyId::from(fun_ty))
+        );
+        assert!(fn_meta
+            .map(|meta| checked.types.get(meta.ty))
+            .is_some_and(|ty| !matches!(ty, Ty::Unknown)));
+        assert_eq!(
+            checked
+                .module_const_meta(&[module, cst])
+                .map(|meta| meta.ty),
+            Some(RuntimeTyId::from(TyArena::FLOAT))
+        );
+    }
+
+    #[test]
+    fn phase_5_checked_program_owns_as_and_read_targets() {
+        let mut strings = StringInterner::new();
+        let mut ast = Ast::new();
+        let mut arena = TyArena::new();
+        let class_registry =
+            ClassRegistry::builtins(&mut |s| strings.intern(s), &mut arena);
+        let as_id = ast
+            .add_expr(Expr::Literal(Literal::Unit), Span::new(0, 0))
+            .unwrap();
+        let read_id = ast
+            .add_expr(Expr::Literal(Literal::Unit), Span::new(0, 0))
+            .unwrap();
+        let let_id = ast
+            .add_expr(Expr::Literal(Literal::Unit), Span::new(0, 0))
+            .unwrap();
+        let is_id = ast
+            .add_expr(Expr::Literal(Literal::Unit), Span::new(0, 0))
+            .unwrap();
+        let pat_id = ast.add_pattern(MatchPattern::Wildcard).unwrap();
+        let field = strings.intern("name");
+        let output = TypecheckOutput {
+            ty_arena: arena,
+            regex_cache: Vec::new(),
+            expr_metadata: HashMap::new(),
+            union_value_reprs: HashMap::new(),
+            function_types: HashMap::new(),
+            module_fn_types: HashMap::new(),
+            module_const_types: HashMap::new(),
+            class_registry,
+            expr_types: HashMap::new(),
+            expr_targets: HashMap::from([
+                (as_id, TyArena::STRING),
+                (read_id, TyArena::INT),
+            ]),
+            is_patterns: HashMap::from([(
+                is_id,
+                CheckedTypePatternInfo::Object(vec![(field, TyArena::STRING)]),
+            )]),
+            let_targets: HashMap::from([(let_id, TyArena::INT)]),
+            match_targets: HashMap::from([(pat_id, TyArena::FLOAT)]),
+            alias_type_expansions: HashMap::new(),
+        };
+        let checked = output.to_checked();
+
+        assert_eq!(
+            checked.expr_target(as_id, "as"),
+            RuntimeTyId::from(TyArena::STRING)
+        );
+        assert_eq!(
+            checked.expr_target(read_id, "read"),
+            RuntimeTyId::from(TyArena::INT)
+        );
+        assert_eq!(
+            checked.let_target(let_id),
+            Some(RuntimeTyId::from(TyArena::INT))
+        );
+        assert_eq!(
+            checked.match_target(pat_id),
+            RuntimeTyId::from(TyArena::FLOAT)
+        );
+        match checked.is_patterns.get(&is_id) {
+            Some(TypePatternInfo::Object(fields)) => {
+                assert_eq!(
+                    fields.first().copied(),
+                    Some((field, RuntimeTyId::from(TyArena::STRING)))
+                );
+            }
+            _ => panic!("expected object pattern metadata"),
+        }
     }
 }

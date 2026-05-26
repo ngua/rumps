@@ -28,6 +28,7 @@ mod pattern;
 mod stmt;
 
 use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
 use std::mem;
 use std::ops::Range;
 
@@ -35,16 +36,19 @@ use indexmap::IndexMap;
 use nonempty::NonEmpty;
 use smallvec::SmallVec;
 
+use super::decl::TypeDeclRegistry;
 use super::env::TypeEnv;
 use super::error::{TyPrinter, TypeError};
 use super::instance::{Instance, InstanceRegistry};
 use super::ty::{Rename, Scheme, Ty, TyArena, TyId, TyVar, TypeClass};
 use super::uf::UnionFind;
 use super::unify::SolveCtx;
-use super::{CheckedExprAux, CheckedExprInfo, TypecheckOutput};
+use super::{
+    CheckedExprAux, CheckedExprInfo, CheckedTypePatternInfo, TypecheckOutput,
+};
 use crate::ast::{
     self, AssocTypeDef, AstClassConstraints, AstTypeExprId, ExprId,
-    InstanceMethodDef, Stmt, StmtId, TxnId, TypeParam,
+    InstanceMethodDef, MatchPatternId, Stmt, StmtId, TxnId, TypeParam,
 };
 use crate::env::Environment;
 use crate::error::Result;
@@ -53,8 +57,8 @@ use crate::value::{self, TypeId, TypeRegistry};
 use crate::{ClassId, Error, Span};
 
 /// Resolve all `TyId` values in a map through the union-find.
-fn resolve_map(
-    map: &mut HashMap<ExprId, TyId>,
+fn resolve_map<K: Eq + Hash>(
+    map: &mut HashMap<K, TyId>,
     uf: &mut UnionFind,
     arena: &mut TyArena,
 ) {
@@ -76,12 +80,14 @@ pub(super) struct InterpreterOutput {
     pub(super) union_value_reprs: HashMap<ExprId, TyId>,
     /// Function and closure types keyed by body expression.
     pub(super) function_types: HashMap<ExprId, TyId>,
-    /// Mapping from AST type expression IDs to their resolved `TyId`s.
-    ///
-    /// Populated for `IS` type patterns, `AS` casts, `READ` conversions, and
-    /// match `IS` arms so the interpreter can look up the target type as a
-    /// `RuntimeTyId`.
-    pub(super) ast_type_map: HashMap<AstTypeExprId, TyId>,
+    /// Checked target types for `as`, `read`, and annotation expressions.
+    pub(super) expr_targets: HashMap<ExprId, TyId>,
+    /// Checked type facts for `expr is Pattern` expression patterns.
+    pub(super) is_patterns: HashMap<ExprId, CheckedTypePatternInfo>,
+    /// Checked type annotation targets for `let` bindings, keyed by RHS expr.
+    pub(super) let_targets: HashMap<ExprId, TyId>,
+    /// Checked target types for `name IS Type` match patterns.
+    pub(super) match_targets: HashMap<MatchPatternId, TyId>,
     /// Maps solved alias `TyId`s to their expanded underlying `TyId`s.
     ///
     /// Populated for `read` targets so runtime object-field reads can resolve
@@ -96,7 +102,10 @@ impl InterpreterOutput {
             expr_metadata: HashMap::new(),
             union_value_reprs: HashMap::new(),
             function_types: HashMap::new(),
-            ast_type_map: HashMap::new(),
+            expr_targets: HashMap::new(),
+            is_patterns: HashMap::new(),
+            let_targets: HashMap::new(),
+            match_targets: HashMap::new(),
             alias_type_expansions: HashMap::new(),
         }
     }
@@ -108,9 +117,12 @@ impl InterpreterOutput {
             .for_each(|info| info.resolve(uf, arena));
         resolve_map(&mut self.union_value_reprs, uf, arena);
         resolve_map(&mut self.function_types, uf, arena);
-        self.ast_type_map
+        resolve_map(&mut self.expr_targets, uf, arena);
+        self.is_patterns
             .values_mut()
-            .for_each(|ty| *ty = uf.resolve(*ty, arena));
+            .for_each(|info| info.resolve(uf, arena));
+        resolve_map(&mut self.let_targets, uf, arena);
+        resolve_map(&mut self.match_targets, uf, arena);
         self.alias_type_expansions = mem::take(&mut self.alias_type_expansions)
             .into_iter()
             .map(|(alias, expanded)| {
@@ -914,7 +926,9 @@ pub(crate) struct InferCtx<'a> {
     pub(super) ast: &'a mut ast::Ast,
     /// Registry of user-defined and builtin types.
     pub(super) registry: &'a TypeRegistry,
-    /// Runtime environment; used to look up module function type schemes.
+    /// AST-backed type declaration metadata used only while typechecking.
+    pub(super) decls: TypeDeclRegistry,
+    /// Runtime environment; used for builtin module typecheck setup.
     pub(super) runtime_env: &'a Environment,
     /// Scoped type environment (variable -> scheme bindings).
     pub(super) env: TypeEnv,
@@ -1021,7 +1035,7 @@ impl<'a> InferCtx<'a> {
     ///
     /// The `strings` interner should be shared with the `TypeRegistry` so
     /// type name lookups produce consistent `StringId`s. The `runtime_env`
-    /// is used to look up module function type schemes.
+    /// provides builtin module setup data.
     /// Set `interactive` to `true` to allow top-level expressions without
     /// requiring a `main` function.
     pub(crate) fn new(
@@ -1039,6 +1053,7 @@ impl<'a> InferCtx<'a> {
         Self {
             ast,
             registry,
+            decls: TypeDeclRegistry::default(),
             runtime_env,
             env,
             instance_registry: InstanceRegistry::new(),
@@ -1239,6 +1254,7 @@ impl<'a> InferCtx<'a> {
             ty_arena: &mut self.ty_arena,
             uf: &mut self.uf,
             registry: self.registry,
+            decls: &self.decls,
             instance_registry: &self.instance_registry,
             env: &self.env,
             errors: &mut self.errors,
@@ -1272,7 +1288,15 @@ impl<'a> InferCtx<'a> {
                     .flat_map(CheckedExprInfo::ty_ids),
             )
             .chain(self.interp.union_value_reprs.values().copied())
-            .chain(self.interp.ast_type_map.values().copied())
+            .chain(self.interp.expr_targets.values().copied())
+            .chain(
+                self.interp
+                    .is_patterns
+                    .values()
+                    .flat_map(CheckedTypePatternInfo::ty_ids),
+            )
+            .chain(self.interp.let_targets.values().copied())
+            .chain(self.interp.match_targets.values().copied())
             .collect();
 
         tys.into_iter().for_each(|ty| {
@@ -1516,6 +1540,8 @@ impl<'a> InferCtx<'a> {
         registry: &TypeRegistry,
         arena: &value::ValueArena,
     ) -> Result<TypecheckOutput> {
+        self.decls = TypeDeclRegistry::from_ast(self.ast, stmts, self.registry);
+
         // Pass 1: Hoist function and module declarations for forward references
         self.hoist_declarations(stmts);
 
@@ -1653,15 +1679,28 @@ impl<'a> InferCtx<'a> {
             let errors = formatted.map(Error::FormattedType);
             Err(Error::multiple(errors))
         } else {
+            let module_fn_types = self
+                .runtime_env
+                .builtin_module_fn_types()
+                .into_iter()
+                .map(|(path, scheme)| (path, scheme.ty))
+                .collect();
+            let module_const_types =
+                self.runtime_env.builtin_module_const_types();
             Ok(TypecheckOutput {
                 ty_arena: self.ty_arena,
                 regex_cache: self.interp.regex_cache,
                 expr_metadata: self.interp.expr_metadata,
                 union_value_reprs: self.interp.union_value_reprs,
                 function_types: self.interp.function_types,
+                module_fn_types,
+                module_const_types,
                 class_registry: self.env.class_registry,
                 expr_types: self.expr_types,
-                ast_type_map: self.interp.ast_type_map,
+                expr_targets: self.interp.expr_targets,
+                is_patterns: self.interp.is_patterns,
+                let_targets: self.interp.let_targets,
+                match_targets: self.interp.match_targets,
                 alias_type_expansions: self.interp.alias_type_expansions,
             })
         }

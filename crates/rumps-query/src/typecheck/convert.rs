@@ -9,12 +9,12 @@ use std::iter;
 use indexmap::IndexMap;
 use smallvec::{smallvec, SmallVec};
 
+use super::decl::TypeDeclRegistry;
 use super::env::TypeEnv;
 use super::error::TypeError;
 use super::infer::ClassContext;
 use super::ty::{Ty, TyArena, TyId, TypeClass};
 use super::uf::UnionFind;
-use super::TypeDeclAccess;
 use crate::ast::{Ast, AstTypeExpr, AstTypeExprId, Visibility};
 use crate::intern::{QualifiedName, StringId};
 use crate::value::{TypeDef, TypeId, TypeRegistry};
@@ -30,6 +30,7 @@ pub(super) struct ConvertCtx<'a> {
     pub(super) ty_arena: &'a mut TyArena,
     pub(super) uf: &'a mut UnionFind,
     pub(super) registry: &'a TypeRegistry,
+    pub(super) decls: &'a TypeDeclRegistry,
     pub(super) env: &'a TypeEnv,
     pub(super) ast: &'a mut Ast,
     pub(super) errors: &'a mut Vec<TypeError>,
@@ -149,10 +150,8 @@ impl ConvertCtx<'_> {
             _ => match self.registry.get_def(id) {
                 Some(TypeDef::Union { members, .. }) => {
                     let members = members.clone();
-                    let member_exprs = self
-                        .registry
-                        .union_member_exprs(TypeDeclAccess::new(), id)
-                        .cloned();
+                    let member_exprs =
+                        self.decls.union_member_exprs(id).cloned();
                     let member_tys = if let Some(member_exprs) =
                         member_exprs.filter(|ms| !ms.is_empty())
                     {
@@ -402,11 +401,8 @@ impl ConvertCtx<'_> {
                                                 type_params,
                                                 ..
                                             } => self
-                                                .registry
-                                                .union_member_exprs(
-                                                    TypeDeclAccess::new(),
-                                                    type_id,
-                                                )
+                                                .decls
+                                                .union_member_exprs(type_id)
                                                 .filter(|member_exprs| {
                                                     !member_exprs.is_empty()
                                                 })

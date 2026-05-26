@@ -601,21 +601,27 @@ impl<I: IoContext> Interpreter<'_, I> {
         });
 
         if let Some((recv, fun)) = inst {
-            let fn_name = fun.or_else(|| {
-                self.checked.types.to_type_id(recv).and_then(|tid| {
-                    self.user_instances.lookup_method(
-                        dispatch.class,
-                        tid,
-                        dispatch.method,
-                    )
-                })
-            });
+            let fn_name = match recv {
+                Some(recv) => fun.or_else(|| {
+                    self.checked.types.to_type_id(recv).and_then(|tid| {
+                        self.user_instances.lookup_method(
+                            dispatch.class,
+                            tid,
+                            dispatch.method,
+                        )
+                    })
+                }),
+                None => fun,
+            };
             match fn_name {
                 Some(name) => {
                     self.invoke_user_instance_fn(name, dispatch).await
                 }
                 None => {
-                    typechecked!("class instance dispatch", "resolved method")
+                    typechecked!(
+                        "class instance dispatch",
+                        "receiver or resolved method"
+                    )
                 }
             }
         } else if let Some(tid) = dispatch
@@ -1535,11 +1541,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .env
                 .get_user_module_fn(path)
                 .map(|d| d.params.len())
-                .or_else(|| {
-                    self.env
-                        .get_module_fn_type(path)
-                        .and_then(|s| self.checked.types.scheme_arity(s))
-                }),
+                .or_else(|| self.checked.module_fn_arity(path)),
             Payload::ClassMethodFn { class, method, .. } => {
                 self.checked.class_registry.lookup_by_name(*class).and_then(
                     |kind| {

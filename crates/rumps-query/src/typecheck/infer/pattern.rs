@@ -15,7 +15,6 @@ use crate::ast::{
 use crate::intern::{QualifiedName, StringId};
 use crate::typecheck::error::TypeError;
 use crate::typecheck::ty::{Scheme, Ty, TyArena, TyId};
-use crate::typecheck::TypeDeclAccess;
 use crate::value::{TypeDef, TypeId};
 use crate::Span;
 
@@ -92,12 +91,8 @@ impl InferCtx<'_> {
                         .collect();
 
                     let payloads = self
-                        .registry
-                        .variant_payloads(
-                            TypeDeclAccess::new(),
-                            type_id,
-                            var_def.name,
-                        )
+                        .decls
+                        .variant_payloads(type_id, var_def.name)
                         .cloned()
                         .unwrap_or_default();
 
@@ -256,7 +251,7 @@ impl InferCtx<'_> {
                 MatchPattern::Is(name, ty_id) => {
                     let narrowed_ty =
                         self.convert().ast_type_to_ty(*ty_id, &IndexMap::new());
-                    self.interp.ast_type_map.insert(*ty_id, narrowed_ty);
+                    self.interp.match_targets.insert(pat_id, narrowed_ty);
 
                     // Function types cannot be inspected at runtime for
                     // opaque callables (class method refs, module fn refs,

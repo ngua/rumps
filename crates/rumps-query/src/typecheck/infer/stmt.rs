@@ -25,7 +25,6 @@ use crate::typecheck::instance::{self, Instance};
 use crate::typecheck::ty::{
     ClassShape, Rename, Scheme, Ty, TyArena, TyId, TyVar, TypeClass,
 };
-use crate::typecheck::TypeDeclAccess;
 use crate::value::{TypeDef, TypeId};
 use crate::{ClassId, Span};
 
@@ -702,7 +701,7 @@ impl InferCtx<'_> {
             Some(id) => {
                 let ann_ty =
                     self.convert().ast_type_to_ty(*id, &IndexMap::new());
-                self.interp.ast_type_map.insert(*id, ann_ty);
+                self.interp.let_targets.insert(rhs, ann_ty);
 
                 // Clone to avoid borrow issues with mutable self
                 let rhs_expr = self.ast.get_expr(rhs).cloned();
@@ -816,8 +815,8 @@ impl InferCtx<'_> {
         let is_obj_alias = matches!(ann_shape, Ty::Named(id, _)
         if self.registry.get_def(id).is_some_and(|def| match def {
             TypeDef::Alias { .. } => self
-                .registry
-                .alias_target(TypeDeclAccess::new(), id)
+                .decls
+                .alias_target(id)
                 .and_then(|target| self
                 .ast
                 .get_type_expr(target))

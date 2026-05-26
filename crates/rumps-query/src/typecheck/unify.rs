@@ -22,13 +22,13 @@ use indexmap::IndexMap;
 use smallvec::{smallvec, SmallVec};
 
 use super::convert::ConvertCtx;
+use super::decl::TypeDeclRegistry;
 use super::env::TypeEnv;
 use super::error::TypeError;
 use super::infer::{ClassContext, Constraint};
 use super::instance::{Instance, InstanceRegistry};
 use super::ty::{Rename, Ty, TyArena, TyId, TyVar, TypeClass};
 use super::uf::UnionFind;
-use super::TypeDeclAccess;
 use crate::ast::{Ast, AstTypeExpr};
 use crate::intern::{QualifiedName, StringId};
 use crate::value::{TypeDef, TypeId, TypeRegistry};
@@ -47,6 +47,7 @@ pub(super) struct SolveCtx<'a> {
     pub(super) ty_arena: &'a mut TyArena,
     pub(super) uf: &'a mut UnionFind,
     pub(super) registry: &'a TypeRegistry,
+    pub(super) decls: &'a TypeDeclRegistry,
     pub(super) instance_registry: &'a InstanceRegistry,
     pub(super) env: &'a TypeEnv,
     pub(super) errors: &'a mut Vec<TypeError>,
@@ -127,6 +128,7 @@ impl SolveCtx<'_> {
             ty_arena: self.ty_arena,
             uf: self.uf,
             registry: self.registry,
+            decls: self.decls,
             env: self.env,
             ast: self.ast,
             errors: self.errors,
@@ -199,10 +201,8 @@ impl SolveCtx<'_> {
         };
         match self.registry.get_def(type_id) {
             Some(TypeDef::Alias { type_params, .. }) => {
-                let target = self
-                    .registry
-                    .alias_target(TypeDeclAccess::new(), type_id)
-                    .unwrap_or_else(|| {
+                let target =
+                    self.decls.alias_target(type_id).unwrap_or_else(|| {
                         typechecked!("alias target", "registered")
                     });
                 // Don't expand if target is an object type; let
@@ -1046,10 +1046,8 @@ impl SolveCtx<'_> {
 
         match def {
             Some(TypeDef::Alias { type_params, .. }) => {
-                let target = self
-                    .registry
-                    .alias_target(TypeDeclAccess::new(), type_id)
-                    .unwrap_or_else(|| {
+                let target =
+                    self.decls.alias_target(type_id).unwrap_or_else(|| {
                         typechecked!("alias target", "registered")
                     });
                 // Check if target is an object type
@@ -2721,12 +2719,10 @@ impl SolveCtx<'_> {
                 let def = self.registry.get_def(type_id);
                 match def {
                     Some(TypeDef::Alias { type_params, .. }) => {
-                        let target = self
-                            .registry
-                            .alias_target(TypeDeclAccess::new(), type_id)
-                            .unwrap_or_else(|| {
-                                typechecked!("alias target", "registered")
-                            });
+                        let target =
+                            self.decls.alias_target(type_id).unwrap_or_else(
+                                || typechecked!("alias target", "registered"),
+                            );
                         let params: SmallVec<[StringId; 2]> =
                             type_params.clone();
                         match self.ast.get_type_expr(target).cloned() {

@@ -42,7 +42,7 @@ use crate::ast::{
     TypeParam,
 };
 use crate::intern::{QualifiedName, StringId, StringInterner};
-use crate::typecheck::{RuntimeTyId, TypeDeclAccess};
+use crate::typecheck::RuntimeTyId;
 use crate::Span;
 
 /// A hashable key for `Map` values.
@@ -954,26 +954,6 @@ pub(crate) struct VariantDef {
     pub(crate) arity: u8,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct VariantTypeDecl {
-    name: StringId,
-    payloads: SmallVec<[AstTypeExprId; 2]>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum TypeDeclMeta {
-    None,
-    Sum {
-        variants: SmallVec<[VariantTypeDecl; 4]>,
-    },
-    Alias {
-        target: AstTypeExprId,
-    },
-    Union {
-        member_exprs: SmallVec<[AstTypeExprId; 8]>,
-    },
-}
-
 /// A type definition.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TypeDef {
@@ -1024,7 +1004,6 @@ pub(crate) struct FunctionDef {
 #[derive(Clone, Debug)]
 pub(crate) struct TypeRegistry {
     defs: Vec<TypeDef>,
-    decls: Vec<TypeDeclMeta>,
     by_name: HashMap<QualifiedName, TypeId>,
 }
 
@@ -1039,7 +1018,6 @@ impl TypeRegistry {
     pub(crate) fn new(arena: &mut ValueArena) -> Self {
         let mut reg = Self {
             defs: Vec::new(),
-            decls: Vec::new(),
             by_name: HashMap::new(),
         };
         reg.register_builtins(arena);
@@ -1051,67 +1029,20 @@ impl TypeRegistry {
         def: TypeDef,
         name: QualifiedName,
     ) -> TypeId {
-        self.register_with_decl(def, TypeDeclMeta::None, name)
-    }
-
-    fn register_with_decl(
-        &mut self,
-        def: TypeDef,
-        decl: TypeDeclMeta,
-        name: QualifiedName,
-    ) -> TypeId {
         let id = TypeId(self.defs.len() as u32);
         self.by_name.insert(name, id);
         self.defs.push(def);
-        self.decls.push(decl);
+        id
+    }
+
+    fn register_internal(&mut self, def: TypeDef) -> TypeId {
+        let id = TypeId(self.defs.len() as u32);
+        self.defs.push(def);
         id
     }
 
     pub(crate) fn get_def(&self, id: TypeId) -> Option<&TypeDef> {
         self.defs.get(id.idx())
-    }
-
-    pub(crate) fn alias_target(
-        &self,
-        _access: TypeDeclAccess,
-        id: TypeId,
-    ) -> Option<AstTypeExprId> {
-        self.decls.get(id.idx()).and_then(|decl| match decl {
-            TypeDeclMeta::Alias { target } => Some(*target),
-            TypeDeclMeta::None
-            | TypeDeclMeta::Sum { .. }
-            | TypeDeclMeta::Union { .. } => None,
-        })
-    }
-
-    pub(crate) fn union_member_exprs(
-        &self,
-        _access: TypeDeclAccess,
-        id: TypeId,
-    ) -> Option<&SmallVec<[AstTypeExprId; 8]>> {
-        self.decls.get(id.idx()).and_then(|decl| match decl {
-            TypeDeclMeta::Union { member_exprs } => Some(member_exprs),
-            TypeDeclMeta::None
-            | TypeDeclMeta::Sum { .. }
-            | TypeDeclMeta::Alias { .. } => None,
-        })
-    }
-
-    pub(crate) fn variant_payloads(
-        &self,
-        _access: TypeDeclAccess,
-        ty: TypeId,
-        name: StringId,
-    ) -> Option<&SmallVec<[AstTypeExprId; 2]>> {
-        self.decls.get(ty.idx()).and_then(|decl| match decl {
-            TypeDeclMeta::Sum { variants } => variants
-                .iter()
-                .find(|v| v.name == name)
-                .map(|v| &v.payloads),
-            TypeDeclMeta::None
-            | TypeDeclMeta::Alias { .. }
-            | TypeDeclMeta::Union { .. } => None,
-        })
     }
 
     /// Look up a type by its qualified name.
@@ -1232,8 +1163,7 @@ impl TypeRegistry {
 
         // Object at index 5: registered internally but NOT user-accessible.
         // Users should use structural object types: `{ field: Type, ... }`
-        self.defs.push(TypeDef::Builtin(BuiltinType::Object));
-        self.decls.push(TypeDeclMeta::None);
+        self.register_internal(TypeDef::Builtin(BuiltinType::Object));
         // NOTE: No by_name insert; users cannot reference "Object" in annotations.
 
         // Option[T] at index 6
@@ -1669,16 +1599,13 @@ impl TypeRegistry {
                     self.register_union(qn, type_params, members, ctx);
                 }
                 Stmt::NewType {
-                    name,
-                    type_params,
-                    target,
-                    ..
+                    name, type_params, ..
                 } => {
                     let qn = prefix.map_or_else(
                         || QualifiedName::local(*name),
                         |p| p.child(*name),
                     );
-                    self.register_alias(qn, type_params, *target, ctx.arena);
+                    self.register_alias(qn, type_params, ctx.arena);
                 }
                 Stmt::Module { name, body } => {
                     let new_prefix = prefix.map_or_else(
@@ -1724,22 +1651,11 @@ impl TypeRegistry {
             })
             .collect();
 
-        let variant_decls: SmallVec<[VariantTypeDecl; 4]> = variants
-            .iter()
-            .map(|v| VariantTypeDecl {
-                name: v.name,
-                payloads: v.payloads.clone(),
-            })
-            .collect();
-
-        self.register_with_decl(
+        self.register(
             TypeDef::Sum {
                 name: name_id,
                 type_params: type_param_ids,
                 variants: variant_defs,
-            },
-            TypeDeclMeta::Sum {
-                variants: variant_decls,
             },
             qn.clone(),
         );
@@ -1766,14 +1682,11 @@ impl TypeRegistry {
             .map(|m| resolve_member_type(ctx.ast, self, *m))
             .collect();
 
-        self.register_with_decl(
+        self.register(
             TypeDef::Union {
                 name: name_id,
                 type_params: type_param_ids,
                 members,
-            },
-            TypeDeclMeta::Union {
-                member_exprs: ast_members.iter().copied().collect(),
             },
             qn.clone(),
         );
@@ -1786,7 +1699,6 @@ impl TypeRegistry {
         &mut self,
         qn: QualifiedName,
         type_params: &[TypeParam],
-        target: AstTypeExprId,
         arena: &mut ValueArena,
     ) {
         let disp = qn.display(&arena.strings);
@@ -1796,12 +1708,11 @@ impl TypeRegistry {
         let type_param_ids: SmallVec<[StringId; 2]> =
             type_params.iter().map(|tp| tp.name).collect();
 
-        self.register_with_decl(
+        self.register(
             TypeDef::Alias {
                 name: name_id,
                 type_params: type_param_ids,
             },
-            TypeDeclMeta::Alias { target },
             qn.clone(),
         );
     }

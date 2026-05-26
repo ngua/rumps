@@ -11,7 +11,7 @@ use smallvec::SmallVec;
 
 use super::ty::{ClassRegistry, Ty, TyArena, TyId};
 use super::Scheme;
-use crate::ast::{AstTypeExprId, ExprId};
+use crate::ast::{ExprId, MatchPatternId};
 use crate::intern::StringId;
 use crate::value::{MapKey, Payload, Value, ValueArena, ValueMeta};
 use crate::TypeId;
@@ -641,6 +641,14 @@ impl RuntimeTypes {
         s.arity(&self.arena)
     }
 
+    /// Read a function type arity using this runtime arena.
+    pub(crate) fn fn_arity(&self, ty: RuntimeTyId) -> Option<usize> {
+        match self.get(ty) {
+            Ty::Fn(params, _) => Some(params.len()),
+            _ => None,
+        }
+    }
+
     /// Build `ValueMeta` from a semantic type, computing `repr` automatically.
     pub(crate) fn meta(&self, ty: RuntimeTyId) -> ValueMeta {
         ValueMeta {
@@ -773,7 +781,12 @@ pub(crate) struct CheckedProgram {
     pub(crate) regex_cache: Vec<regex::Regex>,
     pub(crate) class_registry: ClassRegistry,
     pub(crate) function_types: HashMap<ExprId, RuntimeTyId>,
-    pub(crate) ast_type_map: HashMap<AstTypeExprId, RuntimeTyId>,
+    pub(crate) module_fns: HashMap<Vec<StringId>, ValueMeta>,
+    pub(crate) module_consts: HashMap<Vec<StringId>, ValueMeta>,
+    pub(crate) expr_targets: HashMap<ExprId, RuntimeTyId>,
+    pub(crate) is_patterns: HashMap<ExprId, TypePatternInfo>,
+    pub(crate) let_targets: HashMap<ExprId, RuntimeTyId>,
+    pub(crate) match_targets: HashMap<MatchPatternId, RuntimeTyId>,
 }
 
 impl CheckedProgram {
@@ -782,6 +795,47 @@ impl CheckedProgram {
         self.exprs
             .get(&id)
             .unwrap_or_else(|| invariant!("ExprId in checked program"))
+    }
+
+    pub(crate) fn module_fn_meta(
+        &self,
+        path: &[StringId],
+    ) -> Option<ValueMeta> {
+        self.module_fns.get(path).copied()
+    }
+
+    pub(crate) fn module_fn_arity(&self, path: &[StringId]) -> Option<usize> {
+        self.module_fn_meta(path)
+            .and_then(|meta| self.types.fn_arity(meta.ty))
+    }
+
+    pub(crate) fn module_const_meta(
+        &self,
+        path: &[StringId],
+    ) -> Option<ValueMeta> {
+        self.module_consts.get(path).copied()
+    }
+
+    pub(crate) fn expr_target(
+        &self,
+        id: ExprId,
+        ctx: &'static str,
+    ) -> RuntimeTyId {
+        self.expr_targets
+            .get(&id)
+            .copied()
+            .unwrap_or_else(|| typechecked!(ctx, "checked expression target"))
+    }
+
+    pub(crate) fn let_target(&self, id: ExprId) -> Option<RuntimeTyId> {
+        self.let_targets.get(&id).copied()
+    }
+
+    pub(crate) fn match_target(&self, id: MatchPatternId) -> RuntimeTyId {
+        self.match_targets
+            .get(&id)
+            .copied()
+            .unwrap_or_else(|| typechecked!("match IS", "checked target type"))
     }
 }
 
@@ -805,12 +859,18 @@ pub(crate) enum ExprAux {
     },
     /// Method call dispatched through a class instance.
     InstanceCall {
-        recv: RuntimeTyId,
+        recv: Option<RuntimeTyId>,
         fun: Option<StringId>,
         class: Option<StringId>,
     },
     /// Naked (`:method`) reference resolved to a specific class.
     NakedMethod { class: StringId },
+}
+
+#[derive(Clone)]
+pub(crate) enum TypePatternInfo {
+    Type(RuntimeTyId),
+    Object(Vec<(StringId, RuntimeTyId)>),
 }
 
 #[cfg(test)]

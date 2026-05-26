@@ -278,7 +278,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Evaluate an array literal with expected union element type.
     ///
-    /// Used when the array has a type annotation like `[1, "a"]: Array[Subscript]`.
+    /// Used when typecheck metadata gives the array a union element type.
     /// Unlike `array()`, this does NOT fall back to JSON for heterogeneous elements;
     /// instead, it validates each element is a member of the union and constructs
     /// `Payload::Array` with the union element type.
