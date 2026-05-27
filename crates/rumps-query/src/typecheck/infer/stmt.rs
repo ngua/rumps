@@ -19,7 +19,7 @@ use crate::ast::{
     StmtId, TypeDefAst, TypeParam, UnOp, Visibility, WriteExpr,
 };
 use crate::intern::{QualifiedName, StringId};
-use crate::interpreter::instance::instance_fn_name_owned;
+use crate::interpreter::instance::RuntimeInstance;
 use crate::typecheck::error::TypeError;
 use crate::typecheck::instance::{self, Instance};
 use crate::typecheck::ty::{
@@ -1263,7 +1263,7 @@ impl InferCtx<'_> {
                 .iter()
                 .map(|m| {
                     let mn = self.env.resolve_str(m.name);
-                    let fn_name = instance_fn_name_owned(
+                    let fn_name = RuntimeInstance::fn_name_owned(
                         &class_name_str,
                         &type_name,
                         mn,

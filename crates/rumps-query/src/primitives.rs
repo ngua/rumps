@@ -56,13 +56,15 @@ use smallvec::{smallvec, SmallVec};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::env::{PrimCtx, PrimResult};
-use crate::interpreter::convert::escape_str;
+use crate::interpreter::convert::RawDisplay;
 use crate::typecheck::{RuntimeTyId, RuntimeTypes};
 use crate::value::{MapKey, Payload, TypeId, Value, ValueArena, ValueId};
 use crate::{Result, StringId};
 
-fn meta_type_id(tys: &RuntimeTypes, v: &Value) -> Option<TypeId> {
-    tys.to_type_id(v.repr).or_else(|| tys.to_type_id(v.ty))
+impl RuntimeTypes {
+    fn meta_type_id(&self, v: &Value) -> Option<TypeId> {
+        self.to_type_id(v.repr).or_else(|| self.to_type_id(v.ty))
+    }
 }
 
 /// Shared utilities for primitive function implementations.
@@ -923,7 +925,7 @@ impl Str {
                 .unwrap_or_else(|| typechecked!("String.escape", "String"));
 
             let s = Self::valid_str(ctx.arena, sid);
-            let escaped = escape_str(s);
+            let escaped = RawDisplay::escape_str(s);
             let new_sid = ctx.arena.intern(&escaped);
             Ok(ctx.arena.add_typed(
                 Payload::String(new_sid),
@@ -2061,7 +2063,7 @@ impl Opt {
             let opt = ctx.arena.value(args[0]).cloned().ok_or_else(|| {
                 ctx.runtime_error("Option.unwrap-or: invalid value")
             })?;
-            let opt_ty = meta_type_id(ctx.runtime_types, &opt);
+            let opt_ty = ctx.runtime_types.meta_type_id(&opt);
 
             match (opt_ty, opt.payload) {
                 (Some(TypeId::OPTION), Payload::Variant { tag: 1, vals }) => {
@@ -2094,7 +2096,7 @@ impl Opt {
                 ctx.arena.value(args[0]).cloned().unwrap_or_else(|| {
                     typechecked!("Option.flatten", "valid arg")
                 });
-            let opt_ty = meta_type_id(ctx.runtime_types, &opt);
+            let opt_ty = ctx.runtime_types.meta_type_id(&opt);
 
             match (opt_ty, opt.payload) {
                 (Some(TypeId::OPTION), Payload::Variant { tag: 1, vals }) => {
@@ -2123,7 +2125,7 @@ impl Opt {
                 ctx.arena.value(args[1]).cloned().unwrap_or_else(|| {
                     typechecked!("Option.note", "valid arg")
                 });
-            let opt_ty = meta_type_id(ctx.runtime_types, &opt);
+            let opt_ty = ctx.runtime_types.meta_type_id(&opt);
 
             match (opt_ty, opt.payload) {
                 (Some(TypeId::OPTION), Payload::Variant { tag: 1, vals }) => {
@@ -2163,7 +2165,7 @@ impl Res {
             let res = ctx.arena.value(args[0]).cloned().ok_or_else(|| {
                 ctx.runtime_error("Result.unwrap-or: invalid value")
             })?;
-            let res_ty = meta_type_id(ctx.runtime_types, &res);
+            let res_ty = ctx.runtime_types.meta_type_id(&res);
 
             match (res_ty, res.payload) {
                 (Some(TypeId::RESULT), Payload::Variant { tag: 0, vals }) => {
@@ -2194,7 +2196,7 @@ impl Res {
                 ctx.arena.value(args[0]).cloned().unwrap_or_else(|| {
                     typechecked!("Result.flatten", "valid arg")
                 });
-            let res_ty = meta_type_id(ctx.runtime_types, &res);
+            let res_ty = ctx.runtime_types.meta_type_id(&res);
 
             match (res_ty, res.payload) {
                 (Some(TypeId::RESULT), Payload::Variant { tag: 0, vals }) => {
@@ -2223,7 +2225,7 @@ impl Res {
                 ctx.arena.value(args[0]).cloned().unwrap_or_else(|| {
                     typechecked!("Result.hush", "valid arg")
                 });
-            let res_ty = meta_type_id(ctx.runtime_types, &res);
+            let res_ty = ctx.runtime_types.meta_type_id(&res);
 
             match (res_ty, res.payload) {
                 (Some(TypeId::RESULT), Payload::Variant { tag: 0, vals }) => {

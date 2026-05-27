@@ -18,7 +18,7 @@
 //!         Done(v) => return v,
 //!         Invoke(cont) => {
 //!             let r = invoke_callable(cont.callee, cont.args).await;
-//!             result = resume(cont, r);
+//!             result = ctx.resume(cont, r);
 //!         }
 //!     }
 //! }
@@ -174,472 +174,475 @@ pub(crate) enum SortFrame {
 pub(crate) type HofMethodFn =
     fn(&mut ClassCtx<'_>, &[ValueId]) -> Result<MethodResult>;
 
-fn callable_ret_ty(
-    ctx: &ClassCtx<'_>,
-    id: ValueId,
-    label: &str,
-) -> RuntimeTyId {
-    ctx.arena
-        .ty(id)
-        .and_then(|ty| match ctx.runtime_types.get(ty) {
-            Ty::Fn(_, ret) => Some(RuntimeTyId::from(*ret)),
-            _ => None,
-        })
-        .unwrap_or_else(|| typechecked!(label, "callable metadata"))
-}
+impl ClassCtx<'_> {
+    fn callable_ret_ty(&self, id: ValueId, label: &str) -> RuntimeTyId {
+        self.arena
+            .ty(id)
+            .and_then(|ty| match self.runtime_types.get(ty) {
+                Ty::Fn(_, ret) => Some(RuntimeTyId::from(*ret)),
+                _ => None,
+            })
+            .unwrap_or_else(|| typechecked!(label, "callable metadata"))
+    }
 
-fn result_tys(
-    ctx: &ClassCtx<'_>,
-    id: ValueId,
-) -> Option<(RuntimeTyId, RuntimeTyId)> {
-    ctx.arena
-        .meta(id)
-        .map(|meta| meta.repr)
-        .or_else(|| ctx.arena.ty(id))
-        .and_then(|ty| match ctx.runtime_types.get(ty) {
-            Ty::Result(ok, err) => {
-                Some((RuntimeTyId::from(*ok), RuntimeTyId::from(*err)))
-            }
-            _ => None,
-        })
-}
-
-/// Resume a HoF continuation with the result of a closure invocation.
-///
-/// Called by the trampoline loop after each `invoke_callable`.
-pub(crate) fn resume(
-    ctx: &mut ClassCtx<'_>,
-    cont: Continuation,
-    result: ValueId,
-) -> Result<MethodResult> {
-    match cont.state {
-        HofState::MapIter { kind, mut acc, .. } => {
-            acc.push(result);
-            let IterKind::Array { source, idx } = kind;
-            let next_idx = idx + 1;
-            match ctx.arena.payload(source) {
-                Some(Payload::Array(elems)) if next_idx >= elems.len() => {
-                    Ok(MethodResult::Done(Payload::Array(Arc::new(acc))))
+    fn result_tys(&self, id: ValueId) -> Option<(RuntimeTyId, RuntimeTyId)> {
+        self.arena
+            .meta(id)
+            .map(|meta| meta.repr)
+            .or_else(|| self.arena.ty(id))
+            .and_then(|ty| match self.runtime_types.get(ty) {
+                Ty::Result(ok, err) => {
+                    Some((RuntimeTyId::from(*ok), RuntimeTyId::from(*err)))
                 }
-                Some(Payload::Array(elems)) => {
-                    Ok(MethodResult::Invoke(Continuation {
-                        callee: cont.callee,
-                        args: smallvec![elems[next_idx]],
-                        state: HofState::MapIter {
-                            kind: IterKind::Array {
+                _ => None,
+            })
+    }
+
+    /// Resume a HoF continuation with the result of a closure invocation.
+    ///
+    /// Called by the trampoline loop after each `invoke_callable`.
+    pub(crate) fn resume(
+        &mut self,
+        cont: Continuation,
+        result: ValueId,
+    ) -> Result<MethodResult> {
+        match cont.state {
+            HofState::MapIter { kind, mut acc, .. } => {
+                acc.push(result);
+                let IterKind::Array { source, idx } = kind;
+                let next_idx = idx + 1;
+                match self.arena.payload(source) {
+                    Some(Payload::Array(elems)) if next_idx >= elems.len() => {
+                        Ok(MethodResult::Done(Payload::Array(Arc::new(acc))))
+                    }
+                    Some(Payload::Array(elems)) => {
+                        Ok(MethodResult::Invoke(Continuation {
+                            callee: cont.callee,
+                            args: smallvec![elems[next_idx]],
+                            state: HofState::MapIter {
+                                kind: IterKind::Array {
+                                    source,
+                                    idx: next_idx,
+                                },
+                                acc,
+                            },
+                        }))
+                    }
+                    _ => invariant!("MapIter Array source must be Array"),
+                }
+            }
+            HofState::MapContainer { ctor_ty: _, tag } => {
+                Ok(MethodResult::Done(Payload::Variant {
+                    tag,
+                    vals: smallvec![result],
+                }))
+            }
+            HofState::MapOption => {
+                let elem =
+                    self.arena.meta(result).map(|m| m.ty).unwrap_or_else(
+                        || typechecked!("Option.map", "result meta"),
+                    );
+                let ty = self.runtime_types.option(elem);
+                let id = self.arena.add_typed(
+                    Payload::Variant {
+                        tag: 1,
+                        vals: smallvec![result],
+                    },
+                    self.runtime_types.meta(ty),
+                    self.span,
+                );
+                Ok(MethodResult::DoneValue(id))
+            }
+            HofState::MapResult { err_ty } => {
+                let ok_ty =
+                    self.arena.meta(result).map(|m| m.ty).unwrap_or_else(
+                        || typechecked!("Result.map", "result meta"),
+                    );
+                let ty = self.runtime_types.result(ok_ty, err_ty);
+                let id = self.arena.add_typed(
+                    Payload::Variant {
+                        tag: 0,
+                        vals: smallvec![result],
+                    },
+                    self.runtime_types.meta(ty),
+                    self.span,
+                );
+                Ok(MethodResult::DoneValue(id))
+            }
+            HofState::FilterArray {
+                source,
+                idx,
+                mut acc,
+                pending,
+            } => {
+                // Check if predicate returned true
+                let keep = matches!(
+                    self.arena.payload(result),
+                    Some(Payload::Bool(true))
+                );
+                if keep {
+                    acc.push(pending);
+                }
+                let next_idx = idx + 1;
+                match self.arena.payload(source) {
+                    Some(Payload::Array(elems)) if next_idx >= elems.len() => {
+                        Ok(MethodResult::Done(Payload::Array(Arc::new(acc))))
+                    }
+                    Some(Payload::Array(elems)) => {
+                        let next_elem = elems[next_idx];
+                        Ok(MethodResult::Invoke(Continuation {
+                            callee: cont.callee,
+                            args: smallvec![next_elem],
+                            state: HofState::FilterArray {
                                 source,
                                 idx: next_idx,
+                                acc,
+                                pending: next_elem,
                             },
-                            acc,
-                        },
-                    }))
+                        }))
+                    }
+                    _ => invariant!("FilterArray source must be Array"),
                 }
-                _ => invariant!("MapIter Array source must be Array"),
             }
-        }
-        HofState::MapContainer { ctor_ty: _, tag } => {
-            Ok(MethodResult::Done(Payload::Variant {
-                tag,
-                vals: smallvec![result],
-            }))
-        }
-        HofState::MapOption => {
-            let elem =
-                ctx.arena.meta(result).map(|m| m.ty).unwrap_or_else(|| {
-                    typechecked!("Option.map", "result meta")
-                });
-            let ty = ctx.runtime_types.option(elem);
-            let id = ctx.arena.add_typed(
-                Payload::Variant {
-                    tag: 1,
-                    vals: smallvec![result],
-                },
-                ctx.runtime_types.meta(ty),
-                ctx.span,
-            );
-            Ok(MethodResult::DoneValue(id))
-        }
-        HofState::MapResult { err_ty } => {
-            let ok_ty =
-                ctx.arena.meta(result).map(|m| m.ty).unwrap_or_else(|| {
-                    typechecked!("Result.map", "result meta")
-                });
-            let ty = ctx.runtime_types.result(ok_ty, err_ty);
-            let id = ctx.arena.add_typed(
-                Payload::Variant {
-                    tag: 0,
-                    vals: smallvec![result],
-                },
-                ctx.runtime_types.meta(ty),
-                ctx.span,
-            );
-            Ok(MethodResult::DoneValue(id))
-        }
-        HofState::FilterArray {
-            source,
-            idx,
-            mut acc,
-            pending,
-        } => {
-            // Check if predicate returned true
-            let keep =
-                matches!(ctx.arena.payload(result), Some(Payload::Bool(true)));
-            if keep {
-                acc.push(pending);
-            }
-            let next_idx = idx + 1;
-            match ctx.arena.payload(source) {
-                Some(Payload::Array(elems)) if next_idx >= elems.len() => {
-                    Ok(MethodResult::Done(Payload::Array(Arc::new(acc))))
+            HofState::ReduceArray {
+                source,
+                idx,
+                acc: _,
+            } => {
+                let next_idx = idx + 1;
+                match self.arena.payload(source) {
+                    Some(Payload::Array(elems)) if next_idx >= elems.len() => {
+                        Ok(MethodResult::DoneValue(result))
+                    }
+                    Some(Payload::Array(elems)) => {
+                        Ok(MethodResult::Invoke(Continuation {
+                            callee: cont.callee,
+                            args: smallvec![result, elems[next_idx]],
+                            state: HofState::ReduceArray {
+                                source,
+                                idx: next_idx,
+                                acc: result,
+                            },
+                        }))
+                    }
+                    _ => invariant!("ReduceArray source must be Array"),
                 }
-                Some(Payload::Array(elems)) => {
-                    let next_elem = elems[next_idx];
-                    Ok(MethodResult::Invoke(Continuation {
-                        callee: cont.callee,
-                        args: smallvec![next_elem],
-                        state: HofState::FilterArray {
-                            source,
-                            idx: next_idx,
-                            acc,
-                            pending: next_elem,
-                        },
-                    }))
-                }
-                _ => invariant!("FilterArray source must be Array"),
             }
-        }
-        HofState::ReduceArray {
-            source,
-            idx,
-            acc: _,
-        } => {
-            let next_idx = idx + 1;
-            match ctx.arena.payload(source) {
-                Some(Payload::Array(elems)) if next_idx >= elems.len() => {
+            HofState::ReduceRange { current, end, acc } => {
+                let _ = acc;
+                // `current` is the next value to process.
+                if current >= end {
                     Ok(MethodResult::DoneValue(result))
-                }
-                Some(Payload::Array(elems)) => {
+                } else {
+                    let int_id = self.arena.add_typed(
+                        Payload::Int(current),
+                        self.runtime_types.meta_int(),
+                        self.span,
+                    );
                     Ok(MethodResult::Invoke(Continuation {
                         callee: cont.callee,
-                        args: smallvec![result, elems[next_idx]],
-                        state: HofState::ReduceArray {
-                            source,
-                            idx: next_idx,
+                        args: smallvec![result, int_id],
+                        state: HofState::ReduceRange {
+                            current: current + 1,
+                            end,
                             acc: result,
                         },
                     }))
                 }
-                _ => invariant!("ReduceArray source must be Array"),
             }
-        }
-        HofState::ReduceRange { current, end, acc } => {
-            let _ = acc;
-            // `current` is the next value to process.
-            if current >= end {
-                Ok(MethodResult::DoneValue(result))
-            } else {
-                let int_id = ctx.arena.add_typed(
-                    Payload::Int(current),
-                    ctx.runtime_types.meta_int(),
-                    ctx.span,
-                );
-                Ok(MethodResult::Invoke(Continuation {
-                    callee: cont.callee,
-                    args: smallvec![result, int_id],
-                    state: HofState::ReduceRange {
-                        current: current + 1,
-                        end,
-                        acc: result,
-                    },
-                }))
-            }
-        }
-        HofState::Chain { wrapper } => match wrapper {
-            ChainWrapper::OptionSome | ChainWrapper::ResultOk => {
-                Ok(MethodResult::DoneValue(result))
-            }
-            ChainWrapper::ResultErr(e) => {
-                Ok(MethodResult::Done(Payload::err(e)))
-            }
-        },
-        HofState::ZipWith {
-            arr_a,
-            arr_b,
-            idx,
-            mut acc,
-            ..
-        } => {
-            acc.push(result);
-            let next_idx = idx + 1;
-            let (elems_a, elems_b) =
-                match (ctx.arena.payload(arr_a), ctx.arena.payload(arr_b)) {
+            HofState::Chain { wrapper } => match wrapper {
+                ChainWrapper::OptionSome | ChainWrapper::ResultOk => {
+                    Ok(MethodResult::DoneValue(result))
+                }
+                ChainWrapper::ResultErr(e) => {
+                    Ok(MethodResult::Done(Payload::err(e)))
+                }
+            },
+            HofState::ZipWith {
+                arr_a,
+                arr_b,
+                idx,
+                mut acc,
+                ..
+            } => {
+                acc.push(result);
+                let next_idx = idx + 1;
+                let (elems_a, elems_b) = match (
+                    self.arena.payload(arr_a),
+                    self.arena.payload(arr_b),
+                ) {
                     (Some(Payload::Array(a)), Some(Payload::Array(b))) => {
                         (a.clone(), b.clone())
                     }
                     _ => invariant!("ZipWith sources must be Arrays"),
                 };
-            if next_idx >= elems_a.len() || next_idx >= elems_b.len() {
-                Ok(MethodResult::Done(Payload::Array(Arc::new(acc))))
-            } else {
-                Ok(MethodResult::Invoke(Continuation {
-                    callee: cont.callee,
-                    args: smallvec![elems_a[next_idx], elems_b[next_idx]],
-                    state: HofState::ZipWith {
-                        arr_a,
-                        arr_b,
-                        idx: next_idx,
-                        acc,
+                if next_idx >= elems_a.len() || next_idx >= elems_b.len() {
+                    Ok(MethodResult::Done(Payload::Array(Arc::new(acc))))
+                } else {
+                    Ok(MethodResult::Invoke(Continuation {
+                        callee: cont.callee,
+                        args: smallvec![elems_a[next_idx], elems_b[next_idx]],
+                        state: HofState::ZipWith {
+                            arr_a,
+                            arr_b,
+                            idx: next_idx,
+                            acc,
+                        },
+                    }))
+                }
+            }
+            HofState::ForeachArray { source, idx } => {
+                let next_idx = idx + 1;
+                match self.arena.payload(source) {
+                    Some(Payload::Array(elems)) => match elems.get(next_idx) {
+                        Some(next_elem) => {
+                            Ok(MethodResult::Invoke(Continuation {
+                                callee: cont.callee,
+                                args: smallvec![*next_elem],
+                                state: HofState::ForeachArray {
+                                    source,
+                                    idx: next_idx,
+                                },
+                            }))
+                        }
+                        None => Ok(MethodResult::Done(Payload::Unit)),
                     },
+                    _ => invariant!("ForeachArray source must be Array"),
+                }
+            }
+            HofState::ForeachOnce => Ok(MethodResult::Done(Payload::Unit)),
+            HofState::SortBy { source, stack } => {
+                self.resume_sort_by(cont.callee, source, stack, Some(result))
+            }
+            HofState::ResultMapErr { ok_ty } => {
+                let err_ty =
+                    self.arena.meta(result).map(|m| m.ty).unwrap_or_else(
+                        || typechecked!("Result.map-err", "result meta"),
+                    );
+                let ty = self.runtime_types.result(ok_ty, err_ty);
+                let id = self.arena.add_typed(
+                    Payload::Variant {
+                        tag: 1,
+                        vals: smallvec![result],
+                    },
+                    self.runtime_types.meta(ty),
+                    self.span,
+                );
+                Ok(MethodResult::DoneValue(id))
+            }
+            HofState::BimapResult { tag } => {
+                Ok(MethodResult::Done(Payload::Variant {
+                    tag,
+                    vals: smallvec![result],
                 }))
             }
-        }
-        HofState::ForeachArray { source, idx } => {
-            let next_idx = idx + 1;
-            match ctx.arena.payload(source) {
-                Some(Payload::Array(elems)) => match elems.get(next_idx) {
-                    Some(next_elem) => Ok(MethodResult::Invoke(Continuation {
-                        callee: cont.callee,
-                        args: smallvec![*next_elem],
-                        state: HofState::ForeachArray {
-                            source,
-                            idx: next_idx,
-                        },
-                    })),
-                    None => Ok(MethodResult::Done(Payload::Unit)),
-                },
-                _ => invariant!("ForeachArray source must be Array"),
-            }
-        }
-        HofState::ForeachOnce => Ok(MethodResult::Done(Payload::Unit)),
-        HofState::SortBy { source, stack } => {
-            resume_sort_by(ctx, cont.callee, source, stack, Some(result))
-        }
-        HofState::ResultMapErr { ok_ty } => {
-            let err_ty =
-                ctx.arena.meta(result).map(|m| m.ty).unwrap_or_else(|| {
-                    typechecked!("Result.map-err", "result meta")
-                });
-            let ty = ctx.runtime_types.result(ok_ty, err_ty);
-            let id = ctx.arena.add_typed(
-                Payload::Variant {
-                    tag: 1,
-                    vals: smallvec![result],
-                },
-                ctx.runtime_types.meta(ty),
-                ctx.span,
-            );
-            Ok(MethodResult::DoneValue(id))
-        }
-        HofState::BimapResult { tag } => {
-            Ok(MethodResult::Done(Payload::Variant {
-                tag,
-                vals: smallvec![result],
-            }))
-        }
-        HofState::BimapTuple {
-            second_fn,
-            second_elem,
-            first_result: None,
-        } => Ok(MethodResult::Invoke(Continuation {
-            callee: second_fn,
-            args: smallvec![second_elem],
-            state: HofState::BimapTuple {
+            HofState::BimapTuple {
                 second_fn,
                 second_elem,
-                first_result: Some(result),
-            },
-        })),
-        HofState::BimapTuple {
-            first_result: Some(fst),
-            ..
-        } => Ok(MethodResult::Done(Payload::Tuple(Arc::new(smallvec![
-            fst, result
-        ])))),
-    }
-}
-
-/// Resume or advance sort-by algorithm.
-///
-/// This implements a stack-based merge sort. The algorithm advances until
-/// it needs a comparison (returns `Invoke`) or is done (returns `Done`).
-pub(crate) fn resume_sort_by(
-    ctx: &mut ClassCtx<'_>,
-    cmp_fn: ValueId,
-    source: ValueId,
-    mut stack: Vec<SortFrame>,
-    cmp_result: Option<ValueId>,
-) -> Result<MethodResult> {
-    // Get source array elements
-    let elems = match ctx.arena.payload(source) {
-        Some(Payload::Array(e)) => e.clone(),
-        _ => invariant!("SortBy source must be Array"),
-    };
-
-    // Handle comparison result from previous step
-    let mut pending: Option<SmallVec<[ValueId; 4]>> = None;
-    if let Some(result) = cmp_result {
-        // We were in a Merge; process the comparison result
-        match stack.pop() {
-            Some(SortFrame::Merge {
-                left,
-                right,
-                li,
-                ri,
-                mut merged,
-            }) => {
-                // Check comparison result (expecting Ordering value)
-                let take_left = match ctx.arena.value(result) {
-                    Some(v)
-                        if ctx
-                            .runtime_types
-                            .to_type_id(v.repr)
-                            .or_else(|| ctx.runtime_types.to_type_id(v.ty))
-                            .is_some_and(|ty| ty == TypeId::ORDERING) =>
-                    {
-                        match &v.payload {
-                            Payload::Variant { tag, .. } => *tag <= 1,
-                            _ => true,
-                        }
-                    }
-                    _ => true, // Default to left on unexpected
-                };
-                if take_left {
-                    merged.push(left[li]);
-                    let new_li = li + 1;
-                    if new_li >= left.len() {
-                        // Left exhausted; append rest of right
-                        merged.extend(right[ri..].iter().copied());
-                        pending = Some(merged);
-                    } else {
-                        stack.push(SortFrame::Merge {
-                            left,
-                            right,
-                            li: new_li,
-                            ri,
-                            merged,
-                        });
-                    }
-                } else {
-                    merged.push(right[ri]);
-                    let new_ri = ri + 1;
-                    if new_ri >= right.len() {
-                        // Right exhausted; append rest of left
-                        merged.extend(left[li..].iter().copied());
-                        pending = Some(merged);
-                    } else {
-                        stack.push(SortFrame::Merge {
-                            left,
-                            right,
-                            li,
-                            ri: new_ri,
-                            merged,
-                        });
-                    }
-                }
-            }
-            other => {
-                // Put it back; we'll process below
-                if let Some(f) = other {
-                    stack.push(f);
-                }
-            }
+                first_result: None,
+            } => Ok(MethodResult::Invoke(Continuation {
+                callee: second_fn,
+                args: smallvec![second_elem],
+                state: HofState::BimapTuple {
+                    second_fn,
+                    second_elem,
+                    first_result: Some(result),
+                },
+            })),
+            HofState::BimapTuple {
+                first_result: Some(fst),
+                ..
+            } => Ok(MethodResult::Done(Payload::Tuple(Arc::new(smallvec![
+                fst, result
+            ])))),
         }
     }
 
-    // Main loop: advance until we need a comparison or are done
-    loop {
-        // If we have a pending result, propagate it up
-        if let Some(sorted) = pending.take() {
+    /// Resume or advance sort-by algorithm.
+    ///
+    /// This implements a stack-based merge sort. The algorithm advances until
+    /// it needs a comparison (returns `Invoke`) or is done (returns `Done`).
+    fn resume_sort_by(
+        &mut self,
+        cmp_fn: ValueId,
+        source: ValueId,
+        mut stack: Vec<SortFrame>,
+        cmp_result: Option<ValueId>,
+    ) -> Result<MethodResult> {
+        // Get source array elements
+        let elems = match self.arena.payload(source) {
+            Some(Payload::Array(e)) => e.clone(),
+            _ => invariant!("SortBy source must be Array"),
+        };
+
+        // Handle comparison result from previous step
+        let mut pending: Option<SmallVec<[ValueId; 4]>> = None;
+        if let Some(result) = cmp_result {
+            // We were in a Merge; process the comparison result
             match stack.pop() {
-                None => {
-                    // Done! Return sorted array
-                    break Ok(MethodResult::Done(Payload::Array(Arc::new(
-                        sorted,
-                    ))));
-                }
-                Some(SortFrame::MergeAfterRight { left, lo, hi }) => {
-                    if left.is_empty() {
-                        // This was waiting for left half; now sort right
-                        let mid = lo + (hi - lo) / 2;
-                        stack.push(SortFrame::MergeAfterRight {
-                            left: sorted,
-                            lo,
-                            hi,
-                        });
-                        stack.push(SortFrame::Sort { lo: mid, hi });
+                Some(SortFrame::Merge {
+                    left,
+                    right,
+                    li,
+                    ri,
+                    mut merged,
+                }) => {
+                    // Check comparison result (expecting Ordering value)
+                    let take_left = match self.arena.value(result) {
+                        Some(v)
+                            if self
+                                .runtime_types
+                                .to_type_id(v.repr)
+                                .or_else(|| self.runtime_types.to_type_id(v.ty))
+                                .is_some_and(|ty| ty == TypeId::ORDERING) =>
+                        {
+                            match &v.payload {
+                                Payload::Variant { tag, .. } => *tag <= 1,
+                                _ => true,
+                            }
+                        }
+                        _ => true, // Default to left on unexpected
+                    };
+                    if take_left {
+                        merged.push(left[li]);
+                        let new_li = li + 1;
+                        if new_li >= left.len() {
+                            // Left exhausted; append rest of right
+                            merged.extend(right[ri..].iter().copied());
+                            pending = Some(merged);
+                        } else {
+                            stack.push(SortFrame::Merge {
+                                left,
+                                right,
+                                li: new_li,
+                                ri,
+                                merged,
+                            });
+                        }
                     } else {
-                        // We have both halves; start merge
-                        stack.push(SortFrame::Merge {
-                            left,
-                            right: sorted,
-                            li: 0,
-                            ri: 0,
-                            merged: SmallVec::new(),
-                        });
-                    }
-                }
-                Some(other) => {
-                    // Shouldn't happen
-                    stack.push(other);
-                    invariant!("Unexpected frame when propagating sort result");
-                }
-            }
-            continue;
-        }
-
-        // Process next frame on stack
-        match stack.pop() {
-            None => {
-                // Stack empty with no pending = shouldn't happen
-                invariant!("Sort stack empty unexpectedly");
-            }
-            Some(SortFrame::Sort { lo, hi }) => {
-                if hi - lo <= 1 {
-                    // Base case
-                    pending = Some(elems[lo..hi].iter().copied().collect());
-                } else {
-                    // Split and sort left first
-                    let mid = lo + (hi - lo) / 2;
-                    stack.push(SortFrame::MergeAfterRight {
-                        left: SmallVec::new(),
-                        lo,
-                        hi,
-                    });
-                    stack.push(SortFrame::Sort { lo, hi: mid });
-                }
-            }
-            Some(SortFrame::MergeAfterRight { left, lo, hi }) => {
-                // This shouldn't be on top without a pending result
-                stack.push(SortFrame::MergeAfterRight { left, lo, hi });
-                invariant!("MergeAfterRight without pending result");
-            }
-            Some(SortFrame::Merge {
-                left,
-                right,
-                li,
-                ri,
-                merged,
-            }) => {
-                // Need to compare left[li] and right[ri]
-                let a = left[li];
-                let b = right[ri];
-                break Ok(MethodResult::Invoke(Continuation {
-                    callee: cmp_fn,
-                    args: smallvec![a, b],
-                    state: HofState::SortBy {
-                        source,
-                        stack: {
+                        merged.push(right[ri]);
+                        let new_ri = ri + 1;
+                        if new_ri >= right.len() {
+                            // Right exhausted; append rest of left
+                            merged.extend(left[li..].iter().copied());
+                            pending = Some(merged);
+                        } else {
                             stack.push(SortFrame::Merge {
                                 left,
                                 right,
                                 li,
-                                ri,
+                                ri: new_ri,
                                 merged,
                             });
-                            stack
+                        }
+                    }
+                }
+                other => {
+                    // Put it back; we'll process below
+                    if let Some(f) = other {
+                        stack.push(f);
+                    }
+                }
+            }
+        }
+
+        // Main loop: advance until we need a comparison or are done
+        loop {
+            // If we have a pending result, propagate it up
+            if let Some(sorted) = pending.take() {
+                match stack.pop() {
+                    None => {
+                        // Done! Return sorted array
+                        break Ok(MethodResult::Done(Payload::Array(
+                            Arc::new(sorted),
+                        )));
+                    }
+                    Some(SortFrame::MergeAfterRight { left, lo, hi }) => {
+                        if left.is_empty() {
+                            // This was waiting for left half; now sort right
+                            let mid = lo + (hi - lo) / 2;
+                            stack.push(SortFrame::MergeAfterRight {
+                                left: sorted,
+                                lo,
+                                hi,
+                            });
+                            stack.push(SortFrame::Sort { lo: mid, hi });
+                        } else {
+                            // We have both halves; start merge
+                            stack.push(SortFrame::Merge {
+                                left,
+                                right: sorted,
+                                li: 0,
+                                ri: 0,
+                                merged: SmallVec::new(),
+                            });
+                        }
+                    }
+                    Some(other) => {
+                        // Shouldn't happen
+                        stack.push(other);
+                        invariant!(
+                            "Unexpected frame when propagating sort result"
+                        );
+                    }
+                }
+                continue;
+            }
+
+            // Process next frame on stack
+            match stack.pop() {
+                None => {
+                    // Stack empty with no pending = shouldn't happen
+                    invariant!("Sort stack empty unexpectedly");
+                }
+                Some(SortFrame::Sort { lo, hi }) => {
+                    if hi - lo <= 1 {
+                        // Base case
+                        pending = Some(elems[lo..hi].iter().copied().collect());
+                    } else {
+                        // Split and sort left first
+                        let mid = lo + (hi - lo) / 2;
+                        stack.push(SortFrame::MergeAfterRight {
+                            left: SmallVec::new(),
+                            lo,
+                            hi,
+                        });
+                        stack.push(SortFrame::Sort { lo, hi: mid });
+                    }
+                }
+                Some(SortFrame::MergeAfterRight { left, lo, hi }) => {
+                    // This shouldn't be on top without a pending result
+                    stack.push(SortFrame::MergeAfterRight { left, lo, hi });
+                    invariant!("MergeAfterRight without pending result");
+                }
+                Some(SortFrame::Merge {
+                    left,
+                    right,
+                    li,
+                    ri,
+                    merged,
+                }) => {
+                    // Need to compare left[li] and right[ri]
+                    let a = left[li];
+                    let b = right[ri];
+                    break Ok(MethodResult::Invoke(Continuation {
+                        callee: cmp_fn,
+                        args: smallvec![a, b],
+                        state: HofState::SortBy {
+                            source,
+                            stack: {
+                                stack.push(SortFrame::Merge {
+                                    left,
+                                    right,
+                                    li,
+                                    ri,
+                                    merged,
+                                });
+                                stack
+                            },
                         },
-                    },
-                }));
+                    }));
+                }
             }
         }
     }
@@ -741,7 +744,7 @@ impl OptionHof {
             Other,
         }
 
-        let out_ty = callable_ret_ty(ctx, fn_id, "Option.map");
+        let out_ty = ctx.callable_ret_ty(fn_id, "Option.map");
         let opt_ty = ctx.arena.meta(opt).and_then(|m| {
             ctx.runtime_types
                 .to_type_id(m.repr)
@@ -807,8 +810,8 @@ impl ResultHof {
             Other,
         }
 
-        let out_ty = callable_ret_ty(ctx, fn_id, "Result.map");
-        let tys = result_tys(ctx, res);
+        let out_ty = ctx.callable_ret_ty(fn_id, "Result.map");
+        let tys = ctx.result_tys(res);
         let res_ty = ctx.arena.meta(res).and_then(|m| {
             ctx.runtime_types
                 .to_type_id(m.repr)
@@ -875,8 +878,8 @@ impl ResultHof {
             Err(ValueId, RuntimeTyId),
             Other,
         }
-        let out_ty = callable_ret_ty(ctx, fn_id, "Result.map-err");
-        let tys = result_tys(ctx, res);
+        let out_ty = ctx.callable_ret_ty(fn_id, "Result.map-err");
+        let tys = ctx.result_tys(res);
         let res_ty = ctx.arena.meta(res).and_then(|m| {
             ctx.runtime_types
                 .to_type_id(m.repr)
@@ -1089,8 +1092,7 @@ impl ArrayHof {
             Some(Payload::Array(elems)) => {
                 let len = elems.len();
                 // Kick off merge sort via resume_sort_by with no comparison result
-                resume_sort_by(
-                    ctx,
+                ctx.resume_sort_by(
                     cmp_fn,
                     arr,
                     vec![SortFrame::Sort { lo: 0, hi: len }],

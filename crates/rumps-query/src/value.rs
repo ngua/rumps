@@ -1701,7 +1701,7 @@ impl TypeRegistry {
 
         let members: SmallVec<[TypeId; 8]> = ast_members
             .iter()
-            .map(|m| resolve_member_type(ctx.ast, self, *m))
+            .map(|m| self.resolve_member_type(ctx.ast, *m))
             .collect();
 
         self.register(
@@ -1746,28 +1746,24 @@ impl TypeRegistry {
     fn is_empty(&self) -> bool {
         self.defs.is_empty()
     }
-}
 
-/// Resolve an AST type expression to a base `TypeId` for union member registration.
-///
-/// Union members are stored as `TypeId`s, so we only need
-/// the base type name lookup.
-fn resolve_member_type(
-    ast: &Ast,
-    reg: &TypeRegistry,
-    id: AstTypeExprId,
-) -> TypeId {
-    let te = ast
-        .get_type_expr(id)
-        .unwrap_or_else(|| invariant!("AST type expression ID exists"));
+    /// Resolve an AST type expression to a base `TypeId` for union member registration.
+    ///
+    /// Union members are stored as `TypeId`s, so we only need
+    /// the base type name lookup.
+    fn resolve_member_type(&self, ast: &Ast, id: AstTypeExprId) -> TypeId {
+        let te = ast
+            .get_type_expr(id)
+            .unwrap_or_else(|| invariant!("AST type expression ID exists"));
 
-    match te {
-        AstTypeExpr::Named(name) | AstTypeExpr::App(name, _) => {
-            reg.lookup(name).unwrap_or_else(|| {
-                typechecked!("type reference", "type is defined")
-            })
+        match te {
+            AstTypeExpr::Named(name) | AstTypeExpr::App(name, _) => {
+                self.lookup(name).unwrap_or_else(|| {
+                    typechecked!("type reference", "type is defined")
+                })
+            }
+            _ => typechecked!("union member", "named type expected"),
         }
-        _ => typechecked!("union member", "named type expected"),
     }
 }
 

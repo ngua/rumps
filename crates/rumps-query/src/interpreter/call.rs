@@ -6,7 +6,7 @@ use async_recursion::async_recursion;
 use smallvec::SmallVec;
 
 use super::class::{self, ClassCtx, MethodFn};
-use super::hof::{self, HofMethodFn, HofResult, MethodResult};
+use super::hof::{HofMethodFn, HofResult, MethodResult};
 use super::Interpreter;
 use crate::ast::{Expr, ExprId};
 use crate::env::{PrimCtx, PrimFn};
@@ -1261,11 +1261,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                         regex_cache: &self.checked.regex_cache,
                         span,
                     };
-                    flow = ControlFlow::Continue(hof::resume(
-                        &mut ctx,
-                        cont,
-                        call_result,
-                    )?);
+                    flow =
+                        ControlFlow::Continue(ctx.resume(cont, call_result)?);
                 }
             }
         }

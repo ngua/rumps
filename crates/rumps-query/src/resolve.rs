@@ -34,7 +34,7 @@ use smallvec::{smallvec, SmallVec};
 use crate::ast::{Ast, AstTypeExpr, AstTypeExprId, Expr, ExprId, Stmt, StmtId};
 use crate::env::BUILTIN_MODULE_NAMES;
 use crate::intern::{QualifiedName, StringId};
-use crate::interpreter::instance::instance_fn_name_owned;
+use crate::interpreter::instance::RuntimeInstance;
 use crate::typecheck::ClassRegistry;
 use crate::value::{TypeRegistry, ValueArena};
 use crate::{ClassId, StringInterner};
@@ -385,7 +385,7 @@ impl<'a> ResolveCtx<'a> {
                     .map(|m| {
                         let mn =
                             self.arena.strings.get(m.name).unwrap_or_default();
-                        let fn_name = instance_fn_name_owned(
+                        let fn_name = RuntimeInstance::fn_name_owned(
                             &class_name_str,
                             &fn_type_name,
                             mn,

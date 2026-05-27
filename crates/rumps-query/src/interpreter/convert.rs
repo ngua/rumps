@@ -129,10 +129,10 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// (`\n`, `\t`, etc.) are shown as escape sequences rather than rendered.
     pub(crate) fn display_raw(&mut self, v: &Payload) -> String {
         match v {
-            Payload::Char(c) => escape_char(*c),
+            Payload::Char(c) => Self::escape_char(*c),
             Payload::String(id) | Payload::FilePath(id) => {
                 let s = self.arena.get_str(*id).unwrap_or("");
-                format!("\"{}\"", escape_str(s))
+                format!("\"{}\"", RawDisplay::escape_str(s))
             }
             Payload::Array(elems) => {
                 let vals: Vec<_> = elems
@@ -372,8 +372,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             serde_json::Value::Array(arr) => {
                 let dominated = arr.first().is_none_or(|first| {
-                    let tag = json_type_tag(first);
-                    arr.iter().skip(1).all(|v| json_type_tag(v) == tag)
+                    let tag = Self::json_type_tag(first);
+                    arr.iter().skip(1).all(|v| Self::json_type_tag(v) == tag)
                 });
 
                 if dominated {
@@ -501,44 +501,48 @@ impl<I: IoContext> Interpreter<'_, I> {
             _ => typechecked!("file path", "FilePath | String"),
         }
     }
-}
 
-/// Get a discriminant tag for JSON value type (for homogeneity checks).
-fn json_type_tag(v: &serde_json::Value) -> u8 {
-    match v {
-        serde_json::Value::Null => 0,
-        serde_json::Value::Bool(_) => 1,
-        serde_json::Value::Number(_) => 2,
-        serde_json::Value::String(_) => 3,
-        serde_json::Value::Array(_) => 4,
-        serde_json::Value::Object(_) => 5,
+    /// Get a discriminant tag for JSON value type (for homogeneity checks).
+    fn json_type_tag(v: &serde_json::Value) -> u8 {
+        match v {
+            serde_json::Value::Null => 0,
+            serde_json::Value::Bool(_) => 1,
+            serde_json::Value::Number(_) => 2,
+            serde_json::Value::String(_) => 3,
+            serde_json::Value::Array(_) => 4,
+            serde_json::Value::Object(_) => 5,
+        }
+    }
+
+    /// Escape a char for raw display.
+    fn escape_char(c: char) -> String {
+        match c {
+            '\'' => "'\\''".to_owned(),
+            '\\' => "'\\\\'".to_owned(),
+            '\n' => "'\\n'".to_owned(),
+            '\t' => "'\\t'".to_owned(),
+            '\r' => "'\\r'".to_owned(),
+            '\0' => "'\\0'".to_owned(),
+            c => format!("'{c}'"),
+        }
     }
 }
 
-/// Escape special characters in a string for raw display.
-pub(crate) fn escape_str(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    s.chars().for_each(|c| match c {
-        '"' => out.push_str("\\\""),
-        '\\' => out.push_str("\\\\"),
-        '\n' => out.push_str("\\n"),
-        '\t' => out.push_str("\\t"),
-        '\r' => out.push_str("\\r"),
-        '\0' => out.push_str("\\0"),
-        c => out.push(c),
-    });
-    out
-}
+pub(crate) struct RawDisplay;
 
-/// Escape a char for raw display.
-fn escape_char(c: char) -> String {
-    match c {
-        '\'' => "'\\''".to_owned(),
-        '\\' => "'\\\\'".to_owned(),
-        '\n' => "'\\n'".to_owned(),
-        '\t' => "'\\t'".to_owned(),
-        '\r' => "'\\r'".to_owned(),
-        '\0' => "'\\0'".to_owned(),
-        c => format!("'{c}'"),
+impl RawDisplay {
+    /// Escape special characters in a string for raw display.
+    pub(crate) fn escape_str(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        s.chars().for_each(|c| match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            '\0' => out.push_str("\\0"),
+            c => out.push(c),
+        });
+        out
     }
 }

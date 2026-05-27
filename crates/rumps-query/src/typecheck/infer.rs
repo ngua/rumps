@@ -28,7 +28,6 @@ mod pattern;
 mod stmt;
 
 use std::collections::{HashMap, HashSet};
-use std::hash::Hash;
 use std::mem;
 use std::ops::Range;
 
@@ -56,13 +55,16 @@ use crate::intern::{self, QualifiedName, StringId, StringInterner};
 use crate::value::{self, TypeId, TypeRegistry};
 use crate::{ClassId, Error, Span};
 
-/// Resolve all `TyId` values in a map through the union-find.
-fn resolve_map<K: Eq + Hash>(
-    map: &mut HashMap<K, TyId>,
-    uf: &mut UnionFind,
-    arena: &mut TyArena,
-) {
-    map.values_mut().for_each(|ty| *ty = uf.resolve(*ty, arena));
+impl UnionFind {
+    /// Resolve all `TyId` values in a map through this union-find.
+    fn resolve_map<K>(
+        &mut self,
+        map: &mut HashMap<K, TyId>,
+        arena: &mut TyArena,
+    ) {
+        map.values_mut()
+            .for_each(|ty| *ty = self.resolve(*ty, arena));
+    }
 }
 
 /// Fields populated during inference that are passed directly to the
@@ -115,14 +117,14 @@ impl InterpreterOutput {
         self.expr_metadata
             .values_mut()
             .for_each(|info| info.resolve(uf, arena));
-        resolve_map(&mut self.union_value_reprs, uf, arena);
-        resolve_map(&mut self.function_types, uf, arena);
-        resolve_map(&mut self.expr_targets, uf, arena);
+        uf.resolve_map(&mut self.union_value_reprs, arena);
+        uf.resolve_map(&mut self.function_types, arena);
+        uf.resolve_map(&mut self.expr_targets, arena);
         self.is_patterns
             .values_mut()
             .for_each(|info| info.resolve(uf, arena));
-        resolve_map(&mut self.let_targets, uf, arena);
-        resolve_map(&mut self.match_targets, uf, arena);
+        uf.resolve_map(&mut self.let_targets, arena);
+        uf.resolve_map(&mut self.match_targets, arena);
         self.alias_type_expansions = mem::take(&mut self.alias_type_expansions)
             .into_iter()
             .map(|(alias, expanded)| {
@@ -1271,7 +1273,8 @@ impl<'a> InferCtx<'a> {
     /// Called after constraint solving to replace type variables with their
     /// resolved concrete types.
     pub(crate) fn resolve_all_types(&mut self) {
-        resolve_map(&mut self.expr_types, &mut self.uf, &mut self.ty_arena);
+        self.uf
+            .resolve_map(&mut self.expr_types, &mut self.ty_arena);
         self.interp.resolve(&mut self.uf, &mut self.ty_arena);
         self.collect_runtime_alias_expansions();
     }
