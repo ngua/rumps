@@ -616,7 +616,7 @@ pub(crate) struct VariantAst {
 
 /// A type definition body for user-defined sum types.
 ///
-/// Note: Struct aliases now use `Stmt::NewType` instead.
+/// Note: Struct aliases now use `Stmt::Newtype` instead.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum TypeDefAst {
     /// Sum type: `Variant1 | Variant2(T) | ...`
@@ -993,9 +993,9 @@ pub(crate) enum Expr {
 
     /// Type annotation: `(expr) : Type`.
     ///
-    /// Explicit type annotation on an expression. The interpreter validates
-    /// that the value matches the annotated type at runtime; the type checker
-    /// (once implemented) will use this as the expected type.
+    /// Explicit type annotation on an expression. The type checker validates
+    /// the edge statically. Runtime only preserves approved `newtype`
+    /// representation metadata.
     Annotate(ExprId, AstTypeExprId),
 
     /// A JSON object literal: `{ "key": value, ... }`.
@@ -1315,22 +1315,25 @@ pub(crate) enum Stmt {
         vis: Visibility,
     },
 
-    /// Transparent type alias: `newtype Name = Type` or `newtype Name[T] = Type`.
+    /// Newtype declaration: `newtype Name = Type` or `newtype Name[T] = +Type`.
     ///
-    /// Creates a fully transparent alias; `newtype I = Int` makes `I`
-    /// interchangeable with `Int`. Supports parametric polymorphism.
+    /// Creates an alias between the `newtype` and its representation. Supports
+    /// parametric polymorphism.
     ///
     /// Examples:
     /// - `newtype Person = { name: String, age: Int }`
     /// - `newtype I = Int`
     /// - `newtype IntMap[V] = Map[Int, V]`
     ///
-    /// The visibility is only meaningful inside modules (`+newtype` for public).
-    NewType {
+    /// `type visibility` controls access to the `newtype` name. `repr visibility`
+    /// controls external access to representation edges used by
+    /// annotation, `as`, `read`, and derived conversion class dispatch.
+    Newtype {
         name: StringId,
         type_params: SmallVec<[TypeParam; 2]>,
         target: AstTypeExprId,
         vis: Visibility,
+        repr_vis: Visibility,
     },
 
     /// Union type declaration: `union Name = Type1 | Type2 | ...`.

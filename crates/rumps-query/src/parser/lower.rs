@@ -606,22 +606,24 @@ impl<'a> LowerCtx<'a> {
                     vis: Self::vis(vis),
                 }
             }
-            cst::StmtKind::NewType {
+            cst::StmtKind::Newtype {
                 name,
                 type_params,
                 target,
                 vis,
+                repr_vis,
             } => {
                 self.known_types.insert(name);
                 self.push_type_params(type_params.iter().map(|tp| tp.name));
                 let target_id = self.type_expr(target)?;
                 let tp_lowered = self.type_param_list(type_params)?;
                 self.pop_type_params();
-                Stmt::NewType {
+                Stmt::Newtype {
                     name,
                     type_params: tp_lowered,
                     target: target_id,
                     vis: Self::vis(vis),
+                    repr_vis: Self::vis(repr_vis),
                 }
             }
             cst::StmtKind::Union {
@@ -1891,18 +1893,20 @@ impl<'a> MergeCtx<'a> {
                     vis,
                 }
             }
-            Stmt::NewType {
+            Stmt::Newtype {
                 name,
                 type_params,
                 target: ty,
                 vis,
+                repr_vis,
             } => {
                 let new_ty = self.type_expr(ty, span)?;
-                Stmt::NewType {
+                Stmt::Newtype {
                     name,
                     type_params,
                     target: new_ty,
                     vis,
+                    repr_vis,
                 }
             }
             Stmt::Union {

@@ -1,0 +1,7 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; `newtype` representation visibility syntax and public annotation\n\nmodule SyntaxRepr {\n  +newtype A[T] = +Array[T]\n  +newtype B[T] = Array[T]\n\n  +fun make[T](xs: Array[T]) -> SyntaxRepr.B[T] {\n    xs\n  }\n\n  +fun len[T](xs: SyntaxRepr.B[T]) -> Int {\n    Iterable:length(xs)\n  }\n}\n\nfun main() {\n  let pub: SyntaxRepr.A[Int] = [1, 2, 3]\n  write Iterable:length(pub)\n\n  let arr: Array[Int] = pub\n  write Iterable:length(arr)\n\n  let priv = SyntaxRepr.make([1, 2, 3, 4])\n  write SyntaxRepr.len(priv)\n}\n"
+---
+3
+3
+4

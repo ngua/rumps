@@ -1299,6 +1299,10 @@ impl Indexable {
 }
 
 /// Infallible conversion: `T: Into[U]` means `T` can be converted to `U`.
+///
+/// User `Into` instances must not overlap a public `newtype` representation
+/// edge. They also cannot expose a private representation edge; use
+/// `repr visibility` on the defining `newtype` to control automatic access.
 pub(crate) struct Into;
 
 impl Class for Into {}
@@ -1803,6 +1807,11 @@ impl Into {
 }
 
 /// Fallible conversion: `T: TryInto[U]` means `T` might convert to `U`.
+///
+/// External `read` into a private `newtype` representation requires an
+/// explicit `TryInto` instance in the defining module. `type visibility`
+/// controls the `newtype` name, while `repr visibility` controls automatic
+/// representation access.
 pub(crate) struct TryInto;
 
 impl Class for TryInto {}

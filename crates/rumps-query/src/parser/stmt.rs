@@ -263,18 +263,28 @@ impl Parser {
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::Assign))
             .then_ignore(Self::opt_newlines())
+            .then(
+                just(Token::Plus)
+                    .to(cst::Visibility::Public)
+                    .or_not()
+                    .map(|v| v.unwrap_or_default()),
+            )
+            .then_ignore(Self::opt_newlines())
             .then(Self::type_expr(interner))
-            .map_with_span(|(((vis, name), type_params), target), span| {
-                cst::Stmt::new(
-                    cst::StmtKind::NewType {
-                        name,
-                        type_params,
-                        target,
-                        vis,
-                    },
-                    span,
-                )
-            })
+            .map_with_span(
+                |((((vis, name), type_params), repr_vis), target), span| {
+                    cst::Stmt::new(
+                        cst::StmtKind::Newtype {
+                            name,
+                            type_params,
+                            target,
+                            vis,
+                            repr_vis,
+                        },
+                        span,
+                    )
+                },
+            )
     }
 
     fn union_stmt(

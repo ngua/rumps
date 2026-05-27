@@ -1,0 +1,8 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "module CoercePriv {\n  +newtype A[T] = Array[T]\n\n  +fun make[T](xs: Array[T]) -> CoercePriv.A[T] {\n    xs\n  }\n}\n\nfun main() {\n  let ann-in: CoercePriv.A[Int] = [1, 2, 3]\n  let ann-out: Array[Int] = CoercePriv.make([4, 5, 6])\n  let as-in = [7, 8] as CoercePriv.A[Int]\n  let as-out = CoercePriv.make([9]) as Array[Int]\n}\n"
+---
+ERROR: type mismatch: expected `CoercePriv.A[Int]`, got `Array[Int]`; private representation is not accessible
+type mismatch: expected `Array[Int]`, got `CoercePriv.A[Int]`; private representation is not accessible
+cannot cast `Array[Int]` to `CoercePriv.A[Int]`; private representation is not accessible
+cannot cast `CoercePriv.A[Int]` to `Array[Int]`; private representation is not accessible

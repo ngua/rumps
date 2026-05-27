@@ -1,0 +1,6 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "module ReadPrivTry {\n  +newtype A = Array[Int]\n\n  +fun wrap(xs: Array[Int]) -> ReadPrivTry.A {\n    xs as ReadPrivTry.A\n  }\n\n  +fun len(xs: ReadPrivTry.A) -> Int {\n    Iterable:length(xs)\n  }\n\n  class TryInto[ReadPrivTry.A] for Array[Int] {\n    fun try-into(xs: Array[Int]) -> Result[ReadPrivTry.A, String] {\n      Result.Ok(ReadPrivTry.wrap(xs))\n    }\n  }\n}\n\nmodule ReadPubTry {\n  +newtype A = +Array[Int]\n\n  +fun len(xs: ReadPubTry.A) -> Int {\n    Iterable:length(xs)\n  }\n}\n\nclass TryInto[ReadPubTry.A] for Array[Int] {\n  fun try-into(xs: Array[Int]) -> Result[ReadPubTry.A, String] {\n    Result.Ok(xs as ReadPubTry.A)\n  }\n}\n\nfun main() {\n  let priv = ([1, 2, 3] read ReadPrivTry.A)!\n  write ReadPrivTry.len(priv)\n\n  let pub = ([4, 5, 6] read ReadPubTry.A)!\n  write ReadPubTry.len(pub)\n}\n"
+---
+3
+3

@@ -1,0 +1,34 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Transparent top-level `newtype`s\n\nnewtype MyInt = Int\nnewtype MyStr = String\nnewtype MyBool = Bool\n\nnewtype List[T] = Array[T]\nnewtype Maybe[T] = Option[T]\nnewtype IntMap[V] = Map[Int, V]\n\nnewtype Person = { name: String, age: Int }\nnewtype Address = { street: String, city: String }\nnewtype PatientRecord = { patient: Person, address: Address }\n\nnewtype Box[T] = { value: T }\nnewtype Pair[L, R] = { left: L, right: R }\nnewtype MaybeBox[T] = { inner: Option[T] }\n\nfun greet(p: Person) -> String {\n  \"Hello, {p.name}!\"\n}\n\nfun make-person(name: String, age: Int) -> { name: String, age: Int } {\n  { name: name, age: age }\n}\n\nfun main() {\n  let x: MyInt = 42\n  write x\n\n  let s: MyStr = \"hello\"\n  write s\n\n  let b: MyBool = true\n  write b\n\n  let xs: List[Int] = [1, 2, 3]\n  write Iterable:length(xs)\n\n  let opt: Maybe[Int] = Option.Some(42)\n  write opt ?? 0\n\n  let m: IntMap[String] = { 1 => \"one\" }\n  write m\n\n  let p1: Person = { name: \"Alice\", age: 30 }\n\n  write p1 is Person\n  write p1 is { name: String }\n  write p1 is { name: String, age: Int }\n  write p1 is { name: String, age: Int, extra: Bool }\n\n  let p2: Person = { name: \"Bob\", age: 25, job: \"Engineer\" }\n  write p2 is Person\n  write p2 is { name: String, job: String }\n  write p2 is { name: String, age: Int, job: String }\n\n  write p1.name\n  write p1.age\n\n  write p2.name\n  write p2.job\n\n  let rec: PatientRecord = {\n    patient: { id: 1, name: \"Charlie\", age: 40 },\n    address: { street: \"456 Oak Ave\", city: \"LA\" }\n  }\n  write rec.patient.name\n  write rec.address.city\n\n  write greet({ name: \"Diana\", age: 28 })\n\n  let p3 = make-person(\"Eve\", 35)\n  write p3.name\n  write p3.age\n\n  let int-box: Box[Int] = { value: 42 }\n  write int-box.value\n\n  let str-box: Box[String] = { value: \"hello\" }\n  write str-box.value\n\n  let pair: Pair[Int, String] = { left: 1, right: \"one\" }\n  write pair.left\n  write pair.right\n\n  let nested: Box[Pair[Int, Bool]] = { value: { left: 99, right: true } }\n  write nested.value.left\n  write nested.value.right\n\n  let some-val: MaybeBox[Int] = { inner: Option.Some(123) }\n  let none-val: MaybeBox[Int] = { inner: Option.None }\n  write some-val.inner!\n  write none-val.inner ?? 0\n}\n"
+---
+42
+"hello"
+true
+3
+42
+{ 1 => "one" }
+true
+true
+true
+false
+true
+true
+true
+"Alice"
+30
+"Bob"
+"Engineer"
+"Charlie"
+"LA"
+"Hello, Diana!"
+"Eve"
+35
+42
+"hello"
+1
+"one"
+99
+true
+123
+0

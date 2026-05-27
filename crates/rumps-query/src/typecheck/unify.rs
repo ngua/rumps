@@ -29,7 +29,7 @@ use super::infer::{ClassContext, Constraint};
 use super::instance::{Instance, InstanceRegistry};
 use super::ty::{Rename, Ty, TyArena, TyId, TyVar, TypeClass};
 use super::uf::UnionFind;
-use crate::ast::{Ast, AstTypeExpr};
+use crate::ast::{Ast, AstTypeExpr, AstTypeExprId};
 use crate::intern::{QualifiedName, StringId};
 use crate::value::{TypeDef, TypeId, TypeRegistry};
 use crate::{ClassId, Span};
@@ -38,6 +38,46 @@ use crate::{ClassId, Span};
 ///
 /// With union-find, successful unification mutates the UF in-place.
 pub(crate) type UnifyResult = Result<(), TypeError>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct NewtypeEdge {
+    pub(super) alias: TypeId,
+    pub(super) from: TyId,
+    pub(super) to: TyId,
+    pub(super) repr: TyId,
+}
+
+#[derive(Clone, Copy)]
+struct NewtypeEdgeCtx {
+    from: TyId,
+    to: TyId,
+    span: Span,
+}
+
+#[derive(Clone, Copy)]
+struct NewtypeAlias<'a> {
+    id: TypeId,
+    args: &'a [TyId],
+    repr: TyId,
+}
+
+#[derive(Clone, Copy)]
+enum NewtypeEdgeMode {
+    Accessible,
+    Any,
+}
+
+/// Result of checking a `newtype` representation edge.
+///
+/// `Allowed` means both `type visibility` and `repr visibility` permit the
+/// edge. `Blocked` means the `newtype` exists but private `repr visibility`
+/// prevents external use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum NewtypeEdgeStatus {
+    Allowed,
+    Blocked,
+    Missing,
+}
 
 /// Context for constraint solving (unification, class satisfaction, etc.).
 ///
@@ -54,7 +94,7 @@ pub(super) struct SolveCtx<'a> {
     /// AST reference for alias expansion and field type resolution.
     pub(super) ast: &'a mut Ast,
     /// Current module path (for module-aware type name resolution).
-    pub(super) current_module: &'a Option<QualifiedName>,
+    pub(super) current_module: Option<QualifiedName>,
     /// Current class context (for associated type resolution).
     pub(super) class_context: &'a Option<ClassContext>,
     /// Maps HKT class-constrained type variables to their `ClassId`, so
@@ -132,7 +172,7 @@ impl SolveCtx<'_> {
             env: self.env,
             ast: self.ast,
             errors: self.errors,
-            current_module: self.current_module,
+            current_module: &self.current_module,
             class_context: self.class_context,
             rewrite_ast: false,
         }
@@ -166,16 +206,620 @@ impl SolveCtx<'_> {
         self.unify_inner(t1, t2, span)
     }
 
+    pub(super) fn newtype_edge(
+        &mut self,
+        from: TyId,
+        to: TyId,
+        span: Span,
+    ) -> Option<NewtypeEdge> {
+        let (edge, cycle) = self.newtype_edge_with_mode(
+            from,
+            to,
+            span,
+            NewtypeEdgeMode::Accessible,
+        );
+        if edge.is_none() {
+            if let Some(ty) = cycle {
+                self.report_recursive_newtype_edge(ty, span);
+            }
+        }
+        edge
+    }
+
+    pub(super) fn newtype_edge_any(
+        &mut self,
+        from: TyId,
+        to: TyId,
+        span: Span,
+    ) -> Option<NewtypeEdge> {
+        self.newtype_edge_with_mode(from, to, span, NewtypeEdgeMode::Any)
+            .0
+    }
+
+    pub(super) fn newtype_edge_status(
+        &mut self,
+        from: TyId,
+        to: TyId,
+        span: Span,
+    ) -> NewtypeEdgeStatus {
+        let (edge, cycle) = self.newtype_edge_with_mode(
+            from,
+            to,
+            span,
+            NewtypeEdgeMode::Accessible,
+        );
+        match edge {
+            Some(_) => NewtypeEdgeStatus::Allowed,
+            None => {
+                let snap = self.uf.snapshot();
+                let err_len = self.errors.len();
+                let (blocked, any_cycle) = self.newtype_edge_with_mode(
+                    from,
+                    to,
+                    span,
+                    NewtypeEdgeMode::Any,
+                );
+                self.uf.rollback(snap);
+                self.errors.truncate(err_len);
+                match blocked {
+                    Some(_) => NewtypeEdgeStatus::Blocked,
+                    None => {
+                        if let Some(ty) = cycle.or(any_cycle) {
+                            self.report_recursive_newtype_edge(ty, span);
+                        }
+                        NewtypeEdgeStatus::Missing
+                    }
+                }
+            }
+        }
+    }
+
+    fn newtype_edge_blocked(
+        &mut self,
+        from: TyId,
+        to: TyId,
+        span: Span,
+    ) -> bool {
+        let snap = self.uf.snapshot();
+        let err_len = self.errors.len();
+        let blocked = self.newtype_edge_status(from, to, span)
+            == NewtypeEdgeStatus::Blocked;
+        self.uf.rollback(snap);
+        self.errors.truncate(err_len);
+        blocked
+    }
+
+    fn newtype_edge_with_mode(
+        &mut self,
+        from: TyId,
+        to: TyId,
+        span: Span,
+        mode: NewtypeEdgeMode,
+    ) -> (Option<NewtypeEdge>, Option<TyId>) {
+        let from = self.uf.resolve(from, self.ty_arena);
+        let to = self.uf.resolve(to, self.ty_arena);
+
+        let ctx = NewtypeEdgeCtx { from, to, span };
+        let mut cycle = None;
+        let edge = self
+            .newtype_edge_candidate(from, to, ctx, &mut cycle, mode)
+            .or_else(|| {
+                self.newtype_edge_candidate(to, from, ctx, &mut cycle, mode)
+            });
+        (edge, cycle)
+    }
+
+    fn newtype_edge_candidate(
+        &mut self,
+        alias_ty: TyId,
+        other: TyId,
+        ctx: NewtypeEdgeCtx,
+        cycle: &mut Option<TyId>,
+        mode: NewtypeEdgeMode,
+    ) -> Option<NewtypeEdge> {
+        let snap = self.uf.snapshot();
+        let err_len = self.errors.len();
+        let edge = self.newtype_edge_inner(
+            alias_ty,
+            other,
+            ctx,
+            &mut HashSet::new(),
+            cycle,
+            mode,
+        );
+        if edge.is_some() && self.errors.len() == err_len {
+            edge
+        } else {
+            self.uf.rollback(snap);
+            self.errors.truncate(err_len);
+            None
+        }
+    }
+
+    fn newtype_edge_inner(
+        &mut self,
+        alias_ty: TyId,
+        other: TyId,
+        ctx: NewtypeEdgeCtx,
+        seen: &mut HashSet<TypeId>,
+        cycle: &mut Option<TyId>,
+        mode: NewtypeEdgeMode,
+    ) -> Option<NewtypeEdge> {
+        match self.alias_parts(alias_ty) {
+            Some((alias, args)) => {
+                if !seen.insert(alias) {
+                    *cycle = Some(alias_ty);
+                    None
+                } else if matches!(mode, NewtypeEdgeMode::Accessible)
+                    && !self.convert_ctx().can_access_alias_repr(alias)
+                {
+                    seen.remove(&alias);
+                    None
+                } else {
+                    let repr = self.alias_repr(alias, &args);
+                    let edge = match self.newtype_repr_matches(
+                        NewtypeAlias {
+                            id: alias,
+                            args: &args,
+                            repr,
+                        },
+                        other,
+                        ctx,
+                        seen,
+                        cycle,
+                        mode,
+                    ) {
+                        Ok(()) => Some(NewtypeEdge {
+                            alias,
+                            from: ctx.from,
+                            to: ctx.to,
+                            repr,
+                        }),
+                        Err(_) => None,
+                    };
+                    seen.remove(&alias);
+                    edge
+                }
+            }
+            None => None,
+        }
+    }
+
+    fn alias_parts(&self, ty: TyId) -> Option<(TypeId, SmallVec<[TyId; 4]>)> {
+        match self.ty_arena.get(ty).clone() {
+            Ty::Named(id, args) if self.decls.is_alias(id) => Some((id, args)),
+            _ => None,
+        }
+    }
+
+    fn alias_repr(&mut self, alias: TypeId, args: &[TyId]) -> TyId {
+        match self.registry.get_def(alias) {
+            Some(TypeDef::Alias { type_params, .. }) => {
+                let ps = type_params.clone();
+                let subst: IndexMap<StringId, TyId> =
+                    ps.iter().zip(args.iter()).map(|(&p, &a)| (p, a)).collect();
+                let target = self.decls.alias_target(alias);
+                self.convert_ctx().ast_type_to_ty(target, &subst)
+            }
+            _ => typechecked!("newtype edge", "alias declaration"),
+        }
+    }
+
+    fn report_recursive_newtype_edge(&mut self, ty: TyId, span: Span) {
+        let v = self.uf.fresh();
+        self.errors.push(TypeError::InfiniteType(v, ty, span));
+    }
+
+    fn newtype_repr_matches(
+        &mut self,
+        alias: NewtypeAlias<'_>,
+        other: TyId,
+        ctx: NewtypeEdgeCtx,
+        seen: &mut HashSet<TypeId>,
+        cycle: &mut Option<TyId>,
+        mode: NewtypeEdgeMode,
+    ) -> UnifyResult {
+        match self
+            .ast
+            .get_type_expr(self.decls.alias_target(alias.id))
+            .cloned()
+        {
+            Some(AstTypeExpr::Object(fields)) => self
+                .newtype_object_repr_matches(
+                    alias.id, alias.args, alias.repr, &fields, other, ctx.span,
+                    seen, cycle, mode,
+                ),
+            _ => self.newtype_structural_match(
+                alias.repr, other, ctx.span, seen, cycle, mode,
+            ),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn newtype_object_repr_matches(
+        &mut self,
+        alias: TypeId,
+        args: &[TyId],
+        repr: TyId,
+        fields: &SmallVec<[(StringId, AstTypeExprId); 4]>,
+        other: TyId,
+        span: Span,
+        seen: &mut HashSet<TypeId>,
+        cycle: &mut Option<TyId>,
+        mode: NewtypeEdgeMode,
+    ) -> UnifyResult {
+        match self.ty_arena.get(other).clone() {
+            Ty::Object(obj_fields) => {
+                let ps = match self.registry.get_def(alias) {
+                    Some(TypeDef::Alias { type_params, .. }) => {
+                        type_params.clone()
+                    }
+                    _ => typechecked!("newtype edge", "alias declaration"),
+                };
+                let subst: IndexMap<StringId, TyId> =
+                    ps.iter().zip(args.iter()).map(|(&p, &a)| (p, a)).collect();
+                fields.iter().try_for_each(|(name, ast_ty)| {
+                    let exp =
+                        self.convert_ctx().ast_type_to_ty(*ast_ty, &subst);
+                    match obj_fields.get(name) {
+                        Some(&got) => self.newtype_structural_match(
+                            exp, got, span, seen, cycle, mode,
+                        ),
+                        None => Err(TypeError::MissingField {
+                            ty: alias,
+                            field: self.env.resolve_string(*name),
+                            span,
+                        }),
+                    }
+                })
+            }
+            _ => Err(TypeError::Mismatch {
+                expected: repr,
+                got: other,
+                span,
+            }),
+        }
+    }
+
+    fn newtype_structural_match(
+        &mut self,
+        t1: TyId,
+        t2: TyId,
+        span: Span,
+        seen: &mut HashSet<TypeId>,
+        cycle: &mut Option<TyId>,
+        mode: NewtypeEdgeMode,
+    ) -> UnifyResult {
+        if t1 == t2 {
+            Ok(())
+        } else {
+            let ty1 = self.ty_arena.get(t1).clone();
+            let ty2 = self.ty_arena.get(t2).clone();
+            match (ty1, ty2) {
+                (Ty::Error, _) | (_, Ty::Error) => Ok(()),
+                (Ty::Unknown, _) | (_, Ty::Unknown) => Ok(()),
+                (Ty::Named(id, _), _) if self.decls.is_alias(id) => self
+                    .newtype_edge_inner(
+                        t1,
+                        t2,
+                        NewtypeEdgeCtx {
+                            from: t1,
+                            to: t2,
+                            span,
+                        },
+                        seen,
+                        cycle,
+                        mode,
+                    )
+                    .map_or_else(
+                        || {
+                            Err(TypeError::Mismatch {
+                                expected: t2,
+                                got: t1,
+                                span,
+                            })
+                        },
+                        |_| Ok(()),
+                    ),
+                (_, Ty::Named(id, _)) if self.decls.is_alias(id) => self
+                    .newtype_edge_inner(
+                        t2,
+                        t1,
+                        NewtypeEdgeCtx {
+                            from: t1,
+                            to: t2,
+                            span,
+                        },
+                        seen,
+                        cycle,
+                        mode,
+                    )
+                    .map_or_else(
+                        || {
+                            Err(TypeError::Mismatch {
+                                expected: t2,
+                                got: t1,
+                                span,
+                            })
+                        },
+                        |_| Ok(()),
+                    ),
+
+                (Ty::Var(v), _) => self.unify_var(v, t2, span),
+                (_, Ty::Var(v)) => self.unify_var(v, t1, span),
+
+                (Ty::Bool, Ty::Bool)
+                | (Ty::Int, Ty::Int)
+                | (Ty::Word, Ty::Word)
+                | (Ty::Float, Ty::Float)
+                | (Ty::Char, Ty::Char)
+                | (Ty::String, Ty::String)
+                | (Ty::Unit, Ty::Unit)
+                | (Ty::Time, Ty::Time)
+                | (Ty::Range, Ty::Range)
+                | (Ty::Json, Ty::Json)
+                | (Ty::Ordering, Ty::Ordering)
+                | (Ty::DataStatus, Ty::DataStatus)
+                | (Ty::FilePath, Ty::FilePath)
+                | (Ty::Path, Ty::Path)
+                | (Ty::Regex, Ty::Regex)
+                | (Ty::RuntimeError, Ty::RuntimeError)
+                | (Ty::Local, Ty::Local)
+                | (Ty::Global, Ty::Global) => Ok(()),
+
+                (Ty::Array(a), Ty::Array(b))
+                | (Ty::Option(a), Ty::Option(b)) => {
+                    self.newtype_structural_match(a, b, span, seen, cycle, mode)
+                }
+                (Ty::Result(ok1, err1), Ty::Result(ok2, err2)) => {
+                    self.newtype_structural_match(
+                        ok1, ok2, span, seen, cycle, mode,
+                    )?;
+                    self.newtype_structural_match(
+                        err1, err2, span, seen, cycle, mode,
+                    )
+                }
+                (Ty::Map(k1, v1), Ty::Map(k2, v2)) => {
+                    self.newtype_structural_match(
+                        k1, k2, span, seen, cycle, mode,
+                    )?;
+                    self.newtype_structural_match(
+                        v1, v2, span, seen, cycle, mode,
+                    )
+                }
+                (Ty::Tuple(ts1), Ty::Tuple(ts2)) => {
+                    if ts1.len() == ts2.len() {
+                        self.newtype_structural_sequence(
+                            ts1.iter().copied(),
+                            ts2.iter().copied(),
+                            span,
+                            seen,
+                            cycle,
+                            mode,
+                        )
+                    } else {
+                        Err(TypeError::Mismatch {
+                            expected: t2,
+                            got: t1,
+                            span,
+                        })
+                    }
+                }
+                (Ty::Fn(ps1, ret1), Ty::Fn(ps2, ret2)) => {
+                    if ps1.len() == ps2.len() {
+                        self.newtype_structural_sequence(
+                            ps1.iter().copied(),
+                            ps2.iter().copied(),
+                            span,
+                            seen,
+                            cycle,
+                            mode,
+                        )?;
+                        self.newtype_structural_match(
+                            ret1, ret2, span, seen, cycle, mode,
+                        )
+                    } else {
+                        Err(TypeError::ArityMismatch {
+                            expected: ps2.len(),
+                            got: ps1.len(),
+                            span,
+                        })
+                    }
+                }
+                (Ty::Object(fs1), Ty::Object(fs2)) => self
+                    .newtype_structural_objects(
+                        &fs1, &fs2, span, seen, cycle, mode,
+                    ),
+                (Ty::Union(_, ms1), Ty::Union(_, ms2)) => {
+                    if ms1.len() == ms2.len() {
+                        let available: Vec<usize> = (0..ms2.len()).collect();
+                        self.newtype_structural_union(
+                            &ms1, &ms2, &available, span, seen, cycle, mode,
+                        )
+                        .unwrap_or_else(|| {
+                            Err(TypeError::Mismatch {
+                                expected: t2,
+                                got: t1,
+                                span,
+                            })
+                        })
+                    } else {
+                        Err(TypeError::Mismatch {
+                            expected: t2,
+                            got: t1,
+                            span,
+                        })
+                    }
+                }
+                (Ty::Named(id1, args1), Ty::Named(id2, args2)) => {
+                    if id1 == id2 && args1.len() == args2.len() {
+                        self.newtype_structural_sequence(
+                            args1.iter().copied(),
+                            args2.iter().copied(),
+                            span,
+                            seen,
+                            cycle,
+                            mode,
+                        )
+                    } else {
+                        Err(TypeError::Mismatch {
+                            expected: t2,
+                            got: t1,
+                            span,
+                        })
+                    }
+                }
+                _ => Err(TypeError::Mismatch {
+                    expected: t2,
+                    got: t1,
+                    span,
+                }),
+            }
+        }
+    }
+
+    fn newtype_structural_sequence(
+        &mut self,
+        ts1: impl Iterator<Item = TyId>,
+        ts2: impl Iterator<Item = TyId>,
+        span: Span,
+        seen: &mut HashSet<TypeId>,
+        cycle: &mut Option<TyId>,
+        mode: NewtypeEdgeMode,
+    ) -> UnifyResult {
+        ts1.zip(ts2).try_for_each(|(t1, t2)| {
+            self.newtype_structural_match(t1, t2, span, seen, cycle, mode)
+        })
+    }
+
+    fn newtype_structural_objects(
+        &mut self,
+        fields1: &IndexMap<StringId, TyId>,
+        fields2: &IndexMap<StringId, TyId>,
+        span: Span,
+        seen: &mut HashSet<TypeId>,
+        cycle: &mut Option<TyId>,
+        mode: NewtypeEdgeMode,
+    ) -> UnifyResult {
+        fields1.iter().try_for_each(|(name, t1)| {
+            fields2.get(name).map_or(Ok(()), |&t2| {
+                self.newtype_structural_match(*t1, t2, span, seen, cycle, mode)
+            })
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn newtype_structural_union(
+        &mut self,
+        remaining1: &[TyId],
+        all2: &[TyId],
+        available: &[usize],
+        span: Span,
+        seen: &mut HashSet<TypeId>,
+        cycle: &mut Option<TyId>,
+        mode: NewtypeEdgeMode,
+    ) -> Option<UnifyResult> {
+        match remaining1.split_first() {
+            None => Some(Ok(())),
+            Some((&first, rest)) => self.newtype_structural_union_matches(
+                first, rest, all2, available, span, seen, cycle, mode, 0,
+            ),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn newtype_structural_union_matches(
+        &mut self,
+        first: TyId,
+        rest: &[TyId],
+        all2: &[TyId],
+        available: &[usize],
+        span: Span,
+        seen: &mut HashSet<TypeId>,
+        cycle: &mut Option<TyId>,
+        mode: NewtypeEdgeMode,
+        start: usize,
+    ) -> Option<UnifyResult> {
+        available.get(start).and_then(|&idx| {
+            let m2 = *all2.get(idx)?;
+            let snap = self.uf.snapshot();
+            let err_len = self.errors.len();
+            let mut branch_seen = seen.clone();
+            match self.newtype_structural_match(
+                first,
+                m2,
+                span,
+                &mut branch_seen,
+                cycle,
+                mode,
+            ) {
+                Ok(()) => {
+                    let next: Vec<usize> = available
+                        .iter()
+                        .copied()
+                        .filter(|&i| i != idx)
+                        .collect();
+                    match self.newtype_structural_union(
+                        rest,
+                        all2,
+                        &next,
+                        span,
+                        &mut branch_seen,
+                        cycle,
+                        mode,
+                    ) {
+                        Some(Ok(())) => Some(Ok(())),
+                        _ => {
+                            self.uf.rollback(snap);
+                            self.errors.truncate(err_len);
+                            self.newtype_structural_union_matches(
+                                first,
+                                rest,
+                                all2,
+                                available,
+                                span,
+                                seen,
+                                cycle,
+                                mode,
+                                start + 1,
+                            )
+                        }
+                    }
+                }
+                Err(_) => {
+                    self.uf.rollback(snap);
+                    self.errors.truncate(err_len);
+                    self.newtype_structural_union_matches(
+                        first,
+                        rest,
+                        all2,
+                        available,
+                        span,
+                        seen,
+                        cycle,
+                        mode,
+                        start + 1,
+                    )
+                }
+            }
+        })
+    }
+
     /// Expand a `Ty::Named` alias fully to its target type.
     ///
     /// Recursively expands chained aliases (e.g., `A = B`, `B = Int`) until
     /// reaching a non-alias type. Object aliases are NOT expanded; they need
     /// special handling in `unify_named_with_object`.
-    fn expand_alias_fully(&mut self, ty: TyId) -> Option<TyId> {
+    fn expand_alias_fully(
+        &mut self,
+        ty: TyId,
+        other: TyId,
+        span: Span,
+    ) -> Option<TyId> {
         let mut current = ty;
         let mut expanded = false;
         // Expand until we hit a non-alias or object alias
-        while let Some(next) = self.expand_alias_once(current) {
+        while let Some(next) = self.expand_alias_once(current, other, span) {
             current = next;
             expanded = true;
         }
@@ -194,20 +838,85 @@ impl SolveCtx<'_> {
     ///
     /// Note: Aliases to object types are NOT expanded here; they need special
     /// handling in `unify_named_with_object` to check all required fields.
-    fn expand_alias_once(&mut self, ty: TyId) -> Option<TyId> {
-        let (type_id, args) = match self.ty_arena.get(ty) {
-            Ty::Named(id, a) => (*id, a.clone()),
+    fn expand_alias_once(
+        &mut self,
+        ty: TyId,
+        other: TyId,
+        span: Span,
+    ) -> Option<TyId> {
+        let type_id = match self.ty_arena.get(ty) {
+            Ty::Named(id, _) => *id,
             _ => None?,
         };
         match self.registry.get_def(type_id) {
-            Some(TypeDef::Alias { type_params, .. }) => {
-                let target =
-                    self.decls.alias_target(type_id).unwrap_or_else(|| {
-                        typechecked!("alias target", "registered")
-                    });
-                // Don't expand if target is an object type; let
-                // `unify_named_with_object` handle it for proper
-                // required-field checking
+            Some(TypeDef::Alias { .. }) => {
+                if self
+                    .alias_parts(other)
+                    .is_some_and(|(other_id, _)| other_id == type_id)
+                {
+                    None
+                } else {
+                    let target = self.decls.alias_target(type_id);
+                    // Don't expand if target is an object type; let
+                    // `unify_named_with_object` handle it for proper
+                    // required-field checking
+                    let is_obj = self
+                        .ast
+                        .get_type_expr(target)
+                        .is_some_and(|te| matches!(te, AstTypeExpr::Object(_)));
+                    if is_obj {
+                        None
+                    } else {
+                        self.newtype_edge(ty, other, span)
+                            .filter(|edge| edge.alias == type_id)
+                            .map(|edge| edge.repr)
+                    }
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn expand_alias_fully_for_class(
+        &mut self,
+        ty: TyId,
+        span: Span,
+    ) -> Option<TyId> {
+        let mut current = ty;
+        let mut expanded = false;
+        let mut seen = HashSet::new();
+        while let Some((alias, _)) = self.alias_parts(current) {
+            if seen.insert(alias) {
+                match self.expand_alias_once_for_class(current, span) {
+                    Some(next) => {
+                        if next == current {
+                            self.report_recursive_newtype_edge(current, span);
+                            None
+                        } else {
+                            current = next;
+                            expanded = true;
+                            Some(())
+                        }
+                    }
+                    None => None,
+                }?;
+            } else {
+                self.report_recursive_newtype_edge(current, span);
+                None?;
+            }
+        }
+        Some(current).filter(|_| expanded)
+    }
+
+    fn expand_alias_once_for_class(
+        &mut self,
+        ty: TyId,
+        span: Span,
+    ) -> Option<TyId> {
+        let (type_id, args) = self.alias_parts(ty)?;
+        match self.registry.get_def(type_id) {
+            Some(TypeDef::Alias { .. }) => {
+                let target = self.decls.alias_target(type_id);
                 let is_obj = self
                     .ast
                     .get_type_expr(target)
@@ -215,12 +924,10 @@ impl SolveCtx<'_> {
                 if is_obj {
                     None
                 } else {
-                    let subst: IndexMap<StringId, TyId> = type_params
-                        .iter()
-                        .zip(args.iter())
-                        .map(|(p, a)| (*p, *a))
-                        .collect();
-                    Some(self.convert_ctx().ast_type_to_ty(target, &subst))
+                    let repr = self.alias_repr(type_id, &args);
+                    self.newtype_edge(ty, repr, span)
+                        .filter(|edge| edge.alias == type_id)
+                        .map(|edge| edge.repr)
                 }
             }
             _ => None,
@@ -229,18 +936,22 @@ impl SolveCtx<'_> {
 
     /// Core unification logic.
     fn unify_inner(&mut self, t1: TyId, t2: TyId, span: Span) -> UnifyResult {
-        // Expand aliases fully before unifying (transparent type aliases)
-        let t1 = self.expand_alias_fully(t1).unwrap_or(t1);
-        let t2 = self.expand_alias_fully(t2).unwrap_or(t2);
-
         // Equal TyIds are trivially unified
         if t1 == t2 {
             Ok(())
         } else {
-            // Clone both Ty to release borrow on arena
-            let ty1 = self.ty_arena.get(t1).clone();
-            let ty2 = self.ty_arena.get(t2).clone();
-            self.unify_inner_dispatch(t1, t2, &ty1, &ty2, span)
+            // Expand aliases through approved `newtype` representation edges.
+            let t1 = self.expand_alias_fully(t1, t2, span).unwrap_or(t1);
+            let t2 = self.expand_alias_fully(t2, t1, span).unwrap_or(t2);
+
+            if t1 == t2 {
+                Ok(())
+            } else {
+                // Clone both `Ty`s to release the arena borrow.
+                let ty1 = self.ty_arena.get(t1).clone();
+                let ty2 = self.ty_arena.get(t2).clone();
+                self.unify_inner_dispatch(t1, t2, &ty1, &ty2, span)
+            }
         }
     }
 
@@ -291,6 +1002,16 @@ impl SolveCtx<'_> {
             (Ty::Int, Ty::Int)
             | (Ty::Word, Ty::Word)
             | (Ty::Float, Ty::Float) => Ok(()),
+
+            // A `newtype` edge exists, but private `repr visibility` blocks
+            // this external annotation or unification site.
+            _ if self.newtype_edge_blocked(t1, t2, span) => {
+                Err(TypeError::PrivateReprAnnotation {
+                    from: t1,
+                    to: t2,
+                    span,
+                })
+            }
 
             // Array: unify element types
             (Ty::Array(a), Ty::Array(b)) => self.unify_inner(*a, *b, span),
@@ -1046,53 +1767,72 @@ impl SolveCtx<'_> {
 
         match def {
             Some(TypeDef::Alias { type_params, .. }) => {
-                let target =
-                    self.decls.alias_target(type_id).unwrap_or_else(|| {
-                        typechecked!("alias target", "registered")
-                    });
+                let target = self.decls.alias_target(type_id);
                 // Check if target is an object type
                 let type_params = type_params.clone();
                 match self.ast.get_type_expr(target).cloned() {
                     Some(AstTypeExpr::Object(alias_fields)) => {
-                        // Build substitution from type params to type args
-                        let param_subst: IndexMap<StringId, TyId> = type_params
-                            .iter()
-                            .zip(type_args.iter())
-                            .map(|(p, a)| (*p, *a))
-                            .collect();
+                        let named = self.ty_arena.named(
+                            type_id,
+                            type_args.iter().copied().collect(),
+                        );
+                        let obj =
+                            self.ty_arena.alloc(Ty::Object(obj_fields.clone()));
+                        if self.newtype_edge(named, obj, span).is_some() {
+                            Ok(())
+                        } else if !self
+                            .convert_ctx()
+                            .can_access_alias_repr(type_id)
+                        {
+                            Err(TypeError::Mismatch {
+                                expected: named,
+                                got: obj,
+                                span,
+                            })
+                        } else {
+                            // Build substitution from type params to type args
+                            let param_subst: IndexMap<StringId, TyId> =
+                                type_params
+                                    .iter()
+                                    .zip(type_args.iter())
+                                    .map(|(p, a)| (*p, *a))
+                                    .collect();
 
-                        // Pre-intern field names before the fold
-                        let fields_with_ids: Vec<_> = alias_fields
-                            .iter()
-                            .map(|(name, ty)| (*name, *ty))
-                            .collect();
+                            // Pre-intern field names before the fold
+                            let fields_with_ids: Vec<_> = alias_fields
+                                .iter()
+                                .map(|(name, ty)| (*name, *ty))
+                                .collect();
 
-                        // Check that object has all required fields
-                        fields_with_ids.iter().try_for_each(
-                            |(field_name, field_ty_id)| {
-                                let expected_ty = self
-                                    .convert_ctx()
-                                    .ast_type_to_ty(*field_ty_id, &param_subst);
+                            // Check that object has all required fields
+                            fields_with_ids.iter().try_for_each(
+                                |(field_name, field_ty_id)| {
+                                    let expected_ty =
+                                        self.convert_ctx().ast_type_to_ty(
+                                            *field_ty_id,
+                                            &param_subst,
+                                        );
 
-                                match obj_fields.get(field_name) {
-                                    Some(&obj_ty) => self.unify_inner(
-                                        expected_ty,
-                                        obj_ty,
-                                        span,
-                                    ),
-                                    None => {
-                                        // Missing required field
-                                        Err(TypeError::MissingField {
-                                            ty: type_id,
-                                            field: self
-                                                .env
-                                                .resolve_string(*field_name),
+                                    match obj_fields.get(field_name) {
+                                        Some(&obj_ty) => self.unify_inner(
+                                            expected_ty,
+                                            obj_ty,
                                             span,
-                                        })
+                                        ),
+                                        None => {
+                                            // Missing required field
+                                            Err(TypeError::MissingField {
+                                                ty: type_id,
+                                                field: self.env.resolve_string(
+                                                    *field_name,
+                                                ),
+                                                span,
+                                            })
+                                        }
                                     }
-                                }
-                            },
-                        )
+                                },
+                            )
+                        }
                     }
                     _ => {
                         // Not an object alias, can't unify with object
@@ -1144,13 +1884,13 @@ impl SolveCtx<'_> {
     /// as many errors as possible.
     pub(crate) fn solve_constraints(
         &mut self,
-        constraints: Vec<Constraint>,
+        constraints: Vec<(Constraint, Option<QualifiedName>)>,
         numeric_vars: &[TyVar],
     ) {
         // Pre-build a map from HKT-constrained type variables to their
         // class ID so `unify_apply` can look up tuple constructor instances
         // for position-aware element decomposition.
-        constraints.iter().for_each(|c| {
+        constraints.iter().for_each(|(c, _)| {
             if let Constraint::Class {
                 ty,
                 class: TypeClass::Hkt { id, .. },
@@ -1166,66 +1906,69 @@ impl SolveCtx<'_> {
         // First pass: process Unify, Callable, HasField, Iterable, Indexable.
         // These constraints generate type bindings (via union-find) that
         // other constraints (Numeric, Into[String], etc.) depend on.
-        constraints.iter().for_each(|c| match c {
-            Constraint::Unify(t1, t2, span) => {
-                // Pre-resolve before unifying. While `unify_inner` handles
-                // `Ty::Var` via `unify_var` (which does `find`/`probe`
-                // internally), pre-resolving is still necessary: without it,
-                // error messages on mismatch show unresolved type variables
-                // (e.g. `Option[T]`) instead of concrete types (e.g.
-                // `Option[Int]`).
-                let t1 = self.uf.resolve(*t1, self.ty_arena);
-                let t2 = self.uf.resolve(*t2, self.ty_arena);
-                if let Err(e) = self.unify_types(t1, t2, *span) {
-                    self.errors.push(e);
+        constraints.iter().for_each(|(c, module)| {
+            self.current_module = module.clone();
+            match c {
+                Constraint::Unify(t1, t2, span) => {
+                    // Pre-resolve before unifying. While `unify_inner` handles
+                    // `Ty::Var` via `unify_var` (which does `find`/`probe`
+                    // internally), pre-resolving is still necessary: without it,
+                    // error messages on mismatch show unresolved type variables
+                    // (e.g. `Option[T]`) instead of concrete types (e.g.
+                    // `Option[Int]`).
+                    let t1 = self.uf.resolve(*t1, self.ty_arena);
+                    let t2 = self.uf.resolve(*t2, self.ty_arena);
+                    if let Err(e) = self.unify_types(t1, t2, *span) {
+                        self.errors.push(e);
+                    }
                 }
-            }
-            Constraint::Callable {
-                callee,
-                args,
-                ret,
-                span,
-            } => {
-                let callee = self.uf.resolve(*callee, self.ty_arena);
-                let args: SmallVec<[TyId; 4]> = args
-                    .iter()
-                    .map(|&t| self.uf.resolve(t, self.ty_arena))
-                    .collect();
-                let ret = self.uf.resolve(*ret, self.ty_arena);
-                self.check_callable(callee, &args, ret, *span);
-            }
-            Constraint::HasField {
-                base,
-                field,
-                field_ty,
-                span,
-            } => {
-                let base = self.uf.resolve(*base, self.ty_arena);
-                let field_ty = self.uf.resolve(*field_ty, self.ty_arena);
-                self.check_has_field(base, *field, field_ty, *span);
-            }
-            Constraint::Class { ty, class, span } => match class {
-                // Iterable (with element type) and Indexable: first pass
-                TypeClass::Hkt {
-                    id: ClassId::ITERABLE,
-                    ref elems,
-                    ..
-                } if !elems.is_empty() => {
-                    let ty = self.uf.resolve(*ty, self.ty_arena);
-                    let class = class.resolve_inner(self.uf, self.ty_arena);
-                    self.satisfies_class(&class, ty, *span);
-                }
-                TypeClass::Concrete {
-                    id: ClassId::INDEXABLE,
-                    ..
+                Constraint::Callable {
+                    callee,
+                    args,
+                    ret,
+                    span,
                 } => {
-                    let ty = self.uf.resolve(*ty, self.ty_arena);
-                    let class = class.resolve_inner(self.uf, self.ty_arena);
-                    self.satisfies_class(&class, ty, *span);
+                    let callee = self.uf.resolve(*callee, self.ty_arena);
+                    let args: SmallVec<[TyId; 4]> = args
+                        .iter()
+                        .map(|&t| self.uf.resolve(t, self.ty_arena))
+                        .collect();
+                    let ret = self.uf.resolve(*ret, self.ty_arena);
+                    self.check_callable(callee, &args, ret, *span);
                 }
-                TypeClass::Hkt { .. } => {}
-                TypeClass::Concrete { .. } => {}
-            },
+                Constraint::HasField {
+                    base,
+                    field,
+                    field_ty,
+                    span,
+                } => {
+                    let base = self.uf.resolve(*base, self.ty_arena);
+                    let field_ty = self.uf.resolve(*field_ty, self.ty_arena);
+                    self.check_has_field(base, *field, field_ty, *span);
+                }
+                Constraint::Class { ty, class, span } => match class {
+                    // Iterable (with element type) and Indexable: first pass
+                    TypeClass::Hkt {
+                        id: ClassId::ITERABLE,
+                        ref elems,
+                        ..
+                    } if !elems.is_empty() => {
+                        let ty = self.uf.resolve(*ty, self.ty_arena);
+                        let class = class.resolve_inner(self.uf, self.ty_arena);
+                        self.satisfies_class(&class, ty, *span);
+                    }
+                    TypeClass::Concrete {
+                        id: ClassId::INDEXABLE,
+                        ..
+                    } => {
+                        let ty = self.uf.resolve(*ty, self.ty_arena);
+                        let class = class.resolve_inner(self.uf, self.ty_arena);
+                        self.satisfies_class(&class, ty, *span);
+                    }
+                    TypeClass::Hkt { .. } => {}
+                    TypeClass::Concrete { .. } => {}
+                },
+            }
         });
 
         // Default unresolved numeric type variables to Int after first pass.
@@ -1244,7 +1987,8 @@ impl SolveCtx<'_> {
         });
 
         // Second pass: process simple membership constraints
-        constraints.iter().for_each(|c| {
+        constraints.iter().for_each(|(c, module)| {
+            self.current_module = module.clone();
             if let Constraint::Class { ty, class, span } = c {
                 match class {
                     TypeClass::Concrete { ref params, .. }
@@ -1261,7 +2005,8 @@ impl SolveCtx<'_> {
         // Third pass: final check for HKT and parameterized constraints now
         // that numeric type variables have been defaulted and Callable has
         // resolved all type variables through argument unification.
-        constraints.iter().for_each(|c| {
+        constraints.iter().for_each(|(c, module)| {
+            self.current_module = module.clone();
             if let Constraint::Class { ty, class, span } = c {
                 match class {
                     TypeClass::Concrete { ref params, .. }
@@ -1543,7 +2288,7 @@ impl SolveCtx<'_> {
                                 class_id,
                                 ClassId::NUMERIC | ClassId::BIT_LIKE
                             ) {
-                                self.expand_alias_fully(ty)
+                                self.expand_alias_fully_for_class(ty, span)
                             } else {
                                 None
                             };
@@ -1609,6 +2354,7 @@ impl SolveCtx<'_> {
         ty: TyId,
         span: Span,
     ) {
+        let ty = self.expand_alias_fully_for_class(ty, span).unwrap_or(ty);
         let shape = self.ty_arena.get(ty).clone();
         let builtin_elems: Option<SmallVec<[TyId; 2]>> =
             match (class_id, &shape) {
@@ -1744,177 +2490,43 @@ impl SolveCtx<'_> {
         }
     }
 
-    /// `Into(target)`: `AS` casts.
+    /// `Into(target)`: `as` casts.
     fn check_into(&mut self, ty: TyId, to: TyId, span: Span) {
+        let ty = self.uf.resolve(ty, self.ty_arena);
+        let to = self.uf.resolve(to, self.ty_arena);
         let ty_shape = self.ty_arena.get(ty).clone();
         let to_shape = self.ty_arena.get(to).clone();
-        match (&ty_shape, &to_shape) {
-            (Ty::Var(_), _) | (_, Ty::Var(_)) => {}
-            (Ty::Error, _) | (_, Ty::Error) => {}
-            (Ty::Unknown, _) | (_, Ty::Unknown) => {}
+        let unresolved = matches!(
+            (&ty_shape, &to_shape),
+            (Ty::Var(_), _)
+                | (_, Ty::Var(_))
+                | (Ty::Error, _)
+                | (_, Ty::Error)
+                | (Ty::Unknown, _)
+                | (_, Ty::Unknown)
+        );
 
-            _ if ty == to => {}
-
-            // Functions cannot be stringified
-            (Ty::Fn(_, _), Ty::String) => {
-                self.errors
-                    .push(TypeError::InvalidCast { from: ty, to, span });
-            }
-            (Ty::Union(_, members), Ty::String) => {
-                let ms: SmallVec<[TyId; 4]> = members.clone();
-                ms.iter().for_each(|m| {
-                    self.satisfies_class(
-                        &TypeClass::param(ClassId::INTO, to),
-                        *m,
-                        span,
-                    )
-                });
-            }
-            (_, Ty::String) => {}
-
-            // Functions, regex, refs cannot be Json-serialized
-            (Ty::Fn(_, _), Ty::Json)
-            | (Ty::Regex, Ty::Json)
-            | (Ty::Local, Ty::Json)
-            | (Ty::Global, Ty::Json) => {
-                self.errors
-                    .push(TypeError::InvalidCast { from: ty, to, span });
-            }
-            (Ty::Array(elem), Ty::Json) => self.satisfies_class(
-                &TypeClass::param(ClassId::INTO, TyArena::JSON),
-                *elem,
-                span,
-            ),
-            (Ty::Option(inner), Ty::Json) => self.satisfies_class(
-                &TypeClass::param(ClassId::INTO, TyArena::JSON),
-                *inner,
-                span,
-            ),
-            (Ty::Result(ok, err), Ty::Json) => {
-                let (ok, err) = (*ok, *err);
-                self.satisfies_class(
-                    &TypeClass::param(ClassId::INTO, TyArena::JSON),
-                    ok,
-                    span,
-                );
-                self.satisfies_class(
-                    &TypeClass::param(ClassId::INTO, TyArena::JSON),
-                    err,
-                    span,
-                );
-            }
-            (Ty::Map(k, v), Ty::Json) => {
-                let (k, v) = (*k, *v);
-                self.satisfies_class(
-                    &TypeClass::param(ClassId::INTO, TyArena::JSON),
-                    k,
-                    span,
-                );
-                self.satisfies_class(
-                    &TypeClass::param(ClassId::INTO, TyArena::JSON),
-                    v,
-                    span,
-                );
-            }
-            (Ty::Tuple(elems), Ty::Json) => {
-                let es: SmallVec<[TyId; 4]> = elems.clone();
-                es.iter().for_each(|e| {
-                    self.satisfies_class(
-                        &TypeClass::param(ClassId::INTO, TyArena::JSON),
-                        *e,
-                        span,
-                    )
-                });
-            }
-            (Ty::Object(fields), Ty::Json) => {
-                let vals: SmallVec<[TyId; 4]> =
-                    fields.values().copied().collect();
-                vals.iter().for_each(|t| {
-                    self.satisfies_class(
-                        &TypeClass::param(ClassId::INTO, TyArena::JSON),
-                        *t,
-                        span,
-                    )
-                });
-            }
-            (Ty::Union(_, members), Ty::Json) => {
-                let ms: SmallVec<[TyId; 4]> = members.clone();
-                ms.iter().for_each(|m| {
-                    self.satisfies_class(
-                        &TypeClass::param(ClassId::INTO, TyArena::JSON),
-                        *m,
-                        span,
-                    )
-                });
-            }
-            (Ty::Named(_, args), Ty::Json) => {
-                let as_: SmallVec<[TyId; 4]> = args.clone();
-                as_.iter().for_each(|a| {
-                    self.satisfies_class(
-                        &TypeClass::param(ClassId::INTO, TyArena::JSON),
-                        *a,
-                        span,
-                    )
-                });
-            }
-            (_, Ty::Json) => {}
-
-            // Numeric coercions
-            (Ty::Int, Ty::Float) | (Ty::Float, Ty::Int) => {}
-            (Ty::Word, Ty::Int) | (Ty::Word, Ty::Float) => {}
-            (Ty::Bool, Ty::Int) | (Ty::Int, Ty::Bool) => {}
-
-            // Special conversions
-            (Ty::DataStatus, Ty::Int) => {}
-            (Ty::String, Ty::FilePath) => {}
-            (Ty::Path, Ty::FilePath) => {}
-            (Ty::Named(id, _), Ty::FilePath) if *id == TypeId::PATH => {}
-
-            // `Range -> Array[Int]`
-            (Ty::Range, Ty::Array(elem)) if *elem == TyArena::INT => {}
-
-            // `Storable` to member type
-            (Ty::Union(Some(id), _), _) if *id == TypeId::STORABLE => {
-                if !TyArena::STORABLE_MEMBERS.contains(&to) {
-                    self.errors.push(TypeError::InvalidCast {
+        if unresolved || ty == to {
+        } else {
+            match self.newtype_edge_status(ty, to, span) {
+                NewtypeEdgeStatus::Allowed => {}
+                NewtypeEdgeStatus::Blocked => {
+                    self.errors.push(TypeError::PrivateReprCast {
                         from: ty,
                         to,
                         span,
                     });
                 }
-            }
-
-            // Member to union type
-            (_, Ty::Union(Some(id), _))
-                if *id == TypeId::STORABLE
-                    || *id == TypeId::SCALAR
-                    || *id == TypeId::SUBSCRIPT =>
-            {
-                let uid = *id;
-                let is_member = if uid == TypeId::STORABLE {
-                    TyArena::STORABLE_MEMBERS.contains(&ty)
-                } else if uid == TypeId::SCALAR {
-                    TyArena::SCALAR_MEMBERS.contains(&ty)
-                } else {
-                    TyArena::SUBSCRIPT_MEMBERS.contains(&ty)
-                };
-                if !is_member {
-                    self.errors.push(TypeError::InvalidCast {
-                        from: ty,
-                        to,
-                        span,
-                    });
-                }
-            }
-
-            // Union handling
-            (Ty::Union(prov, members), _) => {
-                let inst = prov.and_then(|id| self.find_into_instance(id, to));
-                match inst {
-                    Some(inst) => {
-                        self.check_instance_constraints(&inst, &[], span, None);
+                NewtypeEdgeStatus::Missing => match (&ty_shape, &to_shape) {
+                    // Functions cannot be stringified
+                    (Ty::Fn(_, _), Ty::String) => {
+                        self.errors.push(TypeError::InvalidCast {
+                            from: ty,
+                            to,
+                            span,
+                        });
                     }
-                    None => {
+                    (Ty::Union(_, members), Ty::String) => {
                         let ms: SmallVec<[TyId; 4]> = members.clone();
                         ms.iter().for_each(|m| {
                             self.satisfies_class(
@@ -1924,50 +2536,226 @@ impl SolveCtx<'_> {
                             )
                         });
                     }
-                }
-            }
+                    (_, Ty::String) => {}
 
-            // User type with `Into` instance
-            (Ty::Named(id, type_args), _) => {
-                let (id, type_args) = (*id, type_args.clone());
-                match self.find_into_instance(id, to) {
-                    Some(inst) => {
-                        self.check_instance_constraints(
-                            &inst, &type_args, span, None,
+                    // Functions, regex, refs cannot be Json-serialized
+                    (Ty::Fn(_, _), Ty::Json)
+                    | (Ty::Regex, Ty::Json)
+                    | (Ty::Local, Ty::Json)
+                    | (Ty::Global, Ty::Json) => {
+                        self.errors.push(TypeError::InvalidCast {
+                            from: ty,
+                            to,
+                            span,
+                        });
+                    }
+                    (Ty::Array(elem), Ty::Json) => self.satisfies_class(
+                        &TypeClass::param(ClassId::INTO, TyArena::JSON),
+                        *elem,
+                        span,
+                    ),
+                    (Ty::Option(inner), Ty::Json) => self.satisfies_class(
+                        &TypeClass::param(ClassId::INTO, TyArena::JSON),
+                        *inner,
+                        span,
+                    ),
+                    (Ty::Result(ok, err), Ty::Json) => {
+                        let (ok, err) = (*ok, *err);
+                        self.satisfies_class(
+                            &TypeClass::param(ClassId::INTO, TyArena::JSON),
+                            ok,
+                            span,
+                        );
+                        self.satisfies_class(
+                            &TypeClass::param(ClassId::INTO, TyArena::JSON),
+                            err,
+                            span,
                         );
                     }
-                    None => {
-                        self.errors.push(TypeError::InvalidCast {
-                            from: ty,
-                            to,
+                    (Ty::Map(k, v), Ty::Json) => {
+                        let (k, v) = (*k, *v);
+                        self.satisfies_class(
+                            &TypeClass::param(ClassId::INTO, TyArena::JSON),
+                            k,
                             span,
+                        );
+                        self.satisfies_class(
+                            &TypeClass::param(ClassId::INTO, TyArena::JSON),
+                            v,
+                            span,
+                        );
+                    }
+                    (Ty::Tuple(elems), Ty::Json) => {
+                        let es: SmallVec<[TyId; 4]> = elems.clone();
+                        es.iter().for_each(|e| {
+                            self.satisfies_class(
+                                &TypeClass::param(ClassId::INTO, TyArena::JSON),
+                                *e,
+                                span,
+                            )
                         });
                     }
-                }
-            }
+                    (Ty::Object(fields), Ty::Json) => {
+                        let vals: SmallVec<[TyId; 4]> =
+                            fields.values().copied().collect();
+                        vals.iter().for_each(|t| {
+                            self.satisfies_class(
+                                &TypeClass::param(ClassId::INTO, TyArena::JSON),
+                                *t,
+                                span,
+                            )
+                        });
+                    }
+                    (Ty::Union(_, members), Ty::Json) => {
+                        let ms: SmallVec<[TyId; 4]> = members.clone();
+                        ms.iter().for_each(|m| {
+                            self.satisfies_class(
+                                &TypeClass::param(ClassId::INTO, TyArena::JSON),
+                                *m,
+                                span,
+                            )
+                        });
+                    }
+                    (Ty::Named(_, args), Ty::Json) => {
+                        let as_: SmallVec<[TyId; 4]> = args.clone();
+                        as_.iter().for_each(|a| {
+                            self.satisfies_class(
+                                &TypeClass::param(ClassId::INTO, TyArena::JSON),
+                                *a,
+                                span,
+                            )
+                        });
+                    }
+                    (_, Ty::Json) => {}
 
-            // Builtin type with user-defined `Into[UserType]` instance.
-            // E.g., `class Into[UserId] FOR Int { ... }`.
-            _ => {
-                let type_id = Self::primitive_type_id(self.ty_arena.get(ty));
-                match type_id.and_then(|id| self.find_into_instance(id, to)) {
-                    Some(inst) => {
-                        self.check_instance_constraints(&inst, &[], span, None);
+                    // Numeric coercions
+                    (Ty::Int, Ty::Float) | (Ty::Float, Ty::Int) => {}
+                    (Ty::Word, Ty::Int) | (Ty::Word, Ty::Float) => {}
+                    (Ty::Bool, Ty::Int) | (Ty::Int, Ty::Bool) => {}
+
+                    // Special conversions
+                    (Ty::DataStatus, Ty::Int) => {}
+                    (Ty::String, Ty::FilePath) => {}
+                    (Ty::Path, Ty::FilePath) => {}
+                    (Ty::Named(id, _), Ty::FilePath) if *id == TypeId::PATH => {
                     }
-                    None => {
-                        self.errors.push(TypeError::InvalidCast {
-                            from: ty,
-                            to,
-                            span,
-                        });
+
+                    // `Range -> Array[Int]`
+                    (Ty::Range, Ty::Array(elem)) if *elem == TyArena::INT => {}
+
+                    // `Storable` to member type
+                    (Ty::Union(Some(id), _), _) if *id == TypeId::STORABLE => {
+                        if !TyArena::STORABLE_MEMBERS.contains(&to) {
+                            self.errors.push(TypeError::InvalidCast {
+                                from: ty,
+                                to,
+                                span,
+                            });
+                        }
                     }
-                }
+
+                    // Member to union type
+                    (_, Ty::Union(Some(id), _))
+                        if *id == TypeId::STORABLE
+                            || *id == TypeId::SCALAR
+                            || *id == TypeId::SUBSCRIPT =>
+                    {
+                        let uid = *id;
+                        let is_member = if uid == TypeId::STORABLE {
+                            TyArena::STORABLE_MEMBERS.contains(&ty)
+                        } else if uid == TypeId::SCALAR {
+                            TyArena::SCALAR_MEMBERS.contains(&ty)
+                        } else {
+                            TyArena::SUBSCRIPT_MEMBERS.contains(&ty)
+                        };
+                        if !is_member {
+                            self.errors.push(TypeError::InvalidCast {
+                                from: ty,
+                                to,
+                                span,
+                            });
+                        }
+                    }
+
+                    // Union handling
+                    (Ty::Union(prov, members), _) => {
+                        let inst =
+                            prov.and_then(|id| self.find_into_instance(id, to));
+                        match inst {
+                            Some(inst) => {
+                                self.check_instance_constraints(
+                                    &inst,
+                                    &[],
+                                    span,
+                                    None,
+                                );
+                            }
+                            None => {
+                                let ms: SmallVec<[TyId; 4]> = members.clone();
+                                ms.iter().for_each(|m| {
+                                    self.satisfies_class(
+                                        &TypeClass::param(ClassId::INTO, to),
+                                        *m,
+                                        span,
+                                    )
+                                });
+                            }
+                        }
+                    }
+
+                    // User type with `Into` instance
+                    (Ty::Named(id, type_args), _) => {
+                        let (id, type_args) = (*id, type_args.clone());
+                        match self.find_into_instance(id, to) {
+                            Some(inst) => {
+                                self.check_instance_constraints(
+                                    &inst, &type_args, span, None,
+                                );
+                            }
+                            None => {
+                                self.errors.push(TypeError::InvalidCast {
+                                    from: ty,
+                                    to,
+                                    span,
+                                });
+                            }
+                        }
+                    }
+
+                    // Builtin type with user-defined `Into[UserType]` instance.
+                    // E.g., `class Into[UserId] FOR Int { ... }`.
+                    _ => {
+                        let type_id =
+                            Self::primitive_type_id(self.ty_arena.get(ty));
+                        match type_id
+                            .and_then(|id| self.find_into_instance(id, to))
+                        {
+                            Some(inst) => {
+                                self.check_instance_constraints(
+                                    &inst,
+                                    &[],
+                                    span,
+                                    None,
+                                );
+                            }
+                            None => {
+                                self.errors.push(TypeError::InvalidCast {
+                                    from: ty,
+                                    to,
+                                    span,
+                                });
+                            }
+                        }
+                    }
+                },
             }
         }
     }
 
     /// `TryInto(target)`: `read` casts.
     fn check_try_into(&mut self, ty: TyId, to: TyId, span: Span) {
+        let ty = self.uf.resolve(ty, self.ty_arena);
+        let to = self.uf.resolve(to, self.ty_arena);
         let ty_shape = self.ty_arena.get(ty).clone();
         let to_shape = self.ty_arena.get(to).clone();
         match (&ty_shape, &to_shape) {
@@ -1977,150 +2765,235 @@ impl SolveCtx<'_> {
 
             _ if ty == to => {}
 
-            // Function types cannot be source for `READ`
-            (Ty::Fn(_, _), _) => {
-                self.errors
-                    .push(TypeError::InvalidRead { from: ty, to, span });
-            }
-
-            // Cannot `READ` into function, regex, or refs
-            (_, Ty::Fn(_, _))
-            | (_, Ty::Regex)
-            | (_, Ty::Local)
-            | (_, Ty::Global) => {
-                self.errors
-                    .push(TypeError::InvalidRead { from: ty, to, span });
-            }
-
-            // `READ Json` requires source to be `Into[Json]`
-            (Ty::Regex, Ty::Json)
-            | (Ty::Local, Ty::Json)
-            | (Ty::Global, Ty::Json) => {
-                self.errors
-                    .push(TypeError::InvalidRead { from: ty, to, span });
-            }
-            (Ty::Array(elem), Ty::Json) => self.satisfies_class(
-                &TypeClass::param(ClassId::TRY_INTO, TyArena::JSON),
-                *elem,
-                span,
-            ),
-            (Ty::Option(inner), Ty::Json) => self.satisfies_class(
-                &TypeClass::param(ClassId::TRY_INTO, TyArena::JSON),
-                *inner,
-                span,
-            ),
-            (Ty::Result(ok, err), Ty::Json) => {
-                let (ok, err) = (*ok, *err);
-                self.satisfies_class(
-                    &TypeClass::param(ClassId::TRY_INTO, TyArena::JSON),
-                    ok,
-                    span,
-                );
-                self.satisfies_class(
-                    &TypeClass::param(ClassId::TRY_INTO, TyArena::JSON),
-                    err,
-                    span,
-                );
-            }
-            (Ty::Map(k, v), Ty::Json) => {
-                let (k, v) = (*k, *v);
-                self.satisfies_class(
-                    &TypeClass::param(ClassId::TRY_INTO, TyArena::JSON),
-                    k,
-                    span,
-                );
-                self.satisfies_class(
-                    &TypeClass::param(ClassId::TRY_INTO, TyArena::JSON),
-                    v,
-                    span,
-                );
-            }
-            (Ty::Tuple(elems), Ty::Json) => {
-                let es: SmallVec<[TyId; 4]> = elems.clone();
-                es.iter().for_each(|e| {
-                    self.satisfies_class(
-                        &TypeClass::param(ClassId::TRY_INTO, TyArena::JSON),
-                        *e,
-                        span,
-                    )
-                });
-            }
-            (Ty::Object(fields), Ty::Json) => {
-                let vals: SmallVec<[TyId; 4]> =
-                    fields.values().copied().collect();
-                vals.iter().for_each(|t| {
-                    self.satisfies_class(
-                        &TypeClass::param(ClassId::TRY_INTO, TyArena::JSON),
-                        *t,
-                        span,
-                    )
-                });
-            }
-            (Ty::Named(_, args), Ty::Json) => {
-                let as_: SmallVec<[TyId; 4]> = args.clone();
-                as_.iter().for_each(|a| {
-                    self.satisfies_class(
-                        &TypeClass::param(ClassId::TRY_INTO, TyArena::JSON),
-                        *a,
-                        span,
-                    )
-                });
-            }
-
-            // Union handling
-            (Ty::Union(prov, members), _) => {
-                match prov.and_then(|id| {
-                    self.instance_registry
-                        .lookup(ClassId::TRY_INTO, id)
-                        .cloned()
-                }) {
-                    Some(inst) => {
-                        if inst.class_args.first().copied() == Some(to) {
-                            self.check_instance_constraints(
-                                &inst,
-                                &[],
-                                span,
-                                None,
-                            );
-                        } else {
-                            self.errors.push(TypeError::InvalidCast {
+            _ => match self.newtype_edge_status(ty, to, span) {
+                NewtypeEdgeStatus::Allowed | NewtypeEdgeStatus::Blocked => {
+                    if !self.check_try_into_instance(ty, to, span) {
+                        self.errors.push(
+                            TypeError::NewtypeReprReadRequiresTryInto {
                                 from: ty,
                                 to,
                                 span,
-                            });
-                        }
+                            },
+                        );
                     }
-                    None => {
-                        let ms: SmallVec<[TyId; 4]> = members.clone();
-                        ms.iter().for_each(|m| {
+                }
+                NewtypeEdgeStatus::Missing => match (&ty_shape, &to_shape) {
+                    // Function types cannot be source for `READ`
+                    (Ty::Fn(_, _), _) => {
+                        self.errors.push(TypeError::InvalidRead {
+                            from: ty,
+                            to,
+                            span,
+                        });
+                    }
+
+                    // Cannot `READ` into function, regex, or refs
+                    (_, Ty::Fn(_, _))
+                    | (_, Ty::Regex)
+                    | (_, Ty::Local)
+                    | (_, Ty::Global) => {
+                        self.errors.push(TypeError::InvalidRead {
+                            from: ty,
+                            to,
+                            span,
+                        });
+                    }
+
+                    // `READ Json` requires source to be `Into[Json]`
+                    (Ty::Regex, Ty::Json)
+                    | (Ty::Local, Ty::Json)
+                    | (Ty::Global, Ty::Json) => {
+                        self.errors.push(TypeError::InvalidRead {
+                            from: ty,
+                            to,
+                            span,
+                        });
+                    }
+                    _ if self.check_try_into_instance(ty, to, span) => {}
+                    (Ty::Array(elem), Ty::Json) => self.satisfies_class(
+                        &TypeClass::param(ClassId::TRY_INTO, TyArena::JSON),
+                        *elem,
+                        span,
+                    ),
+                    (Ty::Option(inner), Ty::Json) => self.satisfies_class(
+                        &TypeClass::param(ClassId::TRY_INTO, TyArena::JSON),
+                        *inner,
+                        span,
+                    ),
+                    (Ty::Result(ok, err), Ty::Json) => {
+                        let (ok, err) = (*ok, *err);
+                        self.satisfies_class(
+                            &TypeClass::param(ClassId::TRY_INTO, TyArena::JSON),
+                            ok,
+                            span,
+                        );
+                        self.satisfies_class(
+                            &TypeClass::param(ClassId::TRY_INTO, TyArena::JSON),
+                            err,
+                            span,
+                        );
+                    }
+                    (Ty::Map(k, v), Ty::Json) => {
+                        let (k, v) = (*k, *v);
+                        self.satisfies_class(
+                            &TypeClass::param(ClassId::TRY_INTO, TyArena::JSON),
+                            k,
+                            span,
+                        );
+                        self.satisfies_class(
+                            &TypeClass::param(ClassId::TRY_INTO, TyArena::JSON),
+                            v,
+                            span,
+                        );
+                    }
+                    (Ty::Tuple(elems), Ty::Json) => {
+                        let es: SmallVec<[TyId; 4]> = elems.clone();
+                        es.iter().for_each(|e| {
                             self.satisfies_class(
-                                &TypeClass::param(ClassId::TRY_INTO, to),
-                                *m,
+                                &TypeClass::param(
+                                    ClassId::TRY_INTO,
+                                    TyArena::JSON,
+                                ),
+                                *e,
                                 span,
                             )
                         });
                     }
-                }
-            }
-
-            // User type with `TryInto` instance
-            (Ty::Named(id, type_args), _) => {
-                let (id, type_args) = (*id, type_args.clone());
-                if let Some(inst) = self
-                    .instance_registry
-                    .lookup(ClassId::TRY_INTO, id)
-                    .cloned()
-                {
-                    if inst.class_args.first().copied() == Some(to) {
-                        self.check_instance_constraints(
-                            &inst, &type_args, span, None,
-                        );
+                    (Ty::Object(fields), Ty::Json) => {
+                        let vals: SmallVec<[TyId; 4]> =
+                            fields.values().copied().collect();
+                        vals.iter().for_each(|t| {
+                            self.satisfies_class(
+                                &TypeClass::param(
+                                    ClassId::TRY_INTO,
+                                    TyArena::JSON,
+                                ),
+                                *t,
+                                span,
+                            )
+                        });
                     }
-                }
-            }
+                    (Ty::Named(_, args), Ty::Json) => {
+                        let as_: SmallVec<[TyId; 4]> = args.clone();
+                        as_.iter().for_each(|a| {
+                            self.satisfies_class(
+                                &TypeClass::param(
+                                    ClassId::TRY_INTO,
+                                    TyArena::JSON,
+                                ),
+                                *a,
+                                span,
+                            )
+                        });
+                    }
 
-            // All other combinations are valid for `READ`
-            _ => {}
+                    // Union handling
+                    (Ty::Union(prov, members), _) => {
+                        let has_inst = prov
+                            .and_then(|_| self.find_try_into_instance(ty, to))
+                            .is_some();
+                        if has_inst {
+                            self.check_try_into_instance(ty, to, span);
+                        } else {
+                            let ms: SmallVec<[TyId; 4]> = members.clone();
+                            ms.iter().for_each(|m| {
+                                self.satisfies_class(
+                                    &TypeClass::param(ClassId::TRY_INTO, to),
+                                    *m,
+                                    span,
+                                )
+                            });
+                        }
+                    }
+
+                    // User type with `TryInto` instance
+                    (Ty::Named(id, type_args), _) => {
+                        let (id, type_args) = (*id, type_args.clone());
+                        let inst = self
+                            .find_try_into_instance_for(id, &type_args, to)
+                            .map(|inst| (inst, type_args));
+                        if let Some((inst, type_args)) = inst {
+                            self.check_instance_constraints(
+                                &inst, &type_args, span, None,
+                            );
+                        }
+                    }
+
+                    // All other combinations are valid for `READ`
+                    _ => {}
+                },
+            },
+        };
+    }
+
+    fn find_try_into_instance(
+        &mut self,
+        ty: TyId,
+        to: TyId,
+    ) -> Option<Instance> {
+        match self.ty_arena.get(ty).clone() {
+            Ty::Union(Some(id), _) => {
+                self.find_try_into_instance_for(id, &[], to)
+            }
+            _ => self.ty_to_type_id_and_args(ty).and_then(|(id, args)| {
+                self.find_try_into_instance_for(id, &args, to)
+            }),
+        }
+    }
+
+    fn find_try_into_instance_for(
+        &mut self,
+        id: TypeId,
+        args: &[TyId],
+        to: TyId,
+    ) -> Option<Instance> {
+        let insts: Vec<Instance> = self
+            .instance_registry
+            .lookup_all(ClassId::TRY_INTO, id)
+            .to_vec();
+        let to = self.uf.resolve(to, self.ty_arena);
+        insts.into_iter().find(|inst| {
+            inst.class_args.first().is_some_and(|&ia| {
+                let subst = self.build_instance_subst_readonly(inst, args);
+                let resolved = self.ty_arena.apply(ia, &subst);
+                self.uf.resolve(resolved, self.ty_arena) == to
+            })
+        })
+    }
+
+    fn check_try_into_instance(
+        &mut self,
+        ty: TyId,
+        to: TyId,
+        span: Span,
+    ) -> bool {
+        let inst = match self.ty_arena.get(ty).clone() {
+            Ty::Union(Some(id), _) => self
+                .find_try_into_instance_for(id, &[], to)
+                .map(|inst| (inst, SmallVec::new())),
+            _ => self.ty_to_type_id_and_args(ty).and_then(|(id, args)| {
+                self.find_try_into_instance_for(id, &args, to)
+                    .map(|inst| (inst, args))
+            }),
+        };
+        match inst {
+            Some((inst, args)) => {
+                let subst = self.build_instance_subst(&inst, &args, span);
+                inst.class_args.first().copied().into_iter().for_each(|ia| {
+                    let resolved = self.ty_arena.apply(ia, &subst);
+                    if let Err(e) = self.unify_types(to, resolved, span) {
+                        self.errors.push(e);
+                    }
+                });
+                self.check_instance_constraints(
+                    &inst,
+                    &args,
+                    span,
+                    Some(&subst),
+                );
+                true
+            }
+            None => false,
         }
     }
 
@@ -2219,7 +3092,7 @@ impl SolveCtx<'_> {
         ty: TyId,
         span: Span,
     ) {
-        let ty = self.expand_alias_fully(ty).unwrap_or(ty);
+        let ty = self.expand_alias_fully_for_class(ty, span).unwrap_or(ty);
 
         match self.ty_arena.get(ty).clone() {
             Ty::Option(opt_elem) => {
@@ -2719,54 +3592,58 @@ impl SolveCtx<'_> {
                 let def = self.registry.get_def(type_id);
                 match def {
                     Some(TypeDef::Alias { type_params, .. }) => {
-                        let target =
-                            self.decls.alias_target(type_id).unwrap_or_else(
-                                || typechecked!("alias target", "registered"),
-                            );
-                        let params: SmallVec<[StringId; 2]> =
-                            type_params.clone();
-                        match self.ast.get_type_expr(target).cloned() {
-                            Some(AstTypeExpr::Object(alias_fields)) => {
-                                // Find field in alias object
-                                let field_str =
-                                    self.env.get_str(field).unwrap_or("");
-                                let field_ty_id = alias_fields
-                                    .iter()
-                                    .find(|(n, _)| *n == field)
-                                    .map(|(_, ty)| *ty);
-                                match field_ty_id {
-                                    Some(ast_ty_id) => {
-                                        let param_subst: IndexMap<_, _> =
-                                            params
-                                                .iter()
-                                                .zip(type_args.iter())
-                                                .map(|(p, &a)| (*p, a))
-                                                .collect();
-                                        let actual_ty =
-                                            self.convert_ctx().ast_type_to_ty(
-                                                ast_ty_id,
-                                                &param_subst,
+                        if !self.convert_ctx().can_access_alias_repr(type_id) {
+                            self.errors
+                                .push(TypeError::NotAnObject(base, span));
+                        } else {
+                            let target = self.decls.alias_target(type_id);
+                            let params: SmallVec<[StringId; 2]> =
+                                type_params.clone();
+                            match self.ast.get_type_expr(target).cloned() {
+                                Some(AstTypeExpr::Object(alias_fields)) => {
+                                    let field_str =
+                                        self.env.get_str(field).unwrap_or("");
+                                    let field_ty_id = alias_fields
+                                        .iter()
+                                        .find(|(n, _)| *n == field)
+                                        .map(|(_, ty)| *ty);
+                                    match field_ty_id {
+                                        Some(ast_ty_id) => {
+                                            let param_subst: IndexMap<_, _> =
+                                                params
+                                                    .iter()
+                                                    .zip(type_args.iter())
+                                                    .map(|(p, &a)| (*p, a))
+                                                    .collect();
+                                            let actual_ty = self
+                                                .convert_ctx()
+                                                .ast_type_to_ty(
+                                                    ast_ty_id,
+                                                    &param_subst,
+                                                );
+                                            if let Err(e) = self.unify_types(
+                                                field_ty, actual_ty, span,
+                                            ) {
+                                                self.errors.push(e);
+                                            }
+                                        }
+                                        None => {
+                                            self.errors.push(
+                                                TypeError::FieldNotFound {
+                                                    ty: base,
+                                                    field: field_str
+                                                        .to_string(),
+                                                    span,
+                                                },
                                             );
-                                        if let Err(e) = self.unify_types(
-                                            field_ty, actual_ty, span,
-                                        ) {
-                                            self.errors.push(e);
                                         }
                                     }
-                                    None => {
-                                        self.errors.push(
-                                            TypeError::FieldNotFound {
-                                                ty: base,
-                                                field: field_str.to_string(),
-                                                span,
-                                            },
-                                        );
-                                    }
                                 }
-                            }
-                            _ => {
-                                self.errors
-                                    .push(TypeError::NotAnObject(base, span));
+                                _ => {
+                                    self.errors.push(TypeError::NotAnObject(
+                                        base, span,
+                                    ));
+                                }
                             }
                         }
                     }

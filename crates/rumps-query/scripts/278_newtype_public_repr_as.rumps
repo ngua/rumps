@@ -1,0 +1,9 @@
+module AsPub {
+  +newtype A[T] = +Array[T]
+}
+
+fun main() {
+  let a = [1, 2, 3] as AsPub.A[Int]
+  let xs = a as Array[Int]
+  write Iterable:length(xs)
+}

@@ -357,7 +357,10 @@ impl<'a> ResolveCtx<'a> {
                 )?;
 
                 let type_qn = match module {
-                    Some(m) if !raw_qn.is_qualified() => {
+                    Some(m)
+                        if !raw_qn.is_qualified()
+                            && self.registry.lookup(&raw_qn).is_none() =>
+                    {
                         m.child(raw_qn.local_name())
                     }
                     _ => raw_qn,

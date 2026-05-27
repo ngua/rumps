@@ -1,0 +1,21 @@
+module ReadPrivNoTry {
+  +newtype A = Array[Int]
+}
+
+module ReadPrivInternalNoTry {
+  +newtype A = Array[Int]
+
+  +fun read-a(xs: Array[Int]) -> Result[ReadPrivInternalNoTry.A, String] {
+    xs read ReadPrivInternalNoTry.A
+  }
+}
+
+module ReadPubNoTry {
+  +newtype A = +Array[Int]
+}
+
+fun main() {
+  let priv = ([1, 2, 3] read ReadPrivNoTry.A)!
+  let internal = ReadPrivInternalNoTry.read-a([4, 5, 6])!
+  let pub = ([7, 8, 9] read ReadPubNoTry.A)!
+}

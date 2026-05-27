@@ -1620,7 +1620,7 @@ impl TypeRegistry {
                     );
                     self.register_union(qn, type_params, members, ctx);
                 }
-                Stmt::NewType {
+                Stmt::Newtype {
                     name, type_params, ..
                 } => {
                     let qn = prefix.map_or_else(

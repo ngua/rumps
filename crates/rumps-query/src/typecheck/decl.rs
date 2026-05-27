@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use smallvec::SmallVec;
 
-use crate::ast::{Ast, AstTypeExprId, Stmt, StmtId, TypeDefAst};
+use crate::ast::{Ast, AstTypeExprId, Stmt, StmtId, TypeDefAst, Visibility};
 use crate::intern::{QualifiedName, StringId};
 use crate::value::{TypeId, TypeRegistry};
 
@@ -19,6 +19,8 @@ enum TypeDeclMeta {
     },
     Alias {
         target: AstTypeExprId,
+        repr_vis: Visibility,
+        module: Option<QualifiedName>,
     },
     Union {
         member_exprs: SmallVec<[AstTypeExprId; 8]>,
@@ -41,11 +43,37 @@ impl TypeDeclRegistry {
         decls
     }
 
-    pub(super) fn alias_target(&self, id: TypeId) -> Option<AstTypeExprId> {
-        self.decls.get(&id).and_then(|decl| match decl {
-            TypeDeclMeta::Alias { target } => Some(*target),
-            TypeDeclMeta::Sum { .. } | TypeDeclMeta::Union { .. } => None,
-        })
+    pub(super) fn alias_target(&self, id: TypeId) -> AstTypeExprId {
+        match self.alias_meta(id) {
+            TypeDeclMeta::Alias { target, .. } => *target,
+            TypeDeclMeta::Sum { .. } | TypeDeclMeta::Union { .. } => {
+                typechecked!("alias target", "alias declaration")
+            }
+        }
+    }
+
+    pub(super) fn alias_repr_vis(&self, id: TypeId) -> Visibility {
+        match self.alias_meta(id) {
+            TypeDeclMeta::Alias { repr_vis, .. } => *repr_vis,
+            TypeDeclMeta::Sum { .. } | TypeDeclMeta::Union { .. } => {
+                typechecked!("alias repr visibility", "alias declaration")
+            }
+        }
+    }
+
+    pub(super) fn alias_module(&self, id: TypeId) -> Option<&QualifiedName> {
+        match self.alias_meta(id) {
+            TypeDeclMeta::Alias { module, .. } => module.as_ref(),
+            TypeDeclMeta::Sum { .. } | TypeDeclMeta::Union { .. } => {
+                typechecked!("alias module", "alias declaration")
+            }
+        }
+    }
+
+    pub(super) fn is_alias(&self, id: TypeId) -> bool {
+        self.decls
+            .get(&id)
+            .is_some_and(|decl| matches!(decl, TypeDeclMeta::Alias { .. }))
     }
 
     pub(super) fn union_member_exprs(
@@ -106,12 +134,21 @@ impl TypeDeclRegistry {
                         },
                     );
                 }
-                Stmt::NewType { name, target, .. } => {
+                Stmt::Newtype {
+                    name,
+                    target,
+                    repr_vis,
+                    ..
+                } => {
                     let qn = Self::child_name(prefix, *name);
                     self.register(
                         reg,
                         &qn,
-                        TypeDeclMeta::Alias { target: *target },
+                        TypeDeclMeta::Alias {
+                            target: *target,
+                            repr_vis: *repr_vis,
+                            module: qn.parent(),
+                        },
                     );
                 }
                 Stmt::Module { name, body } => {
@@ -132,6 +169,12 @@ impl TypeDeclRegistry {
         if let Some(id) = reg.lookup(qn) {
             self.decls.insert(id, meta);
         }
+    }
+
+    fn alias_meta(&self, id: TypeId) -> &TypeDeclMeta {
+        self.decls
+            .get(&id)
+            .unwrap_or_else(|| typechecked!("alias declaration", "registered"))
     }
 
     fn child_name(

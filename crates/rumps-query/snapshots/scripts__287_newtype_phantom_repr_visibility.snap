@@ -1,0 +1,11 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Phantom representation visibility\n\nnewtype Tagged[Tag] = Int\nnewtype Partial[A, B] = Array[A]\nnewtype Wrapper[T] = Int\nnewtype DoubleWrap[A, B] = Wrapper[A]\n\nmodule PhantomPriv {\n  +newtype Tag[Tag] = Int\n  +newtype Part[A, B] = Array[A]\n  +newtype Wrap[T] = Int\n  +newtype Double[A, B] = PhantomPriv.Wrap[A]\n\n  +fun user-id(n: Int) -> Int {\n    let id: PhantomPriv.Tag[String] = n\n    id as Int\n  }\n\n  +fun len(xs: Array[Int]) -> Int {\n    let ps: PhantomPriv.Part[Int, String] = xs\n    Iterable:length(ps as Array[Int])\n  }\n\n  +fun value(n: Int) -> Int {\n    let dw: PhantomPriv.Double[String, Bool] = n\n    dw as Int\n  }\n}\n\nfun main() {\n  let user-id: Tagged[String] = 100\n  let post-id: Tagged[Bool] = 200\n  write user-id\n  write post-id\n\n  let ps: Partial[Int, String] = [1, 2, 3]\n  write Iterable:length(ps)\n\n  let dw: DoubleWrap[String, Bool] = 42\n  write dw\n\n  write PhantomPriv.user-id(300)\n  write PhantomPriv.len([4, 5, 6, 7])\n  write PhantomPriv.value(500)\n}\n"
+---
+100
+200
+3
+42
+300
+4
+500

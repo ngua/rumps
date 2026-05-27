@@ -283,9 +283,9 @@ fun main() {
   write person-result is Result.Ok(_)
   ; Expected: true
 
-  ; Read NATIVE object into struct (extra fields allowed)
+  ; Read NATIVE object into structural type
   let native-obj2 = { name: "Native", age: 25, extra: "ignored" }
-  let native-result = native-obj2 read Person
+  let native-result = native-obj2 read { name: String, age: Int, extra: String }
   write native-result is Result.Ok(_)
   ; Expected: true
 

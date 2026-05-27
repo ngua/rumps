@@ -1,0 +1,40 @@
+fun main() {
+  write Own.run()
+}
+
+module Own {
+  variant Status = Pending | Done
+  newtype UserId = Int
+  union Payload = Int | String
+
+  fun status-name(s: Status) -> String {
+    match s {
+      Status.Pending => { "pending" }
+      Status.Done => { "done" }
+    }
+  }
+
+  fun id-double(id: UserId) -> UserId {
+    id * 2
+  }
+
+  fun payload-kind(p: Payload) -> String {
+    if p is Int { "int" } else { "string" }
+  }
+
+  +fun run() -> String {
+    let status: Status = Status.Done
+    let id: UserId = 21
+    let p: Payload = "x"
+    "{status-name(status)}:{id-double(id)}:{payload-kind(p)}"
+  }
+
+  module Inner {
+    +fun run-inner() -> String {
+      let status: Status = Status.Pending
+      let id: UserId = 7
+      let p: Payload = 3
+      if p is Int { "{status-name(status)}:{id-double(id)}:int" } else { "err" }
+    }
+  }
+}

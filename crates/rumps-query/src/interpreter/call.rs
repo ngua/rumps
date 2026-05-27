@@ -654,11 +654,16 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         dispatch: ClassDispatch,
     ) -> Result<Value> {
-        let repr_ty = dispatch
-            .args
-            .first()
-            .and_then(|&id| self.arena.value(id))
-            .and_then(|v| self.checked.types.to_type_id(v.repr));
+        let repr_ty =
+            if matches!(dispatch.class, ClassId::INTO | ClassId::TRY_INTO) {
+                None
+            } else {
+                dispatch
+                    .args
+                    .first()
+                    .and_then(|&id| self.arena.value(id))
+                    .and_then(|v| self.checked.types.to_type_id(v.repr))
+            };
 
         if let Some(type_id) = repr_ty {
             if let Some(fn_name) = self.user_instances.lookup_method(
@@ -725,6 +730,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         } else {
             self.dispatch_builtin_class_method(
                 dispatch.dispatch_expr_id,
+                dispatch.output_expr_id,
                 dispatch.class,
                 dispatch.method,
                 &dispatch.args,
@@ -782,6 +788,15 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let info = self.checked.expr(id);
                 match &info.aux {
                     ExprAux::HofCall { out, .. } => OutputMeta::Ty(*out),
+                    _ if class == ClassId::TRY_INTO => self
+                        .approved_newtype_edge_meta(id)
+                        .map(|meta| {
+                            self.checked.types.result(
+                                meta.ty,
+                                RuntimeTyId::from(TyArena::STRING),
+                            )
+                        })
+                        .map_or(OutputMeta::Expr(id), OutputMeta::Ty),
                     _ => OutputMeta::Expr(id),
                 }
             }
@@ -1036,6 +1051,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     fn dispatch_builtin_class_method(
         &mut self,
         expr_id: Option<ExprId>,
+        output_id: Option<ExprId>,
         class: ClassId,
         method: StringId,
         args: &[ValueId],
@@ -1180,23 +1196,43 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let id = expr_id.unwrap_or_else(|| {
                     typechecked!("convert class method", "expression id")
                 });
-                let ty_id = self.checked.expr(id).ty;
-                let ty = self.checked.types.get(ty_id).clone();
-                let mut ctx = ClassCtx {
-                    arena: &mut self.arena,
-                    runtime_types: &mut self.checked.types,
-                    registry: &self.registry,
-                    regex_cache: &self.checked.regex_cache,
-                    span,
-                };
-                match class {
-                    ClassId::INTO => class::Into::into_value(&mut ctx, &v, &ty),
-                    ClassId::TRY_INTO => {
-                        class::TryInto::try_into_value(&mut ctx, &v, &ty)
+                let edge = output_id
+                    .and_then(|edge_id| {
+                        self.approved_newtype_edge_meta(edge_id)
+                    })
+                    .or_else(|| self.approved_newtype_edge_meta(id));
+                match edge {
+                    Some(meta) if class == ClassId::INTO => {
+                        Ok(self.value_with_context_meta(v, meta).payload)
                     }
-                    _ => self.class_methods.dispatch_convert(
-                        class, method, &mut ctx, &v.payload, &ty,
-                    ),
+                    Some(meta) if class == ClassId::TRY_INTO => {
+                        let val = self.value_with_context_meta(v, meta);
+                        Ok(self.make_result_ok_value(val, span))
+                    }
+                    _ => {
+                        let ty_id = self.checked.expr(id).ty;
+                        let ty = self.checked.types.get(ty_id).clone();
+                        let mut ctx = ClassCtx {
+                            arena: &mut self.arena,
+                            runtime_types: &mut self.checked.types,
+                            registry: &self.registry,
+                            regex_cache: &self.checked.regex_cache,
+                            span,
+                        };
+                        match class {
+                            ClassId::INTO => {
+                                class::Into::into_value(&mut ctx, &v, &ty)
+                            }
+                            ClassId::TRY_INTO => {
+                                class::TryInto::try_into_value(
+                                    &mut ctx, &v, &ty,
+                                )
+                            }
+                            _ => self.class_methods.dispatch_convert(
+                                class, method, &mut ctx, &v.payload, &ty,
+                            ),
+                        }
+                    }
                 }
             }
             Some(MethodFn::Hof(_)) => {

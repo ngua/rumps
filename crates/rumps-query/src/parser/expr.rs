@@ -1036,7 +1036,6 @@ impl Parser {
         // Naked variant constructor call: `.Variant(args)`.
         let naked_variant = select! { Token::DotIdent(name) => name };
         let naked_variant_call = naked_variant
-            .clone()
             .then_ignore(just(Token::LParen))
             .then_ignore(Self::opt_newlines())
             .then(

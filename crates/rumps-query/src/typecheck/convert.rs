@@ -42,6 +42,19 @@ pub(super) struct ConvertCtx<'a> {
     pub(super) rewrite_ast: bool,
 }
 
+pub(super) fn is_in_module(
+    site: &Option<QualifiedName>,
+    def: &Option<QualifiedName>,
+) -> bool {
+    match (site, def) {
+        (None, None) => true,
+        (Some(site), Some(def)) => {
+            site == def || site.segments().starts_with(def.segments())
+        }
+        (None, Some(_)) | (Some(_), None) => false,
+    }
+}
+
 impl ConvertCtx<'_> {
     /// Resolve a type name to its `TypeId` and effective qualified name.
     ///
@@ -89,11 +102,13 @@ impl ConvertCtx<'_> {
         qn: &QualifiedName,
         span: Span,
     ) -> bool {
-        let is_private = qn.is_qualified()
-            && self
-                .env
-                .lookup_user_module_type_vis(qn)
-                .is_some_and(|vis| vis == Visibility::Private);
+        let def = qn.parent();
+        let is_private = match self.env.lookup_user_module_type_vis(qn) {
+            Some(Visibility::Private) => {
+                !is_in_module(self.current_module, &def)
+            }
+            Some(Visibility::Public) | None => false,
+        };
         if is_private {
             let local = self.env.resolve_str(qn.local_name()).to_owned();
             let module = qn
@@ -213,6 +228,16 @@ impl ConvertCtx<'_> {
             }
             Ty::Named(id, _) => self.ty_arena.named(id, args),
             _ => base,
+        }
+    }
+
+    pub(super) fn can_access_alias_repr(&self, id: TypeId) -> bool {
+        match self.decls.alias_repr_vis(id) {
+            Visibility::Public => true,
+            Visibility::Private => {
+                let def = self.decls.alias_module(id).cloned();
+                is_in_module(self.current_module, &def)
+            }
         }
     }
 

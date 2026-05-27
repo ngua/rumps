@@ -1,8 +1,6 @@
-; newtype edge cases
+; Transparent top-level `newtype`s
 
 fun main() {
-  ; ============ Simple primitive aliases ============
-
   let x: MyInt = 42
   write x
 
@@ -11,8 +9,6 @@ fun main() {
 
   let b: MyBool = true
   write b
-
-  ; ============ Parameterized aliases ============
 
   let xs: List[Int] = [1, 2, 3]
   write Iterable:length(xs)
@@ -23,49 +19,23 @@ fun main() {
   let m: IntMap[String] = { 1 => "one" }
   write m
 
-  ; ============ Phantom type parameters ============
-
-  ; Unused type param (phantom type); useful for type-level tags
-  let user-id: Tagged[String] = 100
-  let post-id: Tagged[Bool] = 200
-  write user-id
-  write post-id
-
-  ; Phantom with multiple params; only some used
-  let ps: Partial[Int, String] = [1, 2, 3]
-  write Iterable:length(ps)
-
-  ; Nested phantom
-  let dw: DoubleWrap[String, Bool] = 42
-  write dw
-
-  ; ============ is operator with aliases ============
-
   let p1: Person = { name: "Alice", age: 30 }
 
-  ; Basic is checks
   write p1 is Person
   write p1 is { name: String }
   write p1 is { name: String, age: Int }
   write p1 is { name: String, age: Int, extra: Bool }
 
-  ; is with extra fields on value
   let p2: Person = { name: "Bob", age: 25, job: "Engineer" }
   write p2 is Person
   write p2 is { name: String, job: String }
   write p2 is { name: String, age: Int, job: String }
 
-  ; ============ Object alias features ============
-
-  ; Field access on object aliases
   write p1.name
   write p1.age
 
-  ; Extra fields are accessible (extensible-record style)
   write p2.name
   write p2.job
-
-  ; Nested alias types
 
   let rec: PatientRecord = {
     patient: { id: 1, name: "Charlie", age: 40 },
@@ -80,26 +50,20 @@ fun main() {
   write p3.name
   write p3.age
 
-  ; ============ Parametric object aliases ============
-
-  ; Single type parameter
   let int-box: Box[Int] = { value: 42 }
   write int-box.value
 
   let str-box: Box[String] = { value: "hello" }
   write str-box.value
 
-  ; Two type parameters
   let pair: Pair[Int, String] = { left: 1, right: "one" }
   write pair.left
   write pair.right
 
-  ; Nested type parameters
   let nested: Box[Pair[Int, Bool]] = { value: { left: 99, right: true } }
   write nested.value.left
   write nested.value.right
 
-  ; newtype wrapping Option
   let some-val: MaybeBox[Int] = { inner: Option.Some(123) }
   let none-val: MaybeBox[Int] = { inner: Option.None }
   write some-val.inner!
@@ -114,23 +78,18 @@ newtype List[T] = Array[T]
 newtype Maybe[T] = Option[T]
 newtype IntMap[V] = Map[Int, V]
 
-newtype Tagged[Tag] = Int
-newtype Partial[A, B] = Array[A]
-newtype Wrapper[T] = Int
-newtype DoubleWrap[A, B] = Wrapper[A]
-
 newtype Person = { name: String, age: Int }
 newtype Address = { street: String, city: String }
 newtype PatientRecord = { patient: Person, address: Address }
 
-fun greet (p: Person) -> String {
-  "Hello, {p.name}!"
-}
-
-fun make-person (name: String, age: Int) -> { name: String, age: Int } {
-  { name: name, age: age }
-}
-
 newtype Box[T] = { value: T }
 newtype Pair[L, R] = { left: L, right: R }
 newtype MaybeBox[T] = { inner: Option[T] }
+
+fun greet(p: Person) -> String {
+  "Hello, {p.name}!"
+}
+
+fun make-person(name: String, age: Int) -> { name: String, age: Int } {
+  { name: name, age: age }
+}

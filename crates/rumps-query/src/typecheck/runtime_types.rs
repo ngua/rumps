@@ -92,7 +92,10 @@ impl RuntimeTypes {
         }
     }
 
-    /// Unwrap newtype wrappers to find the transparent representation type.
+    /// Unwrap `newtype` wrappers to find the runtime representation type.
+    ///
+    /// This map is built only from statically approved metadata. Private
+    /// `repr visibility` is checked before runtime sees an edge.
     pub(crate) fn repr(&self, t: RuntimeTyId) -> RuntimeTyId {
         self.alias_type_expansions
             .get(&t)
@@ -207,7 +210,7 @@ impl RuntimeTypes {
         }
     }
 
-    /// Return object fields for `t` after transparent representation lookup.
+    /// Return object fields for `t` after approved representation lookup.
     pub(crate) fn object_fields(
         &self,
         t: RuntimeTyId,
@@ -774,6 +777,17 @@ impl RuntimeTypes {
     }
 }
 
+/// Runtime info for a statically approved `newtype` representation edge.
+///
+/// The checker records this only when `type visibility` and `repr visibility`
+/// permit the source expression to cross the edge.
+#[derive(Clone, Copy)]
+pub(crate) struct NewtypeEdgeRuntimeInfo {
+    pub(crate) from: RuntimeTyId,
+    pub(crate) to: RuntimeTyId,
+    pub(crate) repr: RuntimeTyId,
+}
+
 /// Full post-typecheck program metadata, combining solved types with
 /// per-expression info, compiled regex patterns, and class definitions.
 pub(crate) struct CheckedProgram {
@@ -785,6 +799,8 @@ pub(crate) struct CheckedProgram {
     pub(crate) module_fns: HashMap<Vec<StringId>, ValueMeta>,
     pub(crate) module_consts: HashMap<Vec<StringId>, ValueMeta>,
     pub(crate) expr_targets: HashMap<ExprId, RuntimeTyId>,
+    /// Approved `newtype` representation edges keyed by use site expression.
+    pub(crate) approved_newtype_edges: HashMap<ExprId, NewtypeEdgeRuntimeInfo>,
     pub(crate) is_patterns: HashMap<ExprId, TypePatternInfo>,
     pub(crate) let_targets: HashMap<ExprId, RuntimeTyId>,
     pub(crate) match_targets: HashMap<MatchPatternId, RuntimeTyId>,
@@ -826,6 +842,13 @@ impl CheckedProgram {
             .get(&id)
             .copied()
             .unwrap_or_else(|| typechecked!(ctx, "checked expression target"))
+    }
+
+    pub(crate) fn approved_newtype_edge(
+        &self,
+        id: ExprId,
+    ) -> Option<NewtypeEdgeRuntimeInfo> {
+        self.approved_newtype_edges.get(&id).copied()
     }
 
     pub(crate) fn let_target(&self, id: ExprId) -> Option<RuntimeTyId> {

@@ -32,8 +32,8 @@ pub(crate) use error::{FormattedTypeError, TyPrinter, TypeError};
 pub(crate) use infer::{Constraint, InferCtx};
 pub(crate) use instance::{Instance, InstanceRegistry};
 pub(crate) use runtime_types::{
-    CheckedProgram, ExprAux, ExprInfo, RuntimeTyId, RuntimeTypes,
-    TypePatternInfo,
+    CheckedProgram, ExprAux, ExprInfo, NewtypeEdgeRuntimeInfo, RuntimeTyId,
+    RuntimeTypes, TypePatternInfo,
 };
 pub(crate) use ty::{
     ClassDef, ClassRegistry, ClassShape, Scheme, Ty, TyArena, TyId, TyVar,
@@ -67,6 +67,9 @@ pub(crate) struct TypecheckOutput {
     pub(crate) expr_types: HashMap<ExprId, TyId>,
     /// Checked target types for `as`, `read`, and annotation expressions.
     pub(crate) expr_targets: HashMap<ExprId, TyId>,
+    /// Newtype representation edges approved by static checking.
+    pub(crate) approved_newtype_edges:
+        HashMap<ExprId, CheckedNewtypeEdgeRuntimeInfo>,
     /// Checked type facts for `expr is Pattern` expression patterns.
     pub(crate) is_patterns: HashMap<ExprId, CheckedTypePatternInfo>,
     /// Checked type annotation targets for `let` bindings, keyed by RHS expr.
@@ -141,6 +144,29 @@ impl CheckedExprInfo {
 
     pub(super) fn ty_ids(&self) -> impl Iterator<Item = TyId> {
         self.ty.into_iter().chain(self.repr)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct CheckedNewtypeEdgeRuntimeInfo {
+    pub(super) from: TyId,
+    pub(super) to: TyId,
+    pub(super) repr: TyId,
+}
+
+impl CheckedNewtypeEdgeRuntimeInfo {
+    pub(super) fn resolve(
+        &mut self,
+        uf: &mut uf::UnionFind,
+        arena: &mut TyArena,
+    ) {
+        self.from = uf.resolve(self.from, arena);
+        self.to = uf.resolve(self.to, arena);
+        self.repr = uf.resolve(self.repr, arena);
+    }
+
+    pub(super) fn ty_ids(&self) -> impl Iterator<Item = TyId> {
+        [self.from, self.to, self.repr].into_iter()
     }
 }
 
@@ -252,6 +278,20 @@ impl TypecheckOutput {
             .iter()
             .map(|(&id, &ty)| (id, RuntimeTyId::from(ty)))
             .collect();
+        let approved_newtype_edges = self
+            .approved_newtype_edges
+            .iter()
+            .map(|(&id, info)| {
+                (
+                    id,
+                    NewtypeEdgeRuntimeInfo {
+                        from: RuntimeTyId::from(info.from),
+                        to: RuntimeTyId::from(info.to),
+                        repr: RuntimeTyId::from(info.repr),
+                    },
+                )
+            })
+            .collect();
         let is_patterns = self
             .is_patterns
             .iter()
@@ -319,6 +359,7 @@ impl TypecheckOutput {
             module_fns,
             module_consts,
             expr_targets,
+            approved_newtype_edges,
             is_patterns,
             let_targets,
             match_targets,
@@ -375,6 +416,7 @@ mod tests {
             class_registry,
             expr_types: HashMap::new(),
             expr_targets: HashMap::new(),
+            approved_newtype_edges: HashMap::new(),
             is_patterns: HashMap::new(),
             let_targets: HashMap::new(),
             match_targets: HashMap::new(),
@@ -423,6 +465,7 @@ mod tests {
             class_registry,
             expr_types: HashMap::from([(id, TyArena::UNIT)]),
             expr_targets: HashMap::new(),
+            approved_newtype_edges: HashMap::new(),
             is_patterns: HashMap::new(),
             let_targets: HashMap::new(),
             match_targets: HashMap::new(),
@@ -463,6 +506,7 @@ mod tests {
             class_registry,
             expr_types: HashMap::new(),
             expr_targets: HashMap::new(),
+            approved_newtype_edges: HashMap::new(),
             is_patterns: HashMap::new(),
             let_targets: HashMap::new(),
             match_targets: HashMap::new(),
@@ -522,6 +566,7 @@ mod tests {
                 (as_id, TyArena::STRING),
                 (read_id, TyArena::INT),
             ]),
+            approved_newtype_edges: HashMap::new(),
             is_patterns: HashMap::from([(
                 is_id,
                 CheckedTypePatternInfo::Object(vec![(field, TyArena::STRING)]),

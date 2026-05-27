@@ -7,11 +7,12 @@ use indexmap::IndexMap;
 use smallvec::SmallVec;
 
 use super::{Constraint, InferCtx};
-use crate::ast::AstTypeExpr;
+use crate::ast::{AstTypeExpr, AstTypeExprId};
+use crate::intern::StringId;
 use crate::typecheck::convert::ConvertCtx;
 use crate::typecheck::error::TypeError;
 use crate::typecheck::ty::{Ty, TyArena, TyId};
-use crate::value::TypeDef;
+use crate::value::{TypeDef, TypeId};
 use crate::Span;
 
 impl InferCtx<'_> {
@@ -27,6 +28,32 @@ impl InferCtx<'_> {
             current_module: &self.current_module,
             class_context: &self.class_context,
             rewrite_ast: true,
+        }
+    }
+
+    pub(super) fn object_alias(
+        &mut self,
+        type_id: TypeId,
+    ) -> Option<(
+        SmallVec<[StringId; 2]>,
+        SmallVec<[(StringId, AstTypeExprId); 4]>,
+    )> {
+        if self.convert().can_access_alias_repr(type_id) {
+            self.registry.get_def(type_id).and_then(|def| match def {
+                TypeDef::Alias { type_params, .. } => {
+                    let ps = type_params.clone();
+                    let target = self.decls.alias_target(type_id);
+                    self.ast.get_type_expr(target).and_then(|te| match te {
+                        AstTypeExpr::Object(fields) => {
+                            Some((ps, fields.clone()))
+                        }
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+        } else {
+            None
         }
     }
 
@@ -296,57 +323,33 @@ impl InferCtx<'_> {
                 })
             }
 
-            // Named type: check if it's an alias to object and look up field
+            // Named type: check if it's an accessible alias to object and look up field
             Ty::Named(type_id, type_args) => {
                 let field_id = self.env.intern(field);
-                let def = self.registry.get_def(type_id);
-                match def {
-                    Some(TypeDef::Alias { type_params, .. }) => {
-                        let target =
-                            self.decls.alias_target(type_id).unwrap_or_else(
-                                || typechecked!("alias target", "registered"),
-                            );
-                        // Check if target is an object type
-                        let params: smallvec::SmallVec<[_; 2]> =
-                            type_params.clone();
-                        match self.ast.get_type_expr(target).cloned() {
-                            Some(AstTypeExpr::Object(fields)) => {
-                                // Find field in object
-                                let field_ty_id = fields
+                match self.object_alias(type_id) {
+                    Some((params, fields)) => {
+                        let field_ty_id = fields
+                            .iter()
+                            .find(|(n, _)| *n == field_id)
+                            .map(|(_, ty)| *ty);
+                        match field_ty_id {
+                            Some(ty_id) => {
+                                let subst: IndexMap<_, _> = params
                                     .iter()
-                                    .find(|(n, _)| *n == field_id)
-                                    .map(|(_, ty)| *ty);
-                                match field_ty_id {
-                                    Some(ty_id) => {
-                                        let subst: IndexMap<_, _> = params
-                                            .iter()
-                                            .zip(type_args.iter())
-                                            .map(|(p, &a)| (*p, a))
-                                            .collect();
-                                        self.convert()
-                                            .ast_type_to_ty(ty_id, &subst)
-                                    }
-                                    None => {
-                                        self.error(TypeError::FieldNotFound {
-                                            ty: base_ty,
-                                            field: field.to_string(),
-                                            span,
-                                        });
-                                        TyArena::ERROR
-                                    }
-                                }
+                                    .zip(type_args.iter())
+                                    .map(|(p, &a)| (*p, a))
+                                    .collect();
+                                self.convert().ast_type_to_ty(ty_id, &subst)
                             }
-                            _ => {
-                                self.error(TypeError::NotAnObject(
-                                    base_ty, span,
-                                ));
+                            None => {
+                                self.error(TypeError::FieldNotFound {
+                                    ty: base_ty,
+                                    field: field.to_string(),
+                                    span,
+                                });
                                 TyArena::ERROR
                             }
                         }
-                    }
-                    Some(_) => {
-                        self.error(TypeError::NotAnObject(base_ty, span));
-                        TyArena::ERROR
                     }
                     None => {
                         self.error(TypeError::NotAnObject(base_ty, span));

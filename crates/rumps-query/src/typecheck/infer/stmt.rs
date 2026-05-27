@@ -11,7 +11,7 @@ use smallvec::{smallvec, SmallVec};
 
 use super::{
     ClassContext, ClassInstanceInput, Constraint, HoistCtx, InferCtx,
-    InstanceMethodInput,
+    InstanceMethodInput, NewtypeIntoOverlap,
 };
 use crate::ast::{
     AssocTypeDef, AstTypeExpr, AstTypeExprId, BindingPattern, DbRef, Expr,
@@ -108,7 +108,7 @@ impl InferCtx<'_> {
                 });
             }
 
-            Some(Stmt::NewType {
+            Some(Stmt::Newtype {
                 ref type_params,
                 target,
                 ..
@@ -280,11 +280,12 @@ impl InferCtx<'_> {
                         self.convert().ast_type_to_ty(*m, &subst);
                     });
                 }
-                Some(Stmt::NewType {
+                Some(Stmt::Newtype {
                     ref name,
                     vis,
                     ref type_params,
                     target,
+                    ..
                 }) => {
                     let qn = mod_path.child(*name);
                     self.env.register_user_module_type_vis(qn, vis);
@@ -573,8 +574,12 @@ impl InferCtx<'_> {
         let param_tys = self.param_tys_with_subst(params, &type_param_subst);
 
         // Declared return type annotation (if any)
-        let declared_ret =
-            ret.map(|id| self.convert().ast_type_to_ty(*id, &type_param_subst));
+        let declared_ret = ret.map(|id| {
+            (
+                self.convert().ast_type_to_ty(*id, &type_param_subst),
+                self.ast.type_expr_span(*id).unwrap_or(span),
+            )
+        });
 
         // Fresh var for provisional return (supports recursive calls)
         let provisional_ret = self.fresh();
@@ -603,8 +608,8 @@ impl InferCtx<'_> {
 
         // Determine actual return type: use annotation if present, else body type
         let actual_ret = match declared_ret {
-            Some(ret_ty) => {
-                self.unify(body_ty, ret_ty, span);
+            Some((ret_ty, ret_span)) => {
+                self.unify(body_ty, ret_ty, ret_span);
                 ret_ty
             }
             None => body_ty,
@@ -701,6 +706,7 @@ impl InferCtx<'_> {
             Some(id) => {
                 let ann_ty =
                     self.convert().ast_type_to_ty(*id, &IndexMap::new());
+                let ann_span = self.ast.type_expr_span(*id).unwrap_or(span);
                 self.interp.let_targets.insert(rhs, ann_ty);
 
                 // Clone to avoid borrow issues with mutable self
@@ -729,10 +735,10 @@ impl InferCtx<'_> {
                         self.bind_pattern(pattern, result, span);
                         None // Already bound
                     } else {
-                        self.infer_default_let(ann_ty, rhs, span)
+                        self.infer_default_let(ann_ty, rhs, ann_span)
                     }
                 } else {
-                    self.infer_default_let(ann_ty, rhs, span)
+                    self.infer_default_let(ann_ty, rhs, ann_span)
                 }
             }
         };
@@ -798,15 +804,17 @@ impl InferCtx<'_> {
         &mut self,
         ann_ty: TyId,
         rhs: ExprId,
-        span: Span,
+        ann_span: Span,
     ) -> Option<TyId> {
         let rhs_ty = self.expr(rhs);
-        self.unify(rhs_ty, ann_ty, span);
+        if !self.reject_private_repr_ann(rhs_ty, ann_ty, ann_span) {
+            self.unify(rhs_ty, ann_ty, ann_span);
+        }
 
         // Record for post-solve union narrowing check. At this point
         // `rhs_ty` may be a type variable (e.g. from a function call);
         // we defer the check until constraint solving resolves it.
-        self.let_annotations.push((rhs, rhs_ty, ann_ty, span));
+        self.let_annotations.push((rhs, rhs_ty, ann_ty, ann_span));
 
         // Extensible records: if rhs is an object and annotation
         // is an alias to object, keep the full object type to
@@ -815,11 +823,8 @@ impl InferCtx<'_> {
         let is_obj_alias = matches!(ann_shape, Ty::Named(id, _)
         if self.registry.get_def(id).is_some_and(|def| match def {
             TypeDef::Alias { .. } => self
-                .decls
-                .alias_target(id)
-                .and_then(|target| self
                 .ast
-                .get_type_expr(target))
+                .get_type_expr(self.decls.alias_target(id))
                 .is_some_and(|te| matches!(te, AstTypeExpr::Object(_))),
             _ => false,
         }));
@@ -1109,7 +1114,66 @@ impl InferCtx<'_> {
                 }
             };
 
-        // 5. Check for forbidden builtin instance
+        // Check for forbidden `newtype` representation overlap.
+        let into_repr_overlap = if class == ClassId::INTO {
+            class_arg_tys.first().copied().is_some_and(|to| {
+                self.newtype_edge_overlaps_into(
+                    for_ty,
+                    to,
+                    module.clone(),
+                    span,
+                )
+                .is_some()
+            })
+        } else {
+            false
+        };
+        if into_repr_overlap {
+            let overlap = class_arg_tys.first().copied().and_then(|to| {
+                self.newtype_edge_overlaps_into(
+                    for_ty,
+                    to,
+                    module.clone(),
+                    span,
+                )
+            });
+            let span = self.repr_overlap_span(
+                for_ty,
+                for_type,
+                &class_arg_tys,
+                class_args,
+                span,
+            );
+            match overlap {
+                Some(NewtypeIntoOverlap::Public) => {
+                    self.error(TypeError::PublicReprIntoOverlap { span });
+                }
+                Some(NewtypeIntoOverlap::Private) => {
+                    self.error(TypeError::PrivateReprIntoExposure { span });
+                }
+                None => {}
+            }
+        }
+
+        let bad_try = if class == ClassId::TRY_INTO {
+            class_arg_tys.first().copied().is_some_and(|to| {
+                self.private_try_into_external(for_ty, to, module.clone(), span)
+            })
+        } else {
+            false
+        };
+        if bad_try {
+            let span = self.repr_overlap_span(
+                for_ty,
+                for_type,
+                &class_arg_tys,
+                class_args,
+                span,
+            );
+            self.error(TypeError::PrivateReprTryIntoExternal { span });
+        }
+
+        // Check for forbidden builtin instance.
         //
         // We allow implementing classes for builtin types IF the class is
         // user-defined OR if the class has type args that include user-defined
@@ -1278,9 +1342,13 @@ impl InferCtx<'_> {
                 type_param_subst.values().copied().collect();
 
             // Skip registration if already hoisted (avoid duplicate error)
-            if !self
-                .instance_registry
-                .has_with_args(class, tid, &class_arg_tys)
+            if !into_repr_overlap
+                && !bad_try
+                && !self.instance_registry.has_with_args(
+                    class,
+                    tid,
+                    &class_arg_tys,
+                )
             {
                 // Convert AST associated types to instance associated types
                 let inst_assoc_types: SmallVec<[instance::AssocTypeDef; 1]> =
@@ -1329,6 +1397,32 @@ impl InferCtx<'_> {
         }
     }
 
+    fn repr_overlap_span(
+        &self,
+        for_ty: TyId,
+        for_type: AstTypeExprId,
+        args: &[TyId],
+        arg_ids: &[AstTypeExprId],
+        fallback: Span,
+    ) -> Span {
+        let for_alias = self
+            .type_id_args(for_ty)
+            .is_some_and(|(id, _)| self.decls.is_alias(id));
+        if for_alias {
+            self.ast.type_expr_span(for_type).unwrap_or(fallback)
+        } else {
+            args.first()
+                .copied()
+                .zip(arg_ids.first().copied())
+                .and_then(|(ty, id)| {
+                    self.type_id_args(ty)
+                        .filter(|(tid, _)| self.decls.is_alias(*tid))
+                        .and_then(|_| self.ast.type_expr_span(id))
+                })
+                .unwrap_or(fallback)
+        }
+    }
+
     /// Typecheck a single instance method definition.
     ///
     /// Validates that the method signature matches the class definition and
@@ -1340,7 +1434,7 @@ impl InferCtx<'_> {
             class_arg_tys,
             type_param_subst,
             method,
-            inst_span,
+            inst_span: _,
         } = input;
 
         let m_span = method.span;
@@ -1509,19 +1603,21 @@ impl InferCtx<'_> {
         let body_ty = self.expr(method.body);
 
         // Determine expected return type (user annotation or class signature)
-        let ret_ty = method
-            .ret
-            .map(|ret_id| {
-                self.convert().ast_type_to_ty(ret_id, type_param_subst)
-            })
-            .unwrap_or(expected_ret_ty);
+        let ret = method.ret.map(|ret_id| {
+            (
+                self.convert().ast_type_to_ty(ret_id, type_param_subst),
+                self.ast.type_expr_span(ret_id).unwrap_or(m_span),
+            )
+        });
+        let ret_ty = ret.map(|(ty, _)| ty).unwrap_or(expected_ret_ty);
+        let ret_span = ret.map(|(_, span)| span).unwrap_or(m_span);
 
         // Unify body with return type
-        self.unify(body_ty, ret_ty, m_span);
+        self.unify(body_ty, ret_ty, ret_span);
 
         // Also unify with class's expected return type (catches wrong annotation)
         if expected_ret_ty != TyArena::UNKNOWN {
-            self.unify(ret_ty, expected_ret_ty, inst_span);
+            self.unify(ret_ty, expected_ret_ty, ret_span);
         }
 
         let fn_ty = self

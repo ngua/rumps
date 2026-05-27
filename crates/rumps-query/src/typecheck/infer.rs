@@ -35,15 +35,17 @@ use indexmap::IndexMap;
 use nonempty::NonEmpty;
 use smallvec::SmallVec;
 
+use super::convert::is_in_module;
 use super::decl::TypeDeclRegistry;
 use super::env::TypeEnv;
 use super::error::{TyPrinter, TypeError};
 use super::instance::{Instance, InstanceRegistry};
 use super::ty::{Rename, Scheme, Ty, TyArena, TyId, TyVar, TypeClass};
 use super::uf::UnionFind;
-use super::unify::SolveCtx;
+use super::unify::{NewtypeEdge, NewtypeEdgeStatus, SolveCtx};
 use super::{
-    CheckedExprAux, CheckedExprInfo, CheckedTypePatternInfo, TypecheckOutput,
+    CheckedExprAux, CheckedExprInfo, CheckedNewtypeEdgeRuntimeInfo,
+    CheckedTypePatternInfo, TypecheckOutput,
 };
 use crate::ast::{
     self, AssocTypeDef, AstClassConstraints, AstTypeExprId, ExprId,
@@ -84,6 +86,9 @@ pub(super) struct InterpreterOutput {
     pub(super) function_types: HashMap<ExprId, TyId>,
     /// Checked target types for `as`, `read`, and annotation expressions.
     pub(super) expr_targets: HashMap<ExprId, TyId>,
+    /// Newtype representation edges approved for runtime execution.
+    pub(super) approved_newtype_edges:
+        HashMap<ExprId, CheckedNewtypeEdgeRuntimeInfo>,
     /// Checked type facts for `expr is Pattern` expression patterns.
     pub(super) is_patterns: HashMap<ExprId, CheckedTypePatternInfo>,
     /// Checked type annotation targets for `let` bindings, keyed by RHS expr.
@@ -105,6 +110,7 @@ impl InterpreterOutput {
             union_value_reprs: HashMap::new(),
             function_types: HashMap::new(),
             expr_targets: HashMap::new(),
+            approved_newtype_edges: HashMap::new(),
             is_patterns: HashMap::new(),
             let_targets: HashMap::new(),
             match_targets: HashMap::new(),
@@ -120,6 +126,9 @@ impl InterpreterOutput {
         uf.resolve_map(&mut self.union_value_reprs, arena);
         uf.resolve_map(&mut self.function_types, arena);
         uf.resolve_map(&mut self.expr_targets, arena);
+        self.approved_newtype_edges
+            .values_mut()
+            .for_each(|info| info.resolve(uf, arena));
         self.is_patterns
             .values_mut()
             .for_each(|info| info.resolve(uf, arena));
@@ -325,7 +334,8 @@ pub(super) struct HoistState {
     ///
     /// `finalize_hoisted_fun` drains the entry, instantiates the final
     /// Pass 2 scheme afresh once per recorded instantiation, and unifies.
-    pub(super) forward_instantiations: HashMap<StmtId, Vec<(TyId, Span)>>,
+    pub(super) forward_instantiations:
+        HashMap<StmtId, Vec<(TyId, Span, Option<QualifiedName>)>>,
     /// Functions whose Pass 2 finalization has completed.
     ///
     /// Each entry records the function's name, its quantified type
@@ -379,7 +389,7 @@ impl HoistState {
     /// process.
     fn build_constraint_unions(cx: &mut HoistCtx<'_>, range: Range<usize>) {
         let cs = mem::take(cx.constraints);
-        cs[range].iter().for_each(|c| match c {
+        cs[range].iter().for_each(|(c, _)| match c {
             Constraint::Unify(a, b, _) => {
                 if let (Ty::Var(va), Ty::Var(vb)) =
                     (cx.ty_arena.get(*a), cx.ty_arena.get(*b))
@@ -489,7 +499,7 @@ impl HoistState {
         let cs = mem::take(cx.constraints);
         let harvested = cs[body_constraint_start..end]
             .iter()
-            .filter_map(|c| match c {
+            .filter_map(|(c, _)| match c {
                 Constraint::Class { ty, class, span } => {
                     match cx.ty_arena.get(*ty) {
                         Ty::Var(tv) => {
@@ -544,6 +554,7 @@ impl HoistState {
         scheme: &Scheme,
         inst_ty: TyId,
         span: Span,
+        module: Option<QualifiedName>,
     ) {
         if let Some(&stmt_id) = self.fun_index.get(&scheme.ty) {
             let is_match = self.funs.get(&stmt_id).is_some_and(|s| s == scheme);
@@ -551,7 +562,7 @@ impl HoistState {
                 self.forward_instantiations
                     .entry(stmt_id)
                     .or_default()
-                    .push((inst_ty, span));
+                    .push((inst_ty, span, module));
             }
         }
     }
@@ -613,25 +624,26 @@ impl HoistState {
             if let Some(final_scheme) = final_scheme {
                 let constraint_start = cx.constraints.len();
 
-                insts.into_iter().for_each(|(forward_ty, span)| {
+                insts.into_iter().for_each(|(forward_ty, span, module)| {
                     let (ty_inst, constraints, var_map) =
                         final_scheme.instantiate_tracked(cx.uf, cx.ty_arena);
                     // Only emit constraints beyond those already emitted
                     // by the original Pass 1 instantiation.
                     constraints.into_iter().skip(pass1_n).for_each(
                         |(ty, class)| {
-                            cx.constraints.push(Constraint::Class {
-                                ty,
-                                class,
-                                span,
-                            });
+                            cx.constraints.push((
+                                Constraint::Class { ty, class, span },
+                                module.clone(),
+                            ));
                         },
                     );
                     if !var_map.is_empty() {
                         self.replay_var_maps.push(var_map);
                     }
-                    cx.constraints
-                        .push(Constraint::Unify(forward_ty, ty_inst, span));
+                    cx.constraints.push((
+                        Constraint::Unify(forward_ty, ty_inst, span),
+                        module,
+                    ));
                 });
 
                 // Check whether the replay introduced class constraints
@@ -642,7 +654,7 @@ impl HoistState {
                 // all deferred constraints, check, then rollback.
                 let has_new_class = cx.constraints[constraint_start..]
                     .iter()
-                    .any(|c| matches!(c, Constraint::Class { .. }));
+                    .any(|(c, _)| matches!(c, Constraint::Class { .. }));
 
                 if has_new_class && !self.finalized_funs.is_empty() {
                     self.enrich_finalized_schemes(cx, constraint_start);
@@ -721,7 +733,7 @@ impl HoistState {
             FunKey,
             SmallVec<[(TyVar, TypeClass<TyId>, Span); 2]>,
         > = HashMap::new();
-        cs[constraint_start..end].iter().for_each(|c| {
+        cs[constraint_start..end].iter().for_each(|(c, _)| {
             if let Constraint::Class { ty, class, span } = c {
                 if let Ty::Var(cv) = cx.ty_arena.get(*ty) {
                     let root = cx.uf.find(*cv);
@@ -821,7 +833,7 @@ pub(super) struct HoistCtx<'a> {
     pub(super) env: &'a mut TypeEnv,
     pub(super) uf: &'a mut UnionFind,
     pub(super) ty_arena: &'a mut TyArena,
-    pub(super) constraints: &'a mut Vec<Constraint>,
+    pub(super) constraints: &'a mut Vec<(Constraint, Option<QualifiedName>)>,
     pub(super) errors: &'a mut Vec<TypeError>,
     pub(super) current_module: &'a Option<QualifiedName>,
 }
@@ -918,6 +930,15 @@ pub(crate) struct ClassContext {
     pub(crate) assoc_types: HashMap<StringId, TyId>,
 }
 
+type ReadCheck = (ExprId, TyId, TyId, Span, Option<QualifiedName>);
+type NewtypeEdgeCheck = (ExprId, TyId, TyId, Span, Option<QualifiedName>);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum NewtypeIntoOverlap {
+    Public,
+    Private,
+}
+
 /// Type inference context.
 ///
 /// Collects type information during the inference pass: inferred expression
@@ -942,7 +963,7 @@ pub(crate) struct InferCtx<'a> {
     /// Type arena; owns all interned types.
     pub(super) ty_arena: TyArena,
     /// Collected constraints to be solved.
-    constraints: Vec<Constraint>,
+    constraints: Vec<(Constraint, Option<QualifiedName>)>,
     /// Union-find for type variable allocation and (future) constraint solving.
     pub(super) uf: UnionFind,
     /// Inferred types for each expression.
@@ -1028,6 +1049,10 @@ pub(crate) struct InferCtx<'a> {
     /// narrows a union type. Union annotations also record the resolved member
     /// representation for runtime metadata.
     let_annotations: Vec<(ExprId, TyId, TyId, Span)>,
+    /// Recorded `read` conversions for checked runtime metadata.
+    read_checks: Vec<ReadCheck>,
+    /// Recorded newtype representation edges for checked runtime metadata.
+    newtype_edge_checks: Vec<NewtypeEdgeCheck>,
     /// Hoisting and forward-reference tracking state.
     pub(super) hoist: HoistState,
 }
@@ -1078,6 +1103,8 @@ impl<'a> InferCtx<'a> {
             interactive,
             poly_param_vars: HashSet::new(),
             let_annotations: Vec::new(),
+            read_checks: Vec::new(),
+            newtype_edge_checks: Vec::new(),
             hoist: HoistState::new(),
         }
     }
@@ -1131,7 +1158,7 @@ impl<'a> InferCtx<'a> {
 
     /// Add a constraint to the collection.
     pub(crate) fn constrain(&mut self, c: Constraint) {
-        self.constraints.push(c);
+        self.constraints.push((c, self.current_module.clone()));
     }
 
     /// Add a unification constraint between two types.
@@ -1187,8 +1214,8 @@ impl<'a> InferCtx<'a> {
     }
 
     /// Get the collected constraints.
-    pub(crate) fn constraints(&self) -> &[Constraint] {
-        &self.constraints
+    pub(crate) fn constraints(&self) -> Vec<&Constraint> {
+        self.constraints.iter().map(|(c, _)| c).collect()
     }
 
     /// Get the inferred type for an expression, if recorded.
@@ -1261,11 +1288,165 @@ impl<'a> InferCtx<'a> {
             env: &self.env,
             errors: &mut self.errors,
             ast: self.ast,
-            current_module: &self.current_module,
+            current_module: self.current_module.clone(),
             class_context: &self.class_context,
             hkt_var_classes: HashMap::new(),
         }
         .solve_constraints(constraints, &self.numeric_vars);
+    }
+
+    pub(super) fn newtype_edge_status(
+        &mut self,
+        from: TyId,
+        to: TyId,
+        module: Option<QualifiedName>,
+        span: Span,
+    ) -> NewtypeEdgeStatus {
+        let snap = self.uf.snapshot();
+        let err_len = self.errors.len();
+        let st = SolveCtx {
+            ty_arena: &mut self.ty_arena,
+            uf: &mut self.uf,
+            registry: self.registry,
+            decls: &self.decls,
+            instance_registry: &self.instance_registry,
+            env: &self.env,
+            errors: &mut self.errors,
+            ast: self.ast,
+            current_module: module,
+            class_context: &self.class_context,
+            hkt_var_classes: HashMap::new(),
+        }
+        .newtype_edge_status(from, to, span);
+        self.uf.rollback(snap);
+        self.errors.truncate(err_len);
+        st
+    }
+
+    pub(super) fn newtype_edge_overlaps_into(
+        &mut self,
+        from: TyId,
+        to: TyId,
+        module: Option<QualifiedName>,
+        span: Span,
+    ) -> Option<NewtypeIntoOverlap> {
+        self.any_newtype_edge(from, to, module, span).map(|edge| {
+            match self.decls.alias_repr_vis(edge.alias) {
+                ast::Visibility::Public => NewtypeIntoOverlap::Public,
+                ast::Visibility::Private => NewtypeIntoOverlap::Private,
+            }
+        })
+    }
+
+    pub(super) fn private_try_into_external(
+        &mut self,
+        from: TyId,
+        to: TyId,
+        module: Option<QualifiedName>,
+        span: Span,
+    ) -> bool {
+        self.any_newtype_edge(from, to, module.clone(), span)
+            .is_some_and(|edge| {
+                self.decls.alias_repr_vis(edge.alias)
+                    == ast::Visibility::Private
+                    && !is_in_module(
+                        &module,
+                        &self.decls.alias_module(edge.alias).cloned(),
+                    )
+            })
+    }
+
+    pub(super) fn reject_private_repr_ann(
+        &mut self,
+        from: TyId,
+        to: TyId,
+        span: Span,
+    ) -> bool {
+        if self.newtype_edge_status(from, to, self.current_module.clone(), span)
+            == NewtypeEdgeStatus::Blocked
+        {
+            self.error(TypeError::PrivateReprAnnotation { from, to, span });
+            true
+        } else {
+            false
+        }
+    }
+
+    fn approved_newtype_edge(
+        &mut self,
+        from: TyId,
+        to: TyId,
+        module: Option<QualifiedName>,
+        span: Span,
+    ) -> Option<NewtypeEdge> {
+        let snap = self.uf.snapshot();
+        let err_len = self.errors.len();
+        let edge = SolveCtx {
+            ty_arena: &mut self.ty_arena,
+            uf: &mut self.uf,
+            registry: self.registry,
+            decls: &self.decls,
+            instance_registry: &self.instance_registry,
+            env: &self.env,
+            errors: &mut self.errors,
+            ast: self.ast,
+            current_module: module,
+            class_context: &self.class_context,
+            hkt_var_classes: HashMap::new(),
+        }
+        .newtype_edge(from, to, span);
+        self.uf.rollback(snap);
+        self.errors.truncate(err_len);
+        edge
+    }
+
+    fn any_newtype_edge(
+        &mut self,
+        from: TyId,
+        to: TyId,
+        module: Option<QualifiedName>,
+        span: Span,
+    ) -> Option<NewtypeEdge> {
+        let snap = self.uf.snapshot();
+        let err_len = self.errors.len();
+        let edge = SolveCtx {
+            ty_arena: &mut self.ty_arena,
+            uf: &mut self.uf,
+            registry: self.registry,
+            decls: &self.decls,
+            instance_registry: &self.instance_registry,
+            env: &self.env,
+            errors: &mut self.errors,
+            ast: self.ast,
+            current_module: module,
+            class_context: &self.class_context,
+            hkt_var_classes: HashMap::new(),
+        }
+        .newtype_edge_any(from, to, span);
+        self.uf.rollback(snap);
+        self.errors.truncate(err_len);
+        edge
+    }
+
+    fn record_approved_newtype_edge(
+        &mut self,
+        id: ExprId,
+        from: TyId,
+        to: TyId,
+        module: Option<QualifiedName>,
+        span: Span,
+    ) -> bool {
+        self.approved_newtype_edge(from, to, module, span)
+            .is_some_and(|edge| {
+                let from = self.uf.resolve(edge.from, &mut self.ty_arena);
+                let to = self.uf.resolve(edge.to, &mut self.ty_arena);
+                let repr = self.uf.resolve(edge.repr, &mut self.ty_arena);
+                self.interp.approved_newtype_edges.insert(
+                    id,
+                    CheckedNewtypeEdgeRuntimeInfo { from, to, repr },
+                );
+                true
+            })
     }
 
     /// Resolve all inferred types through the union-find.
@@ -1294,6 +1475,12 @@ impl<'a> InferCtx<'a> {
             .chain(self.interp.expr_targets.values().copied())
             .chain(
                 self.interp
+                    .approved_newtype_edges
+                    .values()
+                    .flat_map(CheckedNewtypeEdgeRuntimeInfo::ty_ids),
+            )
+            .chain(
+                self.interp
                     .is_patterns
                     .values()
                     .flat_map(CheckedTypePatternInfo::ty_ids),
@@ -1314,6 +1501,114 @@ impl<'a> InferCtx<'a> {
     fn set_instance_call(&mut self, expr: ExprId, tid: TypeId) {
         let ty = self.checked_expr_type_id(tid);
         self.interp.set_instance_call(expr, ty);
+    }
+
+    fn type_id_args(&self, ty: TyId) -> Option<(TypeId, SmallVec<[TyId; 4]>)> {
+        match self.ty_arena.get(ty).clone() {
+            Ty::Named(id, args) => Some((id, args)),
+            Ty::Union(Some(id), _) => Some((id, SmallVec::new())),
+            Ty::Bool => Some((TypeId::BOOL, SmallVec::new())),
+            Ty::Int => Some((TypeId::INT, SmallVec::new())),
+            Ty::Word => Some((TypeId::WORD, SmallVec::new())),
+            Ty::Float => Some((TypeId::FLOAT, SmallVec::new())),
+            Ty::Char => Some((TypeId::CHAR, SmallVec::new())),
+            Ty::String => Some((TypeId::STRING, SmallVec::new())),
+            Ty::Unit => Some((TypeId::UNIT, SmallVec::new())),
+            Ty::Time => Some((TypeId::TIME, SmallVec::new())),
+            Ty::Range => Some((TypeId::RANGE, SmallVec::new())),
+            Ty::Json => Some((TypeId::JSON, SmallVec::new())),
+            Ty::Ordering => Some((TypeId::ORDERING, SmallVec::new())),
+            Ty::DataStatus => Some((TypeId::DATA_STATUS, SmallVec::new())),
+            Ty::FilePath => Some((TypeId::FILEPATH, SmallVec::new())),
+            Ty::Path => Some((TypeId::PATH, SmallVec::new())),
+            Ty::Regex => Some((TypeId::REGEX, SmallVec::new())),
+            Ty::Local => Some((TypeId::LOCAL, SmallVec::new())),
+            Ty::Global => Some((TypeId::GLOBAL, SmallVec::new())),
+            Ty::Array(e) => Some((TypeId::ARRAY, [e].into_iter().collect())),
+            Ty::Option(e) => Some((TypeId::OPTION, [e].into_iter().collect())),
+            Ty::Result(ok, err) => {
+                Some((TypeId::RESULT, [ok, err].into_iter().collect()))
+            }
+            Ty::Map(k, v) => Some((TypeId::MAP, [k, v].into_iter().collect())),
+            Ty::Tuple(args) => Some((TypeId::TUPLE, args)),
+            Ty::Var(_)
+            | Ty::Fn(_, _)
+            | Ty::Object(_)
+            | Ty::Union(None, _)
+            | Ty::RuntimeError
+            | Ty::Apply(_, _)
+            | Ty::AssocType(_, _, _)
+            | Ty::Unknown
+            | Ty::Error => None,
+        }
+    }
+
+    fn build_inst_subst_read(&self, inst: &Instance, args: &[TyId]) -> Rename {
+        let vars: SmallVec<[(TyVar, TyId); 2]> = inst
+            .type_params
+            .iter()
+            .zip(args.iter())
+            .filter_map(|(&p, &a)| match self.ty_arena.get(p) {
+                Ty::Var(tv) => Some((*tv, a)),
+                _ => None,
+            })
+            .collect();
+        Rename(vars.into_iter().collect())
+    }
+
+    fn read_try_inst(
+        &mut self,
+        from: TyId,
+        to: TyId,
+    ) -> Option<(TypeId, Instance)> {
+        let (tid, args) = self.type_id_args(from)?;
+        let insts: Vec<Instance> = self
+            .instance_registry
+            .lookup_all(ClassId::TRY_INTO, tid)
+            .to_vec();
+        let to = self.uf.resolve(to, &mut self.ty_arena);
+        insts
+            .into_iter()
+            .find(|inst| {
+                inst.class_args.first().is_some_and(|&ia| {
+                    let subst = self.build_inst_subst_read(inst, &args);
+                    let resolved = self.ty_arena.apply(ia, &subst);
+                    self.uf.resolve(resolved, &mut self.ty_arena) == to
+                })
+            })
+            .map(|inst| (tid, inst))
+    }
+
+    pub(crate) fn resolve_read_metadata(&mut self) {
+        let reads = mem::take(&mut self.read_checks);
+        reads.into_iter().for_each(|(id, from, to, _, _)| {
+            let from = self.uf.resolve(from, &mut self.ty_arena);
+            let to = self.uf.resolve(to, &mut self.ty_arena);
+            if from == to {
+                self.expand_alias_for_read(to);
+            } else if let Some((tid, inst)) = self.read_try_inst(from, to) {
+                let method = self.env.intern("try-into");
+                self.expand_alias_for_read(to);
+                self.set_instance_call(id, tid);
+                inst.methods.get(&method).copied().into_iter().for_each(
+                    |fun| {
+                        self.interp.set_instance_fun(id, fun);
+                    },
+                );
+            }
+        });
+    }
+
+    pub(crate) fn resolve_newtype_edge_metadata(&mut self) {
+        let checks = mem::take(&mut self.newtype_edge_checks);
+        checks.into_iter().for_each(|(id, from, to, span, module)| {
+            let from = self.uf.resolve(from, &mut self.ty_arena);
+            let to = self.uf.resolve(to, &mut self.ty_arena);
+            if from == to {
+            } else {
+                self.record_approved_newtype_edge(id, from, to, module, span);
+            }
+        });
     }
 
     fn metadata_has_unresolved(&self, info: &CheckedExprInfo) -> bool {
@@ -1575,6 +1870,12 @@ impl<'a> InferCtx<'a> {
         // Resolve deferred user HKT class calls (arity-based disambiguation)
         self.resolve_deferred_hkt_user_calls();
 
+        // Record `read` target metadata only after validation succeeds.
+        self.resolve_read_metadata();
+
+        // Record approved newtype edges only after validation succeeds.
+        self.resolve_newtype_edge_metadata();
+
         self.uf.disable_zonk_cache();
 
         // Check for illegal union narrowing via let annotations
@@ -1701,6 +2002,7 @@ impl<'a> InferCtx<'a> {
                 class_registry: self.env.class_registry,
                 expr_types: self.expr_types,
                 expr_targets: self.interp.expr_targets,
+                approved_newtype_edges: self.interp.approved_newtype_edges,
                 is_patterns: self.interp.is_patterns,
                 let_targets: self.interp.let_targets,
                 match_targets: self.interp.match_targets,

@@ -79,8 +79,8 @@ module Shapes {
 }
 
 module Units {
-  +newtype Meters = Float
-  +newtype Feet = Float
+  +newtype Meters = +Float
+  +newtype Feet = +Float
 
   +fun to-feet(m: Meters) -> Feet {
     m * 3.28084
@@ -96,14 +96,14 @@ module Geometry {
 }
 
 module Colors {
-  +newtype RGB = (Int, Int, Int)
+  +newtype RGB = +(Int, Int, Int)
   +variant Color = Red | Green | Blue | Custom(RGB)
 }
 
 module Multi {
-  +newtype A = Int
-  +newtype B = String
-  +newtype C = Bool
+  +newtype A = +Int
+  +newtype B = +String
+  +newtype C = +Bool
 }
 
 module Generic {

@@ -408,7 +408,7 @@ impl InferCtx<'_> {
                 // to record visibility so imports can check access.
                 Some(Stmt::Type { ref name, vis, .. })
                 | Some(Stmt::Union { ref name, vis, .. })
-                | Some(Stmt::NewType { ref name, vis, .. }) => {
+                | Some(Stmt::Newtype { ref name, vis, .. }) => {
                     let n =
                         self.env.resolve_str(*name).to_owned();
                     // Check for shadowing of builtin types
@@ -1074,7 +1074,33 @@ impl InferCtx<'_> {
                             .iter()
                             .all(|&ty_id| self.is_builtin_ty(ty_id)));
 
-                if !is_forbidden_builtin {
+                let into_repr_overlap = if class == ClassId::INTO {
+                    class_arg_tys.first().copied().is_some_and(|to| {
+                        self.newtype_edge_overlaps_into(
+                            for_ty,
+                            to,
+                            module.clone(),
+                            span,
+                        )
+                        .is_some()
+                    })
+                } else {
+                    false
+                };
+                let bad_try = if class == ClassId::TRY_INTO {
+                    class_arg_tys.first().copied().is_some_and(|to| {
+                        self.private_try_into_external(
+                            for_ty,
+                            to,
+                            module.clone(),
+                            span,
+                        )
+                    })
+                } else {
+                    false
+                };
+
+                if !is_forbidden_builtin && !into_repr_overlap && !bad_try {
                     // Process constraints
                     let mut scheme_constraints: SmallVec<
                         [(TyVar, TypeClass<TyId>); 2],

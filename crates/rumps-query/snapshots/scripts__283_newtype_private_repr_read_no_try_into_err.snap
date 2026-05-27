@@ -1,0 +1,7 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "module ReadPrivNoTry {\n  +newtype A = Array[Int]\n}\n\nmodule ReadPrivInternalNoTry {\n  +newtype A = Array[Int]\n\n  +fun read-a(xs: Array[Int]) -> Result[ReadPrivInternalNoTry.A, String] {\n    xs read ReadPrivInternalNoTry.A\n  }\n}\n\nmodule ReadPubNoTry {\n  +newtype A = +Array[Int]\n}\n\nfun main() {\n  let priv = ([1, 2, 3] read ReadPrivNoTry.A)!\n  let internal = ReadPrivInternalNoTry.read-a([4, 5, 6])!\n  let pub = ([7, 8, 9] read ReadPubNoTry.A)!\n}\n"
+---
+ERROR: cannot `read` `Array[Int]` as `ReadPrivInternalNoTry.A`; `newtype` representation reads require an explicit `TryInto` instance
+cannot `read` `Array[Int]` as `ReadPrivNoTry.A`; `newtype` representation reads require an explicit `TryInto` instance
+cannot `read` `Array[Int]` as `ReadPubNoTry.A`; `newtype` representation reads require an explicit `TryInto` instance

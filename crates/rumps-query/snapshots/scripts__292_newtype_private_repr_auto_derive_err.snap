@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "module AutoPriv {\n  +newtype A = Array[Int]\n\n  +fun make(xs: Array[Int]) -> AutoPriv.A {\n    xs as AutoPriv.A\n  }\n\n  +fun len(xs: AutoPriv.A) -> Int {\n    Iterable:length(xs)\n  }\n}\n\nfun main() {\n  let xs = AutoPriv.make([1, 2, 3])\n  write Iterable:length(xs)\n}\n"
+---
+ERROR: type mismatch: expected `Array[_]`, got `AutoPriv.A`

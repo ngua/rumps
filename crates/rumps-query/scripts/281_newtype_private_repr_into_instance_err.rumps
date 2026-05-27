@@ -1,0 +1,47 @@
+module IntoPriv {
+  +newtype A = Int
+
+  +fun make(n: Int) -> IntoPriv.A {
+    n as IntoPriv.A
+  }
+}
+
+class Into[Int] for IntoPriv.A {
+  fun into(a: IntoPriv.A) -> Int {
+    0
+  }
+}
+
+class Into[IntoPriv.A] for Int {
+  fun into(n: Int) -> IntoPriv.A {
+    IntoPriv.make(n)
+  }
+}
+
+module IntoPub {
+  +newtype A = +Int
+}
+
+module IntoPrivInternal {
+  +newtype A = Int
+
+  class Into[Int] for IntoPrivInternal.A {
+    fun into(a: IntoPrivInternal.A) -> Int {
+      0
+    }
+  }
+}
+
+class Into[Int] for IntoPub.A {
+  fun into(a: IntoPub.A) -> Int {
+    0
+  }
+}
+
+class Into[IntoPub.A] for Int {
+  fun into(n: Int) -> IntoPub.A {
+    n as IntoPub.A
+  }
+}
+
+fun main() {}

@@ -55,7 +55,7 @@ fun main() {
 }
 
 module Outer {
-  +newtype Id = Int
+  +newtype Id = +Int
 
   ; Inner module can use `Id` without `Outer.` prefix
   module Inner {
@@ -92,10 +92,10 @@ module A {
 }
 
 module Root {
-  +newtype Score = Int
+  +newtype Score = +Int
 
   module Level1 {
-    +newtype Multiplier = Float
+    +newtype Multiplier = +Float
 
     module Level2 {
       ; Can access both Score and Multiplier without full qualification
@@ -139,10 +139,10 @@ module Container {
 }
 
 module Multi {
-  +newtype A = Int
+  +newtype A = +Int
 
   module Sub1 {
-    +newtype B = String
+    +newtype B = +String
 
     module Sub2 {
       ; Can access both A and B

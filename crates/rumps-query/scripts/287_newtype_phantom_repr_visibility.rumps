@@ -1,0 +1,45 @@
+; Phantom representation visibility
+
+newtype Tagged[Tag] = Int
+newtype Partial[A, B] = Array[A]
+newtype Wrapper[T] = Int
+newtype DoubleWrap[A, B] = Wrapper[A]
+
+module PhantomPriv {
+  +newtype Tag[Tag] = Int
+  +newtype Part[A, B] = Array[A]
+  +newtype Wrap[T] = Int
+  +newtype Double[A, B] = PhantomPriv.Wrap[A]
+
+  +fun user-id(n: Int) -> Int {
+    let id: PhantomPriv.Tag[String] = n
+    id as Int
+  }
+
+  +fun len(xs: Array[Int]) -> Int {
+    let ps: PhantomPriv.Part[Int, String] = xs
+    Iterable:length(ps as Array[Int])
+  }
+
+  +fun value(n: Int) -> Int {
+    let dw: PhantomPriv.Double[String, Bool] = n
+    dw as Int
+  }
+}
+
+fun main() {
+  let user-id: Tagged[String] = 100
+  let post-id: Tagged[Bool] = 200
+  write user-id
+  write post-id
+
+  let ps: Partial[Int, String] = [1, 2, 3]
+  write Iterable:length(ps)
+
+  let dw: DoubleWrap[String, Bool] = 42
+  write dw
+
+  write PhantomPriv.user-id(300)
+  write PhantomPriv.len([4, 5, 6, 7])
+  write PhantomPriv.value(500)
+}

@@ -1,0 +1,12 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Nested representation visibility\n\nmodule NestedPub {\n  +newtype Person = +{ id: Int, name: String, age: Int }\n  +newtype Address = +{ street: String, city: String }\n  +newtype PatientRecord = +{ patient: NestedPub.Person, address: NestedPub.Address }\n  +newtype Box[T] = +{ value: T }\n  +newtype Pair[L, R] = +{ left: L, right: R }\n  +newtype MaybeBox[T] = +{ inner: Option[T] }\n}\n\nmodule NestedPriv {\n  +newtype Person = { id: Int, name: String, age: Int }\n  +newtype Address = { street: String, city: String }\n  +newtype PatientRecord = { patient: NestedPriv.Person, address: NestedPriv.Address }\n\n  +fun make-record() -> NestedPriv.PatientRecord {\n    {\n      patient: { id: 2, name: \"Diana\", age: 28 },\n      address: { street: \"789 Pine Rd\", city: \"NYC\" }\n    }\n  }\n\n  +fun patient-name(rec: NestedPriv.PatientRecord) -> String {\n    rec.patient.name\n  }\n\n  +fun city(rec: NestedPriv.PatientRecord) -> String {\n    rec.address.city\n  }\n}\n\nfun main() {\n  let rec: NestedPub.PatientRecord = {\n    patient: { id: 1, name: \"Charlie\", age: 40 },\n    address: { street: \"456 Oak Ave\", city: \"LA\" }\n  }\n  write rec.patient.name\n  write rec.address.city\n\n  let nested: NestedPub.Box[NestedPub.Pair[Int, Bool]] = {\n    value: { left: 99, right: true }\n  }\n  write nested.value.left\n  write nested.value.right\n\n  let some-val: NestedPub.MaybeBox[Int] = { inner: Option.Some(123) }\n  let none-val: NestedPub.MaybeBox[Int] = { inner: Option.None }\n  write some-val.inner!\n  write none-val.inner ?? 0\n\n  let priv = NestedPriv.make-record()\n  write NestedPriv.patient-name(priv)\n  write NestedPriv.city(priv)\n}\n"
+---
+"Charlie"
+"LA"
+99
+true
+123
+0
+"Diana"
+"NYC"

@@ -65,7 +65,7 @@ module Shapes {
 }
 
 module Prio {
-  +newtype Priority = Int
+  +newtype Priority = +Int
 
   ; Reversed ordering: higher number = lower priority
   class Ord for Prio.Priority {
@@ -78,7 +78,7 @@ module Prio {
 }
 
 module Nums {
-  +newtype MyInt = Int
+  +newtype MyInt = +Int
 
   class Numeric for Nums.MyInt {
     fun add(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a + b }

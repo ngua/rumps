@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "module AsPub {\n  +newtype A[T] = +Array[T]\n}\n\nfun main() {\n  let a = [1, 2, 3] as AsPub.A[Int]\n  let xs = a as Array[Int]\n  write Iterable:length(xs)\n}\n"
+---
+3

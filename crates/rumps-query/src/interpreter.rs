@@ -339,7 +339,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
 
     /// Execute declarations only (non-interactive mode).
     ///
-    /// Executes `Let`, `Type`, `NewType`, `Union`, and `Import` statements.
+    /// Executes `Let`, `Type`, `Newtype`, `Union`, and `Import` statements.
     /// Skips `Expr` (rejected by typechecker), `Fun`, `Module`, and `ClassInstance`
     /// (already hoisted).
     #[async_recursion]
@@ -376,7 +376,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                         let n = self.arena.strings.resolve(name);
                         self.type_decl(&n, &type_params, &def, span)?
                     }
-                    Stmt::NewType {
+                    Stmt::Newtype {
                         name, type_params, ..
                     } => {
                         let n = self.arena.strings.resolve(name);
@@ -443,6 +443,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             module_fns: HashMap::new(),
             module_consts: HashMap::new(),
             expr_targets: HashMap::new(),
+            approved_newtype_edges: HashMap::new(),
             is_patterns: HashMap::new(),
             let_targets: HashMap::new(),
             match_targets: HashMap::new(),
@@ -568,7 +569,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 self.r#as(id, expr, span).await.map(Evaluated::Value)
             }
             Expr::Read(expr, _) => {
-                self.read(id, expr, span).await.map(Evaluated::Payload)
+                self.read(id, expr, span).await.map(Evaluated::Value)
             }
             Expr::Block(stmts, tail) => {
                 self.block(&stmts, tail).await.map(Evaluated::Value)
@@ -612,7 +613,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 .await
                 .map(Evaluated::Payload),
             Expr::Annotate(inner, _) => {
-                self.annotate(inner, span).await.map(Evaluated::Payload)
+                self.annotate(id, inner, span).await.map(Evaluated::Value)
             }
             Expr::Json(fields) => {
                 self.json(&fields, span).await.map(Evaluated::Payload)
@@ -774,7 +775,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let n = self.arena.strings.resolve(name);
                 self.type_decl(&n, &type_params, &def, span)
             }
-            Stmt::NewType {
+            Stmt::Newtype {
                 name, type_params, ..
             } => {
                 let n = self.arena.strings.resolve(name);
@@ -914,7 +915,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                             )?;
                         }
 
-                        Stmt::NewType {
+                        Stmt::Newtype {
                             name: alias_name,
                             type_params,
                             ..
@@ -1310,7 +1311,31 @@ impl<I: IoContext> Interpreter<'_, I> {
         value
     }
 
+    pub(super) fn approved_newtype_edge_meta(
+        &self,
+        id: ExprId,
+    ) -> Option<ValueMeta> {
+        self.checked
+            .approved_newtype_edge(id)
+            .map(|info| ValueMeta {
+                ty: info.to,
+                repr: info.repr,
+            })
+    }
+
     fn value_for_binding(&self, expr: ExprId, value: Value) -> Value {
+        let value = match self.approved_newtype_edge_meta(expr) {
+            Some(meta)
+                if self.checked.types.matches(
+                    meta.ty,
+                    meta.repr,
+                    self.expr_meta(expr).ty,
+                ) =>
+            {
+                self.value_with_context_meta(value, meta)
+            }
+            _ => value,
+        };
         match self.checked.let_target(expr) {
             None => value,
             Some(ty) => {
@@ -1897,6 +1922,8 @@ impl<I: IoContext> Interpreter<'_, I> {
     ///
     /// Note: `as Storable` is the only infallible union cast. Other unions
     /// require `read` for fallible conversion or `match` for type narrowing.
+    /// `newtype` representation casts use metadata approved by static
+    /// `type visibility` and `repr visibility` checks.
     #[async_recursion]
     async fn r#as(
         &mut self,
@@ -1907,7 +1934,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         let val = self.eval(expr).await?;
         let rty = self.checked.expr_target(id, "as");
 
-        if let Some(target_base) = self.checked.types.to_type_id(rty) {
+        if let Some(meta) = self.approved_newtype_edge_meta(id) {
+            Ok(self.value_with_context_meta(val, meta))
+        } else if let Some(target_base) = self.checked.types.to_type_id(rty) {
             let storable = RuntimeTyId::from(typecheck::TyArena::STORABLE);
             if target_base == TypeId::STORABLE
                 && self.checked.types.matches(val.ty, val.repr, storable)
@@ -1944,17 +1973,41 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// - `String -> Int`: parse, `Result.Err` if invalid
     /// - `String -> Float`: parse, `Result.Err` if invalid
     /// - `Int -> Bool`: `0`/`1` only, else `Result.Err`
+    ///
+    /// `newtype` representation reads use checker metadata. If private
+    /// `repr visibility` blocks an external edge, the checker requires an explicit
+    /// `TryInto` instance instead.
     #[async_recursion]
     async fn read(
         &mut self,
         id: ExprId,
         expr: ExprId,
         span: Span,
-    ) -> Result<Payload> {
+    ) -> Result<Value> {
         let val = self.eval(expr).await?;
         let rty = self.checked.expr_target(id, "read");
-
-        self.read_target_value(&val, rty, span)
+        let has_inst =
+            matches!(&self.checked.expr(id).aux, ExprAux::InstanceCall { .. });
+        if let Some(meta) = self.approved_newtype_edge_meta(id) {
+            let val = self.value_with_context_meta(val, meta);
+            let payload = self.make_result_ok_value(val, span);
+            Ok(self.value_for_expr(id, payload))
+        } else if has_inst {
+            let val_id = self.add_value(val, span);
+            let mid = self.arena.intern("try-into");
+            self.dispatch_class_method_value(call::ClassDispatch {
+                dispatch_expr_id: Some(id),
+                output_expr_id: Some(id),
+                class: ClassId::TRY_INTO,
+                method: mid,
+                args: SmallVec::from_slice(&[val_id]),
+                span,
+            })
+            .await
+        } else {
+            self.read_target_value(&val, rty, span)
+                .map(|payload| self.value_for_expr(id, payload))
+        }
     }
 
     fn read_target_value(
@@ -1963,13 +2016,21 @@ impl<I: IoContext> Interpreter<'_, I> {
         target: RuntimeTyId,
         span: Span,
     ) -> Result<Payload> {
-        match self.resolve_read_target(target) {
-            ReadTarget::Object { target, fields } => {
-                self.read_to_object(&val.payload, target, &fields, span)
+        if self.checked.types.matches(val.ty, val.repr, target) {
+            let val = self.value_with_context_meta(
+                val.clone(),
+                self.checked.types.meta(target),
+            );
+            Ok(self.make_result_ok_value(val, span))
+        } else {
+            match self.resolve_read_target(target) {
+                ReadTarget::Object { target, fields } => {
+                    self.read_to_object(&val.payload, target, &fields, span)
+                }
+                ReadTarget::Ty { target, convert } => self
+                    .read_ty_runtime_value(val, convert, span)
+                    .map(|rv| self.retype_read_ok(rv, target, span)),
             }
-            ReadTarget::Ty { target, convert } => self
-                .read_ty_runtime_value(val, convert, span)
-                .map(|rv| self.retype_read_ok(rv, target, span)),
         }
     }
 
@@ -2405,9 +2466,25 @@ impl<I: IoContext> Interpreter<'_, I> {
     ///
     /// Type validation is handled statically by the typechecker; at runtime
     /// this is a pass-through that simply evaluates the inner expression.
+    /// Approved `newtype` annotation edges can still update value metadata so
+    /// runtime class dispatch sees the checked `newtype` type.
     #[async_recursion]
-    async fn annotate(&mut self, expr: ExprId, _span: Span) -> Result<Payload> {
-        self.eval_payload(expr).await
+    async fn annotate(
+        &mut self,
+        id: ExprId,
+        expr: ExprId,
+        _span: Span,
+    ) -> Result<Value> {
+        match self.approved_newtype_edge_meta(id) {
+            Some(meta) => {
+                let val = self.eval(expr).await?;
+                Ok(self.value_with_context_meta(val, meta))
+            }
+            None => {
+                let payload = self.eval_payload(expr).await?;
+                Ok(self.value_for_expr(id, payload))
+            }
+        }
     }
 
     /// Execute a `let` binding with destructuring.

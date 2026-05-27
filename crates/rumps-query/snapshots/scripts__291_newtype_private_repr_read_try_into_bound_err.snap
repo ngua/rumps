@@ -1,0 +1,6 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "class NeedRead T {\n  fun need-read(x: T) -> String\n}\n\nmodule ReadPrivBound {\n  +newtype A = Array[Int]\n\n  class TryInto[ReadPrivBound.A] for Array[T] where T: NeedRead {\n    fun try-into(xs: Array[T]) -> Result[ReadPrivBound.A, String] {\n      Result.Err(\"no\")\n    }\n  }\n}\n\nmodule TryPrivExternal {\n  +newtype A = Array[Int]\n\n  +fun wrap(xs: Array[Int]) -> TryPrivExternal.A {\n    xs as TryPrivExternal.A\n  }\n}\n\nclass TryInto[TryPrivExternal.A] for Array[Int] {\n  fun try-into(xs: Array[Int]) -> Result[TryPrivExternal.A, String] {\n    Result.Ok(TryPrivExternal.wrap(xs))\n  }\n}\n\nfun main() {\n  let xs = ([1, 2, 3] read ReadPrivBound.A)!\n}\n"
+---
+ERROR: private representation `TryInto` instance must be defined in the defining module
+type `Int` does not satisfy `NeedRead` class

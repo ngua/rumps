@@ -393,12 +393,36 @@ pub(crate) enum TypeError {
     #[error("cannot cast `{from}` to `{to}`; use `read` for fallible conversion or `match`/`is` for narrowing")]
     InvalidCast { from: TyId, to: TyId, span: Span },
 
+    /// External `as` attempted to cross a private `newtype` representation.
+    #[error("cannot cast `{from}` to `{to}`; private representation is not accessible")]
+    PrivateReprCast { from: TyId, to: TyId, span: Span },
+
+    /// External annotation attempted to cross a private `newtype` representation.
+    #[error("type mismatch: expected `{to}`, got `{from}`; private representation is not accessible")]
+    PrivateReprAnnotation { from: TyId, to: TyId, span: Span },
+
     /// Invalid `read` conversion.
     ///
     /// The source type cannot be fallibly converted to the target type via `read`.
     /// Function types, regex, and refs cannot be source or target of `read`.
     #[error("cannot `read` `{from}` as `{to}`")]
     InvalidRead { from: TyId, to: TyId, span: Span },
+
+    /// `newtype` representation `read` needs an explicit `TryInto` instance.
+    #[error("cannot `read` `{from}` as `{to}`; `newtype` representation reads require an explicit `TryInto` instance")]
+    NewtypeReprReadRequiresTryInto { from: TyId, to: TyId, span: Span },
+
+    /// User `Into` instance duplicates public `newtype` representation access.
+    #[error("public representation already provides this `Into` conversion")]
+    PublicReprIntoOverlap { span: Span },
+
+    /// User `Into` instance exposes a private `newtype` representation.
+    #[error("private representation cannot be exposed through `Into`")]
+    PrivateReprIntoExposure { span: Span },
+
+    /// Private `newtype` representation `TryInto` instance is external.
+    #[error("private representation `TryInto` instance must be defined in the defining module")]
+    PrivateReprTryIntoExternal { span: Span },
 
     /// Custom error with a message.
     ///
@@ -689,7 +713,13 @@ impl TypeError {
             | Self::IncompatibleVariantPattern { span, .. }
             | Self::UnionNarrowing { span, .. }
             | Self::InvalidCast { span, .. }
+            | Self::PrivateReprCast { span, .. }
+            | Self::PrivateReprAnnotation { span, .. }
             | Self::InvalidRead { span, .. }
+            | Self::NewtypeReprReadRequiresTryInto { span, .. }
+            | Self::PublicReprIntoOverlap { span }
+            | Self::PrivateReprIntoExposure { span }
+            | Self::PrivateReprTryIntoExternal { span }
             | Self::Custom { span, .. }
             | Self::InvalidRegex(_, _, span)
             | Self::NotFoundInModule { span, .. }
@@ -922,6 +952,28 @@ impl TypeError {
                 ),
                 Some("use `read` for fallible conversion or `match`/`is` for narrowing".to_owned()),
             ),
+            Self::PrivateReprCast { from, to, .. } => (
+                format!(
+                    "cannot cast `{}` to `{}`; private representation is not accessible",
+                    p.format(*from),
+                    p.format(*to)
+                ),
+                Some(
+                    "`type visibility` controls the `newtype` name; `repr visibility` controls external `as` access to its representation"
+                        .to_owned(),
+                ),
+            ),
+            Self::PrivateReprAnnotation { from, to, .. } => (
+                format!(
+                    "type mismatch: expected `{}`, got `{}`; private representation is not accessible",
+                    p.format(*to),
+                    p.format(*from)
+                ),
+                Some(
+                    "`type visibility` controls the `newtype` name; `repr visibility` controls external annotation access to its representation"
+                        .to_owned(),
+                ),
+            ),
             Self::InvalidRead { from, to, .. } => (
                 format!(
                     "cannot `read` `{}` as `{}`",
@@ -929,6 +981,41 @@ impl TypeError {
                     p.format(*to)
                 ),
                 Some("function types, regex, and refs cannot be used with `read`".to_owned()),
+            ),
+            Self::NewtypeReprReadRequiresTryInto { from, to, .. } => (
+                format!(
+                    "cannot `read` `{}` as `{}`; `newtype` representation reads require an explicit `TryInto` instance",
+                    p.format(*from),
+                    p.format(*to)
+                ),
+                Some(
+                    "add an explicit `TryInto` instance; private `repr visibility` requires the instance to be in the defining module"
+                        .to_owned(),
+                ),
+            ),
+            Self::PublicReprIntoOverlap { .. } => (
+                "public representation already provides this `Into` conversion"
+                    .to_owned(),
+                Some(
+                    "`repr visibility` is public, so the representation edge is already available; `type visibility` only controls the `newtype` name"
+                        .to_owned(),
+                ),
+            ),
+            Self::PrivateReprIntoExposure { .. } => (
+                "private representation cannot be exposed through `Into`"
+                    .to_owned(),
+                Some(
+                    "`type visibility` can expose the `newtype` name, but private `repr visibility` keeps the representation edge inside the defining module"
+                        .to_owned(),
+                ),
+            ),
+            Self::PrivateReprTryIntoExternal { .. } => (
+                "private representation `TryInto` instance must be defined in the defining module"
+                    .to_owned(),
+                Some(
+                    "`type visibility` can expose the `newtype` name, but private `repr visibility` lets only the defining module author the `TryInto` representation conversion"
+                        .to_owned(),
+                ),
             ),
             Self::Custom { msg, .. } => (msg.clone(), None),
             Self::InvalidRegex(pattern, err, _) => (

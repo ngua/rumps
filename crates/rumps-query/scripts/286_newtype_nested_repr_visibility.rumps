@@ -1,0 +1,55 @@
+; Nested representation visibility
+
+module NestedPub {
+  +newtype Person = +{ id: Int, name: String, age: Int }
+  +newtype Address = +{ street: String, city: String }
+  +newtype PatientRecord = +{ patient: NestedPub.Person, address: NestedPub.Address }
+  +newtype Box[T] = +{ value: T }
+  +newtype Pair[L, R] = +{ left: L, right: R }
+  +newtype MaybeBox[T] = +{ inner: Option[T] }
+}
+
+module NestedPriv {
+  +newtype Person = { id: Int, name: String, age: Int }
+  +newtype Address = { street: String, city: String }
+  +newtype PatientRecord = { patient: NestedPriv.Person, address: NestedPriv.Address }
+
+  +fun make-record() -> NestedPriv.PatientRecord {
+    {
+      patient: { id: 2, name: "Diana", age: 28 },
+      address: { street: "789 Pine Rd", city: "NYC" }
+    }
+  }
+
+  +fun patient-name(rec: NestedPriv.PatientRecord) -> String {
+    rec.patient.name
+  }
+
+  +fun city(rec: NestedPriv.PatientRecord) -> String {
+    rec.address.city
+  }
+}
+
+fun main() {
+  let rec: NestedPub.PatientRecord = {
+    patient: { id: 1, name: "Charlie", age: 40 },
+    address: { street: "456 Oak Ave", city: "LA" }
+  }
+  write rec.patient.name
+  write rec.address.city
+
+  let nested: NestedPub.Box[NestedPub.Pair[Int, Bool]] = {
+    value: { left: 99, right: true }
+  }
+  write nested.value.left
+  write nested.value.right
+
+  let some-val: NestedPub.MaybeBox[Int] = { inner: Option.Some(123) }
+  let none-val: NestedPub.MaybeBox[Int] = { inner: Option.None }
+  write some-val.inner!
+  write none-val.inner ?? 0
+
+  let priv = NestedPriv.make-record()
+  write NestedPriv.patient-name(priv)
+  write NestedPriv.city(priv)
+}

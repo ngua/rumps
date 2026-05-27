@@ -1,0 +1,31 @@
+module ObjBypassPriv {
+  +newtype Person = { name: String, age: Int }
+
+  +fun make(name: String, age: Int) -> ObjBypassPriv.Person {
+    { name: name, age: age }
+  }
+
+  +fun name(p: ObjBypassPriv.Person) -> String {
+    p.name
+  }
+
+  +fun opt-name(p: ObjBypassPriv.Person) -> Option[String] {
+    p?.name
+  }
+
+  +fun spread(p: ObjBypassPriv.Person) -> ObjBypassPriv.Person {
+    { ...p }
+  }
+
+  +fun has-name(p: ObjBypassPriv.Person) -> Bool {
+    p is { name: String }
+  }
+}
+
+fun main() {
+  let p: ObjBypassPriv.Person = ObjBypassPriv.make("Ada", 37)
+  write p.name
+  write p?.name ?? "missing"
+  let s = { ...p }
+  write p is { name: String }
+}

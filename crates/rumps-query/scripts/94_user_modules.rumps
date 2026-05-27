@@ -208,7 +208,7 @@ module Shapes {
 ; ============ Module with newtype ============
 
 module Users {
-  +newtype User = { name: String, age: Int }
+  +newtype User = +{ name: String, age: Int }
 
   +fun greet(u: Users.User) -> String {
     "Hello, {u.name}"

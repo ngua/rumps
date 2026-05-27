@@ -281,9 +281,9 @@ pub(crate) enum ExprKind {
 
     /// Type annotation: `(expr) : Type`.
     ///
-    /// Explicit type annotation on an expression. The interpreter validates
-    /// that the value matches the annotated type at runtime; the type checker
-    /// (once implemented) will use this as the expected type.
+    /// Explicit type annotation on an expression. The type checker validates
+    /// the edge statically. Runtime only preserves approved `newtype`
+    /// representation metadata.
     Annotate(Box<Expr>, TypeExpr),
 
     /// A parse error detected during CST construction.
@@ -540,14 +540,17 @@ pub(crate) enum StmtKind {
         vis: Visibility,
     },
 
-    /// Transparent type alias: `newtype Name = Type` or `newtype Name[T] = Type`.
+    /// Newtype declaration: `newtype Name = Type` or `newtype Name[T] = +Type`.
     ///
-    /// The visibility is only meaningful inside modules (`+newtype` for public).
-    NewType {
+    /// `type visibility` controls access to the `newtype` name. `repr visibility`
+    /// controls external access to representation edges used by
+    /// annotation, `as`, `read`, and derived conversion class dispatch.
+    Newtype {
         name: StringId,
         type_params: Vec<TypeParam>,
         target: TypeExpr,
         vis: Visibility,
+        repr_vis: Visibility,
     },
 
     /// Union type declaration: `union Name = Type1 | Type2 | ...`.
