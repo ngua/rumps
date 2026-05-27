@@ -163,6 +163,11 @@ impl InferCtx<'_> {
                 self.variant(id, ty_name.clone(), *var_name, args, span)
             }
 
+            // Naked variant constructors
+            Expr::NakedVariant(var_name, args) => {
+                self.naked_variant(id, *var_name, args, span)
+            }
+
             // Postfix operators: `!`
             Expr::Postfix(op, inner) => self.postfix(id, *op, *inner, span),
 
@@ -2338,7 +2343,7 @@ impl InferCtx<'_> {
         span: Span,
     ) -> TyId {
         // Check if condition is an `is` expression with variant bindings
-        let cond_expr = self.ast.get_expr(cond_id).cloned();
+        let cond_expr = self.normalize_is_expr(cond_id, span);
 
         let then_ty = match cond_expr {
             Some(Expr::Is(
@@ -2681,6 +2686,182 @@ impl InferCtx<'_> {
         }
     }
 
+    /// Infer type of a naked variant constructor: `.Variant(args)`.
+    fn naked_variant(
+        &mut self,
+        expr_id: ExprId,
+        var_name: StringId,
+        args: &SmallVec<[ExprId; 4]>,
+        span: Span,
+    ) -> TyId {
+        match self.resolve_naked_variant(var_name, span) {
+            Some((type_id, qn)) => {
+                let arity = self
+                    .registry
+                    .lookup_variant(type_id, var_name)
+                    .map(|v| v.arity as usize)
+                    .unwrap_or(0);
+                if args.is_empty() && arity > 0 {
+                    self.ast.set_expr(
+                        expr_id,
+                        Expr::Variant(qn.clone(), var_name, smallvec![]),
+                    );
+                    self.variant_ctor_fn_type(type_id, qn, var_name, span)
+                } else {
+                    self.ast.set_expr(
+                        expr_id,
+                        Expr::Variant(qn.clone(), var_name, args.clone()),
+                    );
+                    self.variant(expr_id, qn, var_name, args, span)
+                }
+            }
+            None => TyArena::ERROR,
+        }
+    }
+
+    /// Search visible sum types for a variant name.
+    ///
+    /// Returns `Some((TypeId, QualifiedName))` if exactly one visible type
+    /// defines it, or `None` after emitting an error.
+    pub(super) fn resolve_naked_variant(
+        &mut self,
+        var_name: StringId,
+        span: Span,
+    ) -> Option<(TypeId, QualifiedName)> {
+        self.resolve_naked_variant_with(var_name, span, true)
+    }
+
+    fn resolve_naked_variant_silent(
+        &mut self,
+        var_name: StringId,
+        span: Span,
+    ) -> Option<(TypeId, QualifiedName)> {
+        self.resolve_naked_variant_with(var_name, span, false)
+    }
+
+    fn resolve_naked_variant_with(
+        &mut self,
+        var_name: StringId,
+        span: Span,
+        emit: bool,
+    ) -> Option<(TypeId, QualifiedName)> {
+        let mut matches: Vec<_> = self
+            .registry
+            .lookup_variant_types(var_name)
+            .into_iter()
+            .filter(|(id, qn)| self.type_is_in_scope(*id, qn))
+            .collect();
+        matches.sort_by_key(|(_, qn)| qn.display(&self.env.strings));
+
+        match matches.as_slice() {
+            [] => {
+                if emit {
+                    let vn = self.env.resolve_str(var_name).to_owned();
+                    self.error(TypeError::UnknownNakedVariant(vn, span));
+                }
+                None
+            }
+            [(id, qn)] => Some((*id, qn.clone())),
+            _ => {
+                if emit {
+                    let vn = self.env.resolve_str(var_name).to_owned();
+                    let types = matches
+                        .iter()
+                        .map(|(_, qn)| qn.display(&self.env.strings))
+                        .collect();
+                    self.error(TypeError::AmbiguousNakedVariant {
+                        variant: vn,
+                        types,
+                        span,
+                    });
+                }
+                None
+            }
+        }
+    }
+
+    fn type_is_in_scope(&mut self, id: TypeId, qn: &QualifiedName) -> bool {
+        if !qn.is_qualified() || self.env.imports_type(qn) {
+            true
+        } else {
+            self.convert()
+                .resolve_type_name(&QualifiedName::local(qn.local_name()))
+                .is_some_and(|(tid, eff)| tid == id && eff == *qn)
+        }
+    }
+
+    fn resolve_type_pattern(
+        &mut self,
+        pat: &TypePattern,
+        span: Span,
+    ) -> TypePattern {
+        self.resolve_type_pattern_with(pat, span, true)
+    }
+
+    fn resolve_type_pattern_silent(
+        &mut self,
+        pat: &TypePattern,
+        span: Span,
+    ) -> TypePattern {
+        self.resolve_type_pattern_with(pat, span, false)
+    }
+
+    fn resolve_type_pattern_with(
+        &mut self,
+        pat: &TypePattern,
+        span: Span,
+        emit: bool,
+    ) -> TypePattern {
+        match pat {
+            TypePattern::NakedVariant(var) => self
+                .resolve_naked_variant_for_pattern(*var, span, emit)
+                .map_or_else(
+                    || pat.clone(),
+                    |(_, qn)| TypePattern::Variant(qn, *var),
+                ),
+            TypePattern::NakedVariantWildcard(var) => self
+                .resolve_naked_variant_for_pattern(*var, span, emit)
+                .map_or_else(
+                    || pat.clone(),
+                    |(_, qn)| TypePattern::VariantWildcard(qn, *var),
+                ),
+            TypePattern::NakedVariantBind(var, names) => self
+                .resolve_naked_variant_for_pattern(*var, span, emit)
+                .map_or_else(
+                    || pat.clone(),
+                    |(_, qn)| TypePattern::VariantBind(qn, *var, names.clone()),
+                ),
+            _ => pat.clone(),
+        }
+    }
+
+    fn resolve_naked_variant_for_pattern(
+        &mut self,
+        var_name: StringId,
+        span: Span,
+        emit: bool,
+    ) -> Option<(TypeId, QualifiedName)> {
+        if emit {
+            self.resolve_naked_variant(var_name, span)
+        } else {
+            self.resolve_naked_variant_silent(var_name, span)
+        }
+    }
+
+    fn normalize_is_expr(&mut self, id: ExprId, span: Span) -> Option<Expr> {
+        self.ast.get_expr(id).cloned().map(|expr| match expr {
+            Expr::Is(scrutinee, ref pat) => {
+                let resolved = self.resolve_type_pattern_silent(pat, span);
+                if resolved != *pat {
+                    self.ast
+                        .set_expr(id, Expr::Is(scrutinee, resolved.clone()));
+                }
+                Expr::Is(scrutinee, resolved)
+            }
+            _ => expr,
+        })
+    }
+
     /// Get the type for a nullary (zero-arity) variant constructor.
     ///
     /// Used when resolving `Type.Variant` access for variants with no payload.
@@ -2714,8 +2895,8 @@ impl InferCtx<'_> {
     /// Get a function type for a non-zero-arity variant constructor.
     ///
     /// Returns `(PayloadTypes) -> ResultType` where `ResultType` is the sum type.
-    /// Used when `Type.Variant` is accessed but not immediately called (e.g.,
-    /// passed as a function value or used in a call expression).
+    /// Used when `Type.Variant` is accessed but not immediately called, e.g.
+    /// passed as a function value or used in a call expression.
     fn variant_ctor_fn_type(
         &mut self,
         type_id: TypeId,
@@ -2733,35 +2914,42 @@ impl InferCtx<'_> {
                 TyArena::ERROR
             }
             Some(vd) => {
-                // Build result type with fresh type args
-                let (result_ty, type_arg_map) =
-                    self.sum_type_with_fresh_args(type_id);
+                let (res, subst) = self.sum_type_with_fresh_args(type_id);
+                let params: SmallVec<[TyId; 4]> = if type_id == TypeId::OPTION {
+                    match self.ty_arena.get(res) {
+                        Ty::Option(inner) => smallvec![*inner],
+                        _ => smallvec![TyArena::ERROR],
+                    }
+                } else if type_id == TypeId::RESULT {
+                    match (vd.idx, self.ty_arena.get(res)) {
+                        (0, Ty::Result(ok, _)) => smallvec![*ok],
+                        (1, Ty::Result(_, err)) => smallvec![*err],
+                        _ => smallvec![TyArena::ERROR],
+                    }
+                } else if type_id == TypeId::ERROR {
+                    smallvec![TyArena::STRING]
+                } else {
+                    let payloads = self
+                        .decls
+                        .variant_payloads(type_id, vd.name)
+                        .cloned()
+                        .unwrap_or_default();
+                    payloads
+                        .iter()
+                        .map(|&id| self.convert().ast_type_to_ty(id, &subst))
+                        .collect()
+                };
 
-                // Build parameter types by substituting type params
-                let payloads = self
-                    .decls
-                    .variant_payloads(type_id, vd.name)
-                    .cloned()
-                    .unwrap_or_default();
-                let param_tys: SmallVec<[TyId; 4]> = payloads
-                    .iter()
-                    .map(|&te_id| {
-                        self.convert().ast_type_to_ty(te_id, &type_arg_map)
-                    })
-                    .collect();
-
-                self.ty_arena.func(param_tys, result_ty)
+                self.ty_arena.func(params, res)
             }
         }
     }
 
-    /// Create a sum type with fresh type arguments, returning the type and a
-    /// mapping from type param `StringId` to `Ty` for substitution.
+    /// Create a sum type with fresh type arguments and substitution map.
     fn sum_type_with_fresh_args(
         &mut self,
         type_id: TypeId,
     ) -> (TyId, IndexMap<StringId, TyId>) {
-        // Handle builtin types
         if type_id == TypeId::OPTION {
             let inner = self.fresh();
             let map = iter::once((self.env.intern("T"), inner)).collect();
@@ -2773,18 +2961,19 @@ impl InferCtx<'_> {
                 .into_iter()
                 .collect();
             (self.ty_arena.result(ok, err), map)
+        } else if type_id == TypeId::ERROR {
+            (TyArena::RUNTIME_ERROR, IndexMap::new())
         } else {
-            // User-defined sum type
             match self.registry.get_def(type_id) {
                 Some(TypeDef::Sum { type_params, .. }) => {
-                    let type_args: SmallVec<[TyId; 4]> =
+                    let args: SmallVec<[TyId; 4]> =
                         type_params.iter().map(|_| self.fresh()).collect();
                     let map: IndexMap<_, _> = type_params
                         .iter()
-                        .zip(type_args.iter())
-                        .map(|(&param_id, &ty)| (param_id, ty))
+                        .zip(args.iter())
+                        .map(|(&param, &ty)| (param, ty))
                         .collect();
-                    (self.ty_arena.named(type_id, type_args), map)
+                    (self.ty_arena.named(type_id, args), map)
                 }
                 _ => (TyArena::ERROR, IndexMap::new()),
             }
@@ -2906,8 +3095,11 @@ impl InferCtx<'_> {
         span: Span,
     ) -> TyId {
         let scrutinee_ty = self.expr(scrutinee_id);
+        let pattern = self.resolve_type_pattern(pattern, span);
+        self.ast
+            .set_expr(id, Expr::Is(scrutinee_id, pattern.clone()));
 
-        match pattern {
+        match &pattern {
             TypePattern::Type(ty_id) => {
                 let target_ty =
                     self.convert().ast_type_to_ty(*ty_id, &IndexMap::new());
@@ -3068,6 +3260,9 @@ impl InferCtx<'_> {
                     .is_patterns
                     .insert(id, CheckedTypePatternInfo::Object(ftys));
             }
+            TypePattern::NakedVariant(_)
+            | TypePattern::NakedVariantWildcard(_)
+            | TypePattern::NakedVariantBind(..) => {}
         }
 
         TyArena::BOOL

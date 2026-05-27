@@ -362,7 +362,7 @@ impl Parser {
         let variant_pattern = Self::ident()
             .then_ignore(just(Token::Dot))
             .then(Self::ident())
-            .then(pattern_args.or_not())
+            .then(pattern_args.clone().or_not())
             .map(|((ty, var), args)| match args {
                 None => cst::TypePattern::Variant(ty, var),
                 Some(PatternArgs::Wildcard) => {
@@ -370,6 +370,20 @@ impl Parser {
                 }
                 Some(PatternArgs::Bindings(names)) => {
                     cst::TypePattern::VariantBind(ty, var, names)
+                }
+            });
+
+        // `.Variant` pattern (with optional args). The variant type is
+        // resolved during type checking.
+        let naked_variant_pattern = select! { Token::DotIdent(var) => var }
+            .then(pattern_args.or_not())
+            .map(|(var, args)| match args {
+                None => cst::TypePattern::NakedVariant(var),
+                Some(PatternArgs::Wildcard) => {
+                    cst::TypePattern::NakedVariantWildcard(var)
+                }
+                Some(PatternArgs::Bindings(names)) => {
+                    cst::TypePattern::NakedVariantBind(var, names)
                 }
             });
 
@@ -390,7 +404,10 @@ impl Parser {
         let simple_type =
             Self::simple_type_expr(interner).map(cst::TypePattern::Type);
 
-        variant_pattern.or(struct_pat).or(simple_type)
+        naked_variant_pattern
+            .or(variant_pattern)
+            .or(struct_pat)
+            .or(simple_type)
     }
 
     /// Parse a class constraint name with optional type arguments.

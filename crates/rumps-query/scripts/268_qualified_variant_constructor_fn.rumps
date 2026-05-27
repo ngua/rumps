@@ -1,0 +1,13 @@
+; Qualified payload variant constructors are first-class functions.
+
+variant Box[T] = Full(T) | Empty
+
+fun main() {
+  let some = Option.Some
+  let ok = Result.Ok
+  let full = Box.Full
+
+  write some(42)
+  write ok("done")
+  write full(true)
+}

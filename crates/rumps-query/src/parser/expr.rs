@@ -1010,7 +1010,11 @@ impl Parser {
             .ignore_then(Self::ident())
             .then_ignore(just(Token::LParen))
             .then_ignore(Self::opt_newlines())
-            .then(expr.clone().separated_by(class_method_sep).allow_trailing())
+            .then(
+                expr.clone()
+                    .separated_by(class_method_sep.clone())
+                    .allow_trailing(),
+            )
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::RParen))
             .map_with_span(|(method, args), span| {
@@ -1028,6 +1032,29 @@ impl Parser {
             .map_with_span(|method, span| {
                 cst::Expr::new(cst::ExprKind::NakedClassMethodRef(method), span)
             });
+
+        // Naked variant constructor call: `.Variant(args)`.
+        let naked_variant = select! { Token::DotIdent(name) => name };
+        let naked_variant_call = naked_variant
+            .clone()
+            .then_ignore(just(Token::LParen))
+            .then_ignore(Self::opt_newlines())
+            .then(
+                expr.clone()
+                    .separated_by(class_method_sep)
+                    .at_least(1)
+                    .allow_trailing(),
+            )
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RParen))
+            .map_with_span(|(var, args), span| {
+                cst::Expr::new(cst::ExprKind::NakedVariant(var, args), span)
+            });
+
+        // Naked variant constructor value: `.Variant`.
+        let naked_variant_ref = naked_variant.map_with_span(|var, span| {
+            cst::Expr::new(cst::ExprKind::NakedVariant(var, Vec::new()), span)
+        });
 
         // Lexical variable or mempty (`_`)
         let var = Self::ident().map_with_span(move |name, span| {
@@ -1362,6 +1389,8 @@ impl Parser {
             class_method_ref,
             naked_class_method,
             naked_class_method_ref,
+            naked_variant_call,
+            naked_variant_ref,
             var,
             paren,
             array,

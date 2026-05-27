@@ -1,0 +1,6 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Naked payload variant constructors are first-class functions.\n\nvariant Box[T] = Full(T) | Empty\n\nfun main() {\n  let some = .Some\n  let full = .Full\n\n  write some(42)\n  write full(\"ok\")\n}\n"
+---
+Option.Some(42)
+Box.Full("ok")

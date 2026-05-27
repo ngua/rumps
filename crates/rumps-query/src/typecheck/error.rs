@@ -443,6 +443,22 @@ pub(crate) enum TypeError {
     #[error("no class defines method `:{0}`")]
     UnknownNakedMethod(String, Span),
 
+    /// Ambiguous naked variant constructor; multiple types define it.
+    #[error("ambiguous variant constructor `.{variant}`")]
+    AmbiguousNakedVariant {
+        variant: String,
+        types: Vec<String>,
+        span: Span,
+    },
+
+    /// No type in scope defines the given variant constructor.
+    #[error("no type defines variant constructor `.{0}`")]
+    UnknownNakedVariant(String, Span),
+
+    /// Payload variant constructor used without payload.
+    #[error("variant constructor `{variant}` requires payload")]
+    NonNullaryVariantValue { variant: String, span: Span },
+
     /// Unknown method name for a class (with `StringId`s).
     #[error("class has no such method")]
     UnknownMethodId {
@@ -681,6 +697,9 @@ impl TypeError {
             | Self::UnknownClass(_, span)
             | Self::AmbiguousNakedMethod { span, .. }
             | Self::UnknownNakedMethod(_, span)
+            | Self::AmbiguousNakedVariant { span, .. }
+            | Self::UnknownNakedVariant(_, span)
+            | Self::NonNullaryVariantValue { span, .. }
             | Self::UnknownMethodId { span, .. }
             | Self::ConvertMethodNeedsType { span, .. }
             | Self::DuplicateInstance { span, .. }
@@ -941,6 +960,28 @@ impl TypeError {
             Self::UnknownNakedMethod(method, _) => (
                 format!("no class defines method `:{method}`"),
                 None,
+            ),
+            Self::AmbiguousNakedVariant { variant, types, .. } => (
+                format!(
+                    "ambiguous variant constructor `.{variant}`; defined in multiple types"
+                ),
+                Some(format!(
+                    "disambiguate with type prefix: {}",
+                    types
+                        .iter()
+                        .map(|t| format!("`{t}.{variant}`"))
+                        .join(", ")
+                )),
+            ),
+            Self::UnknownNakedVariant(var, _) => (
+                format!("no type in scope defines variant constructor `.{var}`"),
+                None,
+            ),
+            Self::NonNullaryVariantValue { variant, .. } => (
+                format!("variant constructor `{variant}` requires payload"),
+                Some(format!(
+                    "use `{variant}(...)` to construct it, or `{variant}(_)` in a pattern"
+                )),
             ),
             Self::UnknownMethodId { class, method, .. } => {
                 let cn = p.strings.get(*class).unwrap_or("<unknown>");

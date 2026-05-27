@@ -180,6 +180,22 @@ impl InferCtx<'_> {
                     );
                 }
 
+                MatchPattern::NakedVariant(var_name, sub_pats) => {
+                    if let Some((_, qn)) =
+                        self.resolve_naked_variant(*var_name, span)
+                    {
+                        self.ast.set_pattern(
+                            pat_id,
+                            MatchPattern::Variant(
+                                qn.clone(),
+                                *var_name,
+                                sub_pats.clone(),
+                            ),
+                        );
+                        self.pattern_bindings(pat_id, scrutinee_ty, span);
+                    }
+                }
+
                 MatchPattern::Object(fields) => {
                     fields.iter().for_each(|(field_name, sub_pat_id)| {
                         let f = self.env.resolve_string(*field_name);
@@ -518,6 +534,7 @@ impl InferCtx<'_> {
             // Literals, variants, and IS patterns are refutable
             MatchPattern::Literal(_)
             | MatchPattern::Variant(..)
+            | MatchPattern::NakedVariant(..)
             | MatchPattern::Is(..) => false,
         })
     }

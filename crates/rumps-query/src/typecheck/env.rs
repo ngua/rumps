@@ -222,6 +222,11 @@ impl TypeEnv {
         self.imported_types.get(&local)
     }
 
+    /// Check if a qualified type is imported under any local name.
+    pub(crate) fn imports_type(&self, qn: &QualifiedName) -> bool {
+        self.imported_types.values().any(|imported| imported == qn)
+    }
+
     /// Push a new scope (e.g., entering a function body or block).
     pub(crate) fn push_scope(&mut self) {
         self.scopes.push(Scope::default());

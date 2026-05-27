@@ -1,0 +1,37 @@
+; Naked variant constructor shorthand.
+;
+; `.Ctor` resolves when exactly one visible type defines `Ctor`.
+
+variant Box[T] = Full(T) | Empty
+
+fun describe-box(b: Box[Int]) -> String {
+  match b {
+    .Full(v) => { "full {v}" }
+    .Empty => { "empty" }
+  }
+}
+
+fun main() {
+  let some = .Some(42)
+  write some
+
+  let none: Option[Int] = .None
+  write none
+
+  if some is .Some(v) {
+    write "some {v}"
+  }
+
+  write .Ok("done")
+  write .Err("bad")
+
+  let box1 = .Full(7)
+  let box2: Box[Int] = .Empty
+  write describe-box(box1)
+  write describe-box(box2)
+
+  write match .Some(5) {
+    .Some(v) => { v + 1 }
+    .None => { 0 }
+  }
+}

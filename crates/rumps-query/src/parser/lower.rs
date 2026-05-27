@@ -935,6 +935,10 @@ impl<'a> LowerCtx<'a> {
                 let arg_ids = self.exprs(args)?;
                 Expr::Variant(QualifiedName::local(ty), var, arg_ids)
             }
+            cst::ExprKind::NakedVariant(var, args) => {
+                let arg_ids = self.exprs(args)?;
+                Expr::NakedVariant(var, arg_ids)
+            }
             cst::ExprKind::Is(inner, pattern) => {
                 let inner_id = self.expr(*inner)?;
                 let lowered_pat = self.type_pattern(pattern)?;
@@ -1260,11 +1264,20 @@ impl<'a> LowerCtx<'a> {
             cst::TypePattern::Variant(ty, var) => {
                 TypePattern::Variant(QualifiedName::local(ty), var)
             }
+            cst::TypePattern::NakedVariant(var) => {
+                TypePattern::NakedVariant(var)
+            }
             cst::TypePattern::VariantWildcard(ty, var) => {
                 TypePattern::VariantWildcard(QualifiedName::local(ty), var)
             }
+            cst::TypePattern::NakedVariantWildcard(var) => {
+                TypePattern::NakedVariantWildcard(var)
+            }
             cst::TypePattern::VariantBind(ty, var, names) => {
                 TypePattern::VariantBind(QualifiedName::local(ty), var, names)
+            }
+            cst::TypePattern::NakedVariantBind(var, names) => {
+                TypePattern::NakedVariantBind(var, names)
             }
             cst::TypePattern::Object(fields) => {
                 let lowered = fields
@@ -1320,6 +1333,13 @@ impl<'a> LowerCtx<'a> {
                     .map(|p| self.match_pattern(p))
                     .collect::<Result<SmallVec<_>>>()?;
                 MatchPattern::Variant(QualifiedName::new(ty), var, sub_ids)
+            }
+            cst::MatchPattern::NakedVariant(var, pats) => {
+                let sub_ids = pats
+                    .into_iter()
+                    .map(|p| self.match_pattern(p))
+                    .collect::<Result<SmallVec<_>>>()?;
+                MatchPattern::NakedVariant(var, sub_ids)
             }
             cst::MatchPattern::Object(fields) => {
                 let field_ids = fields
@@ -1703,6 +1723,11 @@ impl<'a> MergeCtx<'a> {
                     pats.iter().map(|&p| self.pattern(p, span)).collect();
                 MatchPattern::Variant(ty, var, new_pats?)
             }
+            MatchPattern::NakedVariant(var, pats) => {
+                let new_pats: Result<SmallVec<_>> =
+                    pats.iter().map(|&p| self.pattern(p, span)).collect();
+                MatchPattern::NakedVariant(var, new_pats?)
+            }
             MatchPattern::Object(fields) => {
                 let new_fields: Result<SmallVec<_>> = fields
                     .into_iter()
@@ -1759,11 +1784,20 @@ impl<'a> MergeCtx<'a> {
             TypePattern::Variant(ty, var) => {
                 Ok(TypePattern::Variant(ty.clone(), *var))
             }
+            TypePattern::NakedVariant(var) => {
+                Ok(TypePattern::NakedVariant(*var))
+            }
             TypePattern::VariantWildcard(ty, var) => {
                 Ok(TypePattern::VariantWildcard(ty.clone(), *var))
             }
+            TypePattern::NakedVariantWildcard(var) => {
+                Ok(TypePattern::NakedVariantWildcard(*var))
+            }
             TypePattern::VariantBind(ty, var, binds) => {
                 Ok(TypePattern::VariantBind(ty.clone(), *var, binds.clone()))
+            }
+            TypePattern::NakedVariantBind(var, binds) => {
+                Ok(TypePattern::NakedVariantBind(*var, binds.clone()))
             }
             TypePattern::Object(fields) => {
                 let new_fields: Result<SmallVec<_>> = fields
@@ -2137,6 +2171,11 @@ impl<'a> MergeCtx<'a> {
                 let new_args: Result<SmallVec<_>> =
                     args.iter().map(|&id| self.expr(id, span)).collect();
                 Expr::Variant(ty, var, new_args?)
+            }
+            Expr::NakedVariant(var, args) => {
+                let new_args: Result<SmallVec<_>> =
+                    args.iter().map(|&id| self.expr(id, span)).collect();
+                Expr::NakedVariant(var, new_args?)
             }
             Expr::Path(segments) => Expr::Path(segments),
             Expr::ClassMethod(class, method, args) => {

@@ -629,16 +629,18 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .registry
                 .lookup(&QualifiedName::local(*ty_name))
                 .and_then(|type_id| {
-                    self.registry.lookup_variant(type_id, *field).and_then(
-                        |v| (v.arity == 0).then_some((*ty_name, *field)),
-                    )
+                    self.registry.lookup_variant(type_id, *field).map(|v| {
+                        (QualifiedName::local(*ty_name), *field, v.arity)
+                    })
                 }),
             _ => None,
         });
 
-        if let Some((ty_id, var_id)) = maybe_type_path {
-            self.path(&[ty_id, var_id], span)
+        if let Some((ty, var, 0)) = maybe_type_path {
+            self.path(&[ty.local_name(), var], span)
                 .map(|payload| self.value_for_expr(expr_id, payload))
+        } else if let Some((ty, var, _)) = maybe_type_path {
+            Ok(self.value_for_expr(expr_id, Payload::VariantCtor { ty, var }))
         } else {
             let base_val = self.eval_payload(base).await?;
 

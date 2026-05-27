@@ -1,0 +1,11 @@
+; Naked payload variant constructors are first-class functions.
+
+variant Box[T] = Full(T) | Empty
+
+fun main() {
+  let some = .Some
+  let full = .Full
+
+  write some(42)
+  write full("ok")
+}

@@ -83,11 +83,20 @@ pub(crate) enum TypePattern {
     /// Variant check without payload: `is Option.None`.
     Variant(StringId, StringId),
 
+    /// Unqualified variant check without payload: `is .None`.
+    NakedVariant(StringId),
+
     /// Variant check ignoring payload: `is Option.Some(_)`.
     VariantWildcard(StringId, StringId),
 
+    /// Unqualified variant check ignoring payload: `is .Some(_)`.
+    NakedVariantWildcard(StringId),
+
     /// Variant check with binding: `is Option.Some(val)`.
     VariantBind(StringId, StringId, SmallVec<[StringId; 2]>),
+
+    /// Unqualified variant check with binding: `is .Some(val)`.
+    NakedVariantBind(StringId, SmallVec<[StringId; 2]>),
 
     /// Structural object check: `is { name: String, age: Int }`.
     Object(Vec<(StringId, TypeExpr)>),
@@ -227,6 +236,9 @@ pub(crate) enum ExprKind {
     /// on registered types (`Type.Variant`) to `Expr::Variant`; the parser
     /// emits generic `Field` and `Call` nodes.
     Variant(StringId, StringId, Vec<Expr>),
+
+    /// Unqualified variant constructor: `.Variant(args...)` or `.Variant`.
+    NakedVariant(StringId, Vec<Expr>),
 
     /// Type check.
     Is(Box<Expr>, TypePattern),
@@ -756,6 +768,9 @@ pub(crate) enum MatchPattern {
 
     /// Variant with sub-patterns: `Option.Some(x)`, `Result.Err(e)`
     Variant(Vec<StringId>, StringId, Vec<Self>),
+
+    /// Unqualified variant with sub-patterns: `.Some(x)`, `.Err(e)`.
+    NakedVariant(StringId, Vec<Self>),
 
     /// Object destructuring: `{ name, age }`
     Object(Vec<(StringId, Self)>),

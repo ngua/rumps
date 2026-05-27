@@ -119,6 +119,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                     )
                     .await
                 }
+                Payload::VariantCtor { ty, var } => {
+                    let payload =
+                        self.variant_ctor_payload(&ty, var, &[arg_id], span);
+                    Ok(self.value_for_expr(call_id, payload))
+                }
                 Payload::ClassMethodFn {
                     class,
                     method,
@@ -805,6 +810,39 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
+    fn variant_ctor_arity(
+        &self,
+        ty: &QualifiedName,
+        var: StringId,
+    ) -> Option<usize> {
+        self.registry
+            .lookup(ty)
+            .and_then(|id| self.registry.lookup_variant(id, var))
+            .map(|v| v.arity as usize)
+    }
+
+    fn variant_ctor_payload(
+        &self,
+        ty: &QualifiedName,
+        var: StringId,
+        vals: &[ValueId],
+        _span: Span,
+    ) -> Payload {
+        let var_def = self
+            .registry
+            .lookup(ty)
+            .and_then(|id| self.registry.lookup_variant(id, var))
+            .unwrap_or_else(|| typechecked!("variant constructor", "known"));
+        if var_def.arity as usize == vals.len() {
+            Payload::Variant {
+                tag: var_def.idx,
+                vals: SmallVec::from_slice(vals),
+            }
+        } else {
+            typechecked!("variant constructor arity", "correct")
+        }
+    }
+
     fn value_for_output(
         &mut self,
         output: OutputMeta,
@@ -1292,6 +1330,17 @@ impl<I: IoContext> Interpreter<'_, I> {
                 );
                 Ok(self.add_value(result, span))
             }
+            Payload::VariantCtor { ty, var } => {
+                let payload = self.variant_ctor_payload(&ty, var, args, span);
+                let value = match self.callable_ret(callee_ty) {
+                    Some(ret) => {
+                        let meta = self.checked.types.meta(ret);
+                        self.value_from_meta(payload, meta)
+                    }
+                    None => self.value_from_payload(payload),
+                };
+                Ok(self.add_value(value, span))
+            }
             Payload::ClassMethodFn {
                 class,
                 method,
@@ -1414,6 +1463,23 @@ impl<I: IoContext> Interpreter<'_, I> {
                 } else {
                     self.invoke_module_fn_for_expr(call_id, &path, &vals, span)
                         .await
+                }
+            }
+            Payload::VariantCtor { ty, var } => {
+                let vals = self.eval_args(args).await?;
+                if let Some(partial) = self.maybe_partial_app(
+                    Payload::VariantCtor {
+                        ty: ty.clone(),
+                        var,
+                    },
+                    &vals,
+                    span,
+                ) {
+                    Ok(self.value_for_expr(call_id, partial))
+                } else {
+                    let payload =
+                        self.variant_ctor_payload(&ty, var, &vals, span);
+                    Ok(self.value_for_expr(call_id, payload))
                 }
             }
             Payload::ClassMethodFn {
@@ -1542,6 +1608,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                 .get_user_module_fn(path)
                 .map(|d| d.params.len())
                 .or_else(|| self.checked.module_fn_arity(path)),
+            Payload::VariantCtor { ty, var } => {
+                self.variant_ctor_arity(ty, *var)
+            }
             Payload::ClassMethodFn { class, method, .. } => {
                 self.checked.class_registry.lookup_by_name(*class).and_then(
                     |kind| {
@@ -1635,6 +1704,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                 Payload::ModuleFn { path } => {
                     self.invoke_module_fn(&path, &all_args, span).await
                 }
+                Payload::VariantCtor { ty, var } => Ok(self
+                    .value_from_payload(
+                        self.variant_ctor_payload(&ty, var, &all_args, span),
+                    )),
                 Payload::ClassMethodFn {
                     class,
                     method,

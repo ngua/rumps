@@ -609,7 +609,8 @@ impl RuntimeTypes {
             | Payload::Function { params, ret, .. } => {
                 self.func(params.iter().map(|(_, ty)| *ty).collect(), *ret)
             }
-            Payload::ModuleFn { .. }
+            Payload::VariantCtor { .. }
+            | Payload::ModuleFn { .. }
             | Payload::ClassMethodFn { .. }
             | Payload::PartialApp { .. } => {
                 typechecked!(

@@ -498,13 +498,24 @@ pub(crate) enum TypePattern {
     /// Variant check without payload: `is Option.None`.
     Variant(QualifiedName, StringId),
 
+    /// Unqualified variant check without payload: `is .None`.
+    NakedVariant(StringId),
+
     /// Variant check ignoring payload: `is Option.Some(_)`.
     VariantWildcard(QualifiedName, StringId),
+
+    /// Unqualified variant check ignoring payload: `is .Some(_)`.
+    NakedVariantWildcard(StringId),
 
     /// Variant check with binding: `is Option.Some(val)`.
     ///
     /// Bindings are only visible in the `then` branch of an `if`.
     VariantBind(QualifiedName, StringId, SmallVec<[StringId; 2]>),
+
+    /// Unqualified variant check with binding: `is .Some(val)`.
+    ///
+    /// Bindings are only visible in the `then` branch of an `if`.
+    NakedVariantBind(StringId, SmallVec<[StringId; 2]>),
 
     /// Structural object check: `is { name: String, age: Int }`.
     ///
@@ -539,6 +550,9 @@ pub(crate) enum MatchPattern {
     /// Matches a tagged value if the type and variant match, then recursively
     /// matches the payloads against the sub-patterns.
     Variant(QualifiedName, StringId, SmallVec<[MatchPatternId; 2]>),
+
+    /// Unqualified variant with sub-patterns: `.Some(x)`, `.Err(e)`.
+    NakedVariant(StringId, SmallVec<[MatchPatternId; 2]>),
 
     /// Object destructuring: `{ name, age }`, `{ name, role: "admin" }`
     ///
@@ -856,6 +870,12 @@ pub(crate) enum Expr {
     ///
     /// Examples: `Option.None` (no args), `Option.Some(1)`, `Result.Ok(42)`
     Variant(QualifiedName, StringId, SmallVec<[ExprId; 4]>),
+
+    /// Unqualified variant constructor: `.Variant(args...)` or `.Variant`.
+    ///
+    /// Resolved during type checking. Ambiguous constructor names produce a
+    /// type error, so fully qualified syntax is required.
+    NakedVariant(StringId, SmallVec<[ExprId; 4]>),
 
     /// Namespace path for module functions and constants.
     ///

@@ -1,0 +1,7 @@
+; Uppercase object field names can hold callable values.
+
+fun main() {
+  let x = { Make: n => n + 1 }
+
+  write x.Make(41)
+}

@@ -82,7 +82,6 @@ pub(crate) enum Token<S = StringId> {
     ///
     /// Example: `^data{1}` lexes as `GlobalBrace("data")`, `1`, `}`.
     GlobalBrace(S),
-
     // Arithmetic operators
     Plus,     // +
     Minus,    // -
@@ -149,6 +148,12 @@ pub(crate) enum Token<S = StringId> {
     Indent,
     Dedent,
     Eof,
+
+    /// Leading dot immediately followed by an identifier; for variant shorthand.
+    ///
+    /// Example: `.Some` lexes as `DotIdent("Some")`, but `x.Some` remains
+    /// `Dot`, `Ident("Some")` for field access.
+    DotIdent(S),
 }
 
 impl<S> Token<S> {
@@ -229,6 +234,7 @@ impl Token<String> {
                     Self::IdentBrace(s) => Token::IdentBrace(interner.intern(&s)),
                     Self::Global(s) => Token::Global(interner.intern(&s)),
                     Self::GlobalBrace(s) => Token::GlobalBrace(interner.intern(&s)),
+                    Self::DotIdent(s) => Token::DotIdent(interner.intern(&s)),
                     // Content variants: pass through unchanged
                     Self::String(s) => Token::String(s),
                     Self::Regex(s) => Token::Regex(s),
@@ -386,6 +392,7 @@ impl fmt::Display for Token<String> {
             Self::IdentBrace(s) => write!(f, "{s}{{"),
             Self::Global(s) => write!(f, "^{s}"),
             Self::GlobalBrace(s) => write!(f, "^{s}{{"),
+            Self::DotIdent(s) => write!(f, ".{s}"),
             Self::Plus => write!(f, "+"),
             Self::Minus => write!(f, "-"),
             Self::Mul => write!(f, "*"),
@@ -457,6 +464,9 @@ impl Token<StringId> {
                 || "global variable{".to_owned(),
                 |n| format!("^{n}{{"),
             ),
+            Self::DotIdent(s) => interner
+                .get(*s)
+                .map_or_else(|| ".identifier".to_owned(), |n| format!(".{n}")),
             Self::String(s) => format!("\"{s}\""),
             Self::Regex(s) => format!("/{s}/"),
             Self::Interpolation(parts) => {
@@ -487,6 +497,7 @@ impl fmt::Display for Token<StringId> {
             Self::IdentBrace(_) => write!(f, "identifier{{"),
             Self::Global(_) => write!(f, "global variable"),
             Self::GlobalBrace(_) => write!(f, "global variable{{"),
+            Self::DotIdent(_) => write!(f, ".identifier"),
             Self::String(_) => write!(f, "string literal"),
             Self::Interpolation(_) => write!(f, "interpolated string"),
             Self::Regex(_) => write!(f, "regex literal"),

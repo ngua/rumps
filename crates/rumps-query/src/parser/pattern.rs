@@ -202,7 +202,7 @@ impl Parser {
             let variant_pat = Self::ident()
                 .separated_by(just(Token::Dot))
                 .at_least(2)
-                .then(variant_args.or_not())
+                .then(variant_args.clone().or_not())
                 .try_map(|(segments, args), span| {
                     segments
                         .split_last()
@@ -219,6 +219,16 @@ impl Parser {
                                 "variant pattern requires at least Type.Variant",
                             )
                         })
+                });
+
+            // Naked variant pattern: `.Variant` or `.Variant(pat, ...)`.
+            let naked_variant_pat = select! { Token::DotIdent(var) => var }
+                .then(variant_args.or_not())
+                .map(|(var, args)| {
+                    cst::MatchPattern::NakedVariant(
+                        var,
+                        args.unwrap_or_default(),
+                    )
                 });
 
             // Tuple pattern: `(pat, pat, ...)`
@@ -298,6 +308,7 @@ impl Parser {
             choice((
                 wildcard,
                 literal,
+                naked_variant_pat,
                 variant_pat,
                 tuple_pat,
                 obj_pat,

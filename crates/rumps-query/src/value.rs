@@ -682,6 +682,9 @@ pub(crate) enum Payload {
         vals: SmallVec<[ValueId; 4]>,
     },
 
+    /// A payload-taking variant constructor used as a function value.
+    VariantCtor { ty: QualifiedName, var: StringId },
+
     /// A closure (anonymous function) with captured environment.
     ///
     /// Closures capture their lexical scope at creation time by value.
@@ -828,6 +831,7 @@ impl Payload {
             Self::FilePath(_) => Cow::Borrowed("FilePath"),
             Self::Regex(_) => Cow::Borrowed("Regex"),
             Self::Variant { .. } => Cow::Borrowed("Variant"),
+            Self::VariantCtor { .. } => Cow::Borrowed("VariantCtor"),
             Self::Closure { .. } => Cow::Borrowed("Closure"),
             Self::Function { .. } => Cow::Borrowed("Function"),
             Self::ModuleFn { .. } => Cow::Borrowed("ModuleFn"),
@@ -1096,6 +1100,24 @@ impl TypeRegistry {
                 variants.iter().find(|v| v.name == name)
             }
         })
+    }
+
+    /// Find all registered sum types that define a variant with `name`.
+    pub(crate) fn lookup_variant_types(
+        &self,
+        name: StringId,
+    ) -> Vec<(TypeId, QualifiedName)> {
+        self.by_name
+            .iter()
+            .filter_map(|(qn, &id)| match self.get_def(id) {
+                Some(TypeDef::Sum { variants, .. })
+                    if variants.iter().any(|v| v.name == name) =>
+                {
+                    Some((id, qn.clone()))
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     /// Get the number of type parameters for a type.

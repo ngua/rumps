@@ -537,10 +537,26 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 .optional_field(base, &field, span)
                 .await
                 .map(Evaluated::Payload),
-            Expr::Variant(ref ty, var, ref args) => self
-                .variant(id, ty, var, args, span)
-                .await
-                .map(Evaluated::Payload),
+            Expr::Variant(ref ty, var, ref args) => {
+                let is_ctor = args.is_empty()
+                    && matches!(
+                        self.checked.types.get(self.checked.expr(id).ty),
+                        typecheck::Ty::Fn(_, _)
+                    );
+                if is_ctor {
+                    Ok(Evaluated::Payload(Payload::VariantCtor {
+                        ty: ty.clone(),
+                        var,
+                    }))
+                } else {
+                    self.variant(id, ty, var, args, span)
+                        .await
+                        .map(Evaluated::Payload)
+                }
+            }
+            Expr::NakedVariant(..) => {
+                typechecked!("naked variant constructor", "resolved type")
+            }
             Expr::Path(ref segments) => {
                 self.path_value(id, segments, span).map(Evaluated::Value)
             }

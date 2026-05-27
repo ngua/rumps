@@ -1507,6 +1507,7 @@ impl Into {
             Payload::Regex(_) => "Regex".to_owned(),
             Payload::Range { .. } => "Range".to_owned(),
             Payload::Variant { .. } => "Variant".to_owned(),
+            Payload::VariantCtor { .. } => "VariantCtor".to_owned(),
             Payload::Closure { .. } => "Closure".to_owned(),
             Payload::Function { .. } => "Function".to_owned(),
             Payload::ModuleFn { .. } => "ModuleFn".to_owned(),
@@ -1693,6 +1694,7 @@ impl Into {
             }
             Payload::Closure { .. }
             | Payload::Function { .. }
+            | Payload::VariantCtor { .. }
             | Payload::ModuleFn { .. }
             | Payload::ClassMethodFn { .. }
             | Payload::ModuleConst { .. }
@@ -2176,6 +2178,9 @@ impl Display {
             Payload::Json(j) => j.to_string(),
             Payload::Variant { tag, vals } => {
                 Self::format_variant(ctx, None, *tag, vals)
+            }
+            Payload::VariantCtor { .. } => {
+                typechecked!("Display", "Display (not VariantCtor)")
             }
             Payload::Closure { .. } => {
                 typechecked!("Display", "Display (not Closure)")

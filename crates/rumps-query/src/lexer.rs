@@ -289,6 +289,88 @@ impl Spanned<String> {
         }
         acc
     }
+
+    /// Post-processes leading `.Ident` into a single token for variant
+    /// constructor shorthand.
+    ///
+    /// This only merges when `.` is adjacent to the following identifier and
+    /// is not adjacent to a previous token that can end an expression. Field
+    /// access like `x.Foo` therefore remains `Dot`, `Ident`.
+    fn process_dot_ident(tokens: Vec<Self>) -> Vec<Self> {
+        let cap = tokens.len();
+        let (mut out, pending) = tokens.into_iter().fold(
+            (Vec::with_capacity(cap), None::<Self>),
+            |(mut out, pending), t| match pending {
+                Some(p) => {
+                    let prev_ends_expr = out
+                        .last()
+                        .map(|prev: &Self| {
+                            prev.span.end == p.span.start
+                                && matches!(
+                                    &prev.tok,
+                                    Token::Ident(_)
+                                        | Token::IdentBrace(_)
+                                        | Token::Global(_)
+                                        | Token::GlobalBrace(_)
+                                        | Token::Int(_)
+                                        | Token::Float(_)
+                                        | Token::String(_)
+                                        | Token::Char(_)
+                                        | Token::True
+                                        | Token::False
+                                        | Token::Null
+                                        | Token::Bang
+                                        | Token::RParen
+                                        | Token::RBracket
+                                        | Token::RBrace
+                                )
+                        })
+                        .unwrap_or(false);
+                    let merged = (!prev_ends_expr
+                        && p.tok == Token::Dot
+                        && p.span.end == t.span.start)
+                        .then(|| match &t.tok {
+                            Token::Ident(name) => Some(Self::new(
+                                Token::DotIdent(name.clone()),
+                                Span::new(p.span.start, t.span.end),
+                            )),
+                            _ => None,
+                        })
+                        .flatten();
+
+                    match merged {
+                        Some(m) => {
+                            out.push(m);
+                            (out, None)
+                        }
+                        None => {
+                            out.push(p);
+                            if t.tok == Token::Dot {
+                                (out, Some(t))
+                            } else {
+                                out.push(t);
+                                (out, None)
+                            }
+                        }
+                    }
+                }
+                None => {
+                    if t.tok == Token::Dot {
+                        (out, Some(t))
+                    } else {
+                        out.push(t);
+                        (out, None)
+                    }
+                }
+            },
+        );
+
+        if let Some(t) = pending {
+            out.push(t);
+        }
+
+        out
+    }
 }
 
 impl Spanned<String> {
@@ -325,6 +407,7 @@ impl<'a> Lexer<'a> {
             .parse(self.src)
             .map(Spanned::process_dot_dot)
             .map(Spanned::process_colon)
+            .map(Spanned::process_dot_ident)
             .map(Spanned::process_ref_braces)
             .map(Spanned::process_indentation)
             .map_err(|errs| {

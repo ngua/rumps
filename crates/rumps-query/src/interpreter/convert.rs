@@ -55,6 +55,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             | Payload::Tuple(_)
             | Payload::Map(_)
             | Payload::Variant { .. }
+            | Payload::VariantCtor { .. }
             | Payload::Closure { .. }
             | Payload::Function { .. }
             | Payload::ModuleFn { .. }
@@ -78,6 +79,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             | Payload::Tuple(_)
             | Payload::Map(_)
             | Payload::Variant { .. }
+            | Payload::VariantCtor { .. }
             | Payload::Closure { .. }
             | Payload::Function { .. }
             | Payload::ModuleFn { .. }
@@ -430,6 +432,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             | Payload::FilePath(_)
             | Payload::Regex(_)
             | Payload::Variant { .. }
+            | Payload::VariantCtor { .. }
             | Payload::Closure { .. }
             | Payload::Function { .. }
             | Payload::ModuleFn { .. }

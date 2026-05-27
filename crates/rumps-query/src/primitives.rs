@@ -347,6 +347,7 @@ impl Array {
                     Payload::Unit
                     | Payload::FilePath(_)
                     | Payload::Regex(_)
+                    | Payload::VariantCtor { .. }
                     | Payload::Closure { .. }
                     | Payload::Function { .. }
                     | Payload::ModuleFn { .. }

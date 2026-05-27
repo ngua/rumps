@@ -186,61 +186,53 @@ impl<'a> ResolveCtx<'a> {
         base_id: ExprId,
         field: StringId,
     ) -> Option<Expr> {
-        // First check if it's a simple Type.Variant pattern (takes priority)
-        let variant_expr =
-            self.ast
-                .get_expr(base_id)
-                .cloned()
-                .and_then(|base| match base {
-                    Expr::Var(name) => self
-                        .registry
-                        .lookup(&QualifiedName::local(name))
-                        .and_then(|type_id| {
-                            self.registry
-                                .lookup_variant(type_id, field)
-                                .and_then(|v| {
-                                    (v.arity == 0).then(|| {
-                                        Expr::Variant(
-                                            QualifiedName::local(name),
-                                            field,
-                                            smallvec![],
-                                        )
-                                    })
-                                })
-                        }),
-                    _ => None,
-                });
-
-        // Check for module-qualified type variant: Module.Type.Variant
-        let qualified_variant_expr = variant_expr.or_else(|| {
-            let base_path = self.collect_path_segments(base_id)?;
-            let qn = QualifiedName::new(base_path.to_vec());
-
-            self.registry.lookup(&qn).and_then(|type_id| {
-                self.registry.lookup_variant(type_id, field).and_then(|v| {
-                    (v.arity == 0)
-                        .then(|| Expr::Variant(qn.clone(), field, smallvec![]))
-                })
+        // First check if it's a type variant pattern (takes priority).
+        let variant = self
+            .ast
+            .get_expr(base_id)
+            .cloned()
+            .and_then(|base| match base {
+                Expr::Var(name) => self
+                    .registry
+                    .lookup(&QualifiedName::local(name))
+                    .and_then(|type_id| {
+                        self.registry
+                            .lookup_variant(type_id, field)
+                            .map(|v| (QualifiedName::local(name), v.arity))
+                    }),
+                _ => None,
             })
-        });
+            .or_else(|| {
+                // Check for module-qualified type variant: Module.Type.Variant
+                let base_path = self.collect_path_segments(base_id)?;
+                let qn = QualifiedName::new(base_path.to_vec());
 
-        // If it's a type variant (simple or qualified), use that
-        qualified_variant_expr.or_else(|| {
-            let full_path = self.collect_path_segments(id);
+                self.registry.lookup(&qn).and_then(|type_id| {
+                    self.registry
+                        .lookup_variant(type_id, field)
+                        .map(|v| (qn.clone(), v.arity))
+                })
+            });
 
-            let is_module_path = full_path
-                .as_ref()
-                .and_then(|segs: &SmallVec<[StringId; 4]>| segs.first())
-                .is_some_and(|first| {
-                    self.arena
-                        .strings
-                        .get(*first)
-                        .is_some_and(|s| BUILTIN_MODULE_NAMES.contains(&s))
-                        || self.user_modules.contains(first)
-                });
+        match variant {
+            Some((qn, 0)) => Some(Expr::Variant(qn, field, smallvec![])),
+            Some(_) => None,
+            None => {
+                let full_path = self.collect_path_segments(id);
 
-            is_module_path.then(|| full_path.map(Expr::Path)).flatten()
-        })
+                let is_module_path =
+                    full_path
+                        .as_ref()
+                        .and_then(|segs: &SmallVec<[StringId; 4]>| segs.first())
+                        .is_some_and(|first| {
+                            self.arena.strings.get(*first).is_some_and(|s| {
+                                BUILTIN_MODULE_NAMES.contains(&s)
+                            }) || self.user_modules.contains(first)
+                        });
+
+                is_module_path.then(|| full_path.map(Expr::Path)).flatten()
+            }
+        }
     }
 
     fn resolve_call_expr(

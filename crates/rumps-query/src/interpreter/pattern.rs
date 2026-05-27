@@ -55,6 +55,11 @@ impl<I: IoContext> Interpreter<'_, I> {
             TypePattern::VariantBind(ref ty_name, var_name, _) => {
                 self.check_variant(val, ty_name, *var_name, span)
             }
+            TypePattern::NakedVariant(_)
+            | TypePattern::NakedVariantWildcard(_)
+            | TypePattern::NakedVariantBind(..) => {
+                typechecked!("naked variant pattern", "resolved type")
+            }
             TypePattern::Object(_) => match info {
                 Some(TypePatternInfo::Object(fields)) => Ok(self
                     .checked
@@ -199,6 +204,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                     val,
                     span,
                 }),
+            MatchPattern::NakedVariant(..) => {
+                typechecked!("naked variant pattern", "resolved type")
+            }
             MatchPattern::Object(fields) => {
                 self.try_match_object(scrutinee, fields, val, span)
             }
