@@ -265,8 +265,7 @@ impl InferCtx<'_> {
                 }
 
                 MatchPattern::Is(name, ty_id) => {
-                    let narrowed_ty =
-                        self.convert().ast_type_to_ty(*ty_id, &IndexMap::new());
+                    let narrowed_ty = self.ast_ty(*ty_id);
                     self.interp.match_targets.insert(pat_id, narrowed_ty);
 
                     // Function types cannot be inspected at runtime for
@@ -487,10 +486,7 @@ impl InferCtx<'_> {
                     // Now convert each to `TyId` (requires mutable self)
                     let covered: SmallVec<[TyId; 4]> = ty_ids
                         .into_iter()
-                        .map(|ty_id| {
-                            self.convert()
-                                .ast_type_to_ty(ty_id, &IndexMap::new())
-                        })
+                        .map(|ty_id| self.ast_ty(ty_id))
                         .collect();
 
                     if !members.iter().all(|m| covered.contains(m)) {

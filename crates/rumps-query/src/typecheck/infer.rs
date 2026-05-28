@@ -1021,6 +1021,9 @@ pub(crate) struct InferCtx<'a> {
     /// definitions. Enables resolution of bare associated type references
     /// like `:Index` to the concrete types defined in the current instance.
     pub(super) class_context: Option<ClassContext>,
+    /// Active type parameter substitutions for type expressions inside
+    /// generic function, closure, and instance method bodies.
+    pub(super) ty_substs: Vec<IndexMap<StringId, TyId>>,
     /// Current module path during typechecking (e.g., `Math.Vector`).
     ///
     /// `None` when at top-level; `Some(qn)` inside a module.
@@ -1099,6 +1102,7 @@ impl<'a> InferCtx<'a> {
             in_transaction: None,
             next_txn_id: 0,
             class_context: None,
+            ty_substs: Vec::new(),
             current_module: None,
             interactive,
             poly_param_vars: HashSet::new(),
@@ -2009,5 +2013,20 @@ impl<'a> InferCtx<'a> {
                 alias_type_expansions: self.interp.alias_type_expansions,
             })
         }
+    }
+
+    pub(super) fn cur_subst(&self) -> IndexMap<StringId, TyId> {
+        let mut subst = IndexMap::new();
+        self.ty_substs.iter().for_each(|s| {
+            s.iter().for_each(|(&name, &ty)| {
+                subst.insert(name, ty);
+            });
+        });
+        subst
+    }
+
+    pub(super) fn ast_ty(&mut self, id: AstTypeExprId) -> TyId {
+        let subst = self.cur_subst();
+        self.convert().ast_type_to_ty(id, &subst)
     }
 }

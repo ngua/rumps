@@ -1016,11 +1016,6 @@ impl SolveCtx<'_> {
             // Array: unify element types
             (Ty::Array(a), Ty::Array(b)) => self.unify_inner(*a, *b, span),
 
-            // Range coerces to Array[Int] (for Array HOFs)
-            (Ty::Range, Ty::Array(elem)) | (Ty::Array(elem), Ty::Range) => {
-                self.unify_inner(*elem, TyArena::INT, span)
-            }
-
             // Option: unify inner types
             (Ty::Option(a), Ty::Option(b)) => self.unify_inner(*a, *b, span),
 
@@ -3507,7 +3502,7 @@ impl SolveCtx<'_> {
                 } else if args.len() < params.len() {
                     // Partial application: unify supplied args with prefix
                     params.iter().zip(args.iter()).for_each(|(&p, &a)| {
-                        if let Err(e) = self.unify_types(p, a, span) {
+                        if let Err(e) = self.unify_types(a, p, span) {
                             self.errors.push(e);
                         }
                     });
@@ -3522,7 +3517,7 @@ impl SolveCtx<'_> {
                 } else {
                     // Full application
                     params.iter().zip(args.iter()).for_each(|(&p, &a)| {
-                        if let Err(e) = self.unify_types(p, a, span) {
+                        if let Err(e) = self.unify_types(a, p, span) {
                             self.errors.push(e);
                         }
                     });

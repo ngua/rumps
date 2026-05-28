@@ -594,6 +594,7 @@ impl InferCtx<'_> {
 
         self.env.push_scope();
         self.bind_params(params, &param_tys);
+        self.ty_substs.push(type_param_subst.clone());
 
         // Register type param vars as polymorphic parameters (cannot be refined)
         name_to_tv.values().for_each(|&tv| {
@@ -604,6 +605,7 @@ impl InferCtx<'_> {
         let body_ty = self.expr(body);
 
         // Pop parameter scope
+        self.ty_substs.pop();
         self.env.pop_scope();
 
         // Determine actual return type: use annotation if present, else body type
@@ -704,8 +706,7 @@ impl InferCtx<'_> {
         let ty = match ann {
             None => Some(self.expr(rhs)),
             Some(id) => {
-                let ann_ty =
-                    self.convert().ast_type_to_ty(*id, &IndexMap::new());
+                let ann_ty = self.ast_ty(*id);
                 let ann_span = self.ast.type_expr_span(*id).unwrap_or(span);
                 self.interp.let_targets.insert(rhs, ann_ty);
 
@@ -1577,6 +1578,7 @@ impl InferCtx<'_> {
 
         // Typecheck method body
         self.env.push_scope();
+        self.ty_substs.push((*type_param_subst).clone());
 
         // Bind parameters with user-provided types (or inferred).
         // For unannotated params, use expected types directly so that
@@ -1625,6 +1627,7 @@ impl InferCtx<'_> {
             .func(param_tys.iter().copied().collect(), ret_ty);
         self.interp.function_types.insert(method.body, fn_ty);
 
+        self.ty_substs.pop();
         self.env.pop_scope();
     }
 

@@ -507,6 +507,13 @@ impl InferCtx<'_> {
                                                     let result = self
                                                         .ty_arena
                                                         .apply(ty, &rename);
+                                                    self.closure_schemes
+                                                        .insert(
+                                                            id,
+                                                            Scheme::mono(
+                                                                result,
+                                                            ),
+                                                        );
 
                                                     // For parameterized user classes,
                                                     // register a deferred param call so
@@ -538,7 +545,11 @@ impl InferCtx<'_> {
                                                 }
                                             }
                                         }
-                                        _ => ty,
+                                        _ => {
+                                            self.closure_schemes
+                                                .insert(id, scheme);
+                                            ty
+                                        }
                                     }
                                 }
 
@@ -2068,7 +2079,8 @@ impl InferCtx<'_> {
         &mut self,
         params: &SmallVec<[(StringId, Option<AstTypeExprId>); 4]>,
     ) -> Vec<TyId> {
-        self.param_tys_with_subst(params, &IndexMap::new())
+        let subst = self.cur_subst();
+        self.param_tys_with_subst(params, &subst)
     }
 
     /// Infer types for function/closure parameters with type param substitution.
@@ -2183,6 +2195,7 @@ impl InferCtx<'_> {
 
         self.env.push_scope();
         self.bind_params(params, &param_tys);
+        self.ty_substs.push(type_param_subst.clone());
 
         // Register type param vars as polymorphic parameters (cannot be refined)
         name_to_tv.values().for_each(|&tv| {
@@ -2190,6 +2203,7 @@ impl InferCtx<'_> {
         });
 
         let body_ty = self.expr(body);
+        self.ty_substs.pop();
         self.env.pop_scope();
 
         // If return annotation present, unify body with it
@@ -3159,8 +3173,7 @@ impl InferCtx<'_> {
 
         match &pattern {
             TypePattern::Type(ty_id) => {
-                let target_ty =
-                    self.convert().ast_type_to_ty(*ty_id, &IndexMap::new());
+                let target_ty = self.ast_ty(*ty_id);
                 self.interp
                     .is_patterns
                     .insert(id, CheckedTypePatternInfo::Type(target_ty));
@@ -3287,9 +3300,7 @@ impl InferCtx<'_> {
                 let ftys = fields
                     .iter()
                     .map(|(name, ty_id)| {
-                        let fty = self
-                            .convert()
-                            .ast_type_to_ty(*ty_id, &IndexMap::new());
+                        let fty = self.ast_ty(*ty_id);
                         (*name, fty)
                     })
                     .collect::<Vec<_>>();
@@ -3326,7 +3337,7 @@ impl InferCtx<'_> {
         span: Span,
     ) -> TyId {
         let inner_ty = self.expr(inner_id);
-        let target_ty = self.convert().ast_type_to_ty(ty_id, &IndexMap::new());
+        let target_ty = self.ast_ty(ty_id);
         let tspan = self.ast.type_expr_span(ty_id).unwrap_or(span);
         self.interp.expr_targets.insert(id, target_ty);
         self.newtype_edge_checks.push((
@@ -3385,7 +3396,7 @@ impl InferCtx<'_> {
         span: Span,
     ) -> TyId {
         let inner_ty = self.expr(inner_id);
-        let target_ty = self.convert().ast_type_to_ty(ty_id, &IndexMap::new());
+        let target_ty = self.ast_ty(ty_id);
         let tspan = self.ast.type_expr_span(ty_id).unwrap_or(span);
         self.interp.expr_targets.insert(id, target_ty);
         self.read_checks.push((
@@ -3681,7 +3692,7 @@ impl InferCtx<'_> {
         ty_id: AstTypeExprId,
         span: Span,
     ) -> TyId {
-        let ann_ty = self.convert().ast_type_to_ty(ty_id, &IndexMap::new());
+        let ann_ty = self.ast_ty(ty_id);
         let tspan = self.ast.type_expr_span(ty_id).unwrap_or(span);
         self.interp.expr_targets.insert(id, ann_ty);
 
@@ -3825,10 +3836,8 @@ impl InferCtx<'_> {
         let seed_ty = self.expr(seed);
 
         // State parameter type: annotation or unify with seed
-        let state_ty = state_param
-            .1
-            .map(|id| self.convert().ast_type_to_ty(id, &IndexMap::new()))
-            .unwrap_or(seed_ty);
+        let state_ty =
+            state_param.1.map(|id| self.ast_ty(id)).unwrap_or(seed_ty);
 
         // Unify seed with state type
         self.unify(seed_ty, state_ty, span);
@@ -3841,8 +3850,7 @@ impl InferCtx<'_> {
 
         // Check cont_param annotation if present
         if let Some(ann_id) = cont_param.1 {
-            let ann_ty =
-                self.convert().ast_type_to_ty(ann_id, &IndexMap::new());
+            let ann_ty = self.ast_ty(ann_id);
             self.unify(cont_ty, ann_ty, span);
         }
 

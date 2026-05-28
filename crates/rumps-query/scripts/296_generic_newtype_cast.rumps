@@ -1,0 +1,16 @@
+fun main() {
+  write P.f(P.mk([1, 2, 3]))
+}
+
+module P {
+  +newtype A[T] = Array[T]
+
+  +fun mk[T](xs: Array[T]) -> A[T] {
+    xs as A[T]
+  }
+
+  +fun f[T](x: A[T]) -> Option[T] {
+    let y = x as Array[T]
+    :get(y, 0)
+  }
+}
