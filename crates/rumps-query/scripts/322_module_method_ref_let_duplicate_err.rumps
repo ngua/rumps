@@ -1,0 +1,10 @@
+; Module method reference `let`s participate in duplicate detection.
+
+fun main() {
+  write "unreachable"
+}
+
+module M {
+  +let len = Iterable:length
+  +let len = Iterable:length
+}

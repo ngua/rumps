@@ -1,0 +1,6 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; `if expr is Variant(x)` binds `x` in the then branch dependency walk.\n\nvariant Box = Box(Int)\n\nlet y = if Box.Box(5) is Box.Box(x) { x } else { 0 }\nlet x = y\n\nfun main() {\n  write y\n  write x\n}\n"
+---
+5
+5

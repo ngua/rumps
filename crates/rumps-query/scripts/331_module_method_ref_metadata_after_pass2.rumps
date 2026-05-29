@@ -1,0 +1,24 @@
+; Finalized module method-ref metadata survives module Pass `2`.
+
+variant Wrapper = Wrapper(Int)
+
+class MyTag C {
+  fun tag(x: C) -> String
+}
+
+class MyTag for Wrapper {
+  fun tag(x: Wrapper) -> String {
+    match x {
+      Wrapper.Wrapper(n) => { "tag:{n}" }
+    }
+  }
+}
+
+module Methods {
+  +let tag = MyTag:tag
+}
+
+fun main() {
+  let w = Wrapper.Wrapper(42)
+  write Methods.tag(w)
+}

@@ -1,0 +1,29 @@
+; Empty literal `let` bindings instantiate independently.
+
+import EmptyMod.{ mod-empty }
+
+fun main() {
+  let empty = []
+
+  let ints: Array[Int] = empty
+  let strs: Array[String] = empty
+  let fwd-ints: Array[Int] = fwd-empty
+  let fwd-strs: Array[String] = fwd-empty
+  let mod-ints: Array[Int] = mod-empty
+  let mod-strs: Array[String] = mod-empty
+
+  write Iterable:length(ints)
+  write Iterable:length(strs)
+  write Iterable:length(fwd-ints)
+  write Iterable:length(fwd-strs)
+  write Iterable:length(mod-ints)
+  write Iterable:length(mod-strs)
+  write ints
+  write strs
+}
+
+let fwd-empty = []
+
+module EmptyMod {
+  +let mod-empty = []
+}

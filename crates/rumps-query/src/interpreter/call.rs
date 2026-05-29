@@ -12,7 +12,9 @@ use crate::ast::{Expr, ExprId};
 use crate::env::{PrimCtx, PrimFn};
 use crate::intern::{QualifiedName, StringId};
 use crate::io::IoContext;
-use crate::typecheck::{ExprAux, RuntimeTyId, Ty, TyArena};
+use crate::typecheck::{
+    ClassShape, ExprAux, RuntimeTyId, Ty, TyArena, TyId, TyVar, TypeClass,
+};
 use crate::value::{
     CapturedEnv, FunctionDef, MapKey, Payload, TypeId, Value, ValueId,
     ValueMeta,
@@ -84,19 +86,35 @@ impl<I: IoContext> Interpreter<'_, I> {
         let arg_id = self.add_value(left, span);
 
         // Handle PartialApp via resolve to avoid nesting
-        if let Payload::PartialApp { callee, ref bound } = right {
-            self.resolve_partial_app(callee, bound, &[arg_id], span)
-                .await
-                .map(|value| {
-                    self.value_with_context_meta(value, self.expr_meta(call_id))
-                })
+        if let Payload::PartialApp {
+            callee,
+            ref bound,
+            expr_id,
+        } = right
+        {
+            self.resolve_partial_app(
+                callee,
+                bound,
+                expr_id,
+                &[arg_id],
+                Some(call_id),
+                span,
+            )
+            .await
+            .map(|value| {
+                let meta = self.expr_meta(call_id);
+                self.value_with_context_meta(value, meta)
+            })
         // `right.clone()` is unavoidable here: `maybe_partial_app` takes
         // ownership, but the fallthrough `match right` below also consumes
         // `right`. In practice the clone is cheap since callable values
         // hold `SmallVec` params and (for closures) an `Arc<CapturedEnv>`.
-        } else if let Some(partial) =
-            self.maybe_partial_app(right.clone(), &[arg_id], span)
-        {
+        } else if let Some(partial) = self.maybe_partial_app(
+            right.clone(),
+            &[arg_id],
+            Some(call_id),
+            span,
+        ) {
             Ok(self.value_for_expr(call_id, partial))
         } else {
             // Full application (arity == 1); dispatch as before
@@ -139,10 +157,15 @@ impl<I: IoContext> Interpreter<'_, I> {
                     })
                     .await
                     .map(|value| {
-                        self.value_with_context_meta(
-                            value,
-                            self.expr_meta(call_id),
-                        )
+                        let kind = self
+                            .checked
+                            .class_registry
+                            .lookup_by_name(class)
+                            .unwrap_or_else(|| {
+                                typechecked!("class method class", "known")
+                            });
+                        let meta = self.class_method_call_meta(kind, call_id);
+                        self.value_with_context_meta(value, meta)
                     }),
                 // Type checker guarantees rhs is callable
                 _ => typechecked!("|>", "Callable"),
@@ -172,9 +195,13 @@ impl<I: IoContext> Interpreter<'_, I> {
         // Push new scope for parameters
         self.env.scopes.push();
         self.bind_params(params, args, span);
+        let ty_subst = self.runtime_ty_subst(params, args);
+        self.runtime_ty_substs.push(ty_subst);
 
         // Evaluate body
         let result = self.eval(body).await;
+
+        self.runtime_ty_substs.pop();
 
         // Restore original scope stack
         self.env.scopes.restore(saved);
@@ -199,9 +226,13 @@ impl<I: IoContext> Interpreter<'_, I> {
         // Push new scope for parameters
         self.env.scopes.push();
         self.bind_params(params, args, span);
+        let ty_subst = self.runtime_ty_subst(params, args);
+        self.runtime_ty_substs.push(ty_subst);
 
         // Evaluate body
         let result = self.eval(body).await;
+
+        self.runtime_ty_substs.pop();
 
         // Pop parameter scope
         self.env.scopes.pop();
@@ -493,7 +524,9 @@ impl<I: IoContext> Interpreter<'_, I> {
             method,
             expr_id: Some(expr_id),
         };
-        if let Some(partial) = self.maybe_partial_app(cmf, &arg_ids, span) {
+        if let Some(partial) =
+            self.maybe_partial_app(cmf, &arg_ids, Some(expr_id), span)
+        {
             Ok(self.value_for_expr(expr_id, partial))
         } else {
             let kind = self
@@ -598,12 +631,14 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         dispatch: ClassDispatch,
     ) -> Result<Value> {
-        let inst = dispatch.dispatch_expr_id.and_then(|id| {
-            match &self.checked.expr(id).aux {
+        let inst = dispatch
+            .output_expr_id
+            .into_iter()
+            .chain(dispatch.dispatch_expr_id)
+            .find_map(|id| match &self.checked.expr(id).aux {
                 ExprAux::InstanceCall { recv, fun, .. } => Some((*recv, *fun)),
                 _ => None,
-            }
-        });
+            });
 
         if let Some((recv, fun)) = inst {
             let fn_name = match recv {
@@ -629,6 +664,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                     )
                 }
             }
+        } else if let Some(name) = self.hkt_method(&dispatch) {
+            self.invoke_user_instance_fn(name, dispatch).await
         } else if let Some(tid) = dispatch
             .args
             .first()
@@ -646,6 +683,104 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
         } else {
             self.dispatch_via_repr_or_builtin(dispatch).await
+        }
+    }
+
+    fn hkt_method(&self, dispatch: &ClassDispatch) -> Option<StringId> {
+        if matches!(
+            self.checked.class_registry.shape(dispatch.class),
+            ClassShape::Hkt { .. }
+        ) {
+            self.hkt_recv_arg(dispatch.class, dispatch.method)
+                .and_then(|idx| dispatch.args.get(idx).copied())
+                .and_then(|id| self.arena.value(id))
+                .and_then(|v| match &v.payload {
+                    Payload::Tuple(elems) => self
+                        .user_instances
+                        .lookup_tuple_method(
+                            dispatch.class,
+                            elems.len(),
+                            dispatch.method,
+                        )
+                        .or_else(|| {
+                            self.user_instances.lookup_method(
+                                dispatch.class,
+                                TypeId::TUPLE,
+                                dispatch.method,
+                            )
+                        }),
+                    _ => self.checked.types.to_type_id(v.ty).and_then(|tid| {
+                        self.user_instances.lookup_method(
+                            dispatch.class,
+                            tid,
+                            dispatch.method,
+                        )
+                    }),
+                })
+        } else {
+            None
+        }
+    }
+
+    fn hkt_recv_arg(&self, class: ClassId, method: StringId) -> Option<usize> {
+        let spec = self
+            .checked
+            .class_registry
+            .get(class)
+            .method(method, Span::default())
+            .ok()?;
+        let scheme = spec.scheme();
+        let var =
+            scheme.constraints.iter().find_map(|(var, cls)| match cls {
+                TypeClass::Hkt { id, .. } if *id == class => Some(*var),
+                _ => None,
+            })?;
+        self.checked.types.scheme_params(scheme).and_then(|params| {
+            params.iter().position(|&ty| self.ty_has_hkt_var(ty, var))
+        })
+    }
+
+    fn ty_has_hkt_var(&self, ty: TyId, var: TyVar) -> bool {
+        match self.checked.types.raw(ty) {
+            Ty::Var(v) => *v == var,
+            Ty::Array(t) | Ty::Option(t) => self.ty_has_hkt_var(*t, var),
+            Ty::Result(ok, err) | Ty::Map(ok, err) => {
+                self.ty_has_hkt_var(*ok, var) || self.ty_has_hkt_var(*err, var)
+            }
+            Ty::Fn(params, ret) => {
+                params.iter().any(|&t| self.ty_has_hkt_var(t, var))
+                    || self.ty_has_hkt_var(*ret, var)
+            }
+            Ty::Tuple(ts) | Ty::Union(_, ts) | Ty::Named(_, ts) => {
+                ts.iter().any(|&t| self.ty_has_hkt_var(t, var))
+            }
+            Ty::Object(fields) => fields
+                .values()
+                .any(|&field| self.ty_has_hkt_var(field, var)),
+            Ty::Apply(v, ts) => {
+                *v == var || ts.iter().any(|&t| self.ty_has_hkt_var(t, var))
+            }
+            Ty::AssocType(v, _, _) => *v == var,
+            Ty::Bool
+            | Ty::Int
+            | Ty::Word
+            | Ty::Float
+            | Ty::Char
+            | Ty::String
+            | Ty::Unit
+            | Ty::Time
+            | Ty::Range
+            | Ty::Json
+            | Ty::Ordering
+            | Ty::DataStatus
+            | Ty::FilePath
+            | Ty::Path
+            | Ty::Regex
+            | Ty::RuntimeError
+            | Ty::Local
+            | Ty::Global
+            | Ty::Unknown
+            | Ty::Error => false,
         }
     }
 
@@ -788,15 +923,29 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let info = self.checked.expr(id);
                 match &info.aux {
                     ExprAux::HofCall { out, .. } => OutputMeta::Ty(*out),
-                    _ if class == ClassId::TRY_INTO => self
-                        .approved_newtype_edge_meta(id)
-                        .map(|meta| {
-                            self.checked.types.result(
-                                meta.ty,
-                                RuntimeTyId::from(TyArena::STRING),
+                    _ if class == ClassId::TRY_INTO => {
+                        let target = self
+                            .approved_newtype_edge_meta(id)
+                            .map(|meta| meta.ty)
+                            .or_else(|| {
+                                let ty = self.checked_expr_meta(id).ty;
+                                if self.checked.types.to_type_id(ty)
+                                    == Some(TypeId::RESULT)
+                                {
+                                    None
+                                } else {
+                                    Some(ty)
+                                }
+                            });
+                        target.map_or(OutputMeta::Expr(id), |ty| {
+                            OutputMeta::Ty(
+                                self.checked.types.result(
+                                    ty,
+                                    RuntimeTyId::from(TyArena::STRING),
+                                ),
                             )
                         })
-                        .map_or(OutputMeta::Expr(id), OutputMeta::Ty),
+                    }
                     _ => OutputMeta::Expr(id),
                 }
             }
@@ -815,6 +964,25 @@ impl<I: IoContext> Interpreter<'_, I> {
                     })
                 })
                 .map_or(OutputMeta::Payload, OutputMeta::Ty),
+        }
+    }
+
+    fn class_method_call_meta(
+        &mut self,
+        class: ClassId,
+        id: ExprId,
+    ) -> ValueMeta {
+        let meta = self.expr_meta(id);
+        if class == ClassId::TRY_INTO
+            && self.checked.types.to_type_id(meta.ty) != Some(TypeId::RESULT)
+        {
+            let ty = self
+                .checked
+                .types
+                .result(meta.ty, RuntimeTyId::from(TyArena::STRING));
+            self.checked.types.meta(ty)
+        } else {
+            meta
         }
     }
 
@@ -880,7 +1048,8 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Value {
         match output {
             OutputMeta::Expr(id) => {
-                self.value_with_context_meta(value, self.expr_meta(id))
+                let meta = self.expr_meta(id);
+                self.value_with_context_meta(value, meta)
             }
             OutputMeta::Ty(ty) => {
                 let meta = match self.checked.types.get(ty) {
@@ -1172,7 +1341,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .dispatch_unary(class, method, &mut ctx, &v)
             }
             Some(MethodFn::Nullary(_)) => {
-                let id = expr_id.unwrap_or_else(|| {
+                let id = output_id.or(expr_id).unwrap_or_else(|| {
                     typechecked!("nullary class method", "expression id")
                 });
                 let ty_id = self.checked.expr(id).ty;
@@ -1192,7 +1361,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     self.arena.value(args[0]).cloned().unwrap_or_else(|| {
                         invariant!("class method arg in arena")
                     });
-                let id = expr_id.unwrap_or_else(|| {
+                let id = output_id.or(expr_id).unwrap_or_else(|| {
                     typechecked!("convert class method", "expression id")
                 });
                 let edge = output_id
@@ -1335,10 +1504,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .invoke_closure(&params, body, &env, args, span)
                     .await?;
                 let meta = self.checked.types.meta(ret);
-                Ok(self.add_value(
-                    self.value_with_context_meta(result, meta),
-                    span,
-                ))
+                let result = self.value_with_context_meta(result, meta);
+                Ok(self.add_value(result, span))
             }
             Payload::Function {
                 params, ret, body, ..
@@ -1346,10 +1513,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let result =
                     self.invoke_function(&params, body, args, span).await?;
                 let meta = self.checked.types.meta(ret);
-                Ok(self.add_value(
-                    self.value_with_context_meta(result, meta),
-                    span,
-                ))
+                let result = self.value_with_context_meta(result, meta);
+                Ok(self.add_value(result, span))
             }
             Payload::ModuleFn { path } => {
                 let result = self.invoke_module_fn(&path, args, span).await?;
@@ -1397,9 +1562,15 @@ impl<I: IoContext> Interpreter<'_, I> {
                 );
                 Ok(self.add_value(result, span))
             }
-            Payload::PartialApp { callee, bound } => {
+            Payload::PartialApp {
+                callee,
+                bound,
+                expr_id,
+            } => {
                 let result = self
-                    .resolve_partial_app(callee, &bound, args, span)
+                    .resolve_partial_app(
+                        callee, &bound, expr_id, args, None, span,
+                    )
                     .await?;
                 let result = self.callable_ret(callee_ty).map_or(
                     result.clone(),
@@ -1489,6 +1660,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 if let Some(partial) = self.maybe_partial_app(
                     Payload::ModuleFn { path: path.clone() },
                     &vals,
+                    Some(call_id),
                     span,
                 ) {
                     Ok(self.value_for_expr(call_id, partial))
@@ -1505,6 +1677,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                         var,
                     },
                     &vals,
+                    Some(call_id),
                     span,
                 ) {
                     Ok(self.value_for_expr(call_id, partial))
@@ -1526,6 +1699,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                         expr_id,
                     },
                     &vals,
+                    Some(call_id),
                     span,
                 ) {
                     Ok(self.value_for_expr(call_id, partial))
@@ -1540,10 +1714,15 @@ impl<I: IoContext> Interpreter<'_, I> {
                     })
                     .await
                     .map(|value| {
-                        self.value_with_context_meta(
-                            value,
-                            self.expr_meta(call_id),
-                        )
+                        let kind = self
+                            .checked
+                            .class_registry
+                            .lookup_by_name(class)
+                            .unwrap_or_else(|| {
+                                typechecked!("class method class", "known")
+                            });
+                        let meta = self.class_method_call_meta(kind, call_id);
+                        self.value_with_context_meta(value, meta)
                     })
                 }
             }
@@ -1558,16 +1737,25 @@ impl<I: IoContext> Interpreter<'_, I> {
                 Ok(self
                     .value_for_expr(call_id, Payload::LoopContinue(state_id)))
             }
-            Payload::PartialApp { callee, bound } => {
+            Payload::PartialApp {
+                callee,
+                bound,
+                expr_id,
+            } => {
                 let vals = self.eval_args(args).await?;
-                self.resolve_partial_app(callee, &bound, &vals, span)
-                    .await
-                    .map(|value| {
-                        self.value_with_context_meta(
-                            value,
-                            self.expr_meta(call_id),
-                        )
-                    })
+                self.resolve_partial_app(
+                    callee,
+                    &bound,
+                    expr_id,
+                    &vals,
+                    Some(call_id),
+                    span,
+                )
+                .await
+                .map(|value| {
+                    let meta = self.expr_meta(call_id);
+                    self.value_with_context_meta(value, meta)
+                })
             }
             // Type checker guarantees callee is callable
             _ => typechecked!("call", "Callable"),
@@ -1587,8 +1775,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                 ret: c.ret,
                 body: c.body,
             };
-            let partial =
-                self.maybe_partial_app(f, &vals, c.span).unwrap_or_else(|| {
+            let partial = self
+                .maybe_partial_app(f, &vals, Some(c.call_id), c.span)
+                .unwrap_or_else(|| {
                     invariant!("partial app when under-applied")
                 });
             Ok(self.value_for_expr(c.call_id, partial))
@@ -1596,7 +1785,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             let value = self
                 .invoke_function(c.params, c.body, &vals, c.span)
                 .await?;
-            Ok(self.value_with_context_meta(value, self.expr_meta(c.call_id)))
+            let meta = self.expr_meta(c.call_id);
+            Ok(self.value_with_context_meta(value, meta))
         }
     }
 
@@ -1614,7 +1804,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 env: c.env.clone().into(),
             };
             let partial = self
-                .maybe_partial_app(closure, &vals, c.span)
+                .maybe_partial_app(closure, &vals, Some(c.call_id), c.span)
                 .unwrap_or_else(|| {
                     invariant!("partial app when under-applied")
                 });
@@ -1623,7 +1813,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             let value = self
                 .invoke_closure(c.params, c.body, c.env, &vals, c.span)
                 .await?;
-            Ok(self.value_with_context_meta(value, self.expr_meta(c.call_id)))
+            let meta = self.expr_meta(c.call_id);
+            Ok(self.value_with_context_meta(value, meta))
         }
     }
 
@@ -1656,7 +1847,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     },
                 )
             }
-            Payload::PartialApp { callee, bound } => self
+            Payload::PartialApp { callee, bound, .. } => self
                 .arena
                 .payload(*callee)
                 .and_then(|c| self.callable_arity(c))
@@ -1674,6 +1865,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         callee: Payload,
         args: &[ValueId],
+        expr_id: Option<ExprId>,
         span: Span,
     ) -> Option<Payload> {
         let arity = self.callable_arity(&callee)?;
@@ -1682,6 +1874,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Some(Payload::PartialApp {
                 callee: callee_id,
                 bound: args.iter().copied().collect(),
+                expr_id,
             })
         } else {
             None
@@ -1697,7 +1890,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         callee_id: ValueId,
         bound: &[ValueId],
+        partial_expr_id: Option<ExprId>,
         new_args: &[ValueId],
+        output_expr_id: Option<ExprId>,
         span: Span,
     ) -> Result<Value> {
         let all_args: SmallVec<[ValueId; 4]> =
@@ -1719,6 +1914,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             let partial = Payload::PartialApp {
                 callee: callee_id,
                 bound: all_args,
+                expr_id: output_expr_id.or(partial_expr_id),
             };
             Ok(self.value_from_payload(partial))
         } else {
@@ -1748,7 +1944,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                         class,
                         method,
                         dispatch_expr_id: expr_id,
-                        output_expr_id: None,
+                        output_expr_id: output_expr_id.or(partial_expr_id),
                         args: SmallVec::from_slice(&all_args),
                         span,
                     })
@@ -1807,10 +2003,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                                 || invariant!("parameter value in arena"),
                             );
                         let meta = self.checked.types.union_meta(*ty, val.repr);
-                        self.add_value(
-                            self.value_with_context_meta(val, meta),
-                            span,
-                        )
+                        let val = self.value_with_context_meta(val, meta);
+                        self.add_value(val, span)
                     }
                     _ => *val_id,
                 };

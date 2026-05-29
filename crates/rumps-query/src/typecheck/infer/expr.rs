@@ -10,7 +10,7 @@ use std::iter;
 use indexmap::IndexMap;
 use smallvec::{smallvec, SmallVec};
 
-use super::{Constraint, HoistCtx, InferCtx};
+use super::{Constraint, InferCtx};
 use crate::ast::{
     ArrayElem, AstTypeExpr, AstTypeExprId, BinOp, DbRef, Expr, ExprId,
     Intrinsic, JsonAccessKey, JsonAccessKind, Literal, MatchArm, NumericLit,
@@ -19,11 +19,12 @@ use crate::ast::{
 };
 use crate::env::TxnReq;
 use crate::intern::{QualifiedName, StringId};
+use crate::typecheck::env::MethodRefOrigin;
 use crate::typecheck::error::TypeError;
 use crate::typecheck::instance::Instance;
 use crate::typecheck::ty::{
-    ClassShape, MethodSpec, Rename, Scheme, TrackKind, Ty, TyArena, TyId,
-    TyVar, TypeClass,
+    ClassShape, MethodSpec, Scheme, TrackKind, Ty, TyArena, TyId, TyVar,
+    TypeClass,
 };
 use crate::typecheck::CheckedTypePatternInfo;
 use crate::value::{TypeDef, TypeId};
@@ -456,101 +457,48 @@ impl InferCtx<'_> {
                         } else {
                             match spec {
                                 MethodSpec::Standard(scheme) => {
-                                    // For standard method refs, instantiate the scheme.
-                                    // If type args provided, substitute them.
                                     let (ty, constraints) = scheme.instantiate(
                                         &mut self.uf,
                                         &mut self.ty_arena,
                                     );
-                                    match (
-                                        type_args.first(),
-                                        constraints.first(),
-                                    ) {
-                                        (
-                                            Some(&arg_id),
-                                            Some(&(var_id, ref class)),
-                                        ) => {
-                                            // For parameterized classes, the type arg
-                                            // corresponds to the class param (inside the
-                                            // `Concrete` constraint), not the
-                                            // constraint's subject (the self var).
-                                            let target_ty = match class {
-                                                TypeClass::Concrete {
-                                                    ref params,
-                                                    ..
-                                                } => params
-                                                    .first()
-                                                    .copied()
-                                                    .unwrap_or(var_id),
-                                                _ => var_id,
-                                            };
-                                            // Check the target is actually a `Ty::Var`
-                                            let v_opt = match self
-                                                .ty_arena
-                                                .get(target_ty)
-                                            {
-                                                Ty::Var(v) => Some(*v),
-                                                _ => None,
-                                            };
-                                            match v_opt {
-                                                Some(v) => {
-                                                    let arg_ty = self
-                                                        .convert()
-                                                        .ast_type_to_ty(
-                                                            arg_id,
-                                                            &empty_subst,
-                                                        );
-                                                    let rename = Rename(
-                                                        iter::once((v, arg_ty))
-                                                            .collect(),
-                                                    );
-                                                    let result = self
-                                                        .ty_arena
-                                                        .apply(ty, &rename);
-                                                    self.closure_schemes
-                                                        .insert(
-                                                            id,
-                                                            Scheme::mono(
-                                                                result,
-                                                            ),
-                                                        );
-
-                                                    // For parameterized user classes,
-                                                    // register a deferred param call so
-                                                    // the correct instance function is
-                                                    // resolved after constraint solving.
-                                                    // `var_id` is the self-var (receiver);
-                                                    // `arg_ty` is the concrete class arg.
-                                                    if matches!(
-                                                        class,
-                                                        TypeClass::Concrete { ref params, .. } if !params.is_empty()
-                                                    ) && k.idx() >= ClassId::BUILTIN_COUNT
-                                                    {
-                                                        self.deferred_param_calls.push((
-                                                            id, k, method,
-                                                            var_id, arg_ty,
-                                                        ));
-                                                    }
-
-                                                    result
-                                                }
-                                                None => {
-                                                    self.error(TypeError::Custom {
-                                                        msg:
-                                                            "scheme var is not Ty::Var"
-                                                                .into(),
-                                                        span,
-                                                    });
-                                                    TyArena::ERROR
-                                                }
-                                            }
-                                        }
-                                        _ => {
-                                            self.closure_schemes
-                                                .insert(id, scheme);
-                                            ty
+                                    if let (
+                                        Some(&arg_id),
+                                        Some(&(recv, ref class)),
+                                    ) =
+                                        (type_args.first(), constraints.first())
+                                    {
+                                        let target = match class {
+                                            TypeClass::Concrete {
+                                                ref params,
+                                                ..
+                                            } => params
+                                                .first()
+                                                .copied()
+                                                .unwrap_or(recv),
+                                            _ => recv,
+                                        };
+                                        let arg_ty =
+                                            self.convert().ast_type_to_ty(
+                                                arg_id,
+                                                &empty_subst,
+                                            );
+                                        self.unify(target, arg_ty, span);
+                                        if matches!(
+                                            class,
+                                            TypeClass::Concrete { ref params, .. } if !params.is_empty()
+                                        ) && k.idx()
+                                            >= ClassId::BUILTIN_COUNT
+                                        {
+                                            self.deferred_param_calls.push((
+                                                id, k, method, recv, arg_ty,
+                                            ));
                                         }
                                     }
+                                    self.emit_class_constraints(
+                                        constraints,
+                                        span,
+                                    );
+                                    ty
                                 }
 
                                 MethodSpec::Tracked {
@@ -572,7 +520,10 @@ impl InferCtx<'_> {
                                         ),
                                         span,
                                     });
-                                    self.interp.set_concrete_expr_ty(id, tv);
+                                    if !type_args.is_empty() {
+                                        self.interp
+                                            .set_concrete_expr_ty(id, tv);
+                                    }
                                     self.ty_arena.func(smallvec![], tv)
                                 }
 
@@ -630,15 +581,6 @@ impl InferCtx<'_> {
                                                 smallvec![input_ty],
                                                 target_ty,
                                             );
-                                            let scheme = Scheme {
-                                                vars: smallvec![input_var],
-                                                ty: fn_ty,
-                                                constraints: smallvec::smallvec![
-                                                    (input_var, class)
-                                                ],
-                                            };
-                                            self.closure_schemes
-                                                .insert(id, scheme);
                                             self.newtype_edge_checks.push((
                                                 id,
                                                 input_ty,
@@ -693,18 +635,8 @@ impl InferCtx<'_> {
                                     let ret_ty = self
                                         .ty_arena
                                         .result(target_ty, TyArena::STRING);
-                                    let fn_ty = self
-                                        .ty_arena
-                                        .func(smallvec![input_ty], ret_ty);
-                                    let scheme = Scheme {
-                                        vars: smallvec![input_var],
-                                        ty: fn_ty,
-                                        constraints: smallvec::smallvec![(
-                                            input_var, class
-                                        )],
-                                    };
-                                    self.closure_schemes.insert(id, scheme);
-                                    fn_ty
+                                    self.ty_arena
+                                        .func(smallvec![input_ty], ret_ty)
                                 }
                             }
                         }
@@ -1292,6 +1224,9 @@ impl InferCtx<'_> {
                     span,
                 });
                 self.record_convert_ref_newtype_edge(id, rhs_id, &args, span);
+                self.record_method_ref_call(
+                    id, rhs_id, rhs_ty, &args, result, span,
+                );
                 result
             }
 
@@ -2119,12 +2054,12 @@ impl InferCtx<'_> {
     /// If return annotation present, unifies body type with it.
     ///
     /// For generic closures (`[T](x: T) -> T => x`), type parameters are bound
-    /// as fresh type variables before inferring parameter/return types. The full
-    /// type scheme (with quantified vars and constraints) is stored in
-    /// `closure_schemes` for proper generalization when bound via `let`.
+    /// as fresh type variables before inferring parameter/return types.
+    /// Default qualified `let` generalization captures the resulting function
+    /// type and reachable constraints when the closure is bound.
     fn closure(
         &mut self,
-        expr_id: ExprId,
+        _expr_id: ExprId,
         type_params: &SmallVec<[TypeParam; 2]>,
         params: &SmallVec<[(StringId, Option<AstTypeExprId>); 4]>,
         ret: Option<&AstTypeExprId>,
@@ -2147,19 +2082,16 @@ impl InferCtx<'_> {
             })
             .collect();
 
-        // Build scheme constraints (for storing in closure_schemes)
-        let mut scheme_constraints: SmallVec<[(TyVar, TypeClass<TyId>); 2]> =
-            SmallVec::new();
-
         // Emit constraints for each user-specified bound
         type_params.iter().for_each(|tp| {
             let tv = name_to_tv[&tp.name];
             let ty = self.ty_arena.alloc(Ty::Var(tv));
+            self.let_tv_names.insert(tv, tp.name);
 
             tp.constraints.iter().for_each(|c| {
                 let class =
                     self.convert().ast_class_to_ty_class(c, &type_param_subst);
-                scheme_constraints.push((tv, class.clone()));
+                self.let_tv_cs.push((tv, class.clone()));
 
                 // Emit constraint for body inference
                 self.constrain(Constraint::Class {
@@ -2176,7 +2108,7 @@ impl InferCtx<'_> {
                     .into_iter()
                     .for_each(|sup| {
                         if let Some(sc) = class.with_tag(sup) {
-                            scheme_constraints.push((tv, sc.clone()));
+                            self.let_tv_cs.push((tv, sc.clone()));
                             self.constrain(Constraint::Class {
                                 ty,
                                 class: sc,
@@ -2188,10 +2120,6 @@ impl InferCtx<'_> {
         });
 
         let param_tys = self.param_tys_with_subst(params, &type_param_subst);
-
-        // Snapshot the constraint count so we can scan only the
-        // constraints emitted by this closure's body.
-        let body_constraint_start = self.constraints.len();
 
         self.env.push_scope();
         self.bind_params(params, &param_tys);
@@ -2221,41 +2149,6 @@ impl InferCtx<'_> {
         let param_sv: SmallVec<[TyId; 4]> = param_tys.into_iter().collect();
         let fn_ty = self.ty_arena.func(param_sv, ret_ty);
         self.interp.function_types.insert(body, fn_ty);
-
-        // If there are type params, store the scheme for let binding generalization
-        if !type_params.is_empty() {
-            let tv_names: HashMap<TyVar, StringId> =
-                name_to_tv.iter().map(|(&name, &tv)| (tv, name)).collect();
-            let vars: SmallVec<[TyVar; 4]> =
-                name_to_tv.values().copied().collect();
-            let declared_tvs: HashSet<TyVar> = vars.iter().copied().collect();
-
-            // Phase 3: harvest body-emitted `Class` constraints
-            // transitively linked to quantifying vars.
-            self.hoist.harvest_body_class_constraints(
-                &mut HoistCtx {
-                    env: &mut self.env,
-                    uf: &mut self.uf,
-                    ty_arena: &mut self.ty_arena,
-                    constraints: &mut self.constraints,
-                    errors: &mut self.errors,
-                    current_module: &self.current_module,
-                },
-                body_constraint_start,
-                &vars,
-                &mut scheme_constraints,
-                &declared_tvs,
-                &tv_names,
-            );
-
-            let scheme = Scheme {
-                vars,
-                ty: fn_ty,
-                constraints: scheme_constraints,
-            };
-            self.closure_schemes.insert(expr_id, scheme);
-            self.closure_tv_names.insert(expr_id, tv_names);
-        }
 
         fn_ty
     }
@@ -2358,7 +2251,409 @@ impl InferCtx<'_> {
             &call_arg_tys,
             span,
         );
+        self.record_method_ref_call(
+            call_id,
+            callee_id,
+            callee_ty,
+            &call_arg_tys,
+            ret,
+            span,
+        );
         ret
+    }
+
+    fn record_method_ref_call(
+        &mut self,
+        call_id: ExprId,
+        callee_id: ExprId,
+        callee_ty: TyId,
+        args: &SmallVec<[TyId; 4]>,
+        ret: TyId,
+        span: Span,
+    ) {
+        let origin = self.method_ref_origin_for_callee(callee_id);
+        if let Some(origin) = origin {
+            self.record_method_ref_origin_call(
+                call_id, origin, callee_ty, args, ret, span,
+            );
+        }
+    }
+
+    fn method_ref_origin_for_callee(
+        &self,
+        callee_id: ExprId,
+    ) -> Option<MethodRefOrigin> {
+        self.ast.get_expr(callee_id).and_then(|expr| match expr {
+            Expr::Var(name) => self.env.lookup_method_ref_origin(*name),
+            Expr::Path(segments) => {
+                segments.split_last().and_then(|(&member, mod_segments)| {
+                    let mod_qn = QualifiedName::new(mod_segments.to_vec());
+                    self.env
+                        .lookup_user_module_member(&mod_qn, member)
+                        .and_then(|member| member.method_origin)
+                })
+            }
+            Expr::Field(base, member) => {
+                self.ast.get_expr(*base).and_then(|e| match e {
+                    Expr::Var(module) => {
+                        let mod_qn = QualifiedName::local(*module);
+                        self.env
+                            .lookup_user_module_member(&mod_qn, *member)
+                            .and_then(|member| member.method_origin)
+                    }
+                    _ => None,
+                })
+            }
+            Expr::Call(callee, args) => self
+                .method_ref_origin_for_callee(*callee)
+                .and_then(|origin| {
+                    let applied = origin.applied + args.len();
+                    self.expr_method_ref_arity(origin)
+                        .filter(|&arity| applied < arity)
+                        .map(|_| MethodRefOrigin { applied, ..origin })
+                }),
+            _ => None,
+        })
+    }
+
+    fn expr_method_ref_arity(&self, origin: MethodRefOrigin) -> Option<usize> {
+        self.env
+            .class_def(origin.class)
+            .method(origin.method, Span::default())
+            .ok()
+            .and_then(|spec| spec.scheme().arity(&self.ty_arena))
+    }
+
+    fn record_method_ref_origin_call(
+        &mut self,
+        call_id: ExprId,
+        origin: MethodRefOrigin,
+        callee_ty: TyId,
+        args: &SmallVec<[TyId; 4]>,
+        ret: TyId,
+        span: Span,
+    ) {
+        match self
+            .env
+            .class_def(origin.class)
+            .method(origin.method, span)
+            .cloned()
+        {
+            Ok(spec) => {
+                let (fn_ty, constraints) =
+                    spec.scheme().instantiate(&mut self.uf, &mut self.ty_arena);
+                let (params, sig_ret) = match self.ty_arena.get(fn_ty) {
+                    Ty::Fn(params, ret) => (params.clone(), *ret),
+                    _ => {
+                        self.error(TypeError::Custom {
+                            msg: "class method scheme is not a function type"
+                                .into(),
+                            span,
+                        });
+                        (smallvec![], TyArena::ERROR)
+                    }
+                };
+                let applied = origin.applied.min(params.len());
+                let callee_sig = if applied == 0 {
+                    fn_ty
+                } else {
+                    let remaining: SmallVec<[TyId; 4]> =
+                        params.iter().skip(applied).copied().collect();
+                    self.ty_arena.func(remaining, sig_ret)
+                };
+                self.unify(callee_sig, callee_ty, span);
+                params.iter().skip(applied).zip(args.iter()).for_each(
+                    |(&param, &arg)| {
+                        self.unify(arg, param, span);
+                    },
+                );
+                let used = applied + args.len();
+                if used < params.len() {
+                    let remaining: SmallVec<[TyId; 4]> =
+                        params.iter().skip(used).copied().collect();
+                    let partial = self.ty_arena.func(remaining, sig_ret);
+                    self.unify(partial, ret, span);
+                } else {
+                    self.unify(sig_ret, ret, span);
+                }
+                let is_full = used >= params.len();
+                match &spec {
+                    MethodSpec::Standard(_) => {}
+                    MethodSpec::Tracked { track, .. } => match track {
+                        TrackKind::Mempty => {
+                            self.interp.set_concrete_expr_ty(call_id, sig_ret);
+                        }
+                        TrackKind::Convert if is_full => {
+                            self.interp.set_expr_ty(call_id, sig_ret);
+                            args.first()
+                                .copied()
+                                .filter(|_| origin.applied == 0)
+                                .into_iter()
+                                .for_each(|from| {
+                                    self.newtype_edge_checks.push((
+                                        call_id,
+                                        from,
+                                        sig_ret,
+                                        span,
+                                        self.current_module.clone(),
+                                    ));
+                                });
+                        }
+                        TrackKind::Convert => {}
+                        TrackKind::ConvertResultInner if is_full => {
+                            let inner = match self.ty_arena.get(sig_ret) {
+                                Ty::Result(ok, _) => *ok,
+                                _ => {
+                                    self.error(TypeError::Custom {
+                                        msg:
+                                        "ConvertResultInner expects Result type"
+                                            .into(),
+                                        span,
+                                    });
+                                    TyArena::ERROR
+                                }
+                            };
+                            self.interp.set_expr_ty(call_id, inner);
+                            args.first()
+                                .copied()
+                                .filter(|_| origin.applied == 0)
+                                .into_iter()
+                                .for_each(|from| {
+                                    self.newtype_edge_checks.push((
+                                        call_id,
+                                        from,
+                                        inner,
+                                        span,
+                                        self.current_module.clone(),
+                                    ));
+                                });
+                        }
+                        TrackKind::ConvertResultInner => {}
+                    },
+                }
+                self.record_method_ref_dispatch(
+                    call_id,
+                    origin,
+                    &constraints,
+                    &params,
+                    args,
+                    span,
+                );
+            }
+            Err(e) => self.error(e),
+        }
+    }
+
+    fn record_method_ref_dispatch(
+        &mut self,
+        call_id: ExprId,
+        origin: MethodRefOrigin,
+        constraints: &[(TyId, TypeClass<TyId>)],
+        params: &SmallVec<[TyId; 4]>,
+        args: &SmallVec<[TyId; 4]>,
+        span: Span,
+    ) {
+        if origin.class.idx() >= ClassId::BUILTIN_COUNT {
+            let lookup_ty = if self.method_ref_is_hkt_user(origin.class) {
+                self.method_ref_hkt_current_arg(
+                    origin.class,
+                    constraints,
+                    params,
+                    origin.applied,
+                    args,
+                )
+                .or_else(|| {
+                    self.method_ref_hkt_container(origin.class, constraints)
+                })
+            } else {
+                args.first().copied()
+            };
+            if let Some(ty) = lookup_ty {
+                let type_id = self.nominal_type_id(ty);
+                match type_id {
+                    Some(tid)
+                        if self
+                            .check_instance_available(origin.class, tid, span)
+                            .is_some() =>
+                    {
+                        self.set_instance_call(call_id, tid);
+                    }
+                    _ => {
+                        self.deferred_inst_calls.push((
+                            call_id,
+                            ty,
+                            origin.class,
+                        ));
+                    }
+                }
+            };
+
+            if self.method_ref_is_param_user(origin.class) {
+                args.first()
+                    .copied()
+                    .filter(|_| origin.applied == 0)
+                    .zip(origin.class_arg.or_else(|| {
+                        self.method_ref_param_class_arg(
+                            origin.class,
+                            constraints,
+                        )
+                    }))
+                    .into_iter()
+                    .for_each(|(recv, class_arg)| {
+                        self.deferred_param_calls.push((
+                            call_id,
+                            origin.class,
+                            origin.method,
+                            recv,
+                            class_arg,
+                        ));
+                    });
+            }
+
+            if self.method_ref_is_hkt_user(origin.class) {
+                lookup_ty.into_iter().for_each(|ty| {
+                    self.deferred_hkt_user_calls.push((
+                        call_id,
+                        origin.class,
+                        origin.method,
+                        ty,
+                    ));
+                });
+            }
+        }
+    }
+
+    fn method_ref_hkt_current_arg(
+        &self,
+        class: ClassId,
+        constraints: &[(TyId, TypeClass<TyId>)],
+        params: &SmallVec<[TyId; 4]>,
+        applied: usize,
+        args: &SmallVec<[TyId; 4]>,
+    ) -> Option<TyId> {
+        self.method_ref_hkt_recv_param(class, constraints, params)
+            .and_then(|idx| idx.checked_sub(applied))
+            .and_then(|idx| args.get(idx).copied())
+    }
+
+    fn method_ref_hkt_recv_param(
+        &self,
+        class: ClassId,
+        constraints: &[(TyId, TypeClass<TyId>)],
+        params: &SmallVec<[TyId; 4]>,
+    ) -> Option<usize> {
+        let var = constraints.iter().find_map(|(ty, c)| match c {
+            TypeClass::Hkt { id, .. } if *id == class => {
+                match self.ty_arena.get(*ty) {
+                    Ty::Var(v) => Some(*v),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })?;
+        params
+            .iter()
+            .position(|&ty| self.method_ref_ty_has_var(ty, var))
+    }
+
+    fn method_ref_ty_has_var(&self, ty: TyId, var: TyVar) -> bool {
+        match self.ty_arena.get(ty) {
+            Ty::Var(v) => *v == var,
+            Ty::Array(t) | Ty::Option(t) => self.method_ref_ty_has_var(*t, var),
+            Ty::Result(ok, err) | Ty::Map(ok, err) => {
+                self.method_ref_ty_has_var(*ok, var)
+                    || self.method_ref_ty_has_var(*err, var)
+            }
+            Ty::Tuple(ts) | Ty::Union(_, ts) | Ty::Named(_, ts) => {
+                ts.iter().any(|&ty| self.method_ref_ty_has_var(ty, var))
+            }
+            Ty::Fn(params, ret) => {
+                params.iter().any(|&ty| self.method_ref_ty_has_var(ty, var))
+                    || self.method_ref_ty_has_var(*ret, var)
+            }
+            Ty::Object(fields) => fields
+                .values()
+                .any(|&ty| self.method_ref_ty_has_var(ty, var)),
+            Ty::Apply(v, args) => {
+                *v == var
+                    || args
+                        .iter()
+                        .any(|&ty| self.method_ref_ty_has_var(ty, var))
+            }
+            Ty::AssocType(v, _, _) => *v == var,
+            Ty::Bool
+            | Ty::Int
+            | Ty::Word
+            | Ty::Float
+            | Ty::Char
+            | Ty::String
+            | Ty::Unit
+            | Ty::Time
+            | Ty::Range
+            | Ty::Json
+            | Ty::Ordering
+            | Ty::DataStatus
+            | Ty::FilePath
+            | Ty::Path
+            | Ty::Regex
+            | Ty::RuntimeError
+            | Ty::Local
+            | Ty::Global
+            | Ty::Unknown
+            | Ty::Error => false,
+        }
+    }
+
+    fn method_ref_hkt_container(
+        &self,
+        class: ClassId,
+        constraints: &[(TyId, TypeClass<TyId>)],
+    ) -> Option<TyId> {
+        if matches!(
+            self.env.class_registry().shape(class),
+            ClassShape::Hkt { .. }
+        ) {
+            constraints.iter().find_map(|(ty, c)| match c {
+                TypeClass::Hkt { id, .. } if *id == class => Some(*ty),
+                _ => None,
+            })
+        } else {
+            None
+        }
+    }
+
+    fn method_ref_param_class_arg(
+        &self,
+        class: ClassId,
+        constraints: &[(TyId, TypeClass<TyId>)],
+    ) -> Option<TyId> {
+        if matches!(
+            self.env.class_registry().shape(class),
+            ClassShape::Concrete { params } if params > 0
+        ) {
+            constraints.iter().find_map(|(_, c)| match c {
+                TypeClass::Concrete { id, params } if *id == class => {
+                    params.first().copied()
+                }
+                _ => None,
+            })
+        } else {
+            None
+        }
+    }
+
+    fn method_ref_is_param_user(&self, class: ClassId) -> bool {
+        matches!(
+            self.env.class_registry().shape(class),
+            ClassShape::Concrete { params } if params > 0
+        ) && class.idx() >= ClassId::BUILTIN_COUNT
+    }
+
+    fn method_ref_is_hkt_user(&self, class: ClassId) -> bool {
+        matches!(
+            self.env.class_registry().shape(class),
+            ClassShape::Hkt { .. }
+        ) && class.idx() >= ClassId::BUILTIN_COUNT
     }
 
     fn record_convert_ref_newtype_edge(

@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Finalized top-level `let`s still close the import section.\n\nlet id = x => x\n\nimport Math.{ abs }\n\nfun main() {\n  write id(1)\n}\n"
+---
+ERROR: imports must appear at the top of a scope

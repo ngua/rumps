@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Module `let`s can reference later child module `let` members.\n\nmodule M {\n  import M.Child.{ v }\n\n  +let x = () => M.Child.v + 1\n  +let y = () => v + 1\n\n  module Child {\n    +let v = 41\n  }\n}\n\nfun main() {\n  write 0\n}\n"
+---
+0

@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Residual equality constraints keep function-valued `let` bindings monomorphic.\n\nfun main() {\n  let f = x => if x { 1 } else { 2 }\n\n  write f(true)\n  write f(42)\n}\n"
+---
+ERROR: type `Bool` does not satisfy `Numeric` class

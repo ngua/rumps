@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Module method reference `let`s participate in duplicate detection.\n\nfun main() {\n  write \"unreachable\"\n}\n\nmodule M {\n  +let len = Iterable:length\n  +let len = Iterable:length\n}\n"
+---
+ERROR: duplicate module binding `M.len`; a function or earlier `let` already binds this name

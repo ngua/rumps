@@ -1,0 +1,12 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Empty literal `let` bindings instantiate independently.\n\nimport EmptyMod.{ mod-empty }\n\nfun main() {\n  let empty = []\n\n  let ints: Array[Int] = empty\n  let strs: Array[String] = empty\n  let fwd-ints: Array[Int] = fwd-empty\n  let fwd-strs: Array[String] = fwd-empty\n  let mod-ints: Array[Int] = mod-empty\n  let mod-strs: Array[String] = mod-empty\n\n  write Iterable:length(ints)\n  write Iterable:length(strs)\n  write Iterable:length(fwd-ints)\n  write Iterable:length(fwd-strs)\n  write Iterable:length(mod-ints)\n  write Iterable:length(mod-strs)\n  write ints\n  write strs\n}\n\nlet fwd-empty = []\n\nmodule EmptyMod {\n  +let mod-empty = []\n}\n"
+---
+0
+0
+0
+0
+0
+0
+[  ]
+[  ]

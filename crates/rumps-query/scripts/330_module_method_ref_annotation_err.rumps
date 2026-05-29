@@ -1,0 +1,9 @@
+; Module method-ref `let` annotations are still checked.
+
+module Bad {
+  +let f: Int = Iterable:length
+}
+
+fun main() {
+  write 0
+}

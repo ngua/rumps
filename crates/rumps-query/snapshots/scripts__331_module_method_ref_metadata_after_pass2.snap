@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Finalized module method-ref metadata survives module Pass `2`.\n\nvariant Wrapper = Wrapper(Int)\n\nclass MyTag C {\n  fun tag(x: C) -> String\n}\n\nclass MyTag for Wrapper {\n  fun tag(x: Wrapper) -> String {\n    match x {\n      Wrapper.Wrapper(n) => { \"tag:{n}\" }\n    }\n  }\n}\n\nmodule Methods {\n  +let tag = MyTag:tag\n}\n\nfun main() {\n  let w = Wrapper.Wrapper(42)\n  write Methods.tag(w)\n}\n"
+---
+"tag:42"

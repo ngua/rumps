@@ -2043,8 +2043,20 @@ impl Scheme {
         uf: &mut UnionFind,
     ) -> HashSet<TyVar> {
         let mut fv = uf.free_vars(self.ty, arena);
+        self.constraints.iter().for_each(|(v, class)| {
+            uf.free_vars_for_var(*v, arena).into_iter().for_each(|v| {
+                fv.insert(v);
+            });
+            class
+                .free_vars(arena, uf)
+                .into_iter()
+                .map(|v| uf.find(v))
+                .for_each(|v| {
+                    fv.insert(v);
+                });
+        });
         self.vars.iter().for_each(|v| {
-            fv.remove(v);
+            fv.remove(&uf.find(*v));
         });
         fv
     }

@@ -1,0 +1,7 @@
+; Destructured explicit closure type params still require declared constraints.
+
+fun main() {
+  let (f,) = ([T](x: T) -> T => x + 1,)
+
+  write f(1)
+}

@@ -121,7 +121,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     fn spread_elem_value(
-        &self,
+        &mut self,
         id: ValueId,
         union_elem: Option<RuntimeTyId>,
     ) -> Value {

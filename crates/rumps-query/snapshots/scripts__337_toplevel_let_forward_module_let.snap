@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Top-level `let`s can reference later module `let` members.\n\nlet x = M.v + 1\n\nmodule M {\n  +let v = 41\n}\n\nfun main() {\n  write x\n}\n"
+---
+42

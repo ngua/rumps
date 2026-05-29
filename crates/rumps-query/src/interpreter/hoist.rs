@@ -101,6 +101,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             Some(r) => {
                 let class = r.class;
                 let type_qn = r.type_name.clone();
+                let tuple_arity = r.tuple_arity;
                 let mappings = r.methods.clone();
 
                 // Look up the TypeId for the implementing type.
@@ -137,9 +138,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                                 Ok(())
                             });
 
-                        self.user_instances.register(
+                        self.user_instances.register_with_tuple_arity(
                             class,
                             type_id,
+                            tuple_arity,
                             runtime_inst,
                         );
 

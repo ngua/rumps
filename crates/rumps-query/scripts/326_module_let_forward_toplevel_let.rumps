@@ -1,0 +1,11 @@
+; Module `let` RHSs can close over later top-level `let`s.
+
+module M {
+  +let y = () => x + 1
+}
+
+let x = 41
+
+fun main() {
+  write 0
+}

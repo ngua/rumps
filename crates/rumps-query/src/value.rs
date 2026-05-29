@@ -744,6 +744,7 @@ pub(crate) enum Payload {
     PartialApp {
         callee: ValueId,
         bound: SmallVec<[ValueId; 4]>,
+        expr_id: Option<ExprId>,
     },
 
     /// A module constant reference.

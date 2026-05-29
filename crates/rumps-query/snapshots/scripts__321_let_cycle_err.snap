@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Cyclic ordinary `let` groups are rejected clearly.\n\nfun main() {\n  write a\n}\n\nlet a = b\nlet b = a\n"
+---
+ERROR: cyclic ordinary `let` bindings: `a`, `b`

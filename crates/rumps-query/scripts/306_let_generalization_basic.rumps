@@ -1,0 +1,14 @@
+; Simple variable `let` generalization for inferred closures.
+
+fun main() {
+  let id = x => x
+
+  write id(42)
+  write id("hello")
+  write id(true)
+
+  let pair = x => (x, x)
+
+  write pair(7)
+  write pair("a")
+}

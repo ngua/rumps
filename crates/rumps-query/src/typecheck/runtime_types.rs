@@ -56,6 +56,11 @@ impl RuntimeTypes {
         self.arena.get(t.0)
     }
 
+    /// Look up the `Ty` for a checked `TyId`.
+    pub(crate) fn raw(&self, t: TyId) -> &Ty {
+        self.arena.get(t)
+    }
+
     /// Convert a `RuntimeTyId` to its corresponding `TypeId`.
     ///
     /// Handles primitives (`Ty::Int` -> `TypeId::INT`), parameterized builtins
@@ -390,6 +395,15 @@ impl RuntimeTypes {
         ))
     }
 
+    /// Build a union runtime type in this arena.
+    pub(crate) fn union(
+        &mut self,
+        name: Option<TypeId>,
+        members: SmallVec<[RuntimeTyId; 4]>,
+    ) -> RuntimeTyId {
+        self.intern(Ty::Union(name, members.iter().map(|t| t.raw()).collect()))
+    }
+
     /// Build an array runtime type in this arena.
     pub(crate) fn array(&mut self, elem: RuntimeTyId) -> RuntimeTyId {
         self.intern(Ty::Array(elem.raw()))
@@ -643,6 +657,14 @@ impl RuntimeTypes {
     /// Read a scheme arity using this runtime arena.
     pub(crate) fn scheme_arity(&self, s: &Scheme) -> Option<usize> {
         s.arity(&self.arena)
+    }
+
+    /// Read function parameter types from a scheme using this runtime arena.
+    pub(crate) fn scheme_params<'a>(
+        &'a self,
+        s: &Scheme,
+    ) -> Option<&'a SmallVec<[TyId; 4]>> {
+        s.params(&self.arena)
     }
 
     /// Read a function type arity using this runtime arena.

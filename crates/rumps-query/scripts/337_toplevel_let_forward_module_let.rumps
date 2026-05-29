@@ -1,0 +1,11 @@
+; Top-level `let`s can reference later module `let` members.
+
+let x = M.v + 1
+
+module M {
+  +let v = 41
+}
+
+fun main() {
+  write x
+}

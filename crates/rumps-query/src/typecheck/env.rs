@@ -17,12 +17,23 @@ use crate::ClassId;
 pub(crate) struct ModuleMember {
     pub(crate) scheme: Scheme,
     pub(crate) vis: Visibility,
+    pub(crate) method_origin: Option<MethodRefOrigin>,
+}
+
+/// Origin metadata for a let-bound class method value.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct MethodRefOrigin {
+    pub(crate) class: ClassId,
+    pub(crate) class_arg: Option<TyId>,
+    pub(crate) applied: usize,
+    pub(crate) method: StringId,
 }
 
 /// A single scope in the type environment.
 #[derive(Clone, Debug, Default)]
 struct Scope {
     bindings: HashMap<StringId, Scheme>,
+    method_refs: HashMap<StringId, MethodRefOrigin>,
     /// Whether a non-import statement has been seen in this scope.
     ///
     /// Used to enforce that imports appear at the top of each scope.
@@ -113,10 +124,29 @@ impl TypeEnv {
         scheme: Scheme,
         vis: Visibility,
     ) {
-        self.user_module_members
-            .entry(module)
-            .or_default()
-            .insert(member, ModuleMember { scheme, vis });
+        self.user_module_members.entry(module).or_default().insert(
+            member,
+            ModuleMember {
+                scheme,
+                vis,
+                method_origin: None,
+            },
+        );
+    }
+
+    pub(crate) fn set_user_module_member_method_origin(
+        &mut self,
+        module: &QualifiedName,
+        member: StringId,
+        origin: MethodRefOrigin,
+    ) {
+        if let Some(member) = self
+            .user_module_members
+            .get_mut(module)
+            .and_then(|members| members.get_mut(&member))
+        {
+            member.method_origin = Some(origin);
+        }
     }
 
     /// Look up a user module member by module path and member name.
@@ -159,14 +189,14 @@ impl TypeEnv {
     pub(crate) fn get_public_user_module_members(
         &self,
         mod_path: &QualifiedName,
-    ) -> Vec<(StringId, Scheme)> {
+    ) -> Vec<(StringId, Scheme, Option<MethodRefOrigin>)> {
         self.user_module_members
             .get(mod_path)
             .map(|members| {
                 members
                     .iter()
                     .filter(|(_, m)| m.vis == Visibility::Public)
-                    .map(|(&name, m)| (name, m.scheme.clone()))
+                    .map(|(&name, m)| (name, m.scheme.clone(), m.method_origin))
                     .collect()
             })
             .unwrap_or_default()
@@ -237,6 +267,10 @@ impl TypeEnv {
         self.scopes.pop();
     }
 
+    pub(crate) fn scope_depth(&self) -> usize {
+        self.scopes.len()
+    }
+
     /// Mark that a non-import statement has been seen in the current scope.
     ///
     /// After this, any import statements will be errors.
@@ -275,6 +309,18 @@ impl TypeEnv {
     pub(crate) fn bind(&mut self, id: StringId, scheme: Scheme) {
         if let Some(scope) = self.scopes.last_mut() {
             scope.bindings.insert(id, scheme);
+            scope.method_refs.remove(&id);
+        }
+    }
+
+    /// Mark an existing binding as a class method value.
+    pub(crate) fn bind_method_ref_origin(
+        &mut self,
+        id: StringId,
+        origin: MethodRefOrigin,
+    ) {
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.method_refs.insert(id, origin);
         }
     }
 
@@ -284,6 +330,17 @@ impl TypeEnv {
             .iter()
             .rev()
             .find_map(|scope| scope.bindings.get(&id))
+    }
+
+    /// Look up method-reference origin metadata by `StringId`.
+    pub(crate) fn lookup_method_ref_origin(
+        &self,
+        id: StringId,
+    ) -> Option<MethodRefOrigin> {
+        self.scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.method_refs.get(&id).copied())
     }
 
     /// Intern a string, returning its ID.

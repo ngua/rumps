@@ -1,0 +1,180 @@
+; Let-bound method values instantiate and dispatch independently per use.
+
+import Methods.{ map as imported-map, tag as imported-tag }
+
+variant Wrapper = Wrapper(Int)
+variant Label = Label(String)
+newtype Score = Int
+
+class MyInto[T] C {
+  fun convert(x: C) -> T
+}
+
+class MyInto[Label] for Wrapper {
+  fun convert(x: Wrapper) -> Label {
+    match x {
+      Wrapper.Wrapper(n) => { Label.Label("w:{n}") }
+    }
+  }
+}
+
+class MyInto[Int] for Wrapper {
+  fun convert(x: Wrapper) -> Int {
+    match x {
+      Wrapper.Wrapper(n) => { n }
+    }
+  }
+}
+
+class MyTag[T] C {
+  fun tag(x: C) -> String
+}
+
+class MyTag[Label] for Wrapper {
+  fun tag(x: Wrapper) -> String {
+    match x {
+      Wrapper.Wrapper(n) => { "label:{n}" }
+    }
+  }
+}
+
+class MyTag[Int] for Wrapper {
+  fun tag(x: Wrapper) -> String {
+    match x {
+      Wrapper.Wrapper(n) => { "int:{n}" }
+    }
+  }
+}
+
+class MyMap F {
+  fun my-map[A, B](f: (A) -> B, x: F[A]) -> F[B]
+}
+
+class MyMap for (T,) {
+  fun my-map(f, x) {
+    (x.0, f(x.1))
+  }
+}
+
+class MyMap for (T, U,) {
+  fun my-map(f, x) {
+    (x.0, x.1, f(x.2))
+  }
+}
+
+class MyFront F {
+  fun front-map[A, B](tag: (String, Int, Int), f: (A) -> B, x: F[A]) -> F[B]
+}
+
+class MyFront for (T,) {
+  fun front-map(tag, f, x) {
+    (x.0, f(x.1))
+  }
+}
+
+class MyFront for (T, U,) {
+  fun front-map(tag, f, x) {
+    (x.0, x.1, f(x.2))
+  }
+}
+
+class MyLead F {
+  fun lead-map[A, B](n: Int, tag: (String, Int, Int), f: (A) -> B, x: F[A]) -> F[B]
+}
+
+class MyLead for (T,) {
+  fun lead-map(n, tag, f, x) {
+    (x.0, f(x.1))
+  }
+}
+
+class MyLead for (T, U,) {
+  fun lead-map(n, tag, f, x) {
+    (x.0, x.1, f(x.2))
+  }
+}
+
+class FnMaker C {
+  fun make-fn(x: C) -> ((Int) -> Int)
+}
+
+class FnMaker for Wrapper {
+  fun make-fn(x: Wrapper) -> ((Int) -> Int) {
+    (n: Int) -> Int => n + 100
+  }
+}
+
+fun id[T](x: T) -> T {
+  x
+}
+
+fun use-map(map: (((Int) -> Int), (String, Int)) -> (String, Int)) -> (String, Int) {
+  map(x => x + 5, ("param", 6))
+}
+
+fun use-front(map: ((String, Int, Int), ((Int) -> Int), (String, Int)) -> (String, Int)) -> (String, Int) {
+  map(("not", 1, 2), x => x + 9, ("front", 10))
+}
+
+fun main() {
+  let len = Iterable:length
+  write len([1, 2, 3])
+  write len(1 ..= 5)
+
+  let neg = Negatable:neg
+  write neg(5)
+  write neg(3.5)
+
+  let w = Wrapper.Wrapper(99)
+  let conv-label = MyInto[Label]:convert
+  let conv-int = MyInto[Int]:convert
+  write conv-label(w)
+  write conv-int(w)
+
+  let tag-label = MyTag[Label]:tag
+  let tag-int = MyTag[Int]:tag
+  write tag-label(w)
+  write tag-int(w)
+
+  let my-map = MyMap:my-map
+  let alias-map = my-map
+  write my-map(x => x + 1, ("hello", 42))
+  write my-map(x => x * 10, (1, "two", 3))
+  write alias-map(x => x + 2, ("alias", 40))
+
+  let inc-map = my-map(x => x + 1)
+  write inc-map(("partial", 4))
+
+  let id-map = id(MyMap:my-map)
+  write id-map(x => x + 6, ("id", 7))
+  write use-map(MyMap:my-map)
+  write use-front(MyFront:front-map)
+  let lead-map = MyLead:lead-map(1)
+  write lead-map(("not", 1, 2), x => x + 8, ("lead", 14))
+
+  let id-tag = id(MyTag[Label]:tag)
+  write id-tag(w)
+
+  let empty = Monoid[Option[Int]]:identity
+  write empty()
+  let into-score = Into[Score]:into
+  let score = into-score(77)
+  write Into[Int]:into(score)
+  let try-int = TryInto[Int]:try-into
+  write try-int("42")
+
+  let make-fn = FnMaker:make-fn
+  let made = make-fn(w)
+  write made(23)
+
+  let mod-map = Methods.map
+  write mod-map(x => x * 3, ("module", 7))
+  write imported-map(x => x + 4, ("import", 8))
+  write Methods.tag(w)
+  write imported-tag(w)
+}
+
+module Methods {
+  +let map = MyMap:my-map
+  +let tag = MyTag[Label]:tag
+}

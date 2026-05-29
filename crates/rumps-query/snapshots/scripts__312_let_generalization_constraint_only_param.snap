@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Explicit closure params may appear only in constraints.\n\nfun main() {\n  let f = [T: Display](x: Int) -> Int => x\n\n  write f(7)\n}\n"
+---
+7

@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Let-bound method values preserve method-local constraints.\n\nvariant Box[T] = Box(T)\n\nclass Need C {\n  fun need(x: C) -> String\n}\n\nclass Need for Int {\n  fun need(x: Int) -> String {\n    \"int {x}\"\n  }\n}\n\nclass ShowBox F {\n  fun show[T: Need](x: F[T]) -> String\n}\n\nclass ShowBox for Box {\n  fun show[T: Need](x: Box[T]) -> String {\n    match x {\n      Box.Box(v) => { Need:need(v) }\n    }\n  }\n}\n\nfun main() {\n  let show = ShowBox:show\n\n  write show(Box.Box(7))\n}\n"
+---
+"int 7"

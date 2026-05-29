@@ -1,18 +1,21 @@
 //! Declaration hoisting for forward references.
 //!
-//! Implements Pass 1 of the two-pass type inference: traverse statements and
+//! Implements Pass `1` of the two-pass type inference: traverse statements and
 //! register function/module names with provisional types before any body
 //! inference. This enables forward references and mutual recursion.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use indexmap::IndexMap;
 use smallvec::{smallvec, SmallVec};
 
 use super::{ClassInstanceInput, InferCtx};
 use crate::ast::{
-    AstClassAssocTypeDecl, AstClassMethodSig, AstTypeExpr, AstTypeExprId,
-    BindingPattern, Expr, Import, Stmt, StmtId, TypeParam,
+    ArrayElem, AstClassAssocTypeDecl, AstClassMethodSig, AstTypeExpr,
+    AstTypeExprId, BindingPattern, DbRef, Expr, ExprId, Import, ImportItem,
+    JsonAccessKey, MatchArm, MatchPattern, MatchPatternId, ObjectEntry,
+    OutputTarget, RefTarget, RestPattern, Stmt, StmtId, SubscriptElem,
+    TransactionExpr, TypeParam, TypePattern, Visibility, WriteExpr,
 };
 use crate::env::PRELUDE_MODULE;
 use crate::intern::{QualifiedName, StringId};
@@ -25,6 +28,42 @@ use crate::typecheck::ty::{
 };
 use crate::value::{TypeDef, TypeId};
 use crate::{ClassId, Span};
+
+#[derive(Clone)]
+struct LetInfo {
+    stmt: StmtId,
+    name: StringId,
+    ann: Option<AstTypeExprId>,
+    rhs: ExprId,
+    vis: Visibility,
+    span: Span,
+}
+
+#[derive(Clone)]
+struct ModuleInfo {
+    stmt: StmtId,
+    path: QualifiedName,
+    body: Vec<StmtId>,
+    span: Span,
+}
+
+#[derive(Clone)]
+struct ModuleLetProvider {
+    root: StmtId,
+    names: HashSet<StringId>,
+}
+
+struct StaticLetGraph<'a> {
+    lets: &'a HashMap<StmtId, LetInfo>,
+    mods: &'a HashMap<StmtId, ModuleInfo>,
+    deps: &'a HashMap<StmtId, HashSet<StmtId>>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LetMark {
+    Visiting,
+    Done,
+}
 
 /// AST-level class definition fields, bundled for `hoist_class_def`.
 struct ClassDefInput<'a> {
@@ -62,20 +101,19 @@ struct ClassMethodCtx {
 }
 
 impl InferCtx<'_> {
-    /// Pass 1: Register all function/module declarations with provisional types.
+    /// Pass `1`: Register all function/module declarations with provisional types.
     ///
     /// This enables forward references: functions can call other functions
     /// defined later in the same scope, and modules can be referenced before
     /// their definition.
     ///
-    /// Hoisting is done in three phases to ensure imported types are available
-    /// when function signatures are processed:
-    ///
-    /// 1. **Phase 1**: Hoist modules only (registers module types like `M.T`)
-    /// 2. **Phase 2**: Process imports (populates `imported_types` mapping)
-    /// 3. **Phase 3**: Hoist functions and class instances
+    /// Hoisting first registers modules and imports types, then hoists
+    /// functions and class instances, then infers final top-level and module
+    /// `let` schemes.
     pub(crate) fn hoist_declarations(&mut self, stmts: &[StmtId]) {
-        // Phase 0: Register user-defined class stubs so class names
+        let static_scope = self.env.scope_depth() == 1;
+
+        // Phase `0`: Register user-defined class stubs so class names
         // are available for constraint resolution and method lookup
         stmts.iter().for_each(|&id| {
             let stmt = self.ast.get_stmt(id).cloned();
@@ -99,22 +137,37 @@ impl InferCtx<'_> {
             }
         });
 
-        // Phase 1: Hoist modules only (registers module types)
+        // Phase `1`: Register module names before module bodies process imports.
+        stmts.iter().for_each(|&id| {
+            let stmt = self.ast.get_stmt(id).cloned();
+            if let Some(Stmt::Module { ref name, ref body }) = stmt {
+                self.register_module_tree(QualifiedName::local(*name), body);
+            }
+        });
+
+        // Phase `1`: Hoist modules only (registers module types)
         stmts.iter().for_each(|&id| {
             let stmt = self.ast.get_stmt(id).cloned();
             if let Some(Stmt::Module { ref name, ref body }) = stmt {
                 let span = self.ast.stmt_span(id).unwrap_or_default();
-                self.hoist_module(QualifiedName::local(*name), body, span);
+                self.hoist_module(
+                    QualifiedName::local(*name),
+                    body,
+                    stmts,
+                    span,
+                );
             }
         });
 
-        // Phase 2: Process imports (populates imported_types).
+        // Phase `2`: Process imports (populates imported_types).
         // Auto-import the `Prelude` module first so its members are always
         // in scope, then process user imports (which may shadow them).
         {
             let pid = self.env.intern(PRELUDE_MODULE);
             self.import(&Import::wildcard(pid), Span::default());
         }
+        let prev_defers = self.defer_missing_import_members;
+        self.defer_missing_import_members = prev_defers || static_scope;
         stmts.iter().for_each(|&id| {
             let stmt = self.ast.get_stmt(id).cloned();
             if let Some(Stmt::Import(ref import)) = stmt {
@@ -122,97 +175,1619 @@ impl InferCtx<'_> {
                 self.import(import, span);
             }
         });
+        self.defer_missing_import_members = prev_defers;
 
-        // Phase 3: Hoist functions and class instances
+        // Phase `3`: Hoist functions and class instances
         stmts.iter().for_each(|&id| self.hoist_non_module(id));
+
+        // Phase `4`: infer static `let`s after declarations are available, but
+        // before function bodies can reference final schemes.
+        if static_scope {
+            if self.interactive {
+                let mods = self.collect_module_infos(stmts, None);
+                self.infer_module_let_graph(mods, stmts);
+                self.replay_deferred_imports_for(None);
+            } else {
+                self.infer_static_let_graph(stmts);
+            }
+        }
     }
 
-    /// Hoist top-level `let` bindings.
+    /// Infer top-level simple `let` bindings before function bodies.
     ///
-    /// Only simple bindings (`BindingPattern::Var(name)`) are hoisted;
-    /// destructuring patterns fall through and are bound normally in Pass 2.
-    /// Intended to be called ONLY at script top level, after
-    /// `hoist_declarations`, and ONLY in non-interactive mode.
-    ///
-    /// Two cases:
-    ///
-    /// 1. Closure RHS: hoisted via `hoist_fun` to obtain full parity with
-    ///    `fun` hoisting (polymorphic schemes, fresh instantiation per
-    ///    forward-reference call site, finalization tracking).
-    ///
-    /// 2. Non-closure RHS: hoisted with a provisional fresh `TyVar` and
-    ///    tracked in `hoisted_lets` for the Pass 2 unify step.
-    ///
-    /// Collisions with previously bound names from top-level `fun` or an
-    /// earlier `let` of the same name emit a duplicate-binding error.
-    /// Collisions with imported names are allowed (shadowing imports is
-    /// intentional).
-    pub(crate) fn hoist_toplevel_lets(&mut self, stmts: &[StmtId]) {
-        stmts.iter().for_each(|&id| {
-            let stmt = self.ast.get_stmt(id).cloned();
-            let span = self.ast.stmt_span(id).unwrap_or_default();
-            if let Some(Stmt::Let(BindingPattern::Var(name), ann, rhs, _)) = stmt {
-                // Only reject collisions with hoisted funs and
-                // earlier hoisted lets; allow shadowing imports.
-                // Linear scan is fine; `hoisted_funs` is small (one per
-                // top-level `FUN`) and this runs once per top-level `LET`.
-                let is_hoisted_fun = self.env.lookup(name).is_some_and(|env_s| {
-                    self.hoist.funs.values().any(|s| env_s == s)
-                });
-                let is_hoisted_let = self.hoist.lets.contains_key(&name);
-                if is_hoisted_fun || is_hoisted_let {
-                    let n = self.env.resolve_string(name);
-                    self.error(TypeError::Custom {
-                        msg: format!(
-                            "duplicate top-level binding `{}`; \
-                             a function or earlier `let` already binds this name",
-                            n
-                        ),
-                        span,
-                    });
-                } else {
-                    let closure = self
-                        .ast
-                        .get_expr(rhs)
-                        .cloned()
-                        .and_then(|e| match e {
-                            Expr::Closure { type_params, params, ret, .. } => {
-                                Some((type_params, params, ret))
-                            }
-                            _ => None,
-                        });
-                    match closure {
-                        Some((type_params, params, ret)) => {
-                            // Closure-RHS lets: parity with `fun`.
-                            // `hoist_fun` populates `hoisted_funs` so Phase 4
-                            // forward-ref tracking applies uniformly.
-                            self.hoist_fun(
-                                id,
-                                name,
-                                &type_params,
-                                &params,
-                                ret.as_ref(),
-                            );
-                        }
-                        None => {
-                            let ty = match ann {
-                                Some(aid) => {
-                                    self.convert().ast_type_to_ty(aid, &IndexMap::new())
-                                }
-                                None => self.fresh(),
-                            };
-                            self.env.bind(name, Scheme::mono(ty));
-                            self.hoist.lets.insert(name, ty);
-                        }
+    /// The dependency graph is built from free RHS references to sibling
+    /// top-level `let`s. Acyclic bindings are inferred in dependency order;
+    /// cyclic ordinary `let` groups are rejected.
+    pub(crate) fn infer_toplevel_lets(&mut self, stmts: &[StmtId]) {
+        let infos = self.collect_simple_lets(stmts, None);
+        self.infer_let_graph(infos, None);
+    }
+
+    fn infer_static_let_graph(&mut self, stmts: &[StmtId]) {
+        let lets = self.collect_simple_lets(stmts, None);
+        let mods = self.collect_module_infos(stmts, None);
+        let let_map: HashMap<StmtId, LetInfo> =
+            lets.iter().map(|i| (i.stmt, i.clone())).collect();
+        let mod_map: HashMap<StmtId, ModuleInfo> =
+            mods.iter().map(|m| (m.stmt, m.clone())).collect();
+        let names: HashMap<StringId, StmtId> =
+            lets.iter().map(|i| (i.name, i.stmt)).collect();
+        let providers = self.module_let_providers(&mods);
+        let dep_names = self.import_dep_names(stmts, &providers, names.clone());
+
+        let let_deps = lets.iter().map(|i| {
+            let mut acc = HashSet::new();
+            self.collect_expr_deps(
+                i.rhs,
+                &dep_names,
+                None,
+                &HashSet::new(),
+                &mut acc,
+            );
+            self.collect_expr_module_deps(i.rhs, &providers, &mut acc);
+            (i.stmt, acc)
+        });
+        let mod_deps = mods.iter().map(|m| {
+            let mut acc = HashSet::new();
+            self.collect_module_deps(m, &providers, &mut acc);
+            self.collect_module_top_deps(m, &names, &mut acc);
+            acc.remove(&m.stmt);
+            (m.stmt, acc)
+        });
+        let deps: HashMap<StmtId, HashSet<StmtId>> =
+            let_deps.chain(mod_deps).collect();
+
+        let mut marks = HashMap::new();
+        let mut stack = Vec::new();
+        let mut order = Vec::new();
+        let mut done_mods = HashSet::new();
+        let graph = StaticLetGraph {
+            lets: &let_map,
+            mods: &mod_map,
+            deps: &deps,
+        };
+
+        lets.iter().for_each(|i| {
+            self.visit_static_let(
+                i.stmt, &graph, &mut marks, &mut stack, &mut order,
+            );
+        });
+        mods.iter().for_each(|m| {
+            self.visit_static_let(
+                m.stmt, &graph, &mut marks, &mut stack, &mut order,
+            );
+        });
+
+        order.into_iter().for_each(|id| {
+            if let Some(info) = let_map.get(&id).cloned() {
+                self.replay_ready_deferred_imports_for(
+                    None, &providers, &done_mods,
+                );
+                self.infer_simple_let(info, None);
+            } else if let Some(m) = mod_map.get(&id).cloned() {
+                self.infer_module_lets(m.path, &m.body, stmts, m.span);
+                done_mods.insert(id);
+            }
+        });
+        self.replay_deferred_imports_for(None);
+    }
+
+    fn infer_module_lets(
+        &mut self,
+        mod_path: QualifiedName,
+        body: &[StmtId],
+        root: &[StmtId],
+        span: Span,
+    ) {
+        let prev_module = self.current_module.replace(mod_path.clone());
+
+        self.hoist_module_let_method_classes(body, root, span);
+        self.infer_module_static_let_graph(&mod_path, body, root);
+
+        self.current_module = prev_module;
+    }
+
+    fn infer_module_static_let_graph(
+        &mut self,
+        mod_path: &QualifiedName,
+        body: &[StmtId],
+        root: &[StmtId],
+    ) {
+        let lets = self.collect_simple_lets(body, Some(mod_path));
+        let mods = self.collect_module_infos(body, Some(mod_path));
+        let let_map: HashMap<StmtId, LetInfo> =
+            lets.iter().map(|i| (i.stmt, i.clone())).collect();
+        let mod_map: HashMap<StmtId, ModuleInfo> =
+            mods.iter().map(|m| (m.stmt, m.clone())).collect();
+        let names: HashMap<StringId, StmtId> =
+            lets.iter().map(|i| (i.name, i.stmt)).collect();
+        let providers = self.module_let_providers(&mods);
+        let dep_names = self.import_dep_names(body, &providers, names.clone());
+
+        let let_deps = lets.iter().map(|i| {
+            let mut acc = HashSet::new();
+            self.collect_expr_deps(
+                i.rhs,
+                &dep_names,
+                Some(mod_path),
+                &HashSet::new(),
+                &mut acc,
+            );
+            self.collect_expr_module_deps(i.rhs, &providers, &mut acc);
+            (i.stmt, acc)
+        });
+        let mod_deps = mods.iter().map(|m| {
+            let mut acc = HashSet::new();
+            self.collect_module_deps(m, &providers, &mut acc);
+            self.collect_module_top_deps(m, &names, &mut acc);
+            acc.remove(&m.stmt);
+            (m.stmt, acc)
+        });
+        let deps: HashMap<StmtId, HashSet<StmtId>> =
+            let_deps.chain(mod_deps).collect();
+
+        let mut marks = HashMap::new();
+        let mut stack = Vec::new();
+        let mut order = Vec::new();
+        let mut done_mods = HashSet::new();
+        let graph = StaticLetGraph {
+            lets: &let_map,
+            mods: &mod_map,
+            deps: &deps,
+        };
+
+        lets.iter().for_each(|i| {
+            self.visit_static_let(
+                i.stmt, &graph, &mut marks, &mut stack, &mut order,
+            );
+        });
+        mods.iter().for_each(|m| {
+            self.visit_static_let(
+                m.stmt, &graph, &mut marks, &mut stack, &mut order,
+            );
+        });
+
+        order.into_iter().for_each(|id| {
+            if let Some(info) = let_map.get(&id).cloned() {
+                self.replay_ready_deferred_imports_for(
+                    Some(mod_path),
+                    &providers,
+                    &done_mods,
+                );
+                self.infer_simple_let(info, Some(mod_path));
+            } else if let Some(m) = mod_map.get(&id).cloned() {
+                self.infer_module_lets(m.path, &m.body, root, m.span);
+                done_mods.insert(id);
+            }
+        });
+        self.replay_deferred_imports_for(Some(mod_path));
+        self.clear_module_let_method_origins(&lets);
+    }
+
+    fn collect_module_infos(
+        &self,
+        stmts: &[StmtId],
+        parent: Option<&QualifiedName>,
+    ) -> Vec<ModuleInfo> {
+        stmts
+            .iter()
+            .filter_map(|&id| {
+                let span = self.ast.stmt_span(id).unwrap_or_default();
+                match self.ast.get_stmt(id) {
+                    Some(Stmt::Module { name, body }) => {
+                        let path = parent.map_or_else(
+                            || QualifiedName::local(*name),
+                            |p| p.child(*name),
+                        );
+                        Some(ModuleInfo {
+                            stmt: id,
+                            path,
+                            body: body.clone(),
+                            span,
+                        })
                     }
+                    _ => None,
                 }
+            })
+            .collect()
+    }
+
+    fn register_module_tree(&mut self, path: QualifiedName, body: &[StmtId]) {
+        self.env.register_user_module(path.clone());
+        body.iter().for_each(|&id| {
+            if let Some(Stmt::Module { name, body }) =
+                self.ast.get_stmt(id).cloned()
+            {
+                self.register_module_tree(path.child(name), &body);
             }
         });
     }
 
+    fn infer_module_let_graph(
+        &mut self,
+        mods: Vec<ModuleInfo>,
+        root: &[StmtId],
+    ) {
+        let map: HashMap<StmtId, ModuleInfo> =
+            mods.iter().map(|m| (m.stmt, m.clone())).collect();
+        let providers = self.module_let_providers(&mods);
+        let deps: HashMap<StmtId, HashSet<StmtId>> = mods
+            .iter()
+            .map(|m| {
+                let mut acc = HashSet::new();
+                self.collect_module_deps(m, &providers, &mut acc);
+                (m.stmt, acc)
+            })
+            .collect();
+
+        let mut marks = HashMap::new();
+        let mut stack = Vec::new();
+        let mut order = Vec::new();
+
+        mods.iter().for_each(|m| {
+            self.visit_module_let(
+                m.stmt, &map, &deps, &mut marks, &mut stack, &mut order,
+            );
+        });
+
+        order
+            .into_iter()
+            .filter_map(|id| map.get(&id).cloned())
+            .for_each(|m| {
+                self.infer_module_lets(m.path, &m.body, root, m.span)
+            });
+    }
+
+    fn module_let_providers(
+        &self,
+        mods: &[ModuleInfo],
+    ) -> HashMap<QualifiedName, ModuleLetProvider> {
+        let mut out = HashMap::new();
+        mods.iter().for_each(|m| {
+            self.collect_module_let_provider(m, m.stmt, &mut out);
+        });
+        out
+    }
+
+    fn collect_module_let_provider(
+        &self,
+        m: &ModuleInfo,
+        root: StmtId,
+        out: &mut HashMap<QualifiedName, ModuleLetProvider>,
+    ) {
+        let names = m
+            .body
+            .iter()
+            .filter_map(|&id| match self.ast.get_stmt(id) {
+                Some(Stmt::Let(BindingPattern::Var(name), _, _, _)) => {
+                    Some(*name)
+                }
+                _ => None,
+            })
+            .collect();
+        out.insert(m.path.clone(), ModuleLetProvider { root, names });
+
+        self.collect_module_infos(&m.body, Some(&m.path))
+            .iter()
+            .for_each(|child| {
+                self.collect_module_let_provider(child, root, out);
+            });
+    }
+
+    fn collect_module_deps(
+        &self,
+        m: &ModuleInfo,
+        providers: &HashMap<QualifiedName, ModuleLetProvider>,
+        acc: &mut HashSet<StmtId>,
+    ) {
+        self.collect_module_body_deps(&m.body, providers, acc);
+        acc.remove(&m.stmt);
+    }
+
+    fn import_dep_names(
+        &self,
+        stmts: &[StmtId],
+        providers: &HashMap<QualifiedName, ModuleLetProvider>,
+        mut out: HashMap<StringId, StmtId>,
+    ) -> HashMap<StringId, StmtId> {
+        stmts.iter().for_each(|&id| {
+            if let Some(Stmt::Import(import)) = self.ast.get_stmt(id) {
+                self.collect_import_dep_names(import, providers, &mut out);
+            }
+        });
+        out
+    }
+
+    fn collect_import_dep_names(
+        &self,
+        import: &Import,
+        providers: &HashMap<QualifiedName, ModuleLetProvider>,
+        out: &mut HashMap<StringId, StmtId>,
+    ) {
+        let qn = QualifiedName::new(import.path.to_vec());
+        providers.get(&qn).into_iter().for_each(|p| {
+            let excluded: HashSet<StringId> = import
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    ImportItem::Exclude(name) => Some(*name),
+                    _ => None,
+                })
+                .collect();
+            import.items.iter().for_each(|item| match item {
+                ImportItem::Named { name, alias } if p.names.contains(name) => {
+                    out.entry(alias.unwrap_or(*name)).or_insert(p.root);
+                }
+                ImportItem::Wildcard => {
+                    p.names
+                        .iter()
+                        .filter(|name| !excluded.contains(name))
+                        .for_each(|name| {
+                            out.entry(*name).or_insert(p.root);
+                        });
+                }
+                ImportItem::Named { .. } | ImportItem::Exclude(_) => {}
+            });
+        });
+    }
+
+    fn replay_ready_deferred_imports_for(
+        &mut self,
+        module: Option<&QualifiedName>,
+        providers: &HashMap<QualifiedName, ModuleLetProvider>,
+        done: &HashSet<StmtId>,
+    ) {
+        let (ready, rest): (Vec<_>, Vec<_>) =
+            self.deferred_imports.clone().into_iter().partition(
+                |(import, _, found)| {
+                    let module_matches = match (module, found) {
+                        (Some(target), Some(found)) => found == target,
+                        (None, None) => true,
+                        _ => false,
+                    };
+                    module_matches
+                        && self.deferred_import_ready(import, providers, done)
+                },
+            );
+        self.deferred_imports = rest;
+        ready.into_iter().for_each(|(import, span, m)| {
+            let prev = match m {
+                Some(ref qn) => self.current_module.replace(qn.clone()),
+                None => self.current_module.take(),
+            };
+            self.replay_deferred_import(&import, span);
+            self.current_module = prev;
+        });
+    }
+
+    fn deferred_import_ready(
+        &self,
+        import: &Import,
+        providers: &HashMap<QualifiedName, ModuleLetProvider>,
+        done: &HashSet<StmtId>,
+    ) -> bool {
+        let qn = QualifiedName::new(import.path.to_vec());
+        providers.get(&qn).is_none_or(|p| done.contains(&p.root))
+    }
+
+    fn collect_module_top_deps(
+        &self,
+        m: &ModuleInfo,
+        names: &HashMap<StringId, StmtId>,
+        acc: &mut HashSet<StmtId>,
+    ) {
+        self.collect_module_body_top_deps(&m.body, names, acc);
+    }
+
+    fn collect_module_body_top_deps(
+        &self,
+        body: &[StmtId],
+        names: &HashMap<StringId, StmtId>,
+        acc: &mut HashSet<StmtId>,
+    ) {
+        let mut local = HashSet::new();
+        self.static_decl_names(body, &mut local);
+        body.iter().for_each(|&id| {
+            self.ast
+                .get_stmt(id)
+                .into_iter()
+                .for_each(|stmt| match stmt {
+                    Stmt::Let(BindingPattern::Var(_), _, rhs, _) => {
+                        self.collect_expr_deps(*rhs, names, None, &local, acc);
+                    }
+                    Stmt::Module { body, .. } => {
+                        self.collect_module_body_top_deps(body, names, acc);
+                    }
+                    _ => {}
+                });
+        });
+    }
+
+    fn collect_module_body_deps(
+        &self,
+        body: &[StmtId],
+        providers: &HashMap<QualifiedName, ModuleLetProvider>,
+        acc: &mut HashSet<StmtId>,
+    ) {
+        body.iter().for_each(|&id| {
+            self.ast
+                .get_stmt(id)
+                .into_iter()
+                .for_each(|stmt| match stmt {
+                    Stmt::Import(import) => {
+                        self.collect_import_module_deps(import, providers, acc);
+                    }
+                    Stmt::Let(BindingPattern::Var(_), _, rhs, _) => {
+                        self.collect_expr_module_deps(*rhs, providers, acc);
+                    }
+                    Stmt::Module { body, .. } => {
+                        self.collect_module_body_deps(body, providers, acc);
+                    }
+                    _ => {}
+                });
+        });
+    }
+
+    fn collect_import_module_deps(
+        &self,
+        import: &Import,
+        providers: &HashMap<QualifiedName, ModuleLetProvider>,
+        acc: &mut HashSet<StmtId>,
+    ) {
+        let qn = QualifiedName::new(import.path.to_vec());
+        providers.get(&qn).into_iter().for_each(|p| {
+            let excluded: HashSet<StringId> = import
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    ImportItem::Exclude(name) => Some(*name),
+                    _ => None,
+                })
+                .collect();
+            let needs = import.items.iter().any(|item| match item {
+                ImportItem::Named { name, .. } => p.names.contains(name),
+                ImportItem::Wildcard => {
+                    p.names.iter().any(|name| !excluded.contains(name))
+                }
+                ImportItem::Exclude(_) => false,
+            });
+            if needs {
+                acc.insert(p.root);
+            }
+        });
+    }
+
+    fn visit_module_let(
+        &mut self,
+        id: StmtId,
+        infos: &HashMap<StmtId, ModuleInfo>,
+        deps: &HashMap<StmtId, HashSet<StmtId>>,
+        marks: &mut HashMap<StmtId, LetMark>,
+        stack: &mut Vec<StmtId>,
+        order: &mut Vec<StmtId>,
+    ) {
+        match marks.get(&id).copied() {
+            Some(LetMark::Done) => {}
+            Some(LetMark::Visiting) => {
+                self.reject_module_let_cycle(id, infos, marks, stack);
+            }
+            None => {
+                marks.insert(id, LetMark::Visiting);
+                stack.push(id);
+                deps.get(&id).into_iter().for_each(|ids| {
+                    ids.iter().copied().for_each(|dep| {
+                        self.visit_module_let(
+                            dep, infos, deps, marks, stack, order,
+                        );
+                    });
+                });
+                stack.pop();
+                if marks.get(&id).copied() == Some(LetMark::Visiting) {
+                    marks.insert(id, LetMark::Done);
+                    order.push(id);
+                }
+            }
+        }
+    }
+
+    fn reject_module_let_cycle(
+        &mut self,
+        id: StmtId,
+        infos: &HashMap<StmtId, ModuleInfo>,
+        marks: &mut HashMap<StmtId, LetMark>,
+        stack: &[StmtId],
+    ) {
+        let cyc: Vec<StmtId> =
+            stack.iter().copied().skip_while(|&sid| sid != id).collect();
+        let names: Vec<String> = cyc
+            .iter()
+            .filter_map(|sid| infos.get(sid))
+            .map(|m| format!("`{}`", m.path.display(&self.env.strings)))
+            .collect();
+        let msg = if names.is_empty() {
+            "cyclic module `let` dependency".to_owned()
+        } else {
+            format!("cyclic module `let` dependencies: {}", names.join(", "))
+        };
+        let span = infos.get(&id).map(|m| m.span).unwrap_or_default();
+
+        self.error(TypeError::Custom { msg, span });
+        cyc.into_iter().for_each(|sid| {
+            marks.insert(sid, LetMark::Done);
+        });
+    }
+
+    fn visit_static_let(
+        &mut self,
+        id: StmtId,
+        graph: &StaticLetGraph<'_>,
+        marks: &mut HashMap<StmtId, LetMark>,
+        stack: &mut Vec<StmtId>,
+        order: &mut Vec<StmtId>,
+    ) {
+        match marks.get(&id).copied() {
+            Some(LetMark::Done) => {}
+            Some(LetMark::Visiting) => {
+                self.reject_static_let_cycle(id, graph, marks, stack);
+            }
+            None => {
+                marks.insert(id, LetMark::Visiting);
+                stack.push(id);
+                graph.deps.get(&id).into_iter().for_each(|ids| {
+                    ids.iter().copied().for_each(|dep| {
+                        self.visit_static_let(dep, graph, marks, stack, order);
+                    });
+                });
+                stack.pop();
+                if marks.get(&id).copied() == Some(LetMark::Visiting) {
+                    marks.insert(id, LetMark::Done);
+                    order.push(id);
+                }
+            }
+        }
+    }
+
+    fn reject_static_let_cycle(
+        &mut self,
+        id: StmtId,
+        graph: &StaticLetGraph<'_>,
+        marks: &mut HashMap<StmtId, LetMark>,
+        stack: &[StmtId],
+    ) {
+        let cyc: Vec<StmtId> =
+            stack.iter().copied().skip_while(|&sid| sid != id).collect();
+        let names: Vec<String> = cyc
+            .iter()
+            .filter_map(|sid| self.static_let_name(*sid, graph))
+            .collect();
+        let has_mod = cyc.iter().any(|sid| graph.mods.contains_key(sid));
+        let msg = if names.is_empty() {
+            "cyclic ordinary `let` dependency".to_owned()
+        } else if has_mod {
+            format!("cyclic ordinary `let` dependencies: {}", names.join(", "))
+        } else {
+            format!("cyclic ordinary `let` bindings: {}", names.join(", "))
+        };
+        let span = graph
+            .lets
+            .get(&id)
+            .map(|i| i.span)
+            .or_else(|| graph.mods.get(&id).map(|m| m.span))
+            .unwrap_or_default();
+
+        self.error(TypeError::Custom { msg, span });
+        cyc.into_iter().for_each(|sid| {
+            marks.insert(sid, LetMark::Done);
+            graph.lets.get(&sid).into_iter().for_each(|i| {
+                self.hoist.final_lets.insert(sid);
+                self.env.bind(i.name, Scheme::mono(TyArena::ERROR));
+            });
+        });
+    }
+
+    fn static_let_name(
+        &self,
+        id: StmtId,
+        graph: &StaticLetGraph<'_>,
+    ) -> Option<String> {
+        graph
+            .lets
+            .get(&id)
+            .map(|i| format!("`{}`", self.env.resolve_string(i.name)))
+            .or_else(|| {
+                graph
+                    .mods
+                    .get(&id)
+                    .map(|m| format!("`{}`", m.path.display(&self.env.strings)))
+            })
+    }
+
+    fn collect_expr_module_deps(
+        &self,
+        id: ExprId,
+        providers: &HashMap<QualifiedName, ModuleLetProvider>,
+        acc: &mut HashSet<StmtId>,
+    ) {
+        if let Some(expr) = self.ast.get_expr(id) {
+            match expr {
+                Expr::Interpolation(parts) | Expr::Tuple(parts) => {
+                    parts.iter().for_each(|part| {
+                        self.collect_expr_module_deps(*part, providers, acc);
+                    });
+                }
+
+                Expr::Intrinsic(_, target, val, _) => {
+                    self.collect_ref_target_module_deps(target, providers, acc);
+                    val.iter().for_each(|v| {
+                        self.collect_expr_module_deps(*v, providers, acc);
+                    });
+                }
+
+                Expr::Binary(l, _, r)
+                | Expr::Index(l, r)
+                | Expr::OptionalIndex(l, r)
+                | Expr::Range(l, r, _)
+                | Expr::Matches(l, r)
+                | Expr::Catch(l, r) => {
+                    self.collect_expr_module_deps(*l, providers, acc);
+                    self.collect_expr_module_deps(*r, providers, acc);
+                }
+
+                Expr::Unary(_, inner)
+                | Expr::TupleIndex(inner, _)
+                | Expr::Field(inner, _)
+                | Expr::OptionalField(inner, _)
+                | Expr::Is(inner, _)
+                | Expr::As(inner, _)
+                | Expr::Read(inner, _)
+                | Expr::Postfix(_, inner)
+                | Expr::Annotate(inner, _)
+                | Expr::Raise(inner) => {
+                    self.collect_expr_module_deps(*inner, providers, acc);
+                }
+
+                Expr::Call(callee, args) => {
+                    self.collect_expr_module_deps(*callee, providers, acc);
+                    args.iter().for_each(|arg| {
+                        self.collect_expr_module_deps(*arg, providers, acc);
+                    });
+                }
+
+                Expr::Object(entries) => {
+                    entries.iter().for_each(|entry| match entry {
+                        ObjectEntry::Field(_, expr)
+                        | ObjectEntry::Spread(expr) => {
+                            self.collect_expr_module_deps(
+                                *expr, providers, acc,
+                            );
+                        }
+                    });
+                }
+
+                Expr::Array(elems) => {
+                    elems.iter().for_each(|elem| match elem {
+                        ArrayElem::Elem(expr) | ArrayElem::Spread(expr) => {
+                            self.collect_expr_module_deps(
+                                *expr, providers, acc,
+                            );
+                        }
+                    });
+                }
+
+                Expr::MapLit(entries) => {
+                    entries.iter().for_each(|(k, v)| {
+                        self.collect_expr_module_deps(*k, providers, acc);
+                        self.collect_expr_module_deps(*v, providers, acc);
+                    });
+                }
+
+                Expr::Variant(_, _, args)
+                | Expr::NakedVariant(_, args)
+                | Expr::ClassMethod(_, _, args)
+                | Expr::NakedClassMethod(_, args) => {
+                    args.iter().for_each(|arg| {
+                        self.collect_expr_module_deps(*arg, providers, acc);
+                    });
+                }
+
+                Expr::Path(segs) => {
+                    self.module_path_dep(segs, providers).into_iter().for_each(
+                        |sid| {
+                            acc.insert(sid);
+                        },
+                    );
+                }
+
+                Expr::Block(stmts, tail) => {
+                    stmts.iter().for_each(|stmt| {
+                        self.collect_stmt_module_deps(*stmt, providers, acc);
+                    });
+                    tail.iter().for_each(|expr| {
+                        self.collect_expr_module_deps(*expr, providers, acc);
+                    });
+                }
+
+                Expr::If(cond, then, els) => {
+                    self.collect_expr_module_deps(*cond, providers, acc);
+                    self.collect_expr_module_deps(*then, providers, acc);
+                    els.iter().for_each(|expr| {
+                        self.collect_expr_module_deps(*expr, providers, acc);
+                    });
+                }
+
+                Expr::Match(scrutinee, arms) => {
+                    self.collect_expr_module_deps(*scrutinee, providers, acc);
+                    arms.iter().for_each(|arm| {
+                        arm.guard.iter().for_each(|guard| {
+                            self.collect_expr_module_deps(
+                                *guard, providers, acc,
+                            );
+                        });
+                        self.collect_expr_module_deps(arm.body, providers, acc);
+                    });
+                }
+
+                Expr::Closure { body, .. } => {
+                    self.collect_expr_module_deps(*body, providers, acc);
+                }
+
+                Expr::Json(entries) => {
+                    entries.iter().for_each(|(_, expr)| {
+                        self.collect_expr_module_deps(*expr, providers, acc);
+                    });
+                }
+
+                Expr::Loop { seed, body, .. } => {
+                    self.collect_expr_module_deps(*seed, providers, acc);
+                    self.collect_expr_module_deps(*body, providers, acc);
+                }
+
+                Expr::Transaction(txn) => {
+                    self.collect_txn_module_deps(txn, providers, acc);
+                }
+
+                Expr::Write(w) => {
+                    self.collect_write_module_deps(w, providers, acc);
+                }
+
+                Expr::Ref(r) => {
+                    self.collect_db_ref_module_deps(r, providers, acc);
+                }
+
+                Expr::JsonAccess(inner, _, key) => {
+                    self.collect_expr_module_deps(*inner, providers, acc);
+                    if let JsonAccessKey::Expr(expr) = key {
+                        self.collect_expr_module_deps(*expr, providers, acc);
+                    }
+                }
+
+                Expr::Literal(_)
+                | Expr::Var(_)
+                | Expr::ClassMethodRef(_, _, _)
+                | Expr::NakedClassMethodRef(_)
+                | Expr::Regex(_, _)
+                | Expr::Mempty => {}
+            }
+        }
+    }
+
+    fn collect_stmt_module_deps(
+        &self,
+        id: StmtId,
+        providers: &HashMap<QualifiedName, ModuleLetProvider>,
+        acc: &mut HashSet<StmtId>,
+    ) {
+        self.ast
+            .get_stmt(id)
+            .into_iter()
+            .for_each(|stmt| match stmt {
+                Stmt::Let(_, _, rhs, _) | Stmt::Expr(rhs) => {
+                    self.collect_expr_module_deps(*rhs, providers, acc);
+                }
+                Stmt::Fun { body, .. } => {
+                    self.collect_expr_module_deps(*body, providers, acc);
+                }
+                Stmt::ClassInstance { methods, .. } => {
+                    methods.iter().for_each(|m| {
+                        self.collect_expr_module_deps(m.body, providers, acc);
+                    });
+                }
+                Stmt::Module { .. }
+                | Stmt::Import(_)
+                | Stmt::Type { .. }
+                | Stmt::Union { .. }
+                | Stmt::Newtype { .. }
+                | Stmt::ClassDef { .. } => {}
+            });
+    }
+
+    fn collect_txn_module_deps(
+        &self,
+        txn: &TransactionExpr,
+        providers: &HashMap<QualifiedName, ModuleLetProvider>,
+        acc: &mut HashSet<StmtId>,
+    ) {
+        txn.stmts.iter().for_each(|stmt| {
+            self.collect_stmt_module_deps(*stmt, providers, acc);
+        });
+        txn.expr.iter().for_each(|expr| {
+            self.collect_expr_module_deps(*expr, providers, acc);
+        });
+        txn.modifiers.timeout.iter().for_each(|expr| {
+            self.collect_expr_module_deps(*expr, providers, acc);
+        });
+    }
+
+    fn collect_write_module_deps(
+        &self,
+        w: &WriteExpr,
+        providers: &HashMap<QualifiedName, ModuleLetProvider>,
+        acc: &mut HashSet<StmtId>,
+    ) {
+        self.collect_expr_module_deps(w.expr, providers, acc);
+        if let OutputTarget::File(expr) = w.target {
+            self.collect_expr_module_deps(expr, providers, acc);
+        }
+    }
+
+    fn collect_ref_target_module_deps(
+        &self,
+        target: &RefTarget,
+        providers: &HashMap<QualifiedName, ModuleLetProvider>,
+        acc: &mut HashSet<StmtId>,
+    ) {
+        match target {
+            RefTarget::Inline(r) => {
+                self.collect_db_ref_module_deps(r, providers, acc);
+            }
+            RefTarget::Expr(expr) => {
+                self.collect_expr_module_deps(*expr, providers, acc);
+            }
+        }
+    }
+
+    fn collect_db_ref_module_deps(
+        &self,
+        r: &DbRef,
+        providers: &HashMap<QualifiedName, ModuleLetProvider>,
+        acc: &mut HashSet<StmtId>,
+    ) {
+        let subs = match r {
+            DbRef::Local(_, subs) | DbRef::Global(_, subs) => subs,
+        };
+        subs.iter().for_each(|sub| match sub {
+            SubscriptElem::Elem(expr) | SubscriptElem::Spread(expr) => {
+                self.collect_expr_module_deps(*expr, providers, acc);
+            }
+        });
+    }
+
+    fn module_path_dep(
+        &self,
+        segs: &[StringId],
+        providers: &HashMap<QualifiedName, ModuleLetProvider>,
+    ) -> Option<StmtId> {
+        segs.split_last().and_then(|(member, path)| {
+            let qn = QualifiedName::new(path.to_vec());
+            providers
+                .get(&qn)
+                .filter(|p| p.names.contains(member))
+                .map(|p| p.root)
+        })
+    }
+
+    fn collect_simple_lets(
+        &mut self,
+        stmts: &[StmtId],
+        module: Option<&QualifiedName>,
+    ) -> Vec<LetInfo> {
+        let funs: HashSet<StringId> = stmts
+            .iter()
+            .filter_map(|&id| match self.ast.get_stmt(id) {
+                Some(Stmt::Fun { name, .. }) => Some(*name),
+                _ => None,
+            })
+            .collect();
+        let mut seen = HashSet::new();
+        let mut infos = Vec::new();
+
+        let raw: Vec<_> = stmts
+            .iter()
+            .filter_map(|&id| {
+                let span = self.ast.stmt_span(id).unwrap_or_default();
+                match self.ast.get_stmt(id).cloned() {
+                    Some(Stmt::Let(
+                        BindingPattern::Var(name),
+                        ann,
+                        rhs,
+                        vis,
+                    )) => Some(LetInfo {
+                        stmt: id,
+                        name,
+                        ann,
+                        rhs,
+                        vis,
+                        span,
+                    }),
+                    _ => None,
+                }
+            })
+            .collect();
+
+        raw.into_iter().for_each(|info| {
+            let duplicate =
+                funs.contains(&info.name) || seen.contains(&info.name);
+            if duplicate {
+                self.duplicate_let_error(&info, module);
+            } else {
+                seen.insert(info.name);
+                infos.push(info);
+            }
+        });
+
+        infos
+    }
+
+    fn infer_let_graph(
+        &mut self,
+        infos: Vec<LetInfo>,
+        module: Option<&QualifiedName>,
+    ) {
+        let map: HashMap<StmtId, LetInfo> =
+            infos.iter().map(|i| (i.stmt, i.clone())).collect();
+        let names: HashMap<StringId, StmtId> =
+            infos.iter().map(|i| (i.name, i.stmt)).collect();
+        let deps: HashMap<StmtId, HashSet<StmtId>> = infos
+            .iter()
+            .map(|i| {
+                let mut acc = HashSet::new();
+                self.collect_expr_deps(
+                    i.rhs,
+                    &names,
+                    module,
+                    &HashSet::new(),
+                    &mut acc,
+                );
+                (i.stmt, acc)
+            })
+            .collect();
+
+        let mut marks = HashMap::new();
+        let mut stack = Vec::new();
+        let mut order = Vec::new();
+
+        infos.iter().for_each(|i| {
+            self.visit_let(
+                i.stmt, &map, &deps, &mut marks, &mut stack, &mut order,
+            );
+        });
+
+        order
+            .into_iter()
+            .filter_map(|id| map.get(&id).cloned())
+            .for_each(|info| self.infer_simple_let(info, module));
+    }
+
+    fn visit_let(
+        &mut self,
+        id: StmtId,
+        infos: &HashMap<StmtId, LetInfo>,
+        deps: &HashMap<StmtId, HashSet<StmtId>>,
+        marks: &mut HashMap<StmtId, LetMark>,
+        stack: &mut Vec<StmtId>,
+        order: &mut Vec<StmtId>,
+    ) {
+        match marks.get(&id).copied() {
+            Some(LetMark::Done) => {}
+            Some(LetMark::Visiting) => {
+                self.reject_let_cycle(id, infos, marks, stack);
+            }
+            None => {
+                marks.insert(id, LetMark::Visiting);
+                stack.push(id);
+                deps.get(&id).into_iter().for_each(|ids| {
+                    ids.iter().copied().for_each(|dep| {
+                        self.visit_let(dep, infos, deps, marks, stack, order);
+                    });
+                });
+                stack.pop();
+                if marks.get(&id).copied() == Some(LetMark::Visiting) {
+                    marks.insert(id, LetMark::Done);
+                    order.push(id);
+                }
+            }
+        }
+    }
+
+    fn reject_let_cycle(
+        &mut self,
+        id: StmtId,
+        infos: &HashMap<StmtId, LetInfo>,
+        marks: &mut HashMap<StmtId, LetMark>,
+        stack: &[StmtId],
+    ) {
+        let cyc: Vec<StmtId> =
+            stack.iter().copied().skip_while(|&sid| sid != id).collect();
+        let names: Vec<String> = cyc
+            .iter()
+            .filter_map(|sid| infos.get(sid))
+            .map(|i| format!("`{}`", self.env.resolve_string(i.name)))
+            .collect();
+        let msg = if names.is_empty() {
+            "cyclic ordinary `let` binding".to_owned()
+        } else {
+            format!("cyclic ordinary `let` bindings: {}", names.join(", "))
+        };
+        let span = infos.get(&id).map(|i| i.span).unwrap_or_default();
+
+        self.error(TypeError::Custom { msg, span });
+        cyc.into_iter().for_each(|sid| {
+            marks.insert(sid, LetMark::Done);
+            self.hoist.final_lets.insert(sid);
+            infos.get(&sid).into_iter().for_each(|i| {
+                self.env.bind(i.name, Scheme::mono(TyArena::ERROR));
+            });
+        });
+    }
+
+    fn infer_simple_let(
+        &mut self,
+        info: LetInfo,
+        module: Option<&QualifiedName>,
+    ) {
+        self.r#let(
+            info.stmt,
+            &BindingPattern::Var(info.name),
+            info.ann.as_ref(),
+            info.rhs,
+            info.span,
+        );
+        self.hoist.final_lets.insert(info.stmt);
+
+        if let Some(scheme) = self.env.lookup(info.name).cloned() {
+            let origin = self.env.lookup_method_ref_origin(info.name);
+            self.hoist
+                .final_let_schemes
+                .insert(info.stmt, (info.name, scheme.clone(), origin));
+
+            module.into_iter().for_each(|mod_path| {
+                self.env.register_user_module_member(
+                    mod_path.clone(),
+                    info.name,
+                    scheme.clone(),
+                    info.vis,
+                );
+                origin.into_iter().for_each(|origin| {
+                    self.env.set_user_module_member_method_origin(
+                        mod_path, info.name, origin,
+                    );
+                });
+            });
+        }
+    }
+
+    pub(super) fn restore_final_let(&mut self, id: StmtId) {
+        self.hoist
+            .final_let_schemes
+            .get(&id)
+            .cloned()
+            .into_iter()
+            .for_each(|(name, scheme, origin)| {
+                self.env.bind(name, scheme);
+                origin.into_iter().for_each(|origin| {
+                    self.env.bind_method_ref_origin(name, origin);
+                });
+            });
+    }
+
+    pub(super) fn restore_final_lets(&mut self, stmts: &[StmtId]) {
+        stmts
+            .iter()
+            .copied()
+            .for_each(|id| self.restore_final_let(id));
+    }
+
+    fn duplicate_let_error(
+        &mut self,
+        info: &LetInfo,
+        module: Option<&QualifiedName>,
+    ) {
+        let n = self.env.resolve_string(info.name);
+        let msg = module.map_or_else(
+            || {
+                format!(
+                    "duplicate top-level binding `{}`; a function or earlier `let` already binds this name",
+                    n
+                )
+            },
+            |m| {
+                format!(
+                    "duplicate module binding `{}.{}`; a function or earlier `let` already binds this name",
+                    m.display(&self.env.strings),
+                    n
+                )
+            },
+        );
+        self.error(TypeError::Custom {
+            msg,
+            span: info.span,
+        });
+    }
+
+    fn is_method_ref_rhs(&self, rhs: ExprId) -> bool {
+        self.ast.get_expr(rhs).is_some_and(|expr| {
+            matches!(
+                expr,
+                Expr::ClassMethodRef(_, _, _) | Expr::NakedClassMethodRef(_)
+            )
+        })
+    }
+
+    fn collect_expr_deps(
+        &self,
+        id: ExprId,
+        names: &HashMap<StringId, StmtId>,
+        module: Option<&QualifiedName>,
+        bound: &HashSet<StringId>,
+        acc: &mut HashSet<StmtId>,
+    ) {
+        if let Some(expr) = self.ast.get_expr(id) {
+            match expr {
+                Expr::Var(name) => {
+                    if !bound.contains(name) {
+                        names.get(name).into_iter().for_each(|sid| {
+                            acc.insert(*sid);
+                        });
+                    }
+                }
+
+                Expr::Interpolation(parts) | Expr::Tuple(parts) => {
+                    parts.iter().for_each(|part| {
+                        self.collect_expr_deps(
+                            *part, names, module, bound, acc,
+                        );
+                    });
+                }
+
+                Expr::Intrinsic(_, target, val, _) => {
+                    self.collect_ref_target_deps(
+                        target, names, module, bound, acc,
+                    );
+                    val.iter().for_each(|v| {
+                        self.collect_expr_deps(*v, names, module, bound, acc);
+                    });
+                }
+
+                Expr::Binary(l, _, r)
+                | Expr::Index(l, r)
+                | Expr::OptionalIndex(l, r)
+                | Expr::Range(l, r, _)
+                | Expr::Matches(l, r)
+                | Expr::Catch(l, r) => {
+                    self.collect_expr_deps(*l, names, module, bound, acc);
+                    self.collect_expr_deps(*r, names, module, bound, acc);
+                }
+
+                Expr::Unary(_, inner)
+                | Expr::TupleIndex(inner, _)
+                | Expr::Field(inner, _)
+                | Expr::OptionalField(inner, _)
+                | Expr::Is(inner, _)
+                | Expr::As(inner, _)
+                | Expr::Read(inner, _)
+                | Expr::Postfix(_, inner)
+                | Expr::Annotate(inner, _)
+                | Expr::Raise(inner) => {
+                    self.collect_expr_deps(*inner, names, module, bound, acc);
+                }
+
+                Expr::Call(callee, args) => {
+                    self.collect_expr_deps(*callee, names, module, bound, acc);
+                    args.iter().for_each(|arg| {
+                        self.collect_expr_deps(*arg, names, module, bound, acc);
+                    });
+                }
+
+                Expr::Object(entries) => {
+                    entries.iter().for_each(|entry| match entry {
+                        ObjectEntry::Field(_, expr)
+                        | ObjectEntry::Spread(expr) => {
+                            self.collect_expr_deps(
+                                *expr, names, module, bound, acc,
+                            );
+                        }
+                    });
+                }
+
+                Expr::Array(elems) => {
+                    elems.iter().for_each(|elem| match elem {
+                        ArrayElem::Elem(expr) | ArrayElem::Spread(expr) => {
+                            self.collect_expr_deps(
+                                *expr, names, module, bound, acc,
+                            );
+                        }
+                    });
+                }
+
+                Expr::MapLit(entries) => {
+                    entries.iter().for_each(|(k, v)| {
+                        self.collect_expr_deps(*k, names, module, bound, acc);
+                        self.collect_expr_deps(*v, names, module, bound, acc);
+                    });
+                }
+
+                Expr::Variant(_, _, args)
+                | Expr::NakedVariant(_, args)
+                | Expr::ClassMethod(_, _, args)
+                | Expr::NakedClassMethod(_, args) => {
+                    args.iter().for_each(|arg| {
+                        self.collect_expr_deps(*arg, names, module, bound, acc);
+                    });
+                }
+
+                Expr::Path(segs) => {
+                    self.path_dep(segs, names, module).into_iter().for_each(
+                        |sid| {
+                            acc.insert(sid);
+                        },
+                    );
+                }
+
+                Expr::Block(stmts, tail) => {
+                    let mut local = bound.clone();
+                    self.local_decl_names(stmts, &mut local);
+                    stmts.iter().for_each(|stmt| {
+                        self.collect_stmt_deps(
+                            *stmt, names, module, &mut local, acc,
+                        );
+                    });
+                    tail.iter().for_each(|expr| {
+                        self.collect_expr_deps(
+                            *expr, names, module, &local, acc,
+                        );
+                    });
+                }
+
+                Expr::If(cond, then, els) => {
+                    self.collect_expr_deps(*cond, names, module, bound, acc);
+                    let mut local = bound.clone();
+                    self.if_cond_binding_names(*cond, &mut local);
+                    self.collect_expr_deps(*then, names, module, &local, acc);
+                    els.iter().for_each(|expr| {
+                        self.collect_expr_deps(
+                            *expr, names, module, bound, acc,
+                        );
+                    });
+                }
+
+                Expr::Match(scrutinee, arms) => {
+                    self.collect_expr_deps(
+                        *scrutinee, names, module, bound, acc,
+                    );
+                    arms.iter().for_each(|arm| {
+                        self.collect_match_arm_deps(
+                            arm, names, module, bound, acc,
+                        );
+                    });
+                }
+
+                Expr::Closure { params, body, .. } => {
+                    let mut local = bound.clone();
+                    params.iter().for_each(|(name, _)| {
+                        local.insert(*name);
+                    });
+                    self.collect_expr_deps(*body, names, module, &local, acc);
+                }
+
+                Expr::Json(entries) => {
+                    entries.iter().for_each(|(_, expr)| {
+                        self.collect_expr_deps(
+                            *expr, names, module, bound, acc,
+                        );
+                    });
+                }
+
+                Expr::Loop {
+                    seed,
+                    state_param,
+                    cont_param,
+                    body,
+                } => {
+                    self.collect_expr_deps(*seed, names, module, bound, acc);
+                    let mut local = bound.clone();
+                    local.insert(state_param.0);
+                    local.insert(cont_param.0);
+                    self.collect_expr_deps(*body, names, module, &local, acc);
+                }
+
+                Expr::Transaction(txn) => {
+                    self.collect_txn_deps(txn, names, module, bound, acc);
+                }
+
+                Expr::Write(w) => {
+                    self.collect_write_deps(w, names, module, bound, acc);
+                }
+
+                Expr::Ref(r) => {
+                    self.collect_db_ref_deps(r, names, module, bound, acc);
+                }
+
+                Expr::JsonAccess(inner, _, key) => {
+                    self.collect_expr_deps(*inner, names, module, bound, acc);
+                    if let JsonAccessKey::Expr(expr) = key {
+                        self.collect_expr_deps(
+                            *expr, names, module, bound, acc,
+                        );
+                    }
+                }
+
+                Expr::Literal(_)
+                | Expr::ClassMethodRef(_, _, _)
+                | Expr::NakedClassMethodRef(_)
+                | Expr::Regex(_, _)
+                | Expr::Mempty => {}
+            }
+        }
+    }
+
+    fn collect_stmt_deps(
+        &self,
+        id: StmtId,
+        names: &HashMap<StringId, StmtId>,
+        module: Option<&QualifiedName>,
+        bound: &mut HashSet<StringId>,
+        acc: &mut HashSet<StmtId>,
+    ) {
+        if let Some(stmt) = self.ast.get_stmt(id) {
+            match stmt {
+                Stmt::Let(pat, _, rhs, _) => {
+                    self.collect_expr_deps(*rhs, names, module, bound, acc);
+                    Self::binding_names(pat, bound);
+                }
+
+                Stmt::Expr(expr) => {
+                    self.collect_expr_deps(*expr, names, module, bound, acc);
+                }
+
+                Stmt::Fun {
+                    name, params, body, ..
+                } => {
+                    let mut local = bound.clone();
+                    local.insert(*name);
+                    params.iter().for_each(|(param, _)| {
+                        local.insert(*param);
+                    });
+                    self.collect_expr_deps(*body, names, module, &local, acc);
+                    bound.insert(*name);
+                }
+
+                Stmt::ClassInstance { methods, .. } => {
+                    methods.iter().for_each(|m| {
+                        let mut local = bound.clone();
+                        m.params.iter().for_each(|(param, _)| {
+                            local.insert(*param);
+                        });
+                        self.collect_expr_deps(
+                            m.body, names, module, &local, acc,
+                        );
+                    });
+                }
+
+                Stmt::Module { name, .. } => {
+                    bound.insert(*name);
+                }
+
+                Stmt::Import(_)
+                | Stmt::Type { .. }
+                | Stmt::Union { .. }
+                | Stmt::Newtype { .. }
+                | Stmt::ClassDef { .. } => {}
+            }
+        }
+    }
+
+    fn collect_match_arm_deps(
+        &self,
+        arm: &MatchArm,
+        names: &HashMap<StringId, StmtId>,
+        module: Option<&QualifiedName>,
+        bound: &HashSet<StringId>,
+        acc: &mut HashSet<StmtId>,
+    ) {
+        let mut local = bound.clone();
+        self.match_pattern_names(arm.pattern, &mut local);
+        arm.guard.iter().for_each(|guard| {
+            self.collect_expr_deps(*guard, names, module, &local, acc);
+        });
+        self.collect_expr_deps(arm.body, names, module, &local, acc);
+    }
+
+    fn collect_txn_deps(
+        &self,
+        txn: &TransactionExpr,
+        names: &HashMap<StringId, StmtId>,
+        module: Option<&QualifiedName>,
+        bound: &HashSet<StringId>,
+        acc: &mut HashSet<StmtId>,
+    ) {
+        let mut local = bound.clone();
+        self.local_decl_names(&txn.stmts, &mut local);
+        txn.stmts.iter().for_each(|stmt| {
+            self.collect_stmt_deps(*stmt, names, module, &mut local, acc);
+        });
+        txn.expr.iter().for_each(|expr| {
+            self.collect_expr_deps(*expr, names, module, &local, acc);
+        });
+        txn.modifiers.timeout.iter().for_each(|expr| {
+            self.collect_expr_deps(*expr, names, module, bound, acc);
+        });
+    }
+
+    fn local_decl_names(&self, stmts: &[StmtId], out: &mut HashSet<StringId>) {
+        stmts.iter().for_each(|&id| match self.ast.get_stmt(id) {
+            Some(Stmt::Fun { name, .. }) | Some(Stmt::Module { name, .. }) => {
+                out.insert(*name);
+            }
+            _ => {}
+        });
+    }
+
+    fn static_decl_names(&self, stmts: &[StmtId], out: &mut HashSet<StringId>) {
+        stmts.iter().for_each(|&id| match self.ast.get_stmt(id) {
+            Some(Stmt::Let(BindingPattern::Var(name), _, _, _))
+            | Some(Stmt::Fun { name, .. })
+            | Some(Stmt::Module { name, .. }) => {
+                out.insert(*name);
+            }
+            _ => {}
+        });
+    }
+
+    fn collect_write_deps(
+        &self,
+        w: &WriteExpr,
+        names: &HashMap<StringId, StmtId>,
+        module: Option<&QualifiedName>,
+        bound: &HashSet<StringId>,
+        acc: &mut HashSet<StmtId>,
+    ) {
+        self.collect_expr_deps(w.expr, names, module, bound, acc);
+        if let OutputTarget::File(expr) = w.target {
+            self.collect_expr_deps(expr, names, module, bound, acc);
+        }
+    }
+
+    fn collect_ref_target_deps(
+        &self,
+        target: &RefTarget,
+        names: &HashMap<StringId, StmtId>,
+        module: Option<&QualifiedName>,
+        bound: &HashSet<StringId>,
+        acc: &mut HashSet<StmtId>,
+    ) {
+        match target {
+            RefTarget::Inline(r) => {
+                self.collect_db_ref_deps(r, names, module, bound, acc);
+            }
+            RefTarget::Expr(expr) => {
+                self.collect_expr_deps(*expr, names, module, bound, acc);
+            }
+        }
+    }
+
+    fn collect_db_ref_deps(
+        &self,
+        r: &DbRef,
+        names: &HashMap<StringId, StmtId>,
+        module: Option<&QualifiedName>,
+        bound: &HashSet<StringId>,
+        acc: &mut HashSet<StmtId>,
+    ) {
+        let subs = match r {
+            DbRef::Local(_, subs) | DbRef::Global(_, subs) => subs,
+        };
+        subs.iter().for_each(|sub| match sub {
+            SubscriptElem::Elem(expr) | SubscriptElem::Spread(expr) => {
+                self.collect_expr_deps(*expr, names, module, bound, acc);
+            }
+        });
+    }
+
+    fn path_dep(
+        &self,
+        segs: &[StringId],
+        names: &HashMap<StringId, StmtId>,
+        module: Option<&QualifiedName>,
+    ) -> Option<StmtId> {
+        segs.split_last().and_then(|(member, path)| {
+            module
+                .filter(|mod_path| path == mod_path.segments())
+                .and_then(|_| names.get(member).copied())
+        })
+    }
+
+    fn binding_names(pat: &BindingPattern, out: &mut HashSet<StringId>) {
+        match pat {
+            BindingPattern::Var(name) => {
+                out.insert(*name);
+            }
+            BindingPattern::Tuple(pats) => {
+                pats.iter().for_each(|p| Self::binding_names(p, out));
+            }
+            BindingPattern::Object(fields) => {
+                fields.iter().for_each(|(_, p)| Self::binding_names(p, out));
+            }
+            BindingPattern::Array(pats, rest) => {
+                pats.iter().for_each(|p| Self::binding_names(p, out));
+                if let Some(RestPattern::Bind(name)) = rest {
+                    out.insert(*name);
+                }
+            }
+            BindingPattern::Wildcard => {}
+        }
+    }
+
+    fn if_cond_binding_names(&self, cond: ExprId, out: &mut HashSet<StringId>) {
+        self.ast.get_expr(cond).into_iter().for_each(|expr| {
+            if let Expr::Is(_, pat) = expr {
+                Self::type_pattern_names(pat, out);
+            }
+        });
+    }
+
+    fn type_pattern_names(pat: &TypePattern, out: &mut HashSet<StringId>) {
+        match pat {
+            TypePattern::VariantBind(_, _, names)
+            | TypePattern::NakedVariantBind(_, names) => {
+                names.iter().for_each(|name| {
+                    out.insert(*name);
+                });
+            }
+            TypePattern::Type(_)
+            | TypePattern::Variant(_, _)
+            | TypePattern::NakedVariant(_)
+            | TypePattern::VariantWildcard(_, _)
+            | TypePattern::NakedVariantWildcard(_)
+            | TypePattern::Object(_) => {}
+        }
+    }
+
+    fn match_pattern_names(
+        &self,
+        id: MatchPatternId,
+        out: &mut HashSet<StringId>,
+    ) {
+        self.ast
+            .get_pattern(id)
+            .into_iter()
+            .for_each(|pat| match pat {
+                MatchPattern::Var(name) | MatchPattern::Is(name, _) => {
+                    out.insert(*name);
+                }
+                MatchPattern::Variant(_, _, pats)
+                | MatchPattern::NakedVariant(_, pats) => {
+                    pats.iter().for_each(|p| self.match_pattern_names(*p, out));
+                }
+                MatchPattern::Tuple(pats) => {
+                    pats.iter().for_each(|p| self.match_pattern_names(*p, out));
+                }
+                MatchPattern::Object(fields) => {
+                    fields
+                        .iter()
+                        .for_each(|(_, p)| self.match_pattern_names(*p, out));
+                }
+                MatchPattern::Array(pats, rest) => {
+                    pats.iter().for_each(|p| self.match_pattern_names(*p, out));
+                    if let Some(RestPattern::Bind(name)) = rest {
+                        out.insert(*name);
+                    }
+                }
+                MatchPattern::Wildcard | MatchPattern::Literal(_) => {}
+            });
+    }
     /// Hoist non-module declarations (functions and class instances).
     ///
-    /// Called in Phase 3 after modules have been hoisted and imports processed.
+    /// Called in Phase `3` after modules have been hoisted and imports processed.
     fn hoist_non_module(&mut self, id: StmtId) {
         let span = self.ast.stmt_span(id).unwrap_or_default();
         let stmt = self.ast.get_stmt(id).cloned();
@@ -234,17 +1809,22 @@ impl InferCtx<'_> {
                 constraints,
                 assoc_types: _,
                 methods,
-            }) => self.hoist_class_instance(ClassInstanceInput {
-                class_name,
-                class_args: &class_args,
-                type_params: &type_params,
-                for_type,
-                constraints: &constraints,
-                methods: &methods,
-                assoc_types: (),
-                module: None,
-                span,
-            }),
+            }) => {
+                if !self.hoist.early_instances.contains(&id) {
+                    self.hoist_class_instance(ClassInstanceInput {
+                        class_name,
+                        class_args: &class_args,
+                        type_params: &type_params,
+                        for_type,
+                        constraints: &constraints,
+                        methods: &methods,
+                        assoc_types: (),
+                        module: None,
+                        span,
+                    });
+                    self.hoist.early_instances.insert(id);
+                }
+            }
 
             Some(Stmt::ClassDef {
                 name,
@@ -263,7 +1843,7 @@ impl InferCtx<'_> {
                 span,
             }),
 
-            // Modules already hoisted in Phase 1; imports processed in Phase 2;
+            // Modules already hoisted in Phase `1`; imports processed in Phase `2`;
             // other statements don't need hoisting
             _ => {}
         }
@@ -367,14 +1947,14 @@ impl InferCtx<'_> {
     /// Registers the module name and hoists all function members with
     /// provisional types. Nested modules are processed recursively.
     ///
-    /// Uses the same three-phase approach as top-level hoisting:
-    /// 1. Process nested modules and type declarations
-    /// 2. Process imports inside the module
-    /// 3. Process functions, LETs, and class instances
+    /// Uses the same phased approach as top-level hoisting: nested modules and
+    /// type declarations first, then imports, then functions and class
+    /// instances.
     fn hoist_module(
         &mut self,
         mod_path: QualifiedName,
         body: &[StmtId],
+        root: &[StmtId],
         span: Span,
     ) {
         // Register the module name
@@ -383,7 +1963,7 @@ impl InferCtx<'_> {
         // Save and set current module for unqualified type resolution
         let prev_module = self.current_module.replace(mod_path.clone());
 
-        // Phase 1: Process nested modules and type declarations
+        // Phase `1`: Process nested modules and type declarations
         body.iter().for_each(|&id| {
             let item_span = self.ast.stmt_span(id).unwrap_or(span);
             let item = self.ast.get_stmt(id).cloned();
@@ -391,7 +1971,12 @@ impl InferCtx<'_> {
             match item {
                 Some(Stmt::Module { ref name, ref body }) => {
                     // Nested module; recurse with qualified path
-                    self.hoist_module(mod_path.child(*name), body, item_span);
+                    self.hoist_module(
+                        mod_path.child(*name),
+                        body,
+                        root,
+                        item_span,
+                    );
                 }
 
                 // `variant`/`union`/`newtype`: register visibility for imports.
@@ -435,7 +2020,10 @@ impl InferCtx<'_> {
             }
         });
 
-        // Phase 2: Process imports inside the module
+        // Phase `2`: Process imports inside the module
+        let prev_defers = self.defer_missing_import_members;
+        self.defer_missing_import_members =
+            prev_defers || self.env.scope_depth() == 1;
         body.iter().for_each(|&id| {
             let item_span = self.ast.stmt_span(id).unwrap_or(span);
             let item = self.ast.get_stmt(id).cloned();
@@ -444,8 +2032,9 @@ impl InferCtx<'_> {
                 self.import(import, item_span);
             }
         });
+        self.defer_missing_import_members = prev_defers;
 
-        // Phase 3: Process functions, LETs, and class instances
+        // Phase `3`: Process functions and class instances
         body.iter().for_each(|&id| {
             let item_span = self.ast.stmt_span(id).unwrap_or(span);
             let item = self.ast.get_stmt(id).cloned();
@@ -479,72 +2068,7 @@ impl InferCtx<'_> {
                     }
                 }
 
-                // Module let bindings: hoist with provisional type.
-                // Only simple bindings are valid; destructuring rejected in Pass 2.
-                Some(Stmt::Let(
-                    BindingPattern::Var(ref const_name),
-                    ref ann,
-                    ref rhs,
-                    vis,
-                )) => {
-                    let closure = self.ast.get_expr(*rhs).cloned().and_then(
-                        |e| match e {
-                            Expr::Closure {
-                                type_params,
-                                params,
-                                ret,
-                                ..
-                            } => Some((type_params, params, ret)),
-                            _ => None,
-                        },
-                    );
-                    match closure {
-                        Some((type_params, params, ret)) => {
-                            // Closure-RHS: parity with `fun`. `hoist_fun`
-                            // registers both the env binding AND the
-                            // `hoisted_funs` entry.
-                            self.hoist_fun(
-                                id,
-                                *const_name,
-                                &type_params,
-                                &params,
-                                ret.as_ref(),
-                            );
-                            if let Some(scheme) =
-                                self.env.lookup(*const_name).cloned()
-                            {
-                                self.env.register_user_module_member(
-                                    mod_path.clone(),
-                                    *const_name,
-                                    scheme,
-                                    vis,
-                                );
-                            }
-                        }
-                        None => {
-                            // Non-closure: provisional `TyVar`, tracked for
-                            // Pass 2 unify.
-                            let ty = match ann {
-                                Some(aid) => self
-                                    .convert()
-                                    .ast_type_to_ty(*aid, &IndexMap::new()),
-                                None => self.fresh(),
-                            };
-                            let scheme = Scheme::mono(ty);
-                            self.env.bind(*const_name, scheme.clone());
-                            self.env.register_user_module_member(
-                                mod_path.clone(),
-                                *const_name,
-                                scheme,
-                                vis,
-                            );
-                            // `QualifiedName` clone is typically stack-only (`SmallVec`).
-                            self.hoist
-                                .module_lets
-                                .insert((mod_path.clone(), *const_name), ty);
-                        }
-                    }
-                }
+                Some(Stmt::Let(BindingPattern::Var(_), _, _, _)) => {}
 
                 Some(Stmt::ClassInstance {
                     ref class_name,
@@ -577,9 +2101,140 @@ impl InferCtx<'_> {
         self.current_module = prev_module;
     }
 
+    fn hoist_module_let_method_classes(
+        &mut self,
+        body: &[StmtId],
+        root: &[StmtId],
+        span: Span,
+    ) {
+        let names: HashSet<StringId> = body
+            .iter()
+            .filter_map(|&id| match self.ast.get_stmt(id) {
+                Some(Stmt::Let(BindingPattern::Var(_), _, rhs, _)) => {
+                    self.method_ref_class(*rhs)
+                }
+                _ => None,
+            })
+            .collect();
+
+        names.iter().for_each(|&name| {
+            if let Some(id) = self.find_class_def(root, name) {
+                let saved = self.current_module.take();
+                self.hoist_class_def_stmt(id, span);
+                self.hoist_hkt_class_instance_stmts(root, name, span, None);
+                self.current_module = saved;
+            } else {
+                self.find_class_def(body, name)
+                    .into_iter()
+                    .for_each(|id| self.hoist_class_def_stmt(id, span));
+            }
+        });
+    }
+
+    fn method_ref_class(&self, rhs: ExprId) -> Option<StringId> {
+        self.ast.get_expr(rhs).and_then(|expr| match expr {
+            Expr::ClassMethodRef(class, _, _) => Some(*class),
+            _ => None,
+        })
+    }
+
+    fn clear_module_let_method_origins(&mut self, infos: &[LetInfo]) {
+        infos.iter().for_each(|info| {
+            self.env.lookup(info.name).cloned().into_iter().for_each(
+                |scheme| {
+                    self.env.bind(info.name, scheme);
+                },
+            );
+        });
+    }
+
+    fn find_class_def(
+        &self,
+        stmts: &[StmtId],
+        name: StringId,
+    ) -> Option<StmtId> {
+        stmts.iter().copied().find(|&id| {
+            matches!(
+                self.ast.get_stmt(id),
+                Some(Stmt::ClassDef { name: n, .. }) if *n == name
+            )
+        })
+    }
+
+    fn hoist_class_def_stmt(&mut self, id: StmtId, span: Span) {
+        let stmt = self.ast.get_stmt(id).cloned();
+        if let Some(Stmt::ClassDef {
+            name,
+            class_params,
+            self_var,
+            supers,
+            assoc_types,
+            methods,
+        }) = stmt
+        {
+            self.hoist_class_def(ClassDefInput {
+                name,
+                class_params: &class_params,
+                self_var,
+                supers: &supers,
+                assoc_types: &assoc_types,
+                methods: &methods,
+                span,
+            });
+        }
+    }
+
+    fn hoist_hkt_class_instance_stmts(
+        &mut self,
+        stmts: &[StmtId],
+        name: StringId,
+        span: Span,
+        module: Option<QualifiedName>,
+    ) {
+        stmts.iter().copied().for_each(|id| {
+            let stmt = self.ast.get_stmt(id).cloned();
+            if let Some(Stmt::ClassInstance {
+                class_name,
+                class_args,
+                type_params,
+                for_type,
+                constraints,
+                assoc_types: _,
+                methods,
+            }) = stmt
+            {
+                let is_hkt = self
+                    .env
+                    .class_registry()
+                    .lookup_by_name(class_name)
+                    .is_some_and(|class| {
+                        matches!(
+                            self.env.class_registry().shape(class),
+                            ClassShape::Hkt { .. }
+                        )
+                    });
+                let done = self.hoist.early_instances.contains(&id);
+                if class_name == name && is_hkt && !done {
+                    self.hoist_class_instance(ClassInstanceInput {
+                        class_name,
+                        class_args: &class_args,
+                        type_params: &type_params,
+                        for_type,
+                        constraints: &constraints,
+                        methods: &methods,
+                        assoc_types: (),
+                        module: module.clone(),
+                        span,
+                    });
+                    self.hoist.early_instances.insert(id);
+                }
+            }
+        });
+    }
+
     /// Register a user-defined class stub in the class registry.
     ///
-    /// Called during Phase 0 of hoisting to make class names available
+    /// Called during Phase `0` of hoisting to make class names available
     /// for constraint resolution and method lookup in later phases.
     fn register_class_stub(
         &mut self,
@@ -706,7 +2361,7 @@ impl InferCtx<'_> {
     /// Hoist a user-defined class definition.
     ///
     /// Builds method schemes for each method signature and updates the
-    /// stub `ClassDef` (registered during Phase 0) with full
+    /// stub `ClassDef` (registered during Phase `0`) with full
     /// methods and resolved superclass constraints.
     fn hoist_class_def(&mut self, input: ClassDefInput<'_>) {
         if let Some(class_id) =
@@ -742,7 +2397,7 @@ impl InferCtx<'_> {
                 })
                 .collect();
 
-            // Update the stub ClassDef in the registry
+            // Update the stub `ClassDef` in the registry.
             let def = self.env.class_registry.get_mut(class_id);
             def.methods = method_specs;
             def.supers = resolved_supers;
@@ -760,8 +2415,8 @@ impl InferCtx<'_> {
         let mut subst: IndexMap<StringId, TyId> = IndexMap::new();
         let (total_vars, self_var_idx, class_constraint) = match dc.shape {
             ClassShape::Concrete { params } => {
-                // Self var -> TyVar(0), class params -> TyVar(1..n),
-                // method-local -> TyVar(n+1..)
+                // Self var maps to `TyVar(0)`, class params map to `TyVar(1..n)`,
+                // method-local params map to `TyVar(n+1..)`.
                 let p_start = 1u32;
                 let sv_ty = self.ty_arena.var(0);
                 subst.insert(dc.self_var, sv_ty);
@@ -787,8 +2442,8 @@ impl InferCtx<'_> {
                 (total, 0u32, constraint)
             }
             ClassShape::Hkt { params, .. } => {
-                // Method-local type params -> TyVar(0..m-1),
-                // class (fixed) params -> TyVar(m..m+p-1),
+                // Method-local type params map to `TyVar(0..m-1)`,
+                // class params map to `TyVar(m..m+p-1)`.
                 // self var -> TyVar(m+p)
                 let p_start = method.type_params.iter().fold(0u32, |i, tp| {
                     subst.insert(tp.name, self.ty_arena.var(i));
@@ -992,7 +2647,7 @@ impl InferCtx<'_> {
             span,
         } = input;
 
-        // Parse class name; silently skip if invalid (error in Pass 2)
+        // Parse class name; silently skip if invalid (error in Pass `2`)
         if let Some(class) =
             self.env.class_registry().lookup_by_name(class_name)
         {
@@ -1143,7 +2798,7 @@ impl InferCtx<'_> {
                         },
                     );
 
-                    // Build method map (empty for hoisting; filled in Pass 2)
+                    // Build method map, empty for hoisting; filled in Pass `2`.
                     // Use qualified type name for function name generation to avoid collisions.
                     let type_name_for_fn =
                         match (self.ty_arena.get(for_ty), &module) {
@@ -1182,7 +2837,7 @@ impl InferCtx<'_> {
                         })
                         .collect();
 
-                    // Collect all type params in positional order for 1:1
+                    // Collect all type params in positional order for `1:1`
                     // zip with `type_args`. For tuple constructors, use
                     // the full positional list from `for_ty` so that
                     // element vars at interleaved positions are included.
@@ -1197,7 +2852,7 @@ impl InferCtx<'_> {
                         type_param_subst.values().copied().collect()
                     };
 
-                    // Register instance (ignore duplicate errors; caught in Pass 2)
+                    // Register instance, ignore duplicate errors; caught in Pass `2`.
                     let inst = Instance {
                         class,
                         class_args: class_arg_tys,

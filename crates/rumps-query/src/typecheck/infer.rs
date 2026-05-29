@@ -21,23 +21,25 @@
 //! testing for regression detection. This approach has proven far more effective
 //! at catching bugs in practice.
 
+mod constraint_region;
 mod convert;
 mod expr;
 mod hoist;
 mod pattern;
+mod scheme;
 mod stmt;
 
 use std::collections::{HashMap, HashSet};
 use std::mem;
-use std::ops::Range;
 
 use indexmap::IndexMap;
 use nonempty::NonEmpty;
 use smallvec::SmallVec;
 
+use self::constraint_region::ConstraintRegion;
 use super::convert::is_in_module;
 use super::decl::TypeDeclRegistry;
-use super::env::TypeEnv;
+use super::env::{MethodRefOrigin, TypeEnv};
 use super::error::{TyPrinter, TypeError};
 use super::instance::{Instance, InstanceRegistry};
 use super::ty::{Rename, Scheme, Ty, TyArena, TyId, TyVar, TypeClass};
@@ -289,24 +291,19 @@ pub(super) struct InstanceMethodInput<'a> {
 /// (finalization). Logically cohesive; methods on this struct take a
 /// `&mut HoistCtx` for access to shared `InferCtx` state.
 pub(super) struct HoistState {
-    /// Top-level non-closure `let` bindings hoisted with a provisional type var.
+    /// Simple top-level and module `let` statements inferred before function
+    /// bodies, so Pass `2` skips re-inference.
+    pub(super) final_lets: HashSet<StmtId>,
+    /// Finalized simple `let` bindings, keyed by statement.
     ///
-    /// Pass 1 inserts a fresh var here for each simple `let name = ...` at
-    /// script top level (non-interactive only) whose RHS is NOT a closure
-    /// literal. Pass 2 `r#let` removes the entry, unifies the provisional
-    /// var with the inferred RHS type, and rebinds the name with the final
-    /// scheme.
-    ///
-    /// Closure-RHS `let`s are NOT tracked here; they are hoisted via
-    /// `hoist_fun` and use the existing `closure_schemes` rebind path.
-    pub(super) lets: HashMap<StringId, TyId>,
-    /// Module-level `let` member bindings hoisted with a provisional type var.
-    ///
-    /// Same purpose as `lets`, scoped per module path so distinct
-    /// modules cannot collide. Phase 2 hoists into this map; the
-    /// corresponding unify step happens inside `user_module` Pass 2 just
-    /// before re-registering the member.
-    pub(super) module_lets: HashMap<(QualifiedName, StringId), TyId>,
+    /// Pass `2` rebinds these into the active lexical scope without
+    /// re-inferring the RHS, so later same-name module `let`s do not leak into
+    /// earlier modules or top-level scopes.
+    pub(super) final_let_schemes:
+        HashMap<StmtId, (StringId, Scheme, Option<MethodRefOrigin>)>,
+    /// Class instance statements registered early for module method reference
+    /// `let`s.
+    pub(super) early_instances: HashSet<StmtId>,
     /// Hoisted polymorphic schemes that have not yet been finalized by Pass 2.
     ///
     /// Populated by `hoist_fun` (top level, modules, blocks). The key is
@@ -364,182 +361,15 @@ pub(super) struct HoistState {
 impl HoistState {
     fn new() -> Self {
         Self {
-            lets: HashMap::new(),
-            module_lets: HashMap::new(),
+            final_lets: HashSet::new(),
+            final_let_schemes: HashMap::new(),
+            early_instances: HashSet::new(),
             funs: HashMap::new(),
             fun_index: HashMap::new(),
             forward_instantiations: HashMap::new(),
             finalized_funs: Vec::new(),
             replay_var_maps: Vec::new(),
         }
-    }
-
-    /// Temporarily establish union-find connectivity from `Unify` and
-    /// `Callable` constraints. Caller must create and rollback the UF
-    /// snapshot.
-    ///
-    /// Handles:
-    /// - `Unify(Var, Var)`: direct union
-    /// - `Unify(Fn, Fn)`: sub-unify param and return vars
-    /// - `Callable` with `Fn` callee: union param/ret vars
-    /// - `Callable` with `Var` callee: union callee with arg/ret vars
-    ///
-    /// Temporarily takes ownership of `cx.constraints` to avoid
-    /// cloning; callers pass a range selecting which constraints to
-    /// process.
-    fn build_constraint_unions(cx: &mut HoistCtx<'_>, range: Range<usize>) {
-        let cs = mem::take(cx.constraints);
-        cs[range].iter().for_each(|(c, _)| match c {
-            Constraint::Unify(a, b, _) => {
-                if let (Ty::Var(va), Ty::Var(vb)) =
-                    (cx.ty_arena.get(*a), cx.ty_arena.get(*b))
-                {
-                    let ra = cx.uf.find(*va);
-                    let rb = cx.uf.find(*vb);
-                    cx.uf.union(ra, rb);
-                }
-                let ta = cx.ty_arena.get(*a).clone();
-                let tb = cx.ty_arena.get(*b).clone();
-                if let (Ty::Fn(pa, ra), Ty::Fn(pb, rb)) = (ta, tb) {
-                    pa.iter().zip(pb.iter()).for_each(|(&x, &y)| {
-                        if let (Ty::Var(vx), Ty::Var(vy)) =
-                            (cx.ty_arena.get(x), cx.ty_arena.get(y))
-                        {
-                            let rx = cx.uf.find(*vx);
-                            let ry = cx.uf.find(*vy);
-                            cx.uf.union(rx, ry);
-                        }
-                    });
-                    if let (Ty::Var(vr), Ty::Var(vs)) =
-                        (cx.ty_arena.get(ra), cx.ty_arena.get(rb))
-                    {
-                        let rr = cx.uf.find(*vr);
-                        let rs = cx.uf.find(*vs);
-                        cx.uf.union(rr, rs);
-                    }
-                }
-            }
-            Constraint::Callable {
-                callee, args, ret, ..
-            } => {
-                let ct = cx.ty_arena.get(*callee).clone();
-                match ct {
-                    Ty::Fn(params, fn_ret) => {
-                        params.iter().zip(args.iter()).for_each(|(&p, &a)| {
-                            if let (Ty::Var(vp), Ty::Var(va)) =
-                                (cx.ty_arena.get(p), cx.ty_arena.get(a))
-                            {
-                                let rp = cx.uf.find(*vp);
-                                let ra = cx.uf.find(*va);
-                                cx.uf.union(rp, ra);
-                            }
-                        });
-                        if let (Ty::Var(vr), Ty::Var(va)) =
-                            (cx.ty_arena.get(fn_ret), cx.ty_arena.get(*ret))
-                        {
-                            let rr = cx.uf.find(*vr);
-                            let ra = cx.uf.find(*va);
-                            cx.uf.union(rr, ra);
-                        }
-                    }
-                    Ty::Var(vc) => {
-                        if let Ty::Var(vr) = cx.ty_arena.get(*ret) {
-                            let rc = cx.uf.find(vc);
-                            let rr = cx.uf.find(*vr);
-                            cx.uf.union(rc, rr);
-                        }
-                        args.iter().for_each(|&a| {
-                            if let Ty::Var(va) = cx.ty_arena.get(a) {
-                                let rc = cx.uf.find(vc);
-                                let ra = cx.uf.find(*va);
-                                cx.uf.union(rc, ra);
-                            }
-                        });
-                    }
-                    _ => {}
-                }
-            }
-            _ => {}
-        });
-        *cx.constraints = cs;
-    }
-
-    /// Harvest body-emitted `Class` constraints that are transitively linked
-    /// to quantifying vars (via `Unify`/`Callable` constraints) and add them
-    /// to the scheme's constraint set.
-    ///
-    /// Uses UF snapshot/rollback to temporarily process body unifications
-    /// without side-effecting the main UF state.
-    pub(super) fn harvest_body_class_constraints(
-        &self,
-        cx: &mut HoistCtx<'_>,
-        body_constraint_start: usize,
-        vars: &[TyVar],
-        scheme_constraints: &mut SmallVec<[(TyVar, TypeClass<TyId>); 2]>,
-        declared_tvs: &HashSet<TyVar>,
-        tv_names: &HashMap<TyVar, StringId>,
-    ) {
-        let end = cx.constraints.len();
-        let snap = cx.uf.snapshot();
-
-        Self::build_constraint_unions(cx, body_constraint_start..end);
-
-        // Map UF roots to originating quantifying vars; use the first
-        // mapping and skip collisions (two distinct type params sharing
-        // a root would indicate a unification that should not happen in
-        // well-typed code, but we guard defensively)
-        let mut root_to_orig: HashMap<TyVar, TyVar> =
-            HashMap::with_capacity(vars.len());
-        vars.iter().for_each(|&v| {
-            root_to_orig.entry(cx.uf.find(v)).or_insert(v);
-        });
-
-        // Temporarily take constraints to scan body-emitted class
-        // constraints while still having `&mut cx` for UF lookups.
-        let cs = mem::take(cx.constraints);
-        let harvested = cs[body_constraint_start..end]
-            .iter()
-            .filter_map(|(c, _)| match c {
-                Constraint::Class { ty, class, span } => {
-                    match cx.ty_arena.get(*ty) {
-                        Ty::Var(tv) => {
-                            let root = cx.uf.find(*tv);
-                            root_to_orig
-                                .get(&root)
-                                .map(|orig| (*orig, class.clone(), *span))
-                        }
-                        _ => None,
-                    }
-                }
-                _ => None,
-            })
-            .collect::<SmallVec<[(TyVar, TypeClass<TyId>, Span); 2]>>();
-        *cx.constraints = cs;
-
-        let mut rejected: SmallVec<[(TyVar, TypeClass<TyId>); 2]> =
-            SmallVec::new();
-        harvested.into_iter().for_each(|(orig, class, span)| {
-            let entry = (orig, class.clone());
-            if !scheme_constraints.contains(&entry)
-                && !rejected.contains(&entry)
-            {
-                if declared_tvs.contains(&orig) {
-                    let param = tv_names
-                        .get(&orig)
-                        .map(|&n| cx.env.resolve_string(n))
-                        .unwrap_or_else(|| "?".to_owned());
-                    cx.errors.push(TypeError::MissingTypeParamConstraint {
-                        param,
-                        class,
-                        span,
-                    });
-                    rejected.push(entry);
-                } else {
-                    scheme_constraints.push(entry);
-                }
-            }
-        });
-        cx.uf.rollback(snap);
     }
 
     /// Record a forward-ref instantiation if `scheme` matches a
@@ -649,9 +479,8 @@ impl HoistState {
                 // Check whether the replay introduced class constraints
                 // that (through deferred Unify/Callable chains) reach a
                 // previously-finalized function's quantified vars. Use
-                // the same snapshot/rollback technique as
-                // `harvest_body_class_constraints`: temporarily union
-                // all deferred constraints, check, then rollback.
+                // snapshot/rollback to temporarily union all deferred
+                // constraints, check, then rollback.
                 let has_new_class = cx.constraints[constraint_start..]
                     .iter()
                     .any(|(c, _)| matches!(c, Constraint::Class { .. }));
@@ -700,7 +529,12 @@ impl HoistState {
 
         let snap = cx.uf.snapshot();
 
-        Self::build_constraint_unions(cx, 0..end);
+        ConstraintRegion::build_unions(
+            cx.constraints,
+            0..end,
+            cx.uf,
+            cx.ty_arena,
+        );
 
         // Virtual edges: union each scheme var with its replay
         // instantiation vars to bridge the gap for cycles >= 3.
@@ -910,6 +744,34 @@ impl Constraint {
             | Self::Class { span, .. } => *span,
         }
     }
+
+    fn free_vars(&self, arena: &TyArena, uf: &mut UnionFind) -> HashSet<TyVar> {
+        let mut vars = HashSet::new();
+        match self {
+            Self::Unify(a, b, _) => {
+                vars.extend(uf.free_vars(*a, arena));
+                vars.extend(uf.free_vars(*b, arena));
+            }
+            Self::Callable {
+                callee, args, ret, ..
+            } => {
+                vars.extend(uf.free_vars(*callee, arena));
+                args.iter().for_each(|arg| {
+                    vars.extend(uf.free_vars(*arg, arena));
+                });
+                vars.extend(uf.free_vars(*ret, arena));
+            }
+            Self::HasField { base, field_ty, .. } => {
+                vars.extend(uf.free_vars(*base, arena));
+                vars.extend(uf.free_vars(*field_ty, arena));
+            }
+            Self::Class { ty, class, .. } => {
+                vars.extend(uf.free_vars(*ty, arena));
+                vars.extend(class.free_vars(arena, uf));
+            }
+        }
+        vars
+    }
 }
 
 /// Context for class instance type checking.
@@ -996,16 +858,6 @@ pub(crate) struct InferCtx<'a> {
     /// any type (including `Json` in heterogeneous arrays). After constraint
     /// solving, any unresolved type variables in this set default to `Int`.
     numeric_vars: Vec<TyVar>,
-    /// Type schemes for polymorphic closures.
-    ///
-    /// When a closure with type parameters is inferred, its full scheme
-    /// (quantified vars + constraints) is stored here. On `let` binding,
-    /// we retrieve this scheme for proper generalization instead of
-    /// treating the closure as monomorphic.
-    pub(super) closure_schemes: HashMap<ExprId, Scheme>,
-    /// Declared type-param name mappings for polymorphic closures, consumed
-    /// during `let`-binding to pass through to `finalize_hoisted_fun`.
-    closure_tv_names: HashMap<ExprId, HashMap<TyVar, StringId>>,
     /// Current transaction ID, if inside a `transaction` block.
     ///
     /// Used to enforce that global writes (`@set ^...`, `@kill ^...`) only
@@ -1044,6 +896,15 @@ pub(crate) struct InferCtx<'a> {
     /// Contrast with inference variables (from method calls, etc.) which are NOT
     /// in this set and CAN be pattern-matched since they will unify to concrete types.
     pub(super) poly_param_vars: HashSet<TyVar>,
+    /// Declared type parameter names used by qualified `let` generalization.
+    ///
+    /// A `let` bound callable with explicit type parameters may capture
+    /// declared constraints for those parameters, but inferred constraints
+    /// must be reported as missing declarations.
+    pub(super) let_tv_names: HashMap<TyVar, StringId>,
+    /// Declared type parameter constraints used by qualified `let`
+    /// generalization.
+    pub(super) let_tv_cs: Vec<(TyVar, TypeClass<TyId>)>,
     /// Recorded `let` annotations for post-solve union narrowing validation.
     ///
     /// Each entry is `(rhs_expr, rhs_ty, ann_ty, span)`. After constraint
@@ -1058,6 +919,10 @@ pub(crate) struct InferCtx<'a> {
     newtype_edge_checks: Vec<NewtypeEdgeCheck>,
     /// Hoisting and forward-reference tracking state.
     pub(super) hoist: HoistState,
+    /// Whether unresolved user-module value imports should be replayed later.
+    defer_missing_import_members: bool,
+    /// User-module value imports deferred until module `let`s are finalized.
+    deferred_imports: Vec<(ast::Import, Span, Option<QualifiedName>)>,
 }
 
 impl<'a> InferCtx<'a> {
@@ -1097,8 +962,6 @@ impl<'a> InferCtx<'a> {
             deferred_param_calls: Vec::new(),
             deferred_hkt_user_calls: Vec::new(),
             numeric_vars: Vec::new(),
-            closure_schemes: HashMap::new(),
-            closure_tv_names: HashMap::new(),
             in_transaction: None,
             next_txn_id: 0,
             class_context: None,
@@ -1106,10 +969,14 @@ impl<'a> InferCtx<'a> {
             current_module: None,
             interactive,
             poly_param_vars: HashSet::new(),
+            let_tv_names: HashMap::new(),
+            let_tv_cs: Vec::new(),
             let_annotations: Vec::new(),
             read_checks: Vec::new(),
             newtype_edge_checks: Vec::new(),
             hoist: HoistState::new(),
+            defer_missing_import_members: false,
+            deferred_imports: Vec::new(),
         }
     }
 
@@ -1847,13 +1714,11 @@ impl<'a> InferCtx<'a> {
         // Pass 1: Hoist function and module declarations for forward references
         self.hoist_declarations(stmts);
 
-        // Pass 1.5: Hoist top-level `let` bindings (non-interactive only)
-        if !self.interactive {
-            self.hoist_toplevel_lets(stmts);
-        }
-
         // Pass 2: Infer types for all statement bodies
-        stmts.iter().for_each(|id| self.stmt(*id));
+        stmts.iter().copied().for_each(|id| {
+            self.restore_final_lets(stmts);
+            self.stmt(id);
+        });
 
         // Solve collected constraints (updates union-find in-place)
         self.solve();

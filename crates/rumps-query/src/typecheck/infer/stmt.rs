@@ -4,23 +4,26 @@
 //! function definitions, assignments, etc.
 
 use std::collections::{HashMap, HashSet};
-use std::mem;
 
 use indexmap::IndexMap;
 use itertools::Itertools;
 use smallvec::{smallvec, SmallVec};
 
+use super::constraint_region::{ConstraintKey, ConstraintRegion};
+use super::scheme::SchemePolicy;
 use super::{
     ClassContext, ClassInstanceInput, Constraint, HoistCtx, HoistState,
     InferCtx, InstanceMethodInput, NewtypeIntoOverlap,
 };
 use crate::ast::{
-    AssocTypeDef, AstTypeExpr, AstTypeExprId, BindingPattern, DbRef, Expr,
-    ExprId, Import, ImportItem, OutputFormat, OutputTarget, RefTarget, Stmt,
-    StmtId, TypeDefAst, TypeParam, UnOp, Visibility, WriteExpr,
+    ArrayElem, AssocTypeDef, AstTypeExpr, AstTypeExprId, BindingPattern, DbRef,
+    Expr, ExprId, Import, ImportItem, ObjectEntry, OutputFormat, OutputTarget,
+    RefTarget, Stmt, StmtId, TypeDefAst, TypeParam, UnOp, Visibility,
+    WriteExpr,
 };
 use crate::intern::{QualifiedName, StringId};
 use crate::interpreter::instance::RuntimeInstance;
+use crate::typecheck::env::MethodRefOrigin;
 use crate::typecheck::error::TypeError;
 use crate::typecheck::instance::{self, Instance};
 use crate::typecheck::ty::{
@@ -28,24 +31,6 @@ use crate::typecheck::ty::{
 };
 use crate::value::{TypeDef, TypeId};
 use crate::{ClassId, Span};
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum ConstraintKey {
-    Class(TyId, ClassKey),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum ClassKey {
-    Concrete {
-        id: ClassId,
-        params: SmallVec<[TyId; 1]>,
-    },
-    Hkt {
-        id: ClassId,
-        elems: SmallVec<[TyId; 1]>,
-        params: SmallVec<[TyId; 1]>,
-    },
-}
 
 impl InferCtx<'_> {
     /// Infer types for a statement.
@@ -92,7 +77,11 @@ impl InferCtx<'_> {
 
             Some(Stmt::Let(pattern, ann, rhs, _)) => {
                 self.env.mark_non_import();
-                self.r#let(id, &pattern, ann.as_ref(), rhs, span);
+                if self.hoist.final_lets.contains(&id) {
+                    self.restore_final_let(id);
+                } else {
+                    self.r#let(id, &pattern, ann.as_ref(), rhs, span);
+                }
             }
 
             Some(Stmt::Expr(expr)) => {
@@ -214,6 +203,7 @@ impl InferCtx<'_> {
         // Typecheck each statement and validate it's an allowed item type.
         // We also collect type information for registration.
         body.iter().for_each(|&id| {
+            self.restore_final_lets(body);
             let item_span = self.ast.stmt_span(id).unwrap_or(span);
             let item = self.ast.get_stmt(id).cloned();
 
@@ -236,17 +226,33 @@ impl InferCtx<'_> {
                     // Module constants must be simple bindings (not destructuring)
                     match pat {
                         BindingPattern::Var(ref const_name) => {
-                            self.stmt(id);
-                            // Register as module member with visibility
-                            if let Some(scheme) =
-                                self.env.lookup(*const_name).cloned()
-                            {
-                                self.env.register_user_module_member(
-                                    mod_path.clone(),
-                                    *const_name,
-                                    scheme,
-                                    vis,
-                                );
+                            self.env.mark_non_import();
+                            if self.hoist.final_lets.contains(&id) {
+                                self.restore_final_let(id);
+                            } else {
+                                self.stmt(id);
+                                // Register as module member with visibility
+                                if let Some(scheme) =
+                                    self.env.lookup(*const_name).cloned()
+                                {
+                                    let origin = self
+                                        .env
+                                        .lookup_method_ref_origin(*const_name);
+                                    self.env.register_user_module_member(
+                                        mod_path.clone(),
+                                        *const_name,
+                                        scheme,
+                                        vis,
+                                    );
+                                    origin.into_iter().for_each(|origin| {
+                                        self.env
+                                        .set_user_module_member_method_origin(
+                                            &mod_path,
+                                            *const_name,
+                                            origin,
+                                        );
+                                    });
+                                }
                             }
                         }
                         _ => {
@@ -402,6 +408,13 @@ impl InferCtx<'_> {
 
         // Process wildcard: import all public members
         if has_wildcard {
+            if is_user && self.defer_missing_import_members {
+                self.deferred_imports.push((
+                    import.clone(),
+                    span,
+                    self.current_module.clone(),
+                ));
+            }
             // Get public members from builtin module
             if is_builtin {
                 if let Some(m) = import
@@ -423,9 +436,13 @@ impl InferCtx<'_> {
                 self.env
                     .get_public_user_module_members(&mod_qn)
                     .into_iter()
-                    .for_each(|(name_id, scheme)| {
+                    .for_each(|(name_id, scheme, origin)| {
                         if !exclusions.contains(&name_id) {
                             self.env.bind(name_id, scheme);
+                            origin.into_iter().for_each(|origin| {
+                                self.env
+                                    .bind_method_ref_origin(name_id, origin);
+                            });
                         }
                     });
 
@@ -462,13 +479,17 @@ impl InferCtx<'_> {
                     });
 
                 // Then try user module (check visibility)
-                let user = self.env.lookup_user_module_member(&mod_qn, *name);
+                let user =
+                    self.env.lookup_user_module_member(&mod_qn, *name).cloned();
 
                 let mod_path_str = mod_qn.display(&self.env.strings);
                 match (builtin, user) {
                     (Some(s), _) => self.env.bind(bind_id, s),
                     (None, Some(m)) if m.vis == Visibility::Public => {
                         self.env.bind(bind_id, m.scheme.clone());
+                        m.method_origin.into_iter().for_each(|origin| {
+                            self.env.bind_method_ref_origin(bind_id, origin);
+                        });
                     }
                     (None, Some(_)) => {
                         self.error(TypeError::Custom {
@@ -497,18 +518,124 @@ impl InferCtx<'_> {
                                 });
                             }
                             None => {
-                                self.error(TypeError::Custom {
-                                    msg: format!(
-                                        "member `{}` not found in module `{}`",
-                                        n, mod_path_str
-                                    ),
-                                    span,
-                                });
+                                if is_user && self.defer_missing_import_members {
+                                    self.deferred_imports.push((
+                                        Import {
+                                            path: import.path.clone(),
+                                            items: vec![ImportItem::Named {
+                                                name: *name,
+                                                alias: *alias,
+                                            }],
+                                        },
+                                        span,
+                                        self.current_module.clone(),
+                                    ));
+                                } else {
+                                    self.error(TypeError::Custom {
+                                        msg: format!(
+                                            "member `{}` not found in module `{}`",
+                                            n, mod_path_str
+                                        ),
+                                        span,
+                                    });
+                                }
                             }
                         }
                     }
                 }
             }
+        });
+    }
+
+    pub(super) fn replay_deferred_imports_for(
+        &mut self,
+        module: Option<&QualifiedName>,
+    ) {
+        let (ready, rest): (Vec<_>, Vec<_>) = self
+            .deferred_imports
+            .clone()
+            .into_iter()
+            .partition(|(_, _, m)| match (module, m) {
+                (Some(target), Some(found)) => found == target,
+                (None, None) => true,
+                _ => false,
+            });
+        self.deferred_imports = rest;
+        ready.into_iter().for_each(|(import, span, m)| {
+            let prev = match m {
+                Some(ref qn) => self.current_module.replace(qn.clone()),
+                None => self.current_module.take(),
+            };
+            self.replay_deferred_import(&import, span);
+            self.current_module = prev;
+        });
+    }
+
+    pub(super) fn replay_deferred_import(
+        &mut self,
+        import: &Import,
+        span: Span,
+    ) {
+        let mod_qn = QualifiedName::new(import.path.to_vec());
+        let is_user = self.env.is_user_module(&mod_qn);
+        let mod_path_str = mod_qn.display(&self.env.strings);
+        let mut exclusions: HashSet<StringId> = HashSet::new();
+
+        import.items.iter().for_each(|item| {
+            if let ImportItem::Exclude(name) = item {
+                exclusions.insert(*name);
+            }
+        });
+
+        import.items.iter().for_each(|item| match item {
+            ImportItem::Wildcard if is_user => {
+                self.env
+                    .get_public_user_module_members(&mod_qn)
+                    .into_iter()
+                    .for_each(|(name, scheme, origin)| {
+                        if !exclusions.contains(&name) {
+                            self.env.bind(name, scheme);
+                            origin.into_iter().for_each(|origin| {
+                                self.env.bind_method_ref_origin(name, origin);
+                            });
+                        }
+                    });
+            }
+            ImportItem::Named { name, alias } if is_user => {
+                let bind_id = alias.unwrap_or(*name);
+                let n = self.env.resolve_str(*name).to_owned();
+                match self
+                    .env
+                    .lookup_user_module_member(&mod_qn, *name)
+                    .cloned()
+                {
+                    Some(m) if m.vis == Visibility::Public => {
+                        self.env.bind(bind_id, m.scheme.clone());
+                        m.method_origin.into_iter().for_each(|origin| {
+                            self.env.bind_method_ref_origin(bind_id, origin);
+                        });
+                    }
+                    Some(_) => {
+                        self.error(TypeError::Custom {
+                            msg: format!(
+                                "member `{}` is private in module `{}`",
+                                n, mod_path_str
+                            ),
+                            span,
+                        });
+                    }
+                    None => {
+                        self.error(TypeError::Custom {
+                            msg: format!(
+                                "member `{}` not found in module `{}`",
+                                n, mod_path_str
+                            ),
+                            span,
+                        });
+                    }
+                }
+            }
+            _ => {}
         });
     }
 
@@ -533,6 +660,7 @@ impl InferCtx<'_> {
     ) {
         // Capture outer env free vars BEFORE binding function (for generalization)
         let outer_free = self.env.free_vars(&self.ty_arena, &mut self.uf);
+        let constraint_start = self.constraints.len();
 
         // First pass: create fresh type variables for all type parameters
         let name_to_tv: HashMap<StringId, TyVar> = type_params
@@ -607,10 +735,6 @@ impl InferCtx<'_> {
             .func(param_tys.iter().copied().collect(), provisional_ret);
         self.env.bind(name, Scheme::mono(provisional_fn));
 
-        // Snapshot the constraint count so we can scan only the
-        // constraints emitted by this function's body.
-        let body_constraint_start = self.constraints.len();
-
         self.env.push_scope();
         self.bind_params(params, &param_tys);
         self.ty_substs.push(type_param_subst.clone());
@@ -644,43 +768,31 @@ impl InferCtx<'_> {
             .ty_arena
             .func(param_tys.iter().copied().collect(), actual_ret);
         self.interp.function_types.insert(body, fn_ty);
-        let ty_vars = self.uf.free_vars(fn_ty, &self.ty_arena);
-        // Include all declared type params (they may only appear in constraints,
-        // not in the function type itself; e.g. `T` in `[T, F: Fallible[T]]`)
-        let declared_tvs: HashSet<_> = name_to_tv.values().copied().collect();
-        let tv_names: HashMap<TyVar, StringId> =
-            name_to_tv.iter().map(|(&name, &tv)| (tv, name)).collect();
-        let mut vars: SmallVec<[TyVar; 4]> = ty_vars
-            .union(&declared_tvs)
-            .copied()
-            .filter(|v| !outer_free.contains(v))
+        let declared_tvs: HashSet<_> =
+            name_to_tv.values().map(|&tv| self.uf.find(tv)).collect();
+        let tv_names: HashMap<TyVar, StringId> = name_to_tv
+            .iter()
+            .map(|(&name, &tv)| (self.uf.find(tv), name))
             .collect();
-        vars.sort_unstable();
-
-        // Phase 3: harvest body-emitted `Class` constraints transitively
-        // linked to quantifying vars and add them to the scheme.
-        self.hoist.harvest_body_class_constraints(
-            &mut HoistCtx {
-                env: &mut self.env,
-                uf: &mut self.uf,
-                ty_arena: &mut self.ty_arena,
-                constraints: &mut self.constraints,
-                errors: &mut self.errors,
-                current_module: &self.current_module,
-            },
-            body_constraint_start,
-            &vars,
-            &mut scheme_constraints,
-            &declared_tvs,
-            &tv_names,
-        );
-
-        let scheme = Scheme {
-            vars,
-            ty: fn_ty,
-            constraints: scheme_constraints,
+        let policy = if type_params.is_empty() {
+            SchemePolicy::InferredFun
+        } else {
+            SchemePolicy::ExplicitCallable {
+                vars: &declared_tvs,
+                names: &tv_names,
+            }
         };
-        self.env.bind(name, scheme);
+        let end = self.constraints.len();
+        let out = self.qualified_scheme_in_env(
+            fn_ty,
+            constraint_start..end,
+            policy,
+            scheme_constraints,
+            &outer_free,
+        );
+        self.constraints.truncate(constraint_start);
+        self.constraints.extend(out.residual);
+        self.env.bind(name, out.scheme);
         self.hoist.finalize_hoisted_fun(
             &mut HoistCtx {
                 env: &mut self.env,
@@ -710,9 +822,9 @@ impl InferCtx<'_> {
     /// annotation is a named struct, we bind with the full object type
     /// (preserving extra fields) rather than the narrower annotation type.
     ///
-    /// For polymorphic closures: uses the stored scheme from `closure_schemes`
-    /// for proper generalization instead of monomorphizing.
-    fn r#let(
+    /// For simple variable bindings whose RHS has a function type, generalizes
+    /// inferred variables and reachable class constraints into a scheme.
+    pub(super) fn r#let(
         &mut self,
         stmt_id: StmtId,
         pattern: &BindingPattern,
@@ -720,6 +832,8 @@ impl InferCtx<'_> {
         rhs: ExprId,
         span: Span,
     ) {
+        let constraint_start = self.constraints.len();
+
         // If annotation present, parse and unify.
         // Returns `None` if pattern was already bound (special case).
         let ty = match ann {
@@ -763,60 +877,201 @@ impl InferCtx<'_> {
             }
         };
 
-        // Check if RHS is a polymorphic closure (has stored scheme)
-        // This is done AFTER inferring since closure() stores the scheme
-        let closure_scheme = self.closure_schemes.remove(&rhs);
-
         // Bind variables from the pattern (if not already done)
         if let Some(ty) = ty {
-            if let BindingPattern::Var(name) = pattern {
-                // Phase 1: top-level `let` hoist unify. For annotated
-                // lets, `hoisted_ty` is the annotation type and
-                // `infer_default_let` already unified `rhs` with
-                // `annotation`; this second unify is redundant but
-                // harmless. For unannotated lets, `hoisted_ty` is the
-                // fresh var from hoisting and this is the only unify.
-                if let Some(hoisted_ty) = self.hoist.lets.remove(name) {
-                    self.unify(hoisted_ty, ty, span);
+            match pattern {
+                BindingPattern::Var(name) => {
+                    let method_origin = self.method_ref_origin(rhs, ty);
+                    if self.let_generalizes(rhs, ty) {
+                        let end = self.constraints.len();
+                        let out = self.qualified_scheme(
+                            ty,
+                            constraint_start..end,
+                            SchemePolicy::InferredLet,
+                            SmallVec::new(),
+                        );
+                        let has_open_residual =
+                            self.has_open_residual(&out.scheme, &out.residual);
+                        if has_open_residual {
+                            self.env.bind(*name, Scheme::mono(ty));
+                        } else {
+                            self.constraints.truncate(constraint_start);
+                            self.constraints.extend(out.residual);
+                            self.env.bind(*name, out.scheme);
+                            self.hoist.finalize_hoisted_fun(
+                                &mut HoistCtx {
+                                    env: &mut self.env,
+                                    uf: &mut self.uf,
+                                    ty_arena: &mut self.ty_arena,
+                                    constraints: &mut self.constraints,
+                                    errors: &mut self.errors,
+                                    current_module: &self.current_module,
+                                },
+                                stmt_id,
+                                *name,
+                                HashSet::new(),
+                                HashMap::new(),
+                            );
+                        }
+                    } else {
+                        self.env.bind(*name, Scheme::mono(ty));
+                    }
+                    if let Some(origin) = method_origin {
+                        self.env.bind_method_ref_origin(*name, origin);
+                    }
                 }
-                // Phase 2: module-level `let` hoist unify.
-                if let Some(ref mod_path) = self.current_module {
-                    let key = (mod_path.clone(), *name);
-                    if let Some(hoisted_ty) =
-                        self.hoist.module_lets.remove(&key)
-                    {
-                        self.unify(hoisted_ty, ty, span);
+                _ => {
+                    if self.let_generalizes(rhs, ty) {
+                        let end = self.constraints.len();
+                        let out = self.qualified_scheme(
+                            ty,
+                            constraint_start..end,
+                            SchemePolicy::InferredLet,
+                            SmallVec::new(),
+                        );
+                        if self.has_open_residual(&out.scheme, &out.residual) {
+                            self.bind_pattern(pattern, ty, span);
+                        } else {
+                            self.constraints.truncate(constraint_start);
+                            self.constraints.extend(out.residual);
+                            self.bind_pattern_scheme(
+                                pattern,
+                                &out.scheme,
+                                Some(rhs),
+                                span,
+                            );
+                        }
+                    } else {
+                        self.bind_pattern(pattern, ty, span);
                     }
                 }
             }
-
-            // For polymorphic closures, use the stored scheme directly
-            match (&pattern, closure_scheme) {
-                (BindingPattern::Var(name), Some(scheme)) => {
-                    let tv_names =
-                        self.closure_tv_names.remove(&rhs).unwrap_or_default();
-                    let declared_tvs: HashSet<TyVar> =
-                        scheme.vars.iter().copied().collect();
-                    self.env.bind(*name, scheme);
-                    // Phase 4: closure-RHS let parity with `fun`.
-                    self.hoist.finalize_hoisted_fun(
-                        &mut HoistCtx {
-                            env: &mut self.env,
-                            uf: &mut self.uf,
-                            ty_arena: &mut self.ty_arena,
-                            constraints: &mut self.constraints,
-                            errors: &mut self.errors,
-                            current_module: &self.current_module,
-                        },
-                        stmt_id,
-                        *name,
-                        declared_tvs,
-                        tv_names,
-                    );
-                }
-                _ => self.bind_pattern(pattern, ty, span),
-            }
         }
+    }
+
+    fn let_generalizes(&self, rhs: ExprId, ty: TyId) -> bool {
+        Self::type_contains_fn(ty, &self.ty_arena)
+            || self.expr_has_empty_array(rhs)
+    }
+
+    fn expr_has_empty_array(&self, id: ExprId) -> bool {
+        self.ast.get_expr(id).is_some_and(|expr| match expr {
+            Expr::Array(elems) => {
+                elems.is_empty()
+                    || elems.iter().any(|e| match e {
+                        ArrayElem::Elem(id) | ArrayElem::Spread(id) => {
+                            self.expr_has_empty_array(*id)
+                        }
+                    })
+            }
+            Expr::Tuple(elems) => {
+                elems.iter().any(|id| self.expr_has_empty_array(*id))
+            }
+            Expr::Object(entries) => entries.iter().any(|e| match e {
+                ObjectEntry::Field(_, id) | ObjectEntry::Spread(id) => {
+                    self.expr_has_empty_array(*id)
+                }
+            }),
+            Expr::Annotate(inner, _) => self.expr_has_empty_array(*inner),
+            _ => false,
+        })
+    }
+
+    fn has_open_residual(
+        &mut self,
+        scheme: &Scheme,
+        residual: &[(Constraint, Option<QualifiedName>)],
+    ) -> bool {
+        let vars: HashSet<_> = scheme.vars.iter().copied().collect();
+        residual.iter().any(|(c, _)| match c {
+            Constraint::Unify(a, b, _)
+                if matches!(self.ty_arena.get(*a), Ty::Var(_))
+                    && matches!(self.ty_arena.get(*b), Ty::Var(_)) =>
+            {
+                false
+            }
+            _ => c
+                .free_vars(&self.ty_arena, &mut self.uf)
+                .into_iter()
+                .map(|v| self.uf.find(v))
+                .any(|v| vars.contains(&v)),
+        })
+    }
+
+    fn method_ref_origin(
+        &mut self,
+        rhs: ExprId,
+        ty: TyId,
+    ) -> Option<MethodRefOrigin> {
+        self.ast.get_expr(rhs).cloned().and_then(|expr| match expr {
+            Expr::ClassMethodRef(class, type_args, method) => {
+                let class_arg = type_args.first().map(|ty| {
+                    self.convert().ast_type_to_ty(*ty, &IndexMap::new())
+                });
+                self.env
+                    .class_registry()
+                    .lookup_by_name(class)
+                    .map(|class| MethodRefOrigin {
+                        class,
+                        class_arg,
+                        applied: 0,
+                        method,
+                    })
+            }
+            Expr::NakedClassMethodRef(method) => {
+                let mut matches = self
+                    .env
+                    .class_registry()
+                    .lookup_by_method(method)
+                    .into_iter();
+                match (matches.next(), matches.next()) {
+                    (Some(class), None) => Some(MethodRefOrigin {
+                        class,
+                        class_arg: None,
+                        applied: 0,
+                        method,
+                    }),
+                    _ => None,
+                }
+            }
+            Expr::Var(name) => self.env.lookup_method_ref_origin(name),
+            Expr::Path(segments) => {
+                segments.split_last().and_then(|(&member, mod_segments)| {
+                    let mod_qn = QualifiedName::new(mod_segments.to_vec());
+                    self.env
+                        .lookup_user_module_member(&mod_qn, member)
+                        .and_then(|member| member.method_origin)
+                })
+            }
+            Expr::Field(base, member) => {
+                self.ast.get_expr(base).and_then(|e| match e {
+                    Expr::Var(module) => {
+                        let mod_qn = QualifiedName::local(*module);
+                        self.env
+                            .lookup_user_module_member(&mod_qn, member)
+                            .and_then(|member| member.method_origin)
+                    }
+                    _ => None,
+                })
+            }
+            Expr::Call(callee, args) => {
+                self.method_ref_origin(callee, ty).and_then(|origin| {
+                    let applied = origin.applied + args.len();
+                    self.stmt_method_ref_arity(origin)
+                        .filter(|&arity| applied < arity)
+                        .map(|_| MethodRefOrigin { applied, ..origin })
+                })
+            }
+            _ => None,
+        })
+    }
+
+    fn stmt_method_ref_arity(&self, origin: MethodRefOrigin) -> Option<usize> {
+        self.env
+            .class_def(origin.class)
+            .method(origin.method, Span::default())
+            .ok()
+            .and_then(|spec| spec.scheme().arity(&self.ty_arena))
     }
 
     /// Default inference for `let` with type annotation.
@@ -950,6 +1205,178 @@ impl InferCtx<'_> {
                 // Array destructuring is only allowed in match expressions
                 self.error(TypeError::ArrayPatternInLet(span));
             }
+        }
+    }
+
+    pub(super) fn empty_array_scheme(&mut self, rhs: ExprId) -> Option<Scheme> {
+        self.ast.get_expr(rhs).cloned().and_then(|expr| match expr {
+            Expr::Array(elems) if elems.is_empty() => {
+                let tv = self.fresh_var();
+                let elem = self.ty_arena.alloc(Ty::Var(tv));
+                let ty = self.ty_arena.array(elem);
+                Some(Scheme {
+                    vars: smallvec![tv],
+                    ty,
+                    constraints: SmallVec::new(),
+                })
+            }
+            _ => None,
+        })
+    }
+
+    fn bind_pattern_scheme(
+        &mut self,
+        pattern: &BindingPattern,
+        scheme: &Scheme,
+        rhs: Option<ExprId>,
+        span: Span,
+    ) {
+        match pattern {
+            BindingPattern::Var(name) => {
+                self.env.bind(*name, scheme.clone());
+                rhs.and_then(|rhs| self.method_ref_origin(rhs, scheme.ty))
+                    .into_iter()
+                    .for_each(|origin| {
+                        self.env.bind_method_ref_origin(*name, origin);
+                    });
+            }
+
+            BindingPattern::Wildcard => {}
+
+            BindingPattern::Tuple(pats) => {
+                let shape = self.ty_arena.get(scheme.ty).clone();
+                match shape {
+                    Ty::Tuple(ts) if ts.len() == pats.len() => {
+                        pats.iter().zip(ts.iter()).enumerate().for_each(
+                            |(i, (p, &ty))| {
+                                let rhs = self.tuple_field_rhs(rhs, i);
+                                let s = self.project_scheme(scheme, ty);
+                                self.bind_pattern_scheme(p, &s, rhs, span);
+                            },
+                        );
+                    }
+                    Ty::Tuple(ts) => {
+                        self.error(TypeError::ArityMismatch {
+                            expected: pats.len(),
+                            got: ts.len(),
+                            span,
+                        });
+                        pats.iter().for_each(|p| {
+                            self.bind_pattern_scheme(
+                                p,
+                                &Scheme::mono(TyArena::ERROR),
+                                None,
+                                span,
+                            );
+                        });
+                    }
+                    Ty::Var(_) | Ty::Error => {
+                        self.bind_pattern(pattern, scheme.ty, span);
+                    }
+                    _ => {
+                        self.error(TypeError::NotATuple(scheme.ty, span));
+                        pats.iter().for_each(|p| {
+                            self.bind_pattern_scheme(
+                                p,
+                                &Scheme::mono(TyArena::ERROR),
+                                None,
+                                span,
+                            );
+                        });
+                    }
+                }
+            }
+
+            BindingPattern::Object(fields) => {
+                fields.iter().for_each(|(name, sub)| {
+                    let n =
+                        self.env.get_str(*name).unwrap_or_default().to_owned();
+                    let ty = self.field_type(scheme.ty, &n, span);
+                    let rhs = self.object_field_rhs(rhs, *name);
+                    let s = self.project_scheme(scheme, ty);
+                    self.bind_pattern_scheme(sub, &s, rhs, span);
+                });
+            }
+
+            BindingPattern::Array(_, _) => {
+                self.error(TypeError::ArrayPatternInLet(span));
+            }
+        }
+    }
+
+    fn tuple_field_rhs(
+        &self,
+        rhs: Option<ExprId>,
+        idx: usize,
+    ) -> Option<ExprId> {
+        rhs.and_then(|rhs| {
+            self.ast.get_expr(rhs).and_then(|expr| match expr {
+                Expr::Tuple(elems) => elems.get(idx).copied(),
+                _ => None,
+            })
+        })
+    }
+
+    fn object_field_rhs(
+        &self,
+        rhs: Option<ExprId>,
+        field: StringId,
+    ) -> Option<ExprId> {
+        rhs.and_then(|rhs| {
+            self.ast.get_expr(rhs).and_then(|expr| match expr {
+                Expr::Object(entries) => {
+                    entries.iter().find_map(|entry| match entry {
+                        ObjectEntry::Field(name, id) if *name == field => {
+                            Some(*id)
+                        }
+                        ObjectEntry::Field(_, _) | ObjectEntry::Spread(_) => {
+                            None
+                        }
+                    })
+                }
+                _ => None,
+            })
+        })
+    }
+
+    fn project_scheme(&mut self, scheme: &Scheme, ty: TyId) -> Scheme {
+        let pvars: HashSet<_> =
+            scheme.vars.iter().map(|&v| self.uf.find(v)).collect();
+        let mut vars: HashSet<_> = self
+            .uf
+            .free_vars(ty, &self.ty_arena)
+            .into_iter()
+            .map(|v| self.uf.find(v))
+            .filter(|v| pvars.contains(v))
+            .collect();
+        let mut cs = SmallVec::new();
+
+        (0..scheme.constraints.len()).for_each(|_| {
+            scheme.constraints.iter().for_each(|(v, class)| {
+                let v = self.uf.find(*v);
+                let class =
+                    class.resolve_inner(&mut self.uf, &mut self.ty_arena);
+                let entry = (v, class.clone());
+                if vars.contains(&v) && !cs.contains(&entry) {
+                    class
+                        .free_vars(&self.ty_arena, &mut self.uf)
+                        .into_iter()
+                        .map(|fv| self.uf.find(fv))
+                        .filter(|fv| pvars.contains(fv))
+                        .for_each(|fv| {
+                            vars.insert(fv);
+                        });
+                    cs.push(entry);
+                }
+            });
+        });
+
+        let mut vars: SmallVec<[TyVar; 4]> = vars.into_iter().collect();
+        vars.sort_unstable();
+        Scheme {
+            vars,
+            ty: self.uf.resolve(ty, &mut self.ty_arena),
+            constraints: cs,
         }
     }
 
@@ -2034,45 +2461,24 @@ impl InferCtx<'_> {
         } else {
             let end = self.constraints.len();
             let snap = self.uf.snapshot();
-            let got = {
-                let mut cx = HoistCtx {
-                    env: &mut self.env,
-                    uf: &mut self.uf,
-                    ty_arena: &mut self.ty_arena,
-                    constraints: &mut self.constraints,
-                    errors: &mut self.errors,
-                    current_module: &self.current_module,
-                };
-                HoistState::build_constraint_unions(&mut cx, start..end);
-                let roots: HashMap<_, _> =
-                    map.iter().map(|(&tv, &ty)| (cx.uf.find(tv), ty)).collect();
-                let rename = Rename(map.clone());
-                let cs = mem::take(cx.constraints);
-                let got = cs[start..end]
-                    .iter()
-                    .filter_map(|(c, _)| match c {
-                        Constraint::Class { ty, class: cls, .. } => {
-                            match cx.ty_arena.get(*ty) {
-                                Ty::Var(tv) => {
-                                    roots.get(&cx.uf.find(*tv)).map(|&ty| {
-                                        let cls = cls
-                                            .apply(&rename, cx.ty_arena)
-                                            .resolve_inner(cx.uf, cx.ty_arena);
-                                        (ty, cls)
-                                    })
-                                }
-                                _ => None,
-                            }
-                        }
-                        _ => None,
-                    })
-                    .collect::<SmallVec<[_; 2]>>();
-                *cx.constraints = cs;
-                cx.uf.rollback(snap);
-                got
-            };
+            ConstraintRegion::build_unions(
+                &self.constraints,
+                start..end,
+                &mut self.uf,
+                &self.ty_arena,
+            );
+            let rename = Rename(map.clone());
+            let got = ConstraintRegion::reachable_constraint_pairs(
+                &self.constraints,
+                start..end,
+                map,
+                &rename,
+                &mut self.uf,
+                &mut self.ty_arena,
+            );
             let want = self.constraint_keys(expected);
             let got = self.constraint_keys(&got);
+            self.uf.rollback(snap);
             if got.iter().all(|key| want.contains(key)) {
             } else {
                 self.method_constraints_mismatch(class, method, span);
@@ -2140,30 +2546,7 @@ impl InferCtx<'_> {
         &mut self,
         cs: &[(TyId, TypeClass<TyId>)],
     ) -> Vec<ConstraintKey> {
-        let mut keys: Vec<_> = cs
-            .iter()
-            .map(|(ty, cls)| {
-                let ty = self.uf.resolve(*ty, &mut self.ty_arena);
-                let cls = cls.resolve_inner(&mut self.uf, &mut self.ty_arena);
-                ConstraintKey::Class(ty, Self::class_key(&cls))
-            })
-            .collect();
-        keys.sort_unstable();
-        keys
-    }
-
-    fn class_key(cls: &TypeClass<TyId>) -> ClassKey {
-        match cls {
-            TypeClass::Concrete { id, params } => ClassKey::Concrete {
-                id: *id,
-                params: params.clone(),
-            },
-            TypeClass::Hkt { id, elems, params } => ClassKey::Hkt {
-                id: *id,
-                elems: elems.clone(),
-                params: params.clone(),
-            },
-        }
+        ConstraintRegion::keys(cs, &mut self.uf, &mut self.ty_arena)
     }
 
     /// Extract a `TypeId` from a `TyId`, if it represents a named/aliased type.

@@ -464,6 +464,32 @@ impl UnionFind {
         acc
     }
 
+    /// Collect free vars for a type variable, chasing UF bindings.
+    pub(crate) fn free_vars_for_var(
+        &mut self,
+        v: TyVar,
+        arena: &TyArena,
+    ) -> HashSet<TyVar> {
+        let mut acc = HashSet::new();
+        self.collect_free_var(v, arena, &mut acc);
+        acc
+    }
+
+    fn collect_free_var(
+        &mut self,
+        v: TyVar,
+        arena: &TyArena,
+        acc: &mut HashSet<TyVar>,
+    ) {
+        let root = self.find(v);
+        match self.probe(root) {
+            Some(bound) => self.collect_free_vars(bound, arena, acc),
+            None => {
+                acc.insert(root);
+            }
+        }
+    }
+
     fn collect_free_vars(
         &mut self,
         id: TyId,
@@ -473,13 +499,7 @@ impl UnionFind {
         let ty = arena.get(id).clone();
         match ty {
             Ty::Var(v) => {
-                let root = self.find(v);
-                match self.probe(root) {
-                    Some(bound) => self.collect_free_vars(bound, arena, acc),
-                    None => {
-                        acc.insert(root);
-                    }
-                }
+                self.collect_free_var(v, arena, acc);
             }
             Ty::Bool
             | Ty::Int

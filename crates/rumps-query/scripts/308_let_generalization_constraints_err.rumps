@@ -1,0 +1,7 @@
+; Inferred closure constraints are checked at each use site.
+
+fun main() {
+  let neg = x => 0 - x
+
+  write neg("bad")
+}

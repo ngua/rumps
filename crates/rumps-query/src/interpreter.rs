@@ -126,7 +126,7 @@ use crate::ast::{
 use crate::intern::{QualifiedName, StringId, StringInterner};
 use crate::io::IoContext;
 use crate::resolve::{InstanceMap, ResolveCtx};
-use crate::typecheck::{CheckedProgram, ExprAux, RuntimeTyId};
+use crate::typecheck::{CheckedProgram, ExprAux, RuntimeTyId, TyVar};
 use crate::value::{
     CapturedEnv, FunctionDef, Payload, TypeDef, TypeId, TypeRegistry, Value,
     ValueArena, ValueId, ValueMeta, VariantDef,
@@ -204,6 +204,9 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
     /// populate `user_instances`. Keyed by `StmtId` so hoisting can look up
     /// the resolved info when processing `Stmt::ClassInstance`.
     resolved_instances: InstanceMap,
+
+    /// Runtime substitutions for generic callable body evaluation.
+    runtime_ty_substs: Vec<HashMap<TyVar, RuntimeTyId>>,
 }
 
 // Public API
@@ -305,6 +308,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             module_hofs,
             user_instances: instance::RuntimeInstanceRegistry::new(),
             resolved_instances,
+            runtime_ty_substs: Vec::new(),
         })
     }
 
@@ -462,6 +466,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             module_hofs,
             user_instances: instance::RuntimeInstanceRegistry::new(),
             resolved_instances: HashMap::new(),
+            runtime_ty_substs: Vec::new(),
         }
     }
 
@@ -1224,6 +1229,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Add a value to the arena with explicit type metadata.
     fn add_val(&mut self, v: Payload, meta: ValueMeta, span: Span) -> ValueId {
+        let meta = self.runtime_meta(meta);
         self.arena.add_typed(v, meta, span)
     }
 
@@ -1232,10 +1238,11 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     pub(super) fn value_from_meta(
-        &self,
+        &mut self,
         payload: Payload,
         meta: ValueMeta,
     ) -> Value {
+        let meta = self.runtime_meta(meta);
         Value {
             ty: meta.ty,
             repr: meta.repr,
@@ -1248,7 +1255,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         id: ExprId,
         payload: Payload,
     ) -> Value {
-        let meta = self.expr_meta(id);
+        let meta = self.runtime_meta(self.expr_meta(id));
         let meta = self.meta_for_runtime_payload(meta, &payload);
         self.value_from_meta(payload, meta)
     }
@@ -1284,13 +1291,15 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     pub(super) fn value_with_context_meta(
-        &self,
+        &mut self,
         mut value: Value,
         meta: ValueMeta,
     ) -> Value {
+        let meta = self.runtime_meta(meta);
         let meta = match self.checked.types.get(meta.ty) {
             typecheck::Ty::Union(_, _) => {
-                self.checked.types.union_meta(meta.ty, value.repr)
+                let repr = self.runtime_ty(value.repr);
+                self.checked.types.union_meta(meta.ty, repr)
             }
             _ => meta,
         };
@@ -1311,7 +1320,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             })
     }
 
-    fn value_for_binding(&self, expr: ExprId, value: Value) -> Value {
+    fn value_for_binding(&mut self, expr: ExprId, value: Value) -> Value {
         let value = match self.approved_newtype_edge_meta(expr) {
             Some(meta)
                 if self.checked.types.matches(
@@ -1359,7 +1368,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 "class method payload metadata",
                 "checked expression id"
             ),
-            Payload::PartialApp { callee, bound } => {
+            Payload::PartialApp { callee, bound, .. } => {
                 self.partial_app_meta(*callee, bound.len())
             }
             Payload::ModuleConst { path } => self.module_const_meta(path),
@@ -1378,6 +1387,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
         let ps: SmallVec<[RuntimeTyId; 4]> =
             params.iter().skip(bound).map(|(_, ty)| *ty).collect();
+        let ps: SmallVec<[RuntimeTyId; 4]> =
+            ps.into_iter().map(|ty| self.runtime_ty(ty)).collect();
+        let ret = self.runtime_ty(ret);
         let ty = self.checked.types.func(ps, ret);
         self.checked.types.meta(ty)
     }
@@ -1397,13 +1409,17 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
             Payload::ClassMethodFn {
                 expr_id: Some(id), ..
-            } => self.partial_meta_from_ty(self.expr_meta(id).ty, bound),
+            } => {
+                let ty = self.expr_meta(id).ty;
+                self.partial_meta_from_ty(ty, bound)
+            }
             Payload::ClassMethodFn { expr_id: None, .. } => {
                 typechecked!("partial app", "class method expression metadata")
             }
             Payload::PartialApp {
                 callee,
                 bound: more,
+                ..
             } => {
                 self.partial_app_meta(callee, bound.saturating_add(more.len()))
             }
@@ -1429,6 +1445,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         ty: RuntimeTyId,
         bound: usize,
     ) -> ValueMeta {
+        let ty = self.runtime_ty(ty);
         match self.checked.types.get(ty).clone() {
             typecheck::Ty::Fn(params, ret) => {
                 if bound > params.len() {
@@ -1439,8 +1456,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .skip(bound)
                     .copied()
                     .map(RuntimeTyId::from)
+                    .map(|ty| self.runtime_ty(ty))
                     .collect();
-                let ret = RuntimeTyId::from(ret);
+                let ret = self.runtime_ty(RuntimeTyId::from(ret));
                 let ty = self.checked.types.func(ps, ret);
                 self.checked.types.meta(ty)
             }
@@ -1533,6 +1551,260 @@ impl<I: IoContext> Interpreter<'_, I> {
         self.checked_expr_meta(id)
     }
 
+    fn runtime_meta(&mut self, meta: ValueMeta) -> ValueMeta {
+        let ty = self.runtime_ty(meta.ty);
+        let repr = self.runtime_ty(meta.repr);
+        match self.checked.types.get(ty) {
+            typecheck::Ty::Union(_, _) => {
+                self.checked.types.union_meta(ty, repr)
+            }
+            _ => ValueMeta {
+                ty,
+                repr: self.checked.types.repr(repr),
+            },
+        }
+    }
+
+    fn runtime_ty(&mut self, ty: RuntimeTyId) -> RuntimeTyId {
+        match self.checked.types.get(ty).clone() {
+            typecheck::Ty::Var(v) => {
+                let sub = self
+                    .runtime_ty_substs
+                    .iter()
+                    .rev()
+                    .find_map(|sub| sub.get(&v).copied())
+                    .unwrap_or(ty);
+                if sub == ty {
+                    ty
+                } else {
+                    self.runtime_ty(sub)
+                }
+            }
+            typecheck::Ty::Array(elem) => {
+                let elem = self.runtime_ty(RuntimeTyId::from(elem));
+                self.checked.types.array(elem)
+            }
+            typecheck::Ty::Option(elem) => {
+                let elem = self.runtime_ty(RuntimeTyId::from(elem));
+                self.checked.types.option(elem)
+            }
+            typecheck::Ty::Result(ok, err) => {
+                let ok = self.runtime_ty(RuntimeTyId::from(ok));
+                let err = self.runtime_ty(RuntimeTyId::from(err));
+                self.checked.types.result(ok, err)
+            }
+            typecheck::Ty::Map(key, val) => {
+                let key = self.runtime_ty(RuntimeTyId::from(key));
+                let val = self.runtime_ty(RuntimeTyId::from(val));
+                self.checked.types.map(key, val)
+            }
+            typecheck::Ty::Tuple(elems) => {
+                let elems = elems
+                    .iter()
+                    .map(|&elem| self.runtime_ty(RuntimeTyId::from(elem)))
+                    .collect();
+                self.checked.types.tuple(elems)
+            }
+            typecheck::Ty::Fn(params, ret) => {
+                let params = params
+                    .iter()
+                    .map(|&param| self.runtime_ty(RuntimeTyId::from(param)))
+                    .collect();
+                let ret = self.runtime_ty(RuntimeTyId::from(ret));
+                self.checked.types.func(params, ret)
+            }
+            typecheck::Ty::Object(fields) => {
+                let fields = fields
+                    .iter()
+                    .map(|(&name, &field)| {
+                        (name, self.runtime_ty(RuntimeTyId::from(field)))
+                    })
+                    .collect();
+                self.checked.types.object(fields)
+            }
+            typecheck::Ty::Union(name, members) => {
+                let members = members
+                    .iter()
+                    .map(|&member| self.runtime_ty(RuntimeTyId::from(member)))
+                    .collect();
+                self.checked.types.union(name, members)
+            }
+            typecheck::Ty::Named(id, args) => {
+                let args = args
+                    .iter()
+                    .map(|&arg| self.runtime_ty(RuntimeTyId::from(arg)))
+                    .collect();
+                self.checked.types.named(id, args)
+            }
+            _ => ty,
+        }
+    }
+
+    fn runtime_ty_subst(
+        &mut self,
+        params: &[(StringId, RuntimeTyId)],
+        args: &[ValueId],
+    ) -> HashMap<TyVar, RuntimeTyId> {
+        params
+            .iter()
+            .zip(args.iter())
+            .filter_map(|((_, ty), val_id)| {
+                self.arena.meta(*val_id).map(|meta| (*ty, meta.ty))
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .flat_map(|(ty, actual)| self.runtime_ty_pairs(ty, actual))
+            .collect()
+    }
+
+    fn runtime_ty_pairs(
+        &mut self,
+        formal: RuntimeTyId,
+        actual: RuntimeTyId,
+    ) -> Vec<(TyVar, RuntimeTyId)> {
+        let formal = self.runtime_ty(formal);
+        let actual = self.runtime_ty(actual);
+        match (
+            self.checked.types.get(formal).clone(),
+            self.checked.types.get(actual).clone(),
+        ) {
+            (typecheck::Ty::Var(v), _) => vec![(v, actual)],
+            (typecheck::Ty::Array(f), typecheck::Ty::Array(a))
+            | (typecheck::Ty::Option(f), typecheck::Ty::Option(a)) => self
+                .runtime_ty_pairs(RuntimeTyId::from(f), RuntimeTyId::from(a)),
+            (typecheck::Ty::Result(fa, fb), typecheck::Ty::Result(aa, ab))
+            | (typecheck::Ty::Map(fa, fb), typecheck::Ty::Map(aa, ab)) => self
+                .runtime_ty_pairs(RuntimeTyId::from(fa), RuntimeTyId::from(aa))
+                .into_iter()
+                .chain(self.runtime_ty_pairs(
+                    RuntimeTyId::from(fb),
+                    RuntimeTyId::from(ab),
+                ))
+                .collect(),
+            (typecheck::Ty::Tuple(fs), typecheck::Ty::Tuple(as_))
+            | (typecheck::Ty::Union(_, fs), typecheck::Ty::Union(_, as_)) => fs
+                .iter()
+                .zip(as_.iter())
+                .flat_map(|(&f, &a)| {
+                    self.runtime_ty_pairs(
+                        RuntimeTyId::from(f),
+                        RuntimeTyId::from(a),
+                    )
+                })
+                .collect(),
+            (typecheck::Ty::Fn(fps, fr), typecheck::Ty::Fn(aps, ar)) => {
+                let mut pairs: Vec<(TyVar, RuntimeTyId)> = fps
+                    .iter()
+                    .zip(aps.iter())
+                    .flat_map(|(&f, &a)| {
+                        self.runtime_ty_pairs(
+                            RuntimeTyId::from(f),
+                            RuntimeTyId::from(a),
+                        )
+                    })
+                    .collect();
+                pairs.extend(self.runtime_ty_pairs(
+                    RuntimeTyId::from(fr),
+                    RuntimeTyId::from(ar),
+                ));
+                pairs
+            }
+            (typecheck::Ty::Object(fs), typecheck::Ty::Object(as_)) => fs
+                .iter()
+                .filter_map(|(name, &f)| as_.get(name).map(|&a| (f, a)))
+                .flat_map(|(f, a)| {
+                    self.runtime_ty_pairs(
+                        RuntimeTyId::from(f),
+                        RuntimeTyId::from(a),
+                    )
+                })
+                .collect(),
+            (typecheck::Ty::Named(fid, fs), typecheck::Ty::Named(aid, as_))
+                if fid == aid =>
+            {
+                fs.iter()
+                    .zip(as_.iter())
+                    .flat_map(|(&f, &a)| {
+                        self.runtime_ty_pairs(
+                            RuntimeTyId::from(f),
+                            RuntimeTyId::from(a),
+                        )
+                    })
+                    .collect()
+            }
+            (typecheck::Ty::Apply(fv, fs), typecheck::Ty::Apply(av, as_))
+                if fv == av =>
+            {
+                fs.iter()
+                    .zip(as_.iter())
+                    .flat_map(|(&f, &a)| {
+                        self.runtime_ty_pairs(
+                            RuntimeTyId::from(f),
+                            RuntimeTyId::from(a),
+                        )
+                    })
+                    .collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn payload_for_runtime_ty(
+        &self,
+        payload: Payload,
+        ty: RuntimeTyId,
+    ) -> Payload {
+        match (payload, self.checked.types.get(ty)) {
+            (Payload::Int(n), typecheck::Ty::Float) => {
+                Payload::Float(OrderedFloat(n as f64))
+            }
+            (Payload::Int(n), typecheck::Ty::Word) if n >= 0 => {
+                Payload::Word(n as usize)
+            }
+            (payload, _) => payload,
+        }
+    }
+
+    fn numeric_binop_payloads(
+        &mut self,
+        id: ExprId,
+        op: BinOp,
+        left: Payload,
+        right: Payload,
+    ) -> (Payload, Payload) {
+        if matches!(
+            op,
+            BinOp::Add
+                | BinOp::Sub
+                | BinOp::Mul
+                | BinOp::Div
+                | BinOp::FloorDiv
+                | BinOp::Mod
+                | BinOp::Pow
+        ) {
+            let ty = self.runtime_ty(self.expr_meta(id).ty);
+            let left = self.payload_for_runtime_ty(left, ty);
+            let right = self.payload_for_runtime_ty(right, ty);
+            match (&left, &right) {
+                (Payload::Float(_), Payload::Int(n)) => {
+                    (left, Payload::Float(OrderedFloat(*n as f64)))
+                }
+                (Payload::Int(n), Payload::Float(_)) => {
+                    (Payload::Float(OrderedFloat(*n as f64)), right)
+                }
+                (Payload::Word(_), Payload::Int(n)) if *n >= 0 => {
+                    (left, Payload::Word(*n as usize))
+                }
+                (Payload::Int(n), Payload::Word(_)) if *n >= 0 => {
+                    (Payload::Word(*n as usize), right)
+                }
+                _ => (left, right),
+            }
+        } else {
+            (left, right)
+        }
+    }
+
     /// Convert an AST literal to a runtime value.
     ///
     /// For numeric literals, looks up the resolved type from the type checker
@@ -1542,7 +1814,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             Literal::Bool(b) => Payload::Bool(*b),
             Literal::Numeric(n) => {
                 // Look up the resolved type from typechecking
-                let ty = self.checked.types.get(self.checked.expr(id).ty);
+                let ty = self.runtime_ty(self.checked.expr(id).ty);
+                let ty = self.checked.types.get(ty);
                 match (n, ty) {
                     // Integer literals are polymorphic over Int/Word/Float
                     (NumericLit::Int(v), typecheck::Ty::Int) => {
@@ -1834,6 +2107,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 } else {
                     let left = self.eval_payload(lhs).await?;
                     let right = self.eval_payload(rhs).await?;
+                    let (left, right) =
+                        self.numeric_binop_payloads(id, op, left, right);
                     self.apply_binop(&left, op, &right, span)
                         .map(|payload| self.value_for_expr(id, payload))
                 }

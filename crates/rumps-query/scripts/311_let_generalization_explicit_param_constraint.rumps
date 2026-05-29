@@ -1,0 +1,22 @@
+; Let-bound closure with explicit `T: Numeric` captures the declared constraint.
+
+fun main() {
+  let f = [T: Numeric](x: T) -> T => x + 1
+
+  write f(1)
+  write f(3.5)
+
+  let g = [T: Numeric](x: T) -> T => {
+    let one = 1
+    x + one
+  }
+
+  write g(3.5)
+
+  let h = [T: Numeric](mk: () -> T) -> T => {
+    let one = 1
+    mk() + one
+  }
+
+  write h(() => 3.5)
+}

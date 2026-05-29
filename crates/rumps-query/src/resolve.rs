@@ -49,6 +49,8 @@ pub(crate) struct ResolvedInstance {
     pub(crate) class: ClassId,
     /// The qualified name of the implementing type (e.g., `Point`, `MyModule.Point`).
     pub(crate) type_name: QualifiedName,
+    /// Tuple arity for tuple-constructor instances.
+    pub(crate) tuple_arity: Option<usize>,
     /// Method mappings: `(method_name, generated_fn_name)`.
     pub(crate) methods: Vec<(StringId, StringId)>,
 }
@@ -365,11 +367,17 @@ impl<'a> ResolveCtx<'a> {
                     }
                     _ => raw_qn,
                 };
-                let fn_type_name = match self.ast.get_type_expr(*for_type) {
+                let tuple_arity = match self.ast.get_type_expr(*for_type) {
                     Some(AstTypeExpr::TupleConstructor { arity, .. }) => {
+                        Some(usize::from(*arity))
+                    }
+                    _ => None,
+                };
+                let fn_type_name = match tuple_arity {
+                    Some(arity) => {
                         format!("Tuple{arity}")
                     }
-                    _ => type_qn.display(&self.arena.strings),
+                    None => type_qn.display(&self.arena.strings),
                 };
                 let class_name_str = self
                     .arena
@@ -402,6 +410,7 @@ impl<'a> ResolveCtx<'a> {
                 Some(ResolvedInstance {
                     class,
                     type_name: type_qn,
+                    tuple_arity,
                     methods: mappings,
                 })
             }

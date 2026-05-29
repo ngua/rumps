@@ -83,6 +83,7 @@ impl RuntimeInstance {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct RuntimeInstanceRegistry {
     instances: HashMap<(ClassId, TypeId), RuntimeInstance>,
+    tuple_methods: HashMap<(ClassId, usize, StringId), StringId>,
 }
 
 impl RuntimeInstanceRegistry {
@@ -113,6 +114,15 @@ impl RuntimeInstanceRegistry {
             .and_then(|inst| inst.lookup(method))
     }
 
+    pub(crate) fn lookup_tuple_method(
+        &self,
+        class: ClassId,
+        arity: usize,
+        method: StringId,
+    ) -> Option<StringId> {
+        self.tuple_methods.get(&(class, arity, method)).copied()
+    }
+
     /// Register an instance.
     ///
     /// Overwrites any existing instance for the same `(class, type_id)`.
@@ -123,6 +133,21 @@ impl RuntimeInstanceRegistry {
         type_id: TypeId,
         inst: RuntimeInstance,
     ) {
+        self.register_with_tuple_arity(class, type_id, None, inst);
+    }
+
+    pub(crate) fn register_with_tuple_arity(
+        &mut self,
+        class: ClassId,
+        type_id: TypeId,
+        arity: Option<usize>,
+        inst: RuntimeInstance,
+    ) {
+        arity.into_iter().for_each(|arity| {
+            inst.methods.iter().for_each(|(&method, &fun)| {
+                self.tuple_methods.insert((class, arity, method), fun);
+            });
+        });
         self.instances.insert((class, type_id), inst);
     }
 }

@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Destructured explicit closure type params still require declared constraints.\n\nfun main() {\n  let (f,) = ([T](x: T) -> T => x + 1,)\n\n  write f(1)\n}\n"
+---
+ERROR: type parameter `T` requires `Numeric` constraint

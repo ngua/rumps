@@ -1,0 +1,9 @@
+; Finalized top-level `let`s still close the import section.
+
+let id = x => x
+
+import Math.{ abs }
+
+fun main() {
+  write id(1)
+}

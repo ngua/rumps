@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Module `let` consumers can appear before provider modules.\n\nmodule UseImport {\n  import SourceImport.{ v }\n\n  +let w = () => v + 1\n}\n\nmodule UsePath {\n  +let w = () => SourcePath.v + 1\n}\n\nmodule SourceImport {\n  +let v = 41\n}\n\nmodule SourcePath {\n  +let v = 41\n}\n\nfun main() {\n  write 0\n}\n"
+---
+0

@@ -8,7 +8,11 @@ let foo = "bar"
 let dup = 1
 let dup = 2
 
+let empty = []
+let empty = 3
+
 fun main() {
   write foo
   write dup
+  write empty
 }

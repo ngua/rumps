@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Inferred closure constraints are checked at each use site.\n\nfun main() {\n  let neg = x => 0 - x\n\n  write neg(\"bad\")\n}\n"
+---
+ERROR: type `String` does not satisfy `Numeric` class

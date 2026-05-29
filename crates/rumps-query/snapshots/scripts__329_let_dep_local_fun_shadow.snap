@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Local hoisted functions do not create false top-level `let` dependencies.\n\nlet outer = () => {\n  fun dep() -> Int {\n    shadow()\n  }\n\n  fun shadow() -> Int {\n    41\n  }\n\n  dep() + 1\n}\n\nlet shadow = 1\n\nfun main() {\n  write outer()\n}\n"
+---
+42

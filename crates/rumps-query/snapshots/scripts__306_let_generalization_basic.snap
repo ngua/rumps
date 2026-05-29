@@ -1,0 +1,9 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Simple variable `let` generalization for inferred closures.\n\nfun main() {\n  let id = x => x\n\n  write id(42)\n  write id(\"hello\")\n  write id(true)\n\n  let pair = x => (x, x)\n\n  write pair(7)\n  write pair(\"a\")\n}\n"
+---
+42
+"hello"
+true
+(7, 7)
+("a", "a")

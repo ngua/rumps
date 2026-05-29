@@ -1,0 +1,15 @@
+; Module imports can see finalized `let` members from another module.
+
+module Source {
+  +let v = 41
+}
+
+module Use {
+  import Source.{ v }
+
+  +let w = () => v + 1
+}
+
+fun main() {
+  write 0
+}
