@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Functions that evaluate to functions\n\nfun main() {\n  write f()(1, 2)\n}\n\nfun f() -> ((Int, Int) -> Int) {\n  (x, y) => { x + y }\n}\n"
+---
+3
