@@ -35,7 +35,6 @@ impl<I: IoContext> Interpreter<'_, I> {
         val: &Value,
         pattern: &TypePattern,
         info: Option<&TypePatternInfo>,
-        span: Span,
     ) -> Result<bool> {
         match pattern {
             TypePattern::Type(_) => match info {
@@ -47,13 +46,13 @@ impl<I: IoContext> Interpreter<'_, I> {
                 }
             },
             TypePattern::Variant(ref ty_name, var_name) => {
-                self.check_variant_zero_arity(val, ty_name, *var_name, span)
+                self.check_variant_zero_arity(val, ty_name, *var_name)
             }
             TypePattern::VariantWildcard(ref ty_name, var_name) => {
-                self.check_variant(val, ty_name, *var_name, span)
+                self.check_variant(val, ty_name, *var_name)
             }
             TypePattern::VariantBind(ref ty_name, var_name, _) => {
-                self.check_variant(val, ty_name, *var_name, span)
+                self.check_variant(val, ty_name, *var_name)
             }
             TypePattern::NakedVariant(_)
             | TypePattern::NakedVariantWildcard(_)
@@ -79,10 +78,8 @@ impl<I: IoContext> Interpreter<'_, I> {
         val: &Value,
         ty_name: &QualifiedName,
         var_name: StringId,
-        span: Span,
     ) -> Result<bool> {
-        let (type_id, var_def) =
-            self.lookup_variant(ty_name, var_name, span)?;
+        let (type_id, var_def) = self.lookup_variant(ty_name, var_name)?;
 
         // Type checker guarantees bare variant patterns match zero-arity variants
         if var_def.arity != 0 {
@@ -103,10 +100,8 @@ impl<I: IoContext> Interpreter<'_, I> {
         val: &Value,
         ty_name: &QualifiedName,
         var_name: StringId,
-        span: Span,
     ) -> Result<bool> {
-        let (type_id, var_def) =
-            self.lookup_variant(ty_name, var_name, span)?;
+        let (type_id, var_def) = self.lookup_variant(ty_name, var_name)?;
 
         Ok(match &val.payload {
             Payload::Variant { tag, .. } => {
@@ -135,7 +130,6 @@ impl<I: IoContext> Interpreter<'_, I> {
         &self,
         ty_name: &QualifiedName,
         var_name: StringId,
-        _span: Span,
     ) -> Result<(TypeId, VariantDef)> {
         let type_id = self
             .registry
@@ -156,7 +150,6 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         names: &[StringId],
         payloads: &[ValueId],
-        _span: Span,
     ) {
         names
             .iter()
@@ -252,8 +245,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         m: VariantMatch<'_>,
     ) -> Result<Option<Vec<(StringId, ValueId)>>> {
-        let (type_id, var_def) =
-            self.lookup_variant(m.ty_name, m.var_name, m.span)?;
+        let (type_id, var_def) = self.lookup_variant(m.ty_name, m.var_name)?;
 
         match &m.val.payload {
             Payload::Variant { tag, vals } => {
@@ -438,11 +430,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Apply bindings to the current scope.
-    pub(super) fn apply_bindings(
-        &mut self,
-        bindings: &[(StringId, ValueId)],
-        _span: Span,
-    ) {
+    pub(super) fn apply_bindings(&mut self, bindings: &[(StringId, ValueId)]) {
         bindings.iter().for_each(|&(name_id, val_id)| {
             self.env.scopes.bind(name_id, val_id);
         });

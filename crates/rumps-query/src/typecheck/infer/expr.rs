@@ -150,7 +150,7 @@ impl InferCtx<'_> {
 
             // Control flow: blocks
             Expr::Block(stmts, tail) => {
-                self.block(stmts, tail.as_ref().copied(), span)
+                self.block(stmts, tail.as_ref().copied())
             }
 
             // Control flow: match
@@ -2485,12 +2485,7 @@ impl InferCtx<'_> {
     ///
     /// Executes statements for side effects, then evaluates to the trailing
     /// expression. Returns `Unit` if no trailing expression.
-    fn block(
-        &mut self,
-        stmts: &[StmtId],
-        tail: Option<ExprId>,
-        _span: Span,
-    ) -> TyId {
+    fn block(&mut self, stmts: &[StmtId], tail: Option<ExprId>) -> TyId {
         self.env.push_scope();
         self.hoist_declarations(stmts);
         stmts.iter().for_each(|id| self.stmt(*id));

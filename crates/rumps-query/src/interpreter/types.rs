@@ -29,11 +29,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Extract the `Ok` value from a `Result`.
     ///
     /// Callers must ensure this is only invoked on `Result.Ok` values.
-    pub(super) fn unwrap_result_ok(
-        &self,
-        result: &Payload,
-        _span: Span,
-    ) -> Result<Payload> {
+    pub(super) fn unwrap_result_ok(&self, result: &Payload) -> Result<Payload> {
         match result {
             Payload::Variant { tag: 0, vals } => Ok(vals
                 .first()

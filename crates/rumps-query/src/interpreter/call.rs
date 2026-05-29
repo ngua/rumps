@@ -121,7 +121,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 }
                 Payload::VariantCtor { ty, var } => {
                     let payload =
-                        self.variant_ctor_payload(&ty, var, &[arg_id], span);
+                        self.variant_ctor_payload(&ty, var, &[arg_id]);
                     Ok(self.value_for_expr(call_id, payload))
                 }
                 Payload::ClassMethodFn {
@@ -841,7 +841,6 @@ impl<I: IoContext> Interpreter<'_, I> {
         ty: &QualifiedName,
         var: StringId,
         vals: &[ValueId],
-        _span: Span,
     ) -> Payload {
         let var_def = self
             .registry
@@ -1364,7 +1363,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 Ok(self.add_value(result, span))
             }
             Payload::VariantCtor { ty, var } => {
-                let payload = self.variant_ctor_payload(&ty, var, args, span);
+                let payload = self.variant_ctor_payload(&ty, var, args);
                 let value = match self.callable_ret(callee_ty) {
                     Some(ret) => {
                         let meta = self.checked.types.meta(ret);
@@ -1510,8 +1509,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 ) {
                     Ok(self.value_for_expr(call_id, partial))
                 } else {
-                    let payload =
-                        self.variant_ctor_payload(&ty, var, &vals, span);
+                    let payload = self.variant_ctor_payload(&ty, var, &vals);
                     Ok(self.value_for_expr(call_id, payload))
                 }
             }
@@ -1739,7 +1737,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 }
                 Payload::VariantCtor { ty, var } => Ok(self
                     .value_from_payload(
-                        self.variant_ctor_payload(&ty, var, &all_args, span),
+                        self.variant_ctor_payload(&ty, var, &all_args),
                     )),
                 Payload::ClassMethodFn {
                     class,

@@ -31,7 +31,7 @@ use crate::ast::ExprId;
 use crate::intern::{QualifiedName, StringId};
 use crate::io::IoContext;
 use crate::value::{Payload, Value};
-use crate::{Result, Span};
+use crate::Result;
 
 impl<I: IoContext> Interpreter<'_, I> {
     /// Evaluate a namespace path to a module function.
@@ -43,11 +43,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// If the path doesn't resolve to a module function, falls back to
     /// treating it as a type variant path (for user-defined types registered
     /// at runtime).
-    pub(super) fn path(
-        &mut self,
-        segments: &[StringId],
-        span: Span,
-    ) -> Result<Payload> {
+    pub(super) fn path(&mut self, segments: &[StringId]) -> Result<Payload> {
         // Need at least two segments: module + function (or type + variant)
         // Typechecker validates path structure
         let (&first, _) = segments
@@ -59,7 +55,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             self.module_path(segments)
         } else {
             // Fall back to type + variant interpretation
-            self.type_variant_path(None, segments, span)
+            self.type_variant_path(None, segments)
         }
     }
 
@@ -67,7 +63,6 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         expr_id: ExprId,
         segments: &[StringId],
-        span: Span,
     ) -> Result<Value> {
         if self.env.has_module(
             *segments
@@ -90,11 +85,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .cloned()
                     .unwrap_or_else(|| invariant!("ValueId in arena")))
             } else {
-                self.path(segments, span)
+                self.path(segments)
                     .map(|payload| self.value_for_expr(expr_id, payload))
             }
         } else {
-            self.type_variant_path(Some(expr_id), segments, span)
+            self.type_variant_path(Some(expr_id), segments)
                 .map(|payload| self.value_for_expr(expr_id, payload))
         }
     }
@@ -149,7 +144,6 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         expr_id: Option<ExprId>,
         segments: &[StringId],
-        _span: Span,
     ) -> Result<Payload> {
         match segments {
             [ty_name, var_name] => {

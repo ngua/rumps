@@ -333,9 +333,10 @@ impl Parser {
             .ignore_then(op)
             .then_ignore(Self::opt_newlines())
             .then(operand.clone());
-        operand.clone().then(op_rhs.repeated()).map_with_span(
-            |(first, rest), span| Self::fold_pipe(first, rest, span),
-        )
+        operand
+            .clone()
+            .then(op_rhs.repeated())
+            .map_with_span(|(first, rest), _| Self::fold_pipe(first, rest))
     }
 
     fn catch_expr(
@@ -369,9 +370,10 @@ impl Parser {
             .ignore_then(op)
             .then_ignore(Self::opt_newlines())
             .then(operand.clone());
-        operand.clone().then(op_rhs.repeated()).map_with_span(
-            |(first, rest), span| Self::fold_binary(first, rest, span),
-        )
+        operand
+            .clone()
+            .then(op_rhs.repeated())
+            .map_with_span(|(first, rest), _| Self::fold_binary(first, rest))
     }
 
     fn or_expr(
@@ -384,9 +386,10 @@ impl Parser {
             .ignore_then(op)
             .then_ignore(Self::opt_newlines())
             .then(operand.clone());
-        operand.clone().then(op_rhs.repeated()).map_with_span(
-            |(first, rest), span| Self::fold_binary(first, rest, span),
-        )
+        operand
+            .clone()
+            .then(op_rhs.repeated())
+            .map_with_span(|(first, rest), _| Self::fold_binary(first, rest))
     }
 
     fn and_expr(
@@ -399,9 +402,10 @@ impl Parser {
             .ignore_then(op)
             .then_ignore(Self::opt_newlines())
             .then(operand.clone());
-        operand.clone().then(op_rhs.repeated()).map_with_span(
-            |(first, rest), span| Self::fold_binary(first, rest, span),
-        )
+        operand
+            .clone()
+            .then(op_rhs.repeated())
+            .map_with_span(|(first, rest), _| Self::fold_binary(first, rest))
     }
 
     fn bitor_expr(
@@ -414,9 +418,10 @@ impl Parser {
             .ignore_then(op)
             .then_ignore(Self::opt_newlines())
             .then(operand.clone());
-        operand.clone().then(op_rhs.repeated()).map_with_span(
-            |(first, rest), span| Self::fold_binary(first, rest, span),
-        )
+        operand
+            .clone()
+            .then(op_rhs.repeated())
+            .map_with_span(|(first, rest), _| Self::fold_binary(first, rest))
     }
 
     fn bitand_expr(
@@ -429,9 +434,10 @@ impl Parser {
             .ignore_then(op)
             .then_ignore(Self::opt_newlines())
             .then(operand.clone());
-        operand.clone().then(op_rhs.repeated()).map_with_span(
-            |(first, rest), span| Self::fold_binary(first, rest, span),
-        )
+        operand
+            .clone()
+            .then(op_rhs.repeated())
+            .map_with_span(|(first, rest), _| Self::fold_binary(first, rest))
     }
 
     fn cmp_expr(
@@ -451,9 +457,10 @@ impl Parser {
             .ignore_then(op)
             .then_ignore(Self::opt_newlines())
             .then(operand.clone());
-        operand.clone().then(op_rhs.repeated()).map_with_span(
-            |(first, rest), span| Self::fold_binary(first, rest, span),
-        )
+        operand
+            .clone()
+            .then(op_rhs.repeated())
+            .map_with_span(|(first, rest), _| Self::fold_binary(first, rest))
     }
 
     fn is_expr(
@@ -562,9 +569,10 @@ impl Parser {
             .ignore_then(op)
             .then_ignore(Self::opt_newlines())
             .then(operand.clone());
-        operand.clone().then(op_rhs.repeated()).map_with_span(
-            |(first, rest), span| Self::fold_binary(first, rest, span),
-        )
+        operand
+            .clone()
+            .then(op_rhs.repeated())
+            .map_with_span(|(first, rest), _| Self::fold_binary(first, rest))
     }
 
     fn range_expr(
@@ -611,7 +619,7 @@ impl Parser {
             .then_ignore(Self::opt_newlines())
             .then(operand.clone());
         operand.clone().then(op_rhs.repeated()).map_with_span(
-            |(first, rest), _span| Self::fold_binary_right(first, rest),
+            |(first, rest), _| Self::fold_binary_right(first, rest),
         )
     }
 
@@ -662,9 +670,10 @@ impl Parser {
             .ignore_then(op)
             .then_ignore(Self::opt_newlines())
             .then(operand.clone());
-        operand.clone().then(op_rhs.repeated()).map_with_span(
-            |(first, rest), span| Self::fold_binary(first, rest, span),
-        )
+        operand
+            .clone()
+            .then(op_rhs.repeated())
+            .map_with_span(|(first, rest), _| Self::fold_binary(first, rest))
     }
 
     fn shift_expr(
@@ -680,15 +689,15 @@ impl Parser {
             .ignore_then(op)
             .then_ignore(Self::opt_newlines())
             .then(operand.clone());
-        operand.clone().then(op_rhs.repeated()).map_with_span(
-            |(first, rest), span| Self::fold_binary(first, rest, span),
-        )
+        operand
+            .clone()
+            .then(op_rhs.repeated())
+            .map_with_span(|(first, rest), _| Self::fold_binary(first, rest))
     }
 
     fn fold_binary(
         first: cst::Expr,
         rest: Vec<(BinOp, cst::Expr)>,
-        _outer_span: Span,
     ) -> cst::Expr {
         rest.into_iter().fold(first, |lhs, (op, rhs)| {
             let span = Span::new(lhs.span.start, rhs.span.end);
@@ -699,11 +708,7 @@ impl Parser {
         })
     }
 
-    fn fold_pipe(
-        first: cst::Expr,
-        rest: Vec<(BinOp, cst::Expr)>,
-        _outer_span: Span,
-    ) -> cst::Expr {
+    fn fold_pipe(first: cst::Expr, rest: Vec<(BinOp, cst::Expr)>) -> cst::Expr {
         rest.into_iter().fold(first, |lhs, (op, rhs)| {
             let span = Span::new(lhs.span.start, rhs.span.end);
 

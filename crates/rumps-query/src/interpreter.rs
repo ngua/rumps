@@ -374,17 +374,17 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                         ..
                     } => {
                         let n = self.arena.strings.resolve(name);
-                        self.type_decl(&n, &type_params, &def, span)?
+                        self.type_decl(&n, &type_params, &def)?
                     }
                     Stmt::Newtype {
                         name, type_params, ..
                     } => {
                         let n = self.arena.strings.resolve(name);
-                        self.newtype_decl(&n, &type_params, span)?
+                        self.newtype_decl(&n, &type_params)?
                     }
                     Stmt::Union { name, .. } => {
                         let n = self.arena.strings.resolve(name);
-                        self.union_decl(&n, span)?
+                        self.union_decl(&n)?
                     }
                     Stmt::Import(ref import) => self.import(import, span)?,
                 };
@@ -489,7 +489,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             }
             Expr::Var(name) => {
                 let n = self.arena.strings.resolve(name);
-                self.var_value(id, &n, span).map(Evaluated::Value)
+                self.var_value(id, &n).map(Evaluated::Value)
             }
             Expr::Intrinsic(op, ref rt, val, txn_id) => self
                 .intrinsic(op, rt, val, txn_id, span)
@@ -519,10 +519,9 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::MapLit(entries) => {
                 self.map_lit(&entries, span).await.map(Evaluated::Payload)
             }
-            Expr::TupleIndex(base, idx) => self
-                .tuple_index(base, idx, span)
-                .await
-                .map(Evaluated::Value),
+            Expr::TupleIndex(base, idx) => {
+                self.tuple_index(base, idx).await.map(Evaluated::Value)
+            }
             Expr::Index(base, idx) => {
                 self.index(id, base, idx, span).await.map(Evaluated::Value)
             }
@@ -530,12 +529,11 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 .optional_index(id, base, idx, span)
                 .await
                 .map(Evaluated::Payload),
-            Expr::Field(base, field) => self
-                .field(id, base, &field, span)
-                .await
-                .map(Evaluated::Value),
+            Expr::Field(base, field) => {
+                self.field(id, base, &field).await.map(Evaluated::Value)
+            }
             Expr::OptionalField(base, field) => self
-                .optional_field(base, &field, span)
+                .optional_field(base, &field)
                 .await
                 .map(Evaluated::Payload),
             Expr::Variant(ref ty, var, ref args) => {
@@ -559,12 +557,11 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 typechecked!("naked variant constructor", "resolved type")
             }
             Expr::Path(ref segments) => {
-                self.path_value(id, segments, span).map(Evaluated::Value)
+                self.path_value(id, segments).map(Evaluated::Value)
             }
-            Expr::Is(expr, pattern) => self
-                .is(id, expr, &pattern, span)
-                .await
-                .map(Evaluated::Payload),
+            Expr::Is(expr, pattern) => {
+                self.is(id, expr, &pattern).await.map(Evaluated::Payload)
+            }
             Expr::As(expr, _) => {
                 self.r#as(id, expr, span).await.map(Evaluated::Value)
             }
@@ -609,14 +606,14 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 .map(Evaluated::Value)
             }
             Expr::Range(start_id, end_id, inclusive) => self
-                .range(start_id, end_id, inclusive, span)
+                .range(start_id, end_id, inclusive)
                 .await
                 .map(Evaluated::Payload),
             Expr::Annotate(inner, _) => {
-                self.annotate(id, inner, span).await.map(Evaluated::Value)
+                self.annotate(id, inner).await.map(Evaluated::Value)
             }
             Expr::Json(fields) => {
-                self.json(&fields, span).await.map(Evaluated::Payload)
+                self.json(&fields).await.map(Evaluated::Payload)
             }
             Expr::JsonAccess(base, kind, key) => self
                 .json_access(base, kind, &key, span)
@@ -764,7 +761,6 @@ impl<I: IoContext> Interpreter<'_, I> {
                 name,
                 params.iter().map(|(name, _)| *name).collect(),
                 body,
-                span,
             ),
             Stmt::Type {
                 name,
@@ -773,17 +769,17 @@ impl<I: IoContext> Interpreter<'_, I> {
                 ..
             } => {
                 let n = self.arena.strings.resolve(name);
-                self.type_decl(&n, &type_params, &def, span)
+                self.type_decl(&n, &type_params, &def)
             }
             Stmt::Newtype {
                 name, type_params, ..
             } => {
                 let n = self.arena.strings.resolve(name);
-                self.newtype_decl(&n, &type_params, span)
+                self.newtype_decl(&n, &type_params)
             }
             Stmt::Union { name, .. } => {
                 let n = self.arena.strings.resolve(name);
-                self.union_decl(&n, span)
+                self.union_decl(&n)
             }
             Stmt::Module { name, body } => {
                 self.user_module(name, &body, span).await
@@ -907,12 +903,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                             // will skip if already present.
                             let tn = self.arena.strings.resolve(type_name);
                             let qname = format!("{}.{}", mod_path, tn);
-                            self.type_decl(
-                                &qname,
-                                &type_params,
-                                &def,
-                                item_span,
-                            )?;
+                            self.type_decl(&qname, &type_params, &def)?;
                         }
 
                         Stmt::Newtype {
@@ -925,7 +916,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                             // will skip if already present.
                             let an = self.arena.strings.resolve(alias_name);
                             let qname = format!("{}.{}", mod_path, an);
-                            self.newtype_decl(&qname, &type_params, item_span)?;
+                            self.newtype_decl(&qname, &type_params)?;
                         }
 
                         Stmt::Union {
@@ -936,11 +927,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                             // will skip if already present.
                             let un = self.arena.strings.resolve(union_name);
                             let qname = format!("{}.{}", mod_path, un);
-                            self.union_decl(&qname, item_span)?;
+                            self.union_decl(&qname)?;
                         }
 
                         Stmt::ClassInstance { methods, .. } => {
-                            self.hoist_class_instance(id, &methods, item_span)?;
+                            self.hoist_class_instance(id, &methods)?;
                         }
 
                         // Other statements are rejected by the typechecker
@@ -1114,7 +1105,6 @@ impl<I: IoContext> Interpreter<'_, I> {
         name: StringId,
         params: SmallVec<[StringId; 4]>,
         body: ExprId,
-        _span: Span,
     ) -> Result<()> {
         let ps = self.function_params(params, body);
 
@@ -1140,7 +1130,6 @@ impl<I: IoContext> Interpreter<'_, I> {
         name: &str,
         type_params: &[TypeParam],
         def: &TypeDefAst,
-        _span: Span,
     ) -> Result<()> {
         let qn = self.qname(name);
         let name_id = self.arena.intern(name);
@@ -1188,7 +1177,6 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         name: &str,
         type_params: &[TypeParam],
-        _span: Span,
     ) -> Result<()> {
         let qn = self.qname(name);
         let name_id = self.arena.intern(name);
@@ -1216,7 +1204,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     ///
     /// Union types define a set of types that a value can be.
     /// Example: `union Storable = Bool | Int | Float | Char | String | Json`
-    fn union_decl(&mut self, name: &str, _span: Span) -> Result<()> {
+    fn union_decl(&mut self, name: &str) -> Result<()> {
         let qn = self.qname(name);
 
         if self.registry.lookup(&qn).is_some() {
@@ -1690,12 +1678,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Evaluate a lexical variable reference (`let` bindings only).
     ///
     /// Does NOT fall back to B-tree locals; use `@get` for those.
-    fn var_value(
-        &mut self,
-        expr_id: ExprId,
-        name: &str,
-        _span: Span,
-    ) -> Result<Value> {
+    fn var_value(&mut self, expr_id: ExprId, name: &str) -> Result<Value> {
         let name_id = self.arena.intern(name);
 
         // First try lexical scope
@@ -1903,11 +1886,10 @@ impl<I: IoContext> Interpreter<'_, I> {
         id: ExprId,
         expr: ExprId,
         pattern: &TypePattern,
-        span: Span,
     ) -> Result<Payload> {
         let val = self.eval(expr).await?;
         let info = self.checked.is_patterns.get(&id).cloned();
-        let matched = self.check_pattern(&val, pattern, info.as_ref(), span)?;
+        let matched = self.check_pattern(&val, pattern, info.as_ref())?;
         Ok(Payload::Bool(matched))
     }
 
@@ -2042,7 +2024,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Payload {
         if self.result_payload_is_ok(&result) {
             let inner = self
-                .unwrap_result_ok(&result, span)
+                .unwrap_result_ok(&result)
                 .unwrap_or_else(|_| typechecked!("read", "Result.Ok"));
             self.make_result_ok_typed(inner, target, span)
         } else {
@@ -2127,7 +2109,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                             match self.read_target_value(&fval, elem, span) {
                                 Ok(rv) if self.result_payload_is_ok(&rv) => {
                                     let inner = self
-                                        .unwrap_result_ok(&rv, span)
+                                        .unwrap_result_ok(&rv)
                                         .unwrap_or_else(|_| {
                                             fval.payload.clone()
                                         });
@@ -2186,7 +2168,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             _ => match self.read_target_value(val, inner, span) {
                 Ok(rv) if self.result_payload_is_ok(&rv) => {
                     let inner_val =
-                        self.unwrap_result_ok(&rv, span).unwrap_or_else(|_| {
+                        self.unwrap_result_ok(&rv).unwrap_or_else(|_| {
                             typechecked!("Option read", "Result.Ok")
                         });
                     let inner_id = self.arena.add_typed(
@@ -2282,7 +2264,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                                         if self.result_payload_is_ok(&rv) =>
                                     {
                                         let inner = self
-                                            .unwrap_result_ok(&rv, span)
+                                            .unwrap_result_ok(&rv)
                                             .unwrap_or_else(|_| {
                                                 fval.payload.clone()
                                             });
@@ -2314,7 +2296,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                                 ) {
                                 Ok(rv) if self.result_payload_is_ok(&rv) => {
                                     let inner = self
-                                        .unwrap_result_ok(&rv, span)
+                                        .unwrap_result_ok(&rv)
                                         .unwrap_or_else(|_| {
                                             fval.payload.clone()
                                         });
@@ -2384,7 +2366,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                                         if self.result_payload_is_ok(&rv) =>
                                     {
                                         let inner = self
-                                            .unwrap_result_ok(&rv, span)
+                                            .unwrap_result_ok(&rv)
                                             .unwrap_or_else(|_| {
                                                 fval.payload.clone()
                                             });
@@ -2418,7 +2400,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                                                 .result_payload_is_ok(&rv) =>
                                         {
                                             let inner = self
-                                                .unwrap_result_ok(&rv, span)
+                                                .unwrap_result_ok(&rv)
                                                 .unwrap_or_else(|_| {
                                                     fval.payload.clone()
                                                 });
@@ -2469,12 +2451,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Approved `newtype` annotation edges can still update value metadata so
     /// runtime class dispatch sees the checked `newtype` type.
     #[async_recursion]
-    async fn annotate(
-        &mut self,
-        id: ExprId,
-        expr: ExprId,
-        _span: Span,
-    ) -> Result<Value> {
+    async fn annotate(&mut self, id: ExprId, expr: ExprId) -> Result<Value> {
         match self.approved_newtype_edge_meta(id) {
             Some(meta) => {
                 let val = self.eval(expr).await?;
@@ -2548,11 +2525,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Returns `Payload::Json(Object)`.
     #[async_recursion]
     #[allow(clippy::while_let_on_iterator)]
-    async fn json(
-        &mut self,
-        fields: &[(StringId, ExprId)],
-        _span: Span,
-    ) -> Result<Payload> {
+    async fn json(&mut self, fields: &[(StringId, ExprId)]) -> Result<Payload> {
         let mut obj = serde_json::Map::new();
         // Process fields sequentially to maintain order
         let mut it = fields.iter();

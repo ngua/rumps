@@ -58,7 +58,6 @@ impl<I: IoContext> Interpreter<'_, I> {
                 name,
                 params.iter().map(|(name, _)| *name).collect(),
                 body,
-                span,
             ),
 
             Some(Stmt::Module { name, body }) => {
@@ -66,7 +65,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
 
             Some(Stmt::ClassInstance { methods, .. }) => {
-                self.hoist_class_instance(id, &methods, span)
+                self.hoist_class_instance(id, &methods)
             }
 
             // Other statements don't introduce hoistable bindings
@@ -93,7 +92,6 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         id: StmtId,
         methods: &[InstanceMethodDef],
-        span: Span,
     ) -> Result<()> {
         // Extract data from resolved instance (clone to release borrow).
         // If resolution didn't produce info (e.g., invalid class name),
@@ -132,7 +130,6 @@ impl<I: IoContext> Interpreter<'_, I> {
                                         .map(|(name, _)| *name)
                                         .collect(),
                                     method_def.body,
-                                    span,
                                 )?;
 
                                 runtime_inst.methods.insert(mid, fn_id);

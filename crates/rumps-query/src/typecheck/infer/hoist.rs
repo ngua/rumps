@@ -192,7 +192,6 @@ impl InferCtx<'_> {
                                 &type_params,
                                 &params,
                                 ret.as_ref(),
-                                span,
                             );
                         }
                         None => {
@@ -225,14 +224,7 @@ impl InferCtx<'_> {
                 params,
                 ret,
                 ..
-            }) => self.hoist_fun(
-                id,
-                name,
-                &type_params,
-                &params,
-                ret.as_ref(),
-                span,
-            ),
+            }) => self.hoist_fun(id, name, &type_params, &params, ret.as_ref()),
 
             Some(Stmt::ClassInstance {
                 class_name,
@@ -290,7 +282,6 @@ impl InferCtx<'_> {
         type_params: &SmallVec<[TypeParam; 2]>,
         params: &SmallVec<[(StringId, Option<AstTypeExprId>); 4]>,
         ret: Option<&AstTypeExprId>,
-        _span: Span,
     ) {
         // Create fresh type variables for all type parameters
         let type_param_vars: Vec<_> = type_params
@@ -475,7 +466,6 @@ impl InferCtx<'_> {
                         type_params,
                         params,
                         ret.as_ref(),
-                        item_span,
                     );
 
                     // Register as module member with provisional type
@@ -519,7 +509,6 @@ impl InferCtx<'_> {
                                 &type_params,
                                 &params,
                                 ret.as_ref(),
-                                item_span,
                             );
                             if let Some(scheme) =
                                 self.env.lookup(*const_name).cloned()

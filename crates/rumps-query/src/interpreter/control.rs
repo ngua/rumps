@@ -244,10 +244,9 @@ impl<I: IoContext> Interpreter<'_, I> {
         then_br: ExprId,
         else_br: Option<ExprId>,
     ) -> Result<Value> {
-        let span = self.ast.expr_span(expr).unwrap_or_default();
         let val = self.eval(expr).await?;
         // Check if the value matches the variant
-        let matched = self.check_variant(&val, ty_name, var_name, span)?;
+        let matched = self.check_variant(&val, ty_name, var_name)?;
 
         match else_br {
             Some(else_id) => {
@@ -257,7 +256,6 @@ impl<I: IoContext> Interpreter<'_, I> {
                         &val.payload,
                         names,
                         then_br,
-                        span,
                     )
                     .await
                 } else {
@@ -272,7 +270,6 @@ impl<I: IoContext> Interpreter<'_, I> {
                         &val.payload,
                         names,
                         then_br,
-                        span,
                     )
                     .await?;
                 }
@@ -294,7 +291,6 @@ impl<I: IoContext> Interpreter<'_, I> {
         val: &Payload,
         names: &[StringId],
         body: ExprId,
-        span: Span,
     ) -> Result<Value> {
         let payloads = match val {
             Payload::Variant { vals, .. } => vals.clone(),
@@ -307,7 +303,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
 
         self.env.scopes.push();
-        self.bind_payloads(names, &payloads, span);
+        self.bind_payloads(names, &payloads);
         let result = self.eval(body).await;
         self.env.scopes.pop();
         result
@@ -360,7 +356,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     Some(bindings) => {
                         // Pattern matched; check guard if present
                         self.env.scopes.push();
-                        self.apply_bindings(&bindings, span);
+                        self.apply_bindings(&bindings);
 
                         let guard_ok = match arm.guard {
                             None => true,
@@ -404,7 +400,6 @@ impl<I: IoContext> Interpreter<'_, I> {
         start_id: ExprId,
         end_id: ExprId,
         inclusive: bool,
-        _span: Span,
     ) -> Result<Payload> {
         let start_val = self.eval_payload(start_id).await?;
         let end_val = self.eval_payload(end_id).await?;

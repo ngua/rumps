@@ -443,7 +443,6 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         base: ExprId,
         idx: u32,
-        _span: Span,
     ) -> Result<Value> {
         let base_val = self.eval_payload(base).await?;
 
@@ -621,7 +620,6 @@ impl<I: IoContext> Interpreter<'_, I> {
         expr_id: ExprId,
         base: ExprId,
         field: &StringId,
-        span: Span,
     ) -> Result<Value> {
         // Check if base is a type name (for user-defined types registered at runtime)
         let maybe_type_path = self.ast.get_expr(base).and_then(|e| match e {
@@ -637,7 +635,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         });
 
         if let Some((ty, var, 0)) = maybe_type_path {
-            self.path(&[ty.local_name(), var], span)
+            self.path(&[ty.local_name(), var])
                 .map(|payload| self.value_for_expr(expr_id, payload))
         } else if let Some((ty, var, _)) = maybe_type_path {
             Ok(self.value_for_expr(expr_id, Payload::VariantCtor { ty, var }))
@@ -677,7 +675,6 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         base: ExprId,
         field: &StringId,
-        span: Span,
     ) -> Result<Payload> {
         let base_val = self.eval(base).await?;
         let base_ty = self.value_type_id(&base_val);
@@ -699,10 +696,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .unwrap_or_else(|| {
                         typechecked!("?.field", "Option.Some has payload")
                     });
-                self.try_field_access(&inner, field, span)
+                self.try_field_access(&inner, field)
             }
             // Non-Option value -> try field; Some(field) if exists, None if not
-            other => self.try_field_access(other, field, span),
+            other => self.try_field_access(other, field),
         }
     }
 
@@ -731,7 +728,6 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         val: &Payload,
         field: &StringId,
-        _span: Span,
     ) -> Result<Payload> {
         match val {
             Payload::Object(obj) => Ok(obj
