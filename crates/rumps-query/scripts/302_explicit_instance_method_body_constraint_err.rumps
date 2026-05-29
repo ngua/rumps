@@ -1,0 +1,19 @@
+; Error: explicit instance method bodies may not add method constraints
+
+variant Box[T] = Box(T)
+
+class Bad F {
+  fun f[T](x: F[T]) -> F[T]
+}
+
+class Bad for Box {
+  fun f[T](x: Box[T]) -> Box[T] {
+    match x {
+      Box.Box(v) => { Box.Box(v + 1) }
+    }
+  }
+}
+
+fun main() {
+  write Bad:f(Box.Box(1))
+}

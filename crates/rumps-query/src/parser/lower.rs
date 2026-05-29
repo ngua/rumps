@@ -818,6 +818,7 @@ impl<'a> LowerCtx<'a> {
         &mut self,
         m: cst::InstanceMethodDef,
     ) -> Result<ast::InstanceMethodDef> {
+        self.push_type_params(m.type_params.iter().map(|tp| tp.name));
         let params = m
             .params
             .into_iter()
@@ -828,9 +829,12 @@ impl<'a> LowerCtx<'a> {
             })
             .collect::<Result<SmallVec<_>>>()?;
         let ret = m.ret.map(|t| self.type_expr(t)).transpose()?;
+        let type_params = self.type_param_list(m.type_params)?;
         let body = self.expr(m.body)?;
+        self.pop_type_params();
         Ok(ast::InstanceMethodDef {
             name: m.name,
+            type_params,
             params,
             ret,
             body,
@@ -2045,6 +2049,7 @@ impl<'a> MergeCtx<'a> {
                         let new_body = self.expr(m.body, span)?;
                         Ok(ast::InstanceMethodDef {
                             name: m.name,
+                            type_params: m.type_params,
                             params: new_params?,
                             ret: new_ret,
                             body: new_body,

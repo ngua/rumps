@@ -4,14 +4,15 @@
 //! function definitions, assignments, etc.
 
 use std::collections::{HashMap, HashSet};
+use std::mem;
 
 use indexmap::IndexMap;
 use itertools::Itertools;
 use smallvec::{smallvec, SmallVec};
 
 use super::{
-    ClassContext, ClassInstanceInput, Constraint, HoistCtx, InferCtx,
-    InstanceMethodInput, NewtypeIntoOverlap,
+    ClassContext, ClassInstanceInput, Constraint, HoistCtx, HoistState,
+    InferCtx, InstanceMethodInput, NewtypeIntoOverlap,
 };
 use crate::ast::{
     AssocTypeDef, AstTypeExpr, AstTypeExprId, BindingPattern, DbRef, Expr,
@@ -27,6 +28,24 @@ use crate::typecheck::ty::{
 };
 use crate::value::{TypeDef, TypeId};
 use crate::{ClassId, Span};
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum ConstraintKey {
+    Class(TyId, ClassKey),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum ClassKey {
+    Concrete {
+        id: ClassId,
+        params: SmallVec<[TyId; 1]>,
+    },
+    Hkt {
+        id: ClassId,
+        elems: SmallVec<[TyId; 1]>,
+        params: SmallVec<[TyId; 1]>,
+    },
+}
 
 impl InferCtx<'_> {
     /// Infer types for a statement.
@@ -1446,102 +1465,151 @@ impl InferCtx<'_> {
             .class_def(class)
             .method(method.name, m_span)
             .cloned();
+        let class_shape = self.env.class_registry().shape(class);
+        let class_param_len = match class_shape {
+            ClassShape::Concrete { params }
+            | ClassShape::Hkt { params, .. } => params as usize,
+        };
 
         // Handle unknown method error
-        let (expected_param_tys, expected_ret_ty) = match expected {
-            Ok(spec) => {
-                let scheme = spec.scheme();
-                let shape = self.ty_arena.get(scheme.ty).clone();
-                match shape {
-                    Ty::Fn(params, ret) => match self
-                        .env
-                        .class_registry()
-                        .shape(class)
+        let (expected_param_tys, expected_ret_ty, expected_cs, expected_tps) =
+            match expected {
+                Ok(spec) => {
+                    let scheme = spec.scheme();
+                    if let Some(max) = scheme.vars.iter().map(|v| v.idx()).max()
                     {
-                        ClassShape::Hkt { .. } => {
-                            // For HKT classes the LAST scheme var is the
-                            // container constructor; all preceding vars are
-                            // independent element type variables.
-                            //
-                            // Build a `Rename` that:
-                            //  - maps each element var to a fresh type var
-                            //  - maps the container var to the partially
-                            //    applied `Named(type_id, supplied_args)` so
-                            //    `Apply(container_var, elems)` resolves to
-                            //    `Named(type_id, [supplied... elems...])`
-                            if let Some((&container_var, elem_vars)) =
-                                scheme.vars.split_last()
-                            {
-                                // First, rewrite `for_ty` so that any vars
-                                // inside it that collide with scheme vars are
-                                // replaced with fresh vars. This prevents a
-                                // cycle in the rename (e.g. `for_ty` contains
-                                // `Var(TyVar(2))` which is also the container
-                                // var being mapped to `for_ty`).
-                                let mut pre_rename = HashMap::new();
-                                scheme.vars.iter().for_each(|&sv| {
-                                    pre_rename.insert(sv, self.fresh());
-                                });
-                                let pre_rename = Rename(pre_rename);
-                                let ctor_ty =
-                                    self.ty_arena.apply(for_ty, &pre_rename);
+                        self.uf.reserve_through(max);
+                    }
+                    let shape = self.ty_arena.get(scheme.ty).clone();
+                    match shape {
+                        Ty::Fn(params, ret) => match class_shape {
+                            ClassShape::Hkt { .. } => {
+                                // For HKT classes the LAST scheme var is the
+                                // container constructor; all preceding vars are
+                                // independent element type variables.
+                                //
+                                // Build a `Rename` that:
+                                //  - maps each element var to a fresh type var
+                                //  - maps the container var to the partially
+                                //    applied `Named(type_id, supplied_args)` so
+                                //    `Apply(container_var, elems)` resolves to
+                                //    `Named(type_id, [supplied... elems...])`
+                                if let Some((&container_var, elem_vars)) =
+                                    scheme.vars.split_last()
+                                {
+                                    // First, rewrite `for_ty` so that any vars
+                                    // inside it that collide with scheme vars are
+                                    // replaced with fresh vars. This prevents a
+                                    // cycle in the rename (e.g. `for_ty` contains
+                                    // `Var(TyVar(2))` which is also the container
+                                    // var being mapped to `for_ty`).
+                                    let mut pre_rename = HashMap::new();
+                                    scheme.vars.iter().for_each(|&sv| {
+                                        pre_rename.insert(sv, self.fresh());
+                                    });
+                                    let pre_rename = Rename(pre_rename);
+                                    let ctor_ty = self
+                                        .ty_arena
+                                        .apply(for_ty, &pre_rename);
 
-                                let mut rename = HashMap::new();
-                                rename.insert(container_var, ctor_ty);
-                                elem_vars.iter().for_each(|&ev| {
-                                    rename.insert(ev, self.fresh());
-                                });
-                                let rename = Rename(rename);
+                                    let mut rename = HashMap::new();
+                                    rename.insert(container_var, ctor_ty);
+                                    elem_vars.iter().for_each(|&ev| {
+                                        rename.insert(ev, self.fresh());
+                                    });
+                                    let rename = Rename(rename);
 
+                                    let ps: Vec<_> = params
+                                        .iter()
+                                        .map(|&p| {
+                                            self.ty_arena.apply(p, &rename)
+                                        })
+                                        .collect();
+                                    let r = self.ty_arena.apply(ret, &rename);
+                                    let cs = self.expected_method_constraints(
+                                        scheme,
+                                        Some(container_var),
+                                        &rename,
+                                    );
+                                    let tps = self.expected_method_type_params(
+                                        scheme,
+                                        class_shape,
+                                        class_param_len,
+                                        &rename,
+                                    );
+                                    (ps, r, cs, tps)
+                                } else {
+                                    self.error(TypeError::Custom {
+                                        msg: "HKT class scheme has no type variables"
+                                            .into(),
+                                        span: m_span,
+                                    });
+                                    (
+                                        vec![],
+                                        TyArena::UNKNOWN,
+                                        SmallVec::new(),
+                                        SmallVec::new(),
+                                    )
+                                }
+                            }
+                            _ => {
+                                // Simple/Parameterized: first var is `Self`,
+                                // subsequent vars are class type params.
+                                let self_var = scheme.vars.first().copied();
+                                let class_arg_vars: Vec<_> = scheme
+                                    .vars
+                                    .iter()
+                                    .skip(1)
+                                    .copied()
+                                    .collect();
+                                let mut map = HashMap::new();
+                                if let Some(var) = self_var {
+                                    map.insert(var, for_ty);
+                                }
+                                class_arg_vars
+                                    .iter()
+                                    .zip(class_arg_tys.iter())
+                                    .for_each(|(&var, &arg_ty)| {
+                                        map.insert(var, arg_ty);
+                                    });
+                                scheme
+                                    .vars
+                                    .iter()
+                                    .skip(1 + class_arg_tys.len())
+                                    .for_each(|&var| {
+                                        map.insert(var, self.fresh());
+                                    });
+                                let rename = Rename(map);
                                 let ps: Vec<_> = params
                                     .iter()
                                     .map(|&p| self.ty_arena.apply(p, &rename))
                                     .collect();
                                 let r = self.ty_arena.apply(ret, &rename);
-                                (ps, r)
-                            } else {
-                                self.error(TypeError::Custom {
-                                    msg:
-                                        "HKT class scheme has no type variables"
-                                            .into(),
-                                    span: m_span,
-                                });
-                                (vec![], TyArena::UNKNOWN)
+                                let cs = self.expected_method_constraints(
+                                    scheme, self_var, &rename,
+                                );
+                                let tps = self.expected_method_type_params(
+                                    scheme,
+                                    class_shape,
+                                    class_param_len,
+                                    &rename,
+                                );
+                                (ps, r, cs, tps)
                             }
-                        }
-                        _ => {
-                            // Simple/Parameterized: first var is `Self`,
-                            // subsequent vars are class type params.
-                            let self_var = scheme.vars.first().copied();
-                            let class_arg_vars: Vec<_> =
-                                scheme.vars.iter().skip(1).copied().collect();
-                            let subst_id = |ctx: &mut Self, ty: TyId| -> TyId {
-                                let mut r =
-                                    ctx.subst_self_type(ty, self_var, for_ty);
-                                class_arg_vars
-                                    .iter()
-                                    .zip(class_arg_tys.iter())
-                                    .for_each(|(&var, &arg_ty)| {
-                                        r = ctx.subst_tyvar(r, var, arg_ty);
-                                    });
-                                r
-                            };
-                            let ps: Vec<_> = params
-                                .iter()
-                                .map(|&p| subst_id(self, p))
-                                .collect();
-                            let r = subst_id(self, ret);
-                            (ps, r)
-                        }
-                    },
-                    _ => (vec![], TyArena::UNKNOWN),
+                        },
+                        _ => (
+                            vec![],
+                            TyArena::UNKNOWN,
+                            SmallVec::new(),
+                            SmallVec::new(),
+                        ),
+                    }
                 }
-            }
-            Err(e) => {
-                self.error(e);
-                (vec![], TyArena::UNKNOWN)
-            }
-        };
+                Err(e) => {
+                    self.error(e);
+                    (vec![], TyArena::UNKNOWN, SmallVec::new(), SmallVec::new())
+                }
+            };
 
         // Check arity
         if method.params.len() != expected_param_tys.len() {
@@ -1554,15 +1622,41 @@ impl InferCtx<'_> {
             });
         }
 
-        // For HKT classes, extend subst with method-level type vars
-        // so user-chosen element names (e.g. `V` vs TypeDef's `Val`)
-        // resolve correctly.
-        let mut method_subst;
-        let type_param_subst = if matches!(
+        if !method.type_params.is_empty()
+            && method.type_params.len() != expected_tps.len()
+        {
+            let cn = self
+                .env
+                .resolve_str(self.env.class_registry().name(class))
+                .to_owned();
+            let mn = self.env.resolve_str(method.name).to_owned();
+            self.error(TypeError::Custom {
+                msg: format!(
+                    "method `{}` of class `{}` has {} type parameters but the class method signature has {}",
+                    mn,
+                    cn,
+                    method.type_params.len(),
+                    expected_tps.len(),
+                ),
+                span: m_span,
+            });
+        }
+
+        let tp_tvs: HashMap<StringId, TyVar> = method
+            .type_params
+            .iter()
+            .map(|tp| (tp.name, self.fresh_var()))
+            .collect();
+        let mut method_subst = type_param_subst.clone();
+        method.type_params.iter().for_each(|tp| {
+            let tv = tp_tvs[&tp.name];
+            method_subst.insert(tp.name, self.ty_arena.alloc(Ty::Var(tv)));
+        });
+
+        if matches!(
             self.env.class_registry().shape(class),
             ClassShape::Hkt { .. }
         ) {
-            method_subst = type_param_subst.clone();
             method.params.iter().for_each(|(_, ann)| {
                 if let Some(id) = ann {
                     self.convert().merge_for_type_vars(*id, &mut method_subst);
@@ -1571,19 +1665,35 @@ impl InferCtx<'_> {
             if let Some(ret) = method.ret {
                 self.convert().merge_for_type_vars(ret, &mut method_subst);
             }
-            &method_subst
-        } else {
-            type_param_subst
-        };
+        }
+
+        let type_param_subst = &method_subst;
 
         // Typecheck method body
         self.env.push_scope();
         self.ty_substs.push((*type_param_subst).clone());
+        tp_tvs.values().for_each(|&tv| {
+            self.poly_param_vars.insert(tv);
+        });
 
         // Bind parameters with user-provided types (or inferred).
         // For unannotated params, use expected types directly so that
         // the body can rely on concrete type info (e.g. for match
         // exhaustiveness) without waiting for deferred constraint solving.
+        let method_vars: HashSet<_> = if method.type_params.is_empty() {
+            method_subst
+                .values()
+                .flat_map(|&ty| self.uf.free_vars(ty, &self.ty_arena))
+                .collect()
+        } else {
+            tp_tvs.values().copied().collect()
+        };
+        let mut impl_map = Self::method_type_param_map(
+            &method.type_params,
+            &tp_tvs,
+            &expected_tps,
+        );
+        let mut sig_bad = false;
         let param_tys: Vec<TyId> = method
             .params
             .iter()
@@ -1592,6 +1702,13 @@ impl InferCtx<'_> {
                 Some(id) => {
                     let user_ty =
                         self.convert().ast_type_to_ty(*id, type_param_subst);
+                    self.match_method_ty_vars(
+                        user_ty,
+                        exp_ty,
+                        &method_vars,
+                        &mut impl_map,
+                        &mut sig_bad,
+                    );
                     self.unify(user_ty, exp_ty, m_span);
                     user_ty
                 }
@@ -1599,10 +1716,67 @@ impl InferCtx<'_> {
             })
             .collect();
 
+        if let Some(ret_id) = method.ret {
+            let user_ret =
+                self.convert().ast_type_to_ty(ret_id, type_param_subst);
+            self.match_method_ty_vars(
+                user_ret,
+                expected_ret_ty,
+                &method_vars,
+                &mut impl_map,
+                &mut sig_bad,
+            );
+        }
+        if sig_bad {
+            self.method_signature_mismatch(class, method.name, m_span);
+        }
+
+        let body_map = if method.type_params.is_empty() {
+            self.method_type_param_body_map(&expected_tps, &impl_map)
+        } else {
+            impl_map.clone()
+        };
+        body_map.keys().for_each(|&tv| {
+            self.poly_param_vars.insert(tv);
+        });
+        let got_cs = if method.type_params.is_empty() {
+            expected_cs.clone()
+        } else {
+            let got_cs =
+                self.method_constraints(&method.type_params, type_param_subst);
+            let got_cs =
+                self.apply_method_constraint_rename(got_cs, &Rename(impl_map));
+            self.check_method_constraints_match(
+                class,
+                method.name,
+                &expected_cs,
+                &got_cs,
+                m_span,
+            );
+            got_cs
+        };
+        got_cs.iter().for_each(|&(ty, ref cls)| {
+            self.constrain(Constraint::Class {
+                ty,
+                class: cls.clone(),
+                span: m_span,
+            });
+        });
+
         self.bind_params(&method.params, &param_tys);
+
+        let body_constraint_start = self.constraints.len();
 
         // Infer body type
         let body_ty = self.expr(method.body);
+        self.check_method_body_constraints_match(
+            class,
+            method.name,
+            &expected_cs,
+            &body_map,
+            body_constraint_start,
+            m_span,
+        );
 
         // Determine expected return type (user annotation or class signature)
         let ret = method.ret.map(|ret_id| {
@@ -1629,6 +1803,367 @@ impl InferCtx<'_> {
 
         self.ty_substs.pop();
         self.env.pop_scope();
+    }
+
+    fn match_method_ty_vars(
+        &mut self,
+        got: TyId,
+        expected: TyId,
+        vars: &HashSet<TyVar>,
+        map: &mut HashMap<TyVar, TyId>,
+        bad: &mut bool,
+    ) {
+        let got_ty = self.ty_arena.get(got).clone();
+        let exp_ty = self.ty_arena.get(expected).clone();
+        match (got_ty, exp_ty) {
+            (Ty::Var(v), _) if vars.contains(&v) => {
+                Self::match_method_ty_var(v, expected, map, bad);
+            }
+            (Ty::Array(a), Ty::Array(b)) | (Ty::Option(a), Ty::Option(b)) => {
+                self.match_method_ty_vars(a, b, vars, map, bad);
+            }
+            (Ty::Result(a1, b1), Ty::Result(a2, b2))
+            | (Ty::Map(a1, b1), Ty::Map(a2, b2)) => {
+                self.match_method_ty_vars(a1, a2, vars, map, bad);
+                self.match_method_ty_vars(b1, b2, vars, map, bad);
+            }
+            (Ty::Tuple(a), Ty::Tuple(b))
+            | (Ty::Named(_, a), Ty::Named(_, b)) => {
+                a.iter().zip(b.iter()).for_each(|(&x, &y)| {
+                    self.match_method_ty_vars(x, y, vars, map, bad);
+                });
+            }
+            (Ty::Fn(a_ps, a_ret), Ty::Fn(b_ps, b_ret)) => {
+                a_ps.iter().zip(b_ps.iter()).for_each(|(&x, &y)| {
+                    self.match_method_ty_vars(x, y, vars, map, bad);
+                });
+                self.match_method_ty_vars(a_ret, b_ret, vars, map, bad);
+            }
+            (Ty::Object(a), Ty::Object(b)) => {
+                a.iter().for_each(|(&name, &x)| {
+                    if let Some(&y) = b.get(&name) {
+                        self.match_method_ty_vars(x, y, vars, map, bad);
+                    }
+                });
+            }
+            (Ty::Union(_, a), Ty::Union(_, b)) => {
+                a.iter().zip(b.iter()).for_each(|(&x, &y)| {
+                    self.match_method_ty_vars(x, y, vars, map, bad);
+                });
+            }
+            (Ty::Apply(v, a), Ty::Apply(w, b)) if vars.contains(&v) => {
+                let ty = self.ty_arena.alloc(Ty::Var(w));
+                Self::match_method_ty_var(v, ty, map, bad);
+                a.iter().zip(b.iter()).for_each(|(&x, &y)| {
+                    self.match_method_ty_vars(x, y, vars, map, bad);
+                });
+            }
+            (Ty::Apply(_, a), Ty::Apply(_, b)) => {
+                a.iter().zip(b.iter()).for_each(|(&x, &y)| {
+                    self.match_method_ty_vars(x, y, vars, map, bad);
+                });
+            }
+            _ => {}
+        }
+    }
+
+    fn match_method_ty_var(
+        var: TyVar,
+        ty: TyId,
+        map: &mut HashMap<TyVar, TyId>,
+        bad: &mut bool,
+    ) {
+        match map.get(&var).copied() {
+            Some(prev) if prev == ty => {}
+            Some(_) => {
+                *bad = true;
+            }
+            None => {
+                map.insert(var, ty);
+            }
+        }
+    }
+
+    fn method_type_param_map(
+        tps: &[TypeParam],
+        tvs: &HashMap<StringId, TyVar>,
+        expected: &[TyId],
+    ) -> HashMap<TyVar, TyId> {
+        tps.iter()
+            .zip(expected.iter())
+            .filter_map(|(tp, &ty)| {
+                tvs.get(&tp.name).copied().map(|tv| (tv, ty))
+            })
+            .collect()
+    }
+
+    fn method_type_param_self_map(
+        &mut self,
+        tps: &[TyId],
+    ) -> HashMap<TyVar, TyId> {
+        let tvs: HashSet<_> = tps
+            .iter()
+            .flat_map(|&ty| self.uf.free_vars(ty, &self.ty_arena))
+            .collect();
+        tvs.into_iter()
+            .map(|tv| (tv, self.ty_arena.alloc(Ty::Var(tv))))
+            .collect()
+    }
+
+    fn method_type_param_body_map(
+        &mut self,
+        tps: &[TyId],
+        map: &HashMap<TyVar, TyId>,
+    ) -> HashMap<TyVar, TyId> {
+        let self_map = self.method_type_param_self_map(tps);
+        if map.is_empty() {
+            self_map
+        } else {
+            let tps: HashSet<_> = self_map.keys().copied().collect();
+            map.iter()
+                .filter_map(|(&tv, &ty)| {
+                    let vars = self.uf.free_vars(ty, &self.ty_arena);
+                    if vars.iter().any(|v| tps.contains(v)) {
+                        Some((tv, ty))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        }
+    }
+
+    fn apply_method_constraint_rename(
+        &mut self,
+        cs: SmallVec<[(TyId, TypeClass<TyId>); 2]>,
+        rename: &Rename,
+    ) -> SmallVec<[(TyId, TypeClass<TyId>); 2]> {
+        cs.into_iter()
+            .map(|(ty, cls)| {
+                (
+                    self.ty_arena.apply(ty, rename),
+                    cls.apply(rename, &mut self.ty_arena),
+                )
+            })
+            .collect()
+    }
+
+    fn expected_method_type_params(
+        &mut self,
+        scheme: &Scheme,
+        shape: ClassShape,
+        class_arg_len: usize,
+        rename: &Rename,
+    ) -> SmallVec<[TyId; 2]> {
+        let n = scheme.vars.len().saturating_sub(class_arg_len + 1);
+        let start = if matches!(shape, ClassShape::Hkt { .. }) {
+            0
+        } else {
+            class_arg_len + 1
+        };
+        scheme
+            .vars
+            .iter()
+            .skip(start)
+            .take(n)
+            .map(|v| {
+                rename
+                    .0
+                    .get(v)
+                    .copied()
+                    .unwrap_or_else(|| self.ty_arena.alloc(Ty::Var(*v)))
+            })
+            .collect()
+    }
+
+    fn expected_method_constraints(
+        &mut self,
+        scheme: &Scheme,
+        self_var: Option<TyVar>,
+        rename: &Rename,
+    ) -> SmallVec<[(TyId, TypeClass<TyId>); 2]> {
+        scheme
+            .constraints
+            .iter()
+            .filter(|(tv, _)| Some(*tv) != self_var)
+            .map(|(tv, cls)| {
+                let ty = rename
+                    .0
+                    .get(tv)
+                    .copied()
+                    .unwrap_or_else(|| self.ty_arena.alloc(Ty::Var(*tv)));
+                (ty, cls.apply(rename, &mut self.ty_arena))
+            })
+            .collect()
+    }
+
+    fn method_constraints(
+        &mut self,
+        tps: &[TypeParam],
+        subst: &IndexMap<StringId, TyId>,
+    ) -> SmallVec<[(TyId, TypeClass<TyId>); 2]> {
+        tps.iter().fold(SmallVec::new(), |mut acc, tp| {
+            if let Some(ty) = subst.get(&tp.name).copied() {
+                tp.constraints.iter().for_each(|c| {
+                    let cls = self.convert().ast_class_to_ty_class(c, subst);
+                    acc.push((ty, cls.clone()));
+                    self.env
+                        .class_registry()
+                        .transitive_supers(cls.tag())
+                        .into_iter()
+                        .filter_map(|sup| cls.with_tag(sup).map(|sc| (ty, sc)))
+                        .for_each(|pair| {
+                            acc.push(pair);
+                        });
+                });
+            }
+            acc
+        })
+    }
+
+    fn check_method_body_constraints_match(
+        &mut self,
+        class: ClassId,
+        method: StringId,
+        expected: &[(TyId, TypeClass<TyId>)],
+        map: &HashMap<TyVar, TyId>,
+        start: usize,
+        span: Span,
+    ) {
+        if map.is_empty() {
+        } else {
+            let end = self.constraints.len();
+            let snap = self.uf.snapshot();
+            let got = {
+                let mut cx = HoistCtx {
+                    env: &mut self.env,
+                    uf: &mut self.uf,
+                    ty_arena: &mut self.ty_arena,
+                    constraints: &mut self.constraints,
+                    errors: &mut self.errors,
+                    current_module: &self.current_module,
+                };
+                HoistState::build_constraint_unions(&mut cx, start..end);
+                let roots: HashMap<_, _> =
+                    map.iter().map(|(&tv, &ty)| (cx.uf.find(tv), ty)).collect();
+                let rename = Rename(map.clone());
+                let cs = mem::take(cx.constraints);
+                let got = cs[start..end]
+                    .iter()
+                    .filter_map(|(c, _)| match c {
+                        Constraint::Class { ty, class: cls, .. } => {
+                            match cx.ty_arena.get(*ty) {
+                                Ty::Var(tv) => {
+                                    roots.get(&cx.uf.find(*tv)).map(|&ty| {
+                                        let cls = cls
+                                            .apply(&rename, cx.ty_arena)
+                                            .resolve_inner(cx.uf, cx.ty_arena);
+                                        (ty, cls)
+                                    })
+                                }
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    })
+                    .collect::<SmallVec<[_; 2]>>();
+                *cx.constraints = cs;
+                cx.uf.rollback(snap);
+                got
+            };
+            let want = self.constraint_keys(expected);
+            let got = self.constraint_keys(&got);
+            if got.iter().all(|key| want.contains(key)) {
+            } else {
+                self.method_constraints_mismatch(class, method, span);
+            }
+        }
+    }
+
+    fn check_method_constraints_match(
+        &mut self,
+        class: ClassId,
+        method: StringId,
+        expected: &[(TyId, TypeClass<TyId>)],
+        got: &[(TyId, TypeClass<TyId>)],
+        span: Span,
+    ) {
+        let want = self.constraint_keys(expected);
+        let got = self.constraint_keys(got);
+        if want == got {
+        } else {
+            self.method_constraints_mismatch(class, method, span);
+        }
+    }
+
+    fn method_signature_mismatch(
+        &mut self,
+        class: ClassId,
+        method: StringId,
+        span: Span,
+    ) {
+        let cn = self
+            .env
+            .resolve_str(self.env.class_registry().name(class))
+            .to_owned();
+        let mn = self.env.resolve_str(method).to_owned();
+        self.error(TypeError::Custom {
+            msg: format!(
+                "method `{}` of class `{}` has signature that does not match the class method signature",
+                mn, cn,
+            ),
+            span,
+        });
+    }
+
+    fn method_constraints_mismatch(
+        &mut self,
+        class: ClassId,
+        method: StringId,
+        span: Span,
+    ) {
+        let cn = self
+            .env
+            .resolve_str(self.env.class_registry().name(class))
+            .to_owned();
+        let mn = self.env.resolve_str(method).to_owned();
+        self.error(TypeError::Custom {
+            msg: format!(
+                "method `{}` of class `{}` has constraints that do not match the class method signature",
+                mn, cn,
+            ),
+            span,
+        });
+    }
+
+    fn constraint_keys(
+        &mut self,
+        cs: &[(TyId, TypeClass<TyId>)],
+    ) -> Vec<ConstraintKey> {
+        let mut keys: Vec<_> = cs
+            .iter()
+            .map(|(ty, cls)| {
+                let ty = self.uf.resolve(*ty, &mut self.ty_arena);
+                let cls = cls.resolve_inner(&mut self.uf, &mut self.ty_arena);
+                ConstraintKey::Class(ty, Self::class_key(&cls))
+            })
+            .collect();
+        keys.sort_unstable();
+        keys
+    }
+
+    fn class_key(cls: &TypeClass<TyId>) -> ClassKey {
+        match cls {
+            TypeClass::Concrete { id, params } => ClassKey::Concrete {
+                id: *id,
+                params: params.clone(),
+            },
+            TypeClass::Hkt { id, elems, params } => ClassKey::Hkt {
+                id: *id,
+                elems: elems.clone(),
+                params: params.clone(),
+            },
+        }
     }
 
     /// Extract a `TypeId` from a `TyId`, if it represents a named/aliased type.

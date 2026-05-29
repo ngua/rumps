@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Error: explicit instance method type params must match by position\n\nvariant Box[T] = Box(T)\n\nclass Swappable F {\n  fun swap[T, U](x: F[T], y: U) -> F[U]\n}\n\nclass Swappable for Box {\n  fun swap[A, B](x: Box[B], y: A) -> Box[A] {\n    Box.Box(y)\n  }\n}\n\nfun main() {\n  write Swappable:swap(Box.Box(1), \"x\")\n}\n"
+---
+ERROR: method `swap` of class `Swappable` has signature that does not match the class method signature

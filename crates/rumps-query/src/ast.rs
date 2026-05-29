@@ -1229,10 +1229,11 @@ pub(crate) struct AstClassMethodSig {
 
 /// A method definition in a class instance.
 ///
-/// Represents `fun method(params) -> RetType { body }` inside a `class ... for ...` block.
+/// Represents `fun method[T](params) -> RetType { body }` inside a `class ... for ...` block.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct InstanceMethodDef {
     pub(crate) name: StringId,
+    pub(crate) type_params: SmallVec<[TypeParam; 2]>,
     pub(crate) params: SmallVec<[(StringId, Option<AstTypeExprId>); 4]>,
     pub(crate) ret: Option<AstTypeExprId>,
     pub(crate) body: ExprId,

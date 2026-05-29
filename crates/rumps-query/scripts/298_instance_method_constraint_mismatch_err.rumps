@@ -1,0 +1,16 @@
+; Error: explicit instance method constraints must match the class method signature
+
+variant Box[T] = Full(T) | Empty
+
+class Mappable for Box {
+  fun map[T: Ord, U](f: (T) -> U, x: Box[T]) -> Box[U] {
+    match x {
+      Box.Full(v) => { Box.Full(f(v)) }
+      Box.Empty => { Box.Empty }
+    }
+  }
+}
+
+fun main() {
+  write Mappable:map(x => x, Box.Full(1))
+}

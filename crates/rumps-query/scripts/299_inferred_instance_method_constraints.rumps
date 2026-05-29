@@ -1,0 +1,19 @@
+; Inferred instance method implementations inherit class method constraints
+
+variant Box[T] = Box(T)
+
+class ShowBox F {
+  fun show[T: Display](x: F[T]) -> String
+}
+
+class ShowBox for Box {
+  fun show(x: Box[T]) -> String {
+    match x {
+      Box.Box(v) => { Display:display(v) }
+    }
+  }
+}
+
+fun main() {
+  write ShowBox:show(Box.Box(42))
+}

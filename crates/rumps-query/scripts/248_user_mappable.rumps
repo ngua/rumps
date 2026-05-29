@@ -1,6 +1,7 @@
-; User Mappable for type, newtype, and union
+; User Mappable for inferred and explicit methods, newtype, and union
 
 variant Box[T] = Full(T) | Empty
+variant Pack[T] = Full(T) | Empty
 newtype Bag[T] = Array[T]
 union Flex = Option[Int] | Array[Int]
 
@@ -13,8 +14,17 @@ class Mappable for Box {
   }
 }
 
+class Mappable for Pack {
+  fun map[T, U](f: (T) -> U, x: Pack[T]) -> Pack[U] {
+    match x {
+      Pack.Full(v) => { Pack.Full(f(v)) }
+      Pack.Empty => { Pack.Empty }
+    }
+  }
+}
+
 fun main() {
-  ; type with user instance
+  ; inferred type with user instance
   write Mappable:map(x => x * 2, Box.Full(21))
   write Mappable:map(x => x + 10, Box.Empty)
 
@@ -25,6 +35,11 @@ fun main() {
 
   ; type-changing map
   write Mappable:map(x => "{x}!", Box.Full(99))
+
+  ; explicit type params with user instance
+  write Mappable:map(x => x * 2, Pack.Full(21))
+  write Mappable:map(x => x + 10, Pack.Empty)
+  write Mappable:map(x => "{x}!", Pack.Full(99))
 
   ; newtype auto-derive
   let b: Bag[Int] = [1, 2, 3]

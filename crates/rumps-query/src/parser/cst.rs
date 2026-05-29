@@ -482,6 +482,7 @@ pub(crate) struct ClassMethodSig {
 #[derive(Clone, Debug)]
 pub(crate) struct InstanceMethodDef {
     pub(crate) name: StringId,
+    pub(crate) type_params: Vec<TypeParam>,
     pub(crate) params: SmallVec<[(StringId, Option<TypeExpr>); 4]>,
     pub(crate) ret: Option<TypeExpr>,
     pub(crate) body: Expr,

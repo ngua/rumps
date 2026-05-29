@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Error: explicit instance method constraints must match the class method signature\n\nvariant Box[T] = Full(T) | Empty\n\nclass Mappable for Box {\n  fun map[T: Ord, U](f: (T) -> U, x: Box[T]) -> Box[U] {\n    match x {\n      Box.Full(v) => { Box.Full(f(v)) }\n      Box.Empty => { Box.Empty }\n    }\n  }\n}\n\nfun main() {\n  write Mappable:map(x => x, Box.Full(1))\n}\n"
+---
+ERROR: method `map` of class `Mappable` has constraints that do not match the class method signature

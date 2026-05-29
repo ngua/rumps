@@ -1,0 +1,17 @@
+; Error: explicit instance method type params must match by position
+
+variant Box[T] = Box(T)
+
+class Swappable F {
+  fun swap[T, U](x: F[T], y: U) -> F[U]
+}
+
+class Swappable for Box {
+  fun swap[A, B](x: Box[B], y: A) -> Box[A] {
+    Box.Box(y)
+  }
+}
+
+fun main() {
+  write Swappable:swap(Box.Box(1), "x")
+}

@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Error: explicit instance method type param arity must match the class method\n\nvariant Box = Box\n\nclass Weird C {\n  fun f[A, B](x: C) -> String\n}\n\nclass Weird for Box {\n  fun f[T](x: Box) -> String {\n    \"ok\"\n  }\n}\n\nfun main() {\n  write Weird:f(Box.Box)\n}\n"
+---
+ERROR: method `f` of class `Weird` has 1 type parameters but the class method signature has 2

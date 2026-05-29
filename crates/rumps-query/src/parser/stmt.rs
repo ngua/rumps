@@ -533,7 +533,7 @@ impl Parser {
             .or_not()
             .map(|cs| cs.unwrap_or_default());
 
-        // Instance method: `fun name(params) [-> Type] { body }`
+        // Instance method: `fun name[T](params) [-> Type] { body }`
         let method_param = Self::ident().then(
             just(Token::Colon)
                 .ignore_then(Self::opt_newlines())
@@ -560,15 +560,22 @@ impl Parser {
             .ignore_then(Self::opt_newlines())
             .ignore_then(Self::ident())
             .then_ignore(Self::opt_newlines())
+            .then(Self::type_params(interner))
+            .then_ignore(Self::opt_newlines())
             .then(method_params)
             .then(method_ret)
             .then(method_body)
             .map_with_span(
-                |(((name, params_vec), ret), (stmts, blk_span)), span| {
+                |(
+                    (((name, type_params), params_vec), ret),
+                    (stmts, blk_span),
+                ),
+                 span| {
                     let params = SmallVec::from_vec(params_vec);
                     let body = Self::stmts_to_block(stmts, blk_span);
                     cst::InstanceMethodDef {
                         name,
+                        type_params,
                         params,
                         ret,
                         body,

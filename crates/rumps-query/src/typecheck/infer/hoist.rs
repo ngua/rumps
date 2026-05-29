@@ -866,11 +866,38 @@ impl InferCtx<'_> {
         // (e) Build function type
         let fn_ty = self.ty_arena.func(param_tys, ret_ty);
 
+        let mut cs = smallvec![class_constraint];
+        method.type_params.iter().for_each(|tp| {
+            let tv = ctx.subst.get(&tp.name).copied().and_then(|ty| {
+                if let Ty::Var(tv) = self.ty_arena.get(ty) {
+                    Some(*tv)
+                } else {
+                    None
+                }
+            });
+            if let Some(tv) = tv {
+                tp.constraints.iter().for_each(|c| {
+                    let class =
+                        self.convert().ast_class_to_ty_class(c, &ctx.subst);
+                    cs.push((tv, class.clone()));
+                    self.env
+                        .class_registry()
+                        .transitive_supers(class.tag())
+                        .into_iter()
+                        .for_each(|sup| {
+                            if let Some(sc) = class.with_tag(sup) {
+                                cs.push((tv, sc));
+                            }
+                        });
+                });
+            }
+        });
+
         // (g) Assemble scheme
         let scheme = Scheme {
             vars: (0..total_vars).map(TyVar::new).collect(),
             ty: fn_ty,
-            constraints: smallvec![class_constraint],
+            constraints: cs,
         };
 
         Some((method.name, MethodSpec::Standard(scheme)))

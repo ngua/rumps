@@ -964,7 +964,7 @@ impl TyVar {
 ///
 /// `Copy` and `Eq`; eliminates deep cloning of recursive type trees.
 /// Use `TyArena::get` to retrieve the underlying `Ty`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
 pub(crate) struct TyId(u32);
 
