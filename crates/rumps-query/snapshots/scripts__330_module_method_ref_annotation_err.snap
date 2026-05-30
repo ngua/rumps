@@ -1,5 +1,0 @@
----
-source: crates/rumps-query/tests/scripts.rs
-description: "; Module method-ref `let` annotations are still checked.\n\nmodule Bad {\n  +let f: Int = Iterable:length\n}\n\nfun main() {\n  write 0\n}\n"
----
-ERROR: type mismatch: expected `Int`, got `(T[U]) -> Int`

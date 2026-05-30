@@ -1,5 +1,0 @@
----
-source: crates/rumps-query/tests/scripts.rs
-description: "; Pass `2` restores finalized module `let` bindings by statement.\n\nmodule A {\n  +let x = 1\n\n  +fun f() -> Int {\n    x\n  }\n}\n\nmodule B {\n  +let x = \"s\"\n}\n\nfun main() {\n  write A.f()\n}\n"
----
-1

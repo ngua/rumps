@@ -1,5 +1,0 @@
----
-source: crates/rumps-query/tests/scripts.rs
-description: "; Module `let` consumers can depend on nested providers declared later.\n\nmodule UseNestedImport {\n  import SourceNestedImport.Inner.{ v }\n\n  +let w = () => v + 1\n}\n\nmodule UseNestedPath {\n  +let w = () => SourceNestedPath.Inner.v + 1\n}\n\nmodule SourceNestedImport {\n  module Inner {\n    +let v = 41\n  }\n}\n\nmodule SourceNestedPath {\n  module Inner {\n    +let v = 41\n  }\n}\n\nfun main() {\n  write 0\n}\n"
----
-0

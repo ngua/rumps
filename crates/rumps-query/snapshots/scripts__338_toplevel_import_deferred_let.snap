@@ -1,5 +1,0 @@
----
-source: crates/rumps-query/tests/scripts.rs
-description: "; Top-level imports can see finalized `let` members from later modules.\n\nimport M.{ v }\n\nlet x = v + 1\n\nmodule M {\n  +let v = 41\n}\n\nfun main() {\n  write x\n}\n"
----
-42

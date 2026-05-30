@@ -301,9 +301,6 @@ pub(super) struct HoistState {
     /// earlier modules or top-level scopes.
     pub(super) final_let_schemes:
         HashMap<StmtId, (StringId, Scheme, Option<MethodRefOrigin>)>,
-    /// Class instance statements registered early for module method reference
-    /// `let`s.
-    pub(super) early_instances: HashSet<StmtId>,
     /// Hoisted polymorphic schemes that have not yet been finalized by Pass 2.
     ///
     /// Populated by `hoist_fun` (top level, modules, blocks). The key is
@@ -363,7 +360,6 @@ impl HoistState {
         Self {
             final_lets: HashSet::new(),
             final_let_schemes: HashMap::new(),
-            early_instances: HashSet::new(),
             funs: HashMap::new(),
             fun_index: HashMap::new(),
             forward_instantiations: HashMap::new(),
@@ -1714,11 +1710,9 @@ impl<'a> InferCtx<'a> {
         // Pass 1: Hoist function and module declarations for forward references
         self.hoist_declarations(stmts);
 
-        // Pass 2: Infer types for all statement bodies
-        stmts.iter().copied().for_each(|id| {
-            self.restore_final_lets(stmts);
-            self.stmt(id);
-        });
+        // Pass `2`: Infer types for all statement bodies.
+        self.install_final_let_schemes(stmts);
+        stmts.iter().copied().for_each(|id| self.stmt(id));
 
         // Solve collected constraints (updates union-find in-place)
         self.solve();

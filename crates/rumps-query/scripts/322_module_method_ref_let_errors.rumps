@@ -1,4 +1,4 @@
-; Module method reference `let`s participate in duplicate detection.
+; Duplicate module method-reference `let`s are rejected.
 
 fun main() {
   write "unreachable"

@@ -1,5 +1,0 @@
----
-source: crates/rumps-query/tests/scripts.rs
-description: "; Nested module `let`s can see finalized parent module `let`s.\n\nmodule Outer {\n  +let x = 41\n\n  module Inner {\n    +let y = () => Outer.x + 1\n  }\n}\n\nfun main() {\n  write 0\n}\n"
----
-0

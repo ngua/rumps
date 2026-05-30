@@ -1,5 +1,0 @@
----
-source: crates/rumps-query/tests/scripts.rs
-description: "; Deferred top-level imports do not create false `let` cycles.\n\nimport M.{ w }\n\nlet x = 1\n\nmodule M {\n  +let w = () => x\n}\n\nfun main() {\n  write 0\n}\n"
----
-0

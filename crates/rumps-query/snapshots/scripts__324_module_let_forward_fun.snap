@@ -1,5 +1,0 @@
----
-source: crates/rumps-query/tests/scripts.rs
-description: "; Module `let` RHSs can close over later top-level functions.\n\nmodule M {\n  +let g = x => f(x)\n}\n\nfun f(n: Int) -> Int {\n  n + 1\n}\n\nfun main() {\n  write M.g(1)\n}\n"
----
-2

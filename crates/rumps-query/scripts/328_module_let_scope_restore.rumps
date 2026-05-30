@@ -1,0 +1,31 @@
+; Module `let` schemes are restored for nested scopes and pass `2`.
+
+module Outer {
+  +let x = 41
+
+  module Inner {
+    +let y = () => Outer.x + 1
+  }
+}
+
+module A {
+  +let x = 1
+
+  +fun f() -> Int {
+    x
+  }
+}
+
+module B {
+  +let x = "s"
+
+  +fun f() -> String {
+    x
+  }
+}
+
+fun main() {
+  write Outer.Inner.y()
+  write A.f()
+  write B.f()
+}

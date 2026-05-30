@@ -1,0 +1,30 @@
+; Static `let` dependency collection respects local binders.
+
+variant Box = Box(Int)
+
+let y = if Box.Box(5) is Box.Box(x) { x } else { 0 }
+let x = y
+
+let outer = () => {
+  fun dep() -> Int {
+    shadow()
+  }
+
+  fun shadow() -> Int {
+    41
+  }
+
+  dep() + 1
+}
+
+let shadow = outer()
+
+let by-param = local => local + 1
+let local = by-param(40)
+
+fun main() {
+  write y
+  write x
+  write shadow
+  write local
+}

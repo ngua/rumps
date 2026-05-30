@@ -199,11 +199,12 @@ impl InferCtx<'_> {
 
         // Save and set current module for unqualified type resolution
         let prev_module = self.current_module.replace(mod_path.clone());
+        self.env.push_scope();
+        self.install_final_let_schemes(body);
 
         // Typecheck each statement and validate it's an allowed item type.
         // We also collect type information for registration.
         body.iter().for_each(|&id| {
-            self.restore_final_lets(body);
             let item_span = self.ast.stmt_span(id).unwrap_or(span);
             let item = self.ast.get_stmt(id).cloned();
 
@@ -349,6 +350,7 @@ impl InferCtx<'_> {
         });
 
         // Restore previous module
+        self.env.pop_scope();
         self.current_module = prev_module;
     }
 
@@ -561,7 +563,35 @@ impl InferCtx<'_> {
                 _ => false,
             });
         self.deferred_imports = rest;
-        ready.into_iter().for_each(|(import, span, m)| {
+        self.replay_deferred_imports(ready);
+    }
+
+    pub(super) fn replay_deferred_imports_for_paths(
+        &mut self,
+        module: Option<&QualifiedName>,
+        paths: &HashSet<QualifiedName>,
+    ) {
+        let (ready, rest): (Vec<_>, Vec<_>) =
+            self.deferred_imports.clone().into_iter().partition(
+                |(import, _, m)| {
+                    let module_matches = match (module, m) {
+                        (Some(target), Some(found)) => found == target,
+                        (None, None) => true,
+                        _ => false,
+                    };
+                    let path = QualifiedName::new(import.path.to_vec());
+                    module_matches && paths.contains(&path)
+                },
+            );
+        self.deferred_imports = rest;
+        self.replay_deferred_imports(ready);
+    }
+
+    fn replay_deferred_imports(
+        &mut self,
+        imports: Vec<(Import, Span, Option<QualifiedName>)>,
+    ) {
+        imports.into_iter().for_each(|(import, span, m)| {
             let prev = match m {
                 Some(ref qn) => self.current_module.replace(qn.clone()),
                 None => self.current_module.take(),

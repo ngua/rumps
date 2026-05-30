@@ -1,5 +1,0 @@
----
-source: crates/rumps-query/tests/scripts.rs
-description: "; Wildcard exclusions do not create module `let` dependencies.\n\nmodule A {\n  import B.{ ..., -b }\n\n  +let a = 1\n}\n\nmodule B {\n  import A.{ ..., -a }\n\n  +let b = 2\n}\n\nfun main() {\n  write 0\n}\n"
----
-0

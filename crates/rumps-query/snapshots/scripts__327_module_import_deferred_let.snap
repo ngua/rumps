@@ -1,5 +1,0 @@
----
-source: crates/rumps-query/tests/scripts.rs
-description: "; Module imports can see finalized `let` members from another module.\n\nmodule Source {\n  +let v = 41\n}\n\nmodule Use {\n  import Source.{ v }\n\n  +let w = () => v + 1\n}\n\nfun main() {\n  write 0\n}\n"
----
-0

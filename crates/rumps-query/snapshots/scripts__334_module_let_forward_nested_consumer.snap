@@ -1,5 +1,0 @@
----
-source: crates/rumps-query/tests/scripts.rs
-description: "; Nested module consumers can depend on later sibling providers.\n\nmodule UseNestedImport {\n  module Inner {\n    import SourceImport.{ v }\n\n    +let w = () => v + 1\n  }\n}\n\nmodule UseNestedPath {\n  module Inner {\n    +let w = () => SourcePath.v + 1\n  }\n}\n\nmodule SourceImport {\n  +let v = 41\n}\n\nmodule SourcePath {\n  +let v = 41\n}\n\nfun main() {\n  write 0\n}\n"
----
-0
