@@ -1,10 +1,16 @@
-; Duplicate module method-reference `let`s are rejected.
-
-fun main() {
-  write "unreachable"
-}
+; Module `let` shadowing is allowed.
 
 module M {
+  +fun len() -> Int { 1 }
+
   +let len = Iterable:length
-  +let len = Iterable:length
+  +let len = x => x + 1
+
+  +let value = 10
+  +let value = value + 32
+}
+
+fun main() {
+  write M.len(41)
+  write M.value
 }

@@ -232,28 +232,27 @@ impl InferCtx<'_> {
                                 self.restore_final_let(id);
                             } else {
                                 self.stmt(id);
-                                // Register as module member with visibility
-                                if let Some(scheme) =
-                                    self.env.lookup(*const_name).cloned()
-                                {
-                                    let origin = self
-                                        .env
-                                        .lookup_method_ref_origin(*const_name);
-                                    self.env.register_user_module_member(
-                                        mod_path.clone(),
-                                        *const_name,
-                                        scheme,
-                                        vis,
-                                    );
-                                    origin.into_iter().for_each(|origin| {
-                                        self.env
+                            }
+                            if let Some(scheme) =
+                                self.env.lookup(*const_name).cloned()
+                            {
+                                let origin = self
+                                    .env
+                                    .lookup_method_ref_origin(*const_name);
+                                self.env.register_user_module_member(
+                                    mod_path.clone(),
+                                    *const_name,
+                                    scheme,
+                                    vis,
+                                );
+                                origin.into_iter().for_each(|origin| {
+                                    self.env
                                         .set_user_module_member_method_origin(
                                             &mod_path,
                                             *const_name,
                                             origin,
                                         );
-                                    });
-                                }
+                                });
                             }
                         }
                         _ => {

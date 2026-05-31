@@ -164,11 +164,11 @@ impl InferCtx<'_> {
         // before function bodies can reference final schemes.
         if static_scope {
             if self.interactive {
-                let scope = self.collect_static_scope(stmts, None, false);
+                let scope = self.collect_static_scope(stmts, None);
                 self.infer_static_scope(scope, stmts, StaticGraphKind::Mod);
                 self.replay_deferred_imports_for(None);
             } else {
-                let scope = self.collect_static_scope(stmts, None, true);
+                let scope = self.collect_static_scope(stmts, None);
                 self.infer_static_scope(scope, stmts, StaticGraphKind::Static);
             }
         }
@@ -180,7 +180,7 @@ impl InferCtx<'_> {
     /// top-level `let`s. Acyclic bindings are inferred in dependency order;
     /// cyclic ordinary `let` groups are rejected.
     pub(crate) fn infer_toplevel_lets(&mut self, stmts: &[StmtId]) {
-        let scope = self.collect_static_scope(stmts, None, true);
+        let scope = self.collect_static_scope(stmts, None);
         self.infer_static_scope(scope, stmts, StaticGraphKind::Let);
     }
 
@@ -192,7 +192,7 @@ impl InferCtx<'_> {
     ) {
         let prev_module = self.current_module.replace(mod_path.clone());
 
-        let scope = self.collect_static_scope(body, Some(&mod_path), true);
+        let scope = self.collect_static_scope(body, Some(&mod_path));
         self.infer_static_scope(scope, root, StaticGraphKind::Static);
 
         self.current_module = prev_module;
@@ -244,34 +244,11 @@ impl InferCtx<'_> {
         &mut self,
         stmts: &[StmtId],
         module: Option<&QualifiedName>,
-        dups: bool,
     ) -> StaticScope {
-        let funs: HashSet<StringId> = stmts
-            .iter()
-            .filter_map(|&id| match self.ast.get_stmt(id) {
-                Some(Stmt::Fun { name, .. }) => Some(*name),
-                _ => None,
-            })
-            .collect();
-        let raw: Vec<_> = stmts
+        let lets: Vec<_> = stmts
             .iter()
             .filter_map(|&id| self.simple_let_info(id))
             .collect();
-        let mut seen = HashSet::new();
-        let mut lets = Vec::new();
-
-        raw.into_iter().for_each(|info| {
-            let duplicate =
-                funs.contains(&info.name) || seen.contains(&info.name);
-            if duplicate {
-                if dups {
-                    self.duplicate_let_error(&info, module);
-                }
-            } else {
-                seen.insert(info.name);
-                lets.push(info);
-            }
-        });
 
         let local_names = lets.iter().map(|i| (i.name, i.stmt)).collect();
         let mods: Vec<_> = stmts
@@ -438,10 +415,10 @@ impl InferCtx<'_> {
             .enumerate()
             .map(|(idx, id)| (id, idx))
             .collect();
-        let dep_names = match kind {
-            StaticGraphKind::Let => scope.local_names.clone(),
-            StaticGraphKind::Mod => HashMap::new(),
+        let final_names = self.final_let_names(scope);
+        let import_names = match kind {
             StaticGraphKind::Static => self.import_dep_names(scope),
+            StaticGraphKind::Let | StaticGraphKind::Mod => HashMap::new(),
         };
         let mod_names = match kind {
             StaticGraphKind::Static => scope.local_names.clone(),
@@ -455,13 +432,22 @@ impl InferCtx<'_> {
             })
             .map(|i| {
                 let mut acc = HashSet::new();
+                let mut names = self.visible_let_names(scope, i.stmt);
+                import_names.iter().for_each(|(name, sid)| {
+                    names.entry(*name).or_insert(*sid);
+                });
+                final_names.iter().for_each(|(name, sid)| {
+                    if *sid != i.stmt {
+                        names.entry(*name).or_insert(*sid);
+                    }
+                });
                 let providers = match kind {
                     StaticGraphKind::Static => Some(&scope.providers),
                     StaticGraphKind::Let | StaticGraphKind::Mod => None,
                 };
                 self.collect_expr_deps(
                     i.rhs,
-                    &dep_names,
+                    &names,
                     scope.module.as_ref(),
                     providers,
                     &HashSet::new(),
@@ -499,6 +485,26 @@ impl InferCtx<'_> {
             roots,
             pos,
         }
+    }
+
+    fn visible_let_names(
+        &self,
+        scope: &StaticScope,
+        stmt: StmtId,
+    ) -> HashMap<StringId, StmtId> {
+        scope
+            .lets
+            .iter()
+            .take_while(|i| i.stmt != stmt)
+            .map(|i| (i.name, i.stmt))
+            .collect()
+    }
+
+    fn final_let_names(
+        &self,
+        scope: &StaticScope,
+    ) -> HashMap<StringId, StmtId> {
+        scope.lets.iter().map(|i| (i.name, i.stmt)).collect()
     }
 
     fn provider_paths_for(
@@ -632,7 +638,7 @@ impl InferCtx<'_> {
         &self,
         scope: &StaticScope,
     ) -> HashMap<StringId, StmtId> {
-        let mut out = scope.local_names.clone();
+        let mut out = HashMap::new();
         scope.stmts.iter().for_each(|&id| {
             if let Some(Stmt::Import(import)) = self.ast.get_stmt(id) {
                 let qn = QualifiedName::new(import.path.to_vec());
@@ -728,33 +734,6 @@ impl InferCtx<'_> {
             .collect();
 
         ids.into_iter().for_each(|id| self.restore_final_let(id));
-    }
-
-    fn duplicate_let_error(
-        &mut self,
-        info: &LetInfo,
-        module: Option<&QualifiedName>,
-    ) {
-        let n = self.env.resolve_string(info.name);
-        let msg = module.map_or_else(
-            || {
-                format!(
-                    "duplicate top-level binding `{}`; a function or earlier `let` already binds this name",
-                    n
-                )
-            },
-            |m| {
-                format!(
-                    "duplicate module binding `{}.{}`; a function or earlier `let` already binds this name",
-                    m.display(&self.env.strings),
-                    n
-                )
-            },
-        );
-        self.error(TypeError::Custom {
-            msg,
-            span: info.span,
-        });
     }
 
     fn collect_expr_deps(

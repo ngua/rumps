@@ -1,12 +1,11 @@
-; Top-level duplicate bindings are rejected (fun/let collision
-; and let/let shadowing).
+; Top-level `let` shadowing is allowed.
 
 fun foo() -> Int { 1 }
 
 let foo = "bar"
 
 let dup = 1
-let dup = 2
+let dup = dup + 1
 
 let empty = []
 let empty = 3

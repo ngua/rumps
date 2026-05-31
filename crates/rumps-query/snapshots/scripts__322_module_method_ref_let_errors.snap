@@ -1,5 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Duplicate module method-reference `let`s are rejected.\n\nfun main() {\n  write \"unreachable\"\n}\n\nmodule M {\n  +let len = Iterable:length\n  +let len = Iterable:length\n}\n"
+description: "; Module `let` shadowing is allowed.\n\nmodule M {\n  +fun len() -> Int { 1 }\n\n  +let len = Iterable:length\n  +let len = x => x + 1\n\n  +let value = 10\n  +let value = value + 32\n}\n\nfun main() {\n  write M.len(41)\n  write M.value\n}\n"
 ---
-ERROR: duplicate module binding `M.len`; a function or earlier `let` already binds this name
+42
+42
