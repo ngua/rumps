@@ -257,10 +257,13 @@ impl InferCtx<'_> {
         span: Span,
     ) -> bool {
         let v = self.uf.find(v);
-        let name = self
-            .let_tv_names
-            .iter()
-            .map(|(&tv, &name)| (tv, name))
+        let names: Vec<_> = self
+            .current_let_tv_frame()
+            .into_iter()
+            .flat_map(|fr| fr.names.iter().map(|(&tv, &name)| (tv, name)))
+            .collect();
+        let name = names
+            .into_iter()
             .find(|(tv, _)| self.uf.find(*tv) == v)
             .map(|(_, name)| name);
 
@@ -280,7 +283,11 @@ impl InferCtx<'_> {
 
     fn let_tv_declared(&mut self, v: TyVar, class: &TypeClass<TyId>) -> bool {
         let class = class.resolve_inner(&mut self.uf, &mut self.ty_arena);
-        self.let_tv_cs.clone().into_iter().any(|(tv, c)| {
+        let cs = self
+            .current_let_tv_frame()
+            .map(|fr| fr.cs.clone())
+            .unwrap_or_default();
+        cs.into_iter().any(|(tv, c)| {
             self.uf.find(tv) == v
                 && c.resolve_inner(&mut self.uf, &mut self.ty_arena) == class
         })

@@ -77,7 +77,7 @@ impl InferCtx<'_> {
 
             Some(Stmt::Let(pattern, ann, rhs, _)) => {
                 self.env.mark_non_import();
-                if self.hoist.final_lets.contains(&id) {
+                if self.final_let_done(id) {
                     self.restore_final_let(id);
                 } else {
                     self.r#let(id, &pattern, ann.as_ref(), rhs, span);
@@ -228,7 +228,7 @@ impl InferCtx<'_> {
                     match pat {
                         BindingPattern::Var(ref const_name) => {
                             self.env.mark_non_import();
-                            if self.hoist.final_lets.contains(&id) {
+                            if self.final_let_done(id) {
                                 self.restore_final_let(id);
                             } else {
                                 self.stmt(id);
@@ -437,13 +437,9 @@ impl InferCtx<'_> {
                 self.env
                     .get_public_user_module_members(&mod_qn)
                     .into_iter()
-                    .for_each(|(name_id, scheme, origin)| {
-                        if !exclusions.contains(&name_id) {
-                            self.env.bind(name_id, scheme);
-                            origin.into_iter().for_each(|origin| {
-                                self.env
-                                    .bind_method_ref_origin(name_id, origin);
-                            });
+                    .for_each(|(name, s, origin)| {
+                        if !exclusions.contains(&name) {
+                            self.bind_imported_member(name, s, origin);
                         }
                     });
 
@@ -487,10 +483,11 @@ impl InferCtx<'_> {
                 match (builtin, user) {
                     (Some(s), _) => self.env.bind(bind_id, s),
                     (None, Some(m)) if m.vis == Visibility::Public => {
-                        self.env.bind(bind_id, m.scheme.clone());
-                        m.method_origin.into_iter().for_each(|origin| {
-                            self.env.bind_method_ref_origin(bind_id, origin);
-                        });
+                        self.bind_imported_member(
+                            bind_id,
+                            m.scheme,
+                            m.method_origin,
+                        );
                     }
                     (None, Some(_)) => {
                         self.error(TypeError::Custom {
@@ -552,17 +549,9 @@ impl InferCtx<'_> {
         &mut self,
         module: Option<&QualifiedName>,
     ) {
-        let (ready, rest): (Vec<_>, Vec<_>) = self
-            .deferred_imports
-            .clone()
-            .into_iter()
-            .partition(|(_, _, m)| match (module, m) {
-                (Some(target), Some(found)) => found == target,
-                (None, None) => true,
-                _ => false,
-            });
-        self.deferred_imports = rest;
-        self.replay_deferred_imports(ready);
+        self.replay_deferred_imports_matching(|_, m| {
+            Self::deferred_module_matches(module, m)
+        });
     }
 
     pub(super) fn replay_deferred_imports_for_paths(
@@ -570,18 +559,32 @@ impl InferCtx<'_> {
         module: Option<&QualifiedName>,
         paths: &HashSet<QualifiedName>,
     ) {
-        let (ready, rest): (Vec<_>, Vec<_>) =
-            self.deferred_imports.clone().into_iter().partition(
-                |(import, _, m)| {
-                    let module_matches = match (module, m) {
-                        (Some(target), Some(found)) => found == target,
-                        (None, None) => true,
-                        _ => false,
-                    };
-                    let path = QualifiedName::new(import.path.to_vec());
-                    module_matches && paths.contains(&path)
-                },
-            );
+        self.replay_deferred_imports_matching(|import, m| {
+            let path = QualifiedName::new(import.path.to_vec());
+            Self::deferred_module_matches(module, m) && paths.contains(&path)
+        });
+    }
+
+    fn deferred_module_matches(
+        module: Option<&QualifiedName>,
+        found: &Option<QualifiedName>,
+    ) -> bool {
+        match (module, found) {
+            (Some(target), Some(found)) => found == target,
+            (None, None) => true,
+            _ => false,
+        }
+    }
+
+    fn replay_deferred_imports_matching<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&Import, &Option<QualifiedName>) -> bool,
+    {
+        let (ready, rest): (Vec<_>, Vec<_>) = self
+            .deferred_imports
+            .clone()
+            .into_iter()
+            .partition(|(import, _, m)| f(import, m));
         self.deferred_imports = rest;
         self.replay_deferred_imports(ready);
     }
@@ -621,12 +624,9 @@ impl InferCtx<'_> {
                 self.env
                     .get_public_user_module_members(&mod_qn)
                     .into_iter()
-                    .for_each(|(name, scheme, origin)| {
+                    .for_each(|(name, s, origin)| {
                         if !exclusions.contains(&name) {
-                            self.env.bind(name, scheme);
-                            origin.into_iter().for_each(|origin| {
-                                self.env.bind_method_ref_origin(name, origin);
-                            });
+                            self.bind_imported_member(name, s, origin);
                         }
                     });
             }
@@ -639,10 +639,11 @@ impl InferCtx<'_> {
                     .cloned()
                 {
                     Some(m) if m.vis == Visibility::Public => {
-                        self.env.bind(bind_id, m.scheme.clone());
-                        m.method_origin.into_iter().for_each(|origin| {
-                            self.env.bind_method_ref_origin(bind_id, origin);
-                        });
+                        self.bind_imported_member(
+                            bind_id,
+                            m.scheme,
+                            m.method_origin,
+                        );
                     }
                     Some(_) => {
                         self.error(TypeError::Custom {
@@ -665,6 +666,18 @@ impl InferCtx<'_> {
                 }
             }
             _ => {}
+        });
+    }
+
+    fn bind_imported_member(
+        &mut self,
+        bind: StringId,
+        s: Scheme,
+        origin: Option<MethodRefOrigin>,
+    ) {
+        self.env.bind(bind, s);
+        origin.into_iter().for_each(|origin| {
+            self.env.bind_method_ref_origin(bind, origin);
         });
     }
 
@@ -862,6 +875,7 @@ impl InferCtx<'_> {
         span: Span,
     ) {
         let constraint_start = self.constraints.len();
+        self.push_let_tv_frame();
 
         // If annotation present, parse and unify.
         // Returns `None` if pattern was already bound (special case).
@@ -976,6 +990,8 @@ impl InferCtx<'_> {
                 }
             }
         }
+
+        self.pop_let_tv_frame();
     }
 
     fn let_generalizes(&self, rhs: ExprId, ty: TyId) -> bool {
@@ -1235,22 +1251,6 @@ impl InferCtx<'_> {
                 self.error(TypeError::ArrayPatternInLet(span));
             }
         }
-    }
-
-    pub(super) fn empty_array_scheme(&mut self, rhs: ExprId) -> Option<Scheme> {
-        self.ast.get_expr(rhs).cloned().and_then(|expr| match expr {
-            Expr::Array(elems) if elems.is_empty() => {
-                let tv = self.fresh_var();
-                let elem = self.ty_arena.alloc(Ty::Var(tv));
-                let ty = self.ty_arena.array(elem);
-                Some(Scheme {
-                    vars: smallvec![tv],
-                    ty,
-                    constraints: SmallVec::new(),
-                })
-            }
-            _ => None,
-        })
     }
 
     fn bind_pattern_scheme(

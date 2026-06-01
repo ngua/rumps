@@ -90,6 +90,20 @@ enum StaticGraphKind {
     Static,
 }
 
+impl StaticGraphKind {
+    fn has_lets(self) -> bool {
+        matches!(self, Self::Let | Self::Static)
+    }
+
+    fn has_mods(self) -> bool {
+        matches!(self, Self::Mod | Self::Static)
+    }
+
+    fn is_static(self) -> bool {
+        matches!(self, Self::Static)
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LetMark {
     Visiting,
@@ -373,41 +387,26 @@ impl InferCtx<'_> {
         scope: &StaticScope,
         kind: StaticGraphKind,
     ) -> StaticGraph {
+        let has_lets = kind.has_lets();
+        let has_mods = kind.has_mods();
         let let_nodes = scope
             .lets
             .iter()
-            .filter(|_| {
-                matches!(kind, StaticGraphKind::Let | StaticGraphKind::Static)
-            })
+            .filter(|_| has_lets)
             .map(|i| (i.stmt, StaticNode::Let(i.clone())));
         let mod_nodes = scope
             .mods
             .iter()
-            .filter(|_| {
-                matches!(kind, StaticGraphKind::Mod | StaticGraphKind::Static)
-            })
+            .filter(|_| has_mods)
             .map(|m| (m.stmt, StaticNode::Mod(m.clone())));
         let nodes: HashMap<StmtId, StaticNode> =
             let_nodes.chain(mod_nodes).collect();
         let roots: Vec<StmtId> = scope
             .lets
             .iter()
-            .filter(|_| {
-                matches!(kind, StaticGraphKind::Let | StaticGraphKind::Static)
-            })
+            .filter(|_| has_lets)
             .map(|i| i.stmt)
-            .chain(
-                scope
-                    .mods
-                    .iter()
-                    .filter(|_| {
-                        matches!(
-                            kind,
-                            StaticGraphKind::Mod | StaticGraphKind::Static
-                        )
-                    })
-                    .map(|m| m.stmt),
-            )
+            .chain(scope.mods.iter().filter(|_| has_mods).map(|m| m.stmt))
             .collect();
         let pos = roots
             .iter()
@@ -416,62 +415,48 @@ impl InferCtx<'_> {
             .map(|(idx, id)| (id, idx))
             .collect();
         let final_names = self.final_let_names(scope);
-        let import_names = match kind {
-            StaticGraphKind::Static => self.import_dep_names(scope),
-            StaticGraphKind::Let | StaticGraphKind::Mod => HashMap::new(),
+        let import_names = if kind.is_static() {
+            self.import_dep_names(scope)
+        } else {
+            HashMap::new()
         };
-        let mod_names = match kind {
-            StaticGraphKind::Static => scope.local_names.clone(),
-            StaticGraphKind::Let | StaticGraphKind::Mod => HashMap::new(),
+        let mod_names = if kind.is_static() {
+            scope.local_names.clone()
+        } else {
+            HashMap::new()
         };
-        let let_deps = scope
-            .lets
-            .iter()
-            .filter(|_| {
-                matches!(kind, StaticGraphKind::Let | StaticGraphKind::Static)
-            })
-            .map(|i| {
-                let mut acc = HashSet::new();
-                let mut names = self.visible_let_names(scope, i.stmt);
-                import_names.iter().for_each(|(name, sid)| {
+        let let_deps = scope.lets.iter().filter(|_| has_lets).map(|i| {
+            let mut acc = HashSet::new();
+            let mut names = self.visible_let_names(scope, i.stmt);
+            import_names.iter().for_each(|(name, sid)| {
+                names.entry(*name).or_insert(*sid);
+            });
+            final_names.iter().for_each(|(name, sid)| {
+                if *sid != i.stmt {
                     names.entry(*name).or_insert(*sid);
-                });
-                final_names.iter().for_each(|(name, sid)| {
-                    if *sid != i.stmt {
-                        names.entry(*name).or_insert(*sid);
-                    }
-                });
-                let providers = match kind {
-                    StaticGraphKind::Static => Some(&scope.providers),
-                    StaticGraphKind::Let | StaticGraphKind::Mod => None,
-                };
-                self.collect_expr_deps(
-                    i.rhs,
-                    &names,
-                    scope.module.as_ref(),
-                    providers,
-                    &HashSet::new(),
-                    &mut acc,
-                );
-                (i.stmt, acc)
+                }
             });
-        let mod_deps = scope
-            .mods
-            .iter()
-            .filter(|_| {
-                matches!(kind, StaticGraphKind::Mod | StaticGraphKind::Static)
-            })
-            .map(|m| {
-                let mut acc = HashSet::new();
-                self.collect_module_deps(
-                    m,
-                    &scope.providers,
-                    &mod_names,
-                    &mut acc,
-                );
-                acc.remove(&m.stmt);
-                (m.stmt, acc)
-            });
+            let providers = if kind.is_static() {
+                Some(&scope.providers)
+            } else {
+                None
+            };
+            self.collect_expr_deps(
+                i.rhs,
+                &names,
+                scope.module.as_ref(),
+                providers,
+                &HashSet::new(),
+                &mut acc,
+            );
+            (i.stmt, acc)
+        });
+        let mod_deps = scope.mods.iter().filter(|_| has_mods).map(|m| {
+            let mut acc = HashSet::new();
+            self.collect_module_deps(m, &scope.providers, &mod_names, &mut acc);
+            acc.remove(&m.stmt);
+            (m.stmt, acc)
+        });
         let mut deps: HashMap<StmtId, HashSet<StmtId>> =
             let_deps.chain(mod_deps).collect();
 
@@ -598,8 +583,11 @@ impl InferCtx<'_> {
         cyc.into_iter().for_each(|sid| {
             marks.insert(sid, LetMark::Done);
             if let Some(StaticNode::Let(i)) = graph.nodes.get(&sid) {
-                self.hoist.final_lets.insert(sid);
-                self.env.bind(i.name, Scheme::mono(TyArena::ERROR));
+                let scheme = Scheme::mono(TyArena::ERROR);
+                self.hoist
+                    .final_let_schemes
+                    .insert(sid, (i.name, scheme.clone(), None));
+                self.env.bind(i.name, scheme);
             }
         });
     }
@@ -643,32 +631,8 @@ impl InferCtx<'_> {
             if let Some(Stmt::Import(import)) = self.ast.get_stmt(id) {
                 let qn = QualifiedName::new(import.path.to_vec());
                 scope.providers.by_mod.get(&qn).into_iter().for_each(|p| {
-                    let excluded: HashSet<StringId> = import
-                        .items
-                        .iter()
-                        .filter_map(|item| match item {
-                            ImportItem::Exclude(name) => Some(*name),
-                            _ => None,
-                        })
-                        .collect();
-                    import.items.iter().for_each(|item| match item {
-                        ImportItem::Named { name, alias }
-                            if Self::public_provider_let(p, *name) =>
-                        {
-                            out.entry(alias.unwrap_or(*name)).or_insert(p.root);
-                        }
-                        ImportItem::Wildcard => {
-                            p.lets
-                                .iter()
-                                .filter(|(name, vis)| {
-                                    **vis == Visibility::Public
-                                        && !excluded.contains(name)
-                                })
-                                .for_each(|(name, _)| {
-                                    out.entry(*name).or_insert(p.root);
-                                });
-                        }
-                        ImportItem::Named { .. } | ImportItem::Exclude(_) => {}
+                    Self::provider_import_lets(import, p, |_, bind| {
+                        out.entry(bind).or_insert(p.root);
                     });
                 });
             }
@@ -688,7 +652,6 @@ impl InferCtx<'_> {
             info.rhs,
             info.span,
         );
-        self.hoist.final_lets.insert(info.stmt);
 
         if let Some(scheme) = self.env.lookup(info.name).cloned() {
             let origin = self.env.lookup_method_ref_origin(info.name);
@@ -710,6 +673,10 @@ impl InferCtx<'_> {
                 });
             });
         }
+    }
+
+    pub(super) fn final_let_done(&self, id: StmtId) -> bool {
+        self.hoist.final_let_schemes.contains_key(&id)
     }
 
     pub(super) fn restore_final_let(&mut self, id: StmtId) {
@@ -787,6 +754,38 @@ impl InferCtx<'_> {
 
     fn public_provider_let(p: &ModuleLetProvider, name: StringId) -> bool {
         p.lets.get(&name) == Some(&Visibility::Public)
+    }
+
+    fn provider_import_lets<F>(import: &Import, p: &ModuleLetProvider, mut f: F)
+    where
+        F: FnMut(StringId, StringId),
+    {
+        let excluded: HashSet<StringId> = import
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                ImportItem::Exclude(name) => Some(*name),
+                _ => None,
+            })
+            .collect();
+        import.items.iter().for_each(|item| match item {
+            ImportItem::Named { name, alias }
+                if Self::public_provider_let(p, *name) =>
+            {
+                f(*name, alias.unwrap_or(*name));
+            }
+            ImportItem::Wildcard => {
+                p.lets
+                    .iter()
+                    .filter(|(name, vis)| {
+                        **vis == Visibility::Public && !excluded.contains(name)
+                    })
+                    .for_each(|(name, _)| {
+                        f(*name, *name);
+                    });
+            }
+            ImportItem::Named { .. } | ImportItem::Exclude(_) => {}
+        });
     }
 
     fn collect_module_body_refs(
@@ -1182,32 +1181,8 @@ impl InferCtx<'_> {
     ) {
         let qn = QualifiedName::new(import.path.to_vec());
         providers.by_mod.get(&qn).into_iter().for_each(|p| {
-            let excluded: HashSet<StringId> = import
-                .items
-                .iter()
-                .filter_map(|item| match item {
-                    ImportItem::Exclude(name) => Some(*name),
-                    _ => None,
-                })
-                .collect();
-            import.items.iter().for_each(|item| match item {
-                ImportItem::Named { name, .. }
-                    if Self::public_provider_let(p, *name) =>
-                {
-                    acc.insert(StaticRef::Path(qn.clone(), *name));
-                }
-                ImportItem::Wildcard => {
-                    p.lets
-                        .iter()
-                        .filter(|(name, vis)| {
-                            **vis == Visibility::Public
-                                && !excluded.contains(name)
-                        })
-                        .for_each(|(name, _)| {
-                            acc.insert(StaticRef::Path(qn.clone(), *name));
-                        });
-                }
-                ImportItem::Named { .. } | ImportItem::Exclude(_) => {}
+            Self::provider_import_lets(import, p, |name, _| {
+                acc.insert(StaticRef::Path(qn.clone(), name));
             });
         });
     }

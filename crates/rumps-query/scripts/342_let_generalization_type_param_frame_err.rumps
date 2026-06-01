@@ -1,0 +1,9 @@
+; Missing constraints are reported against the current `let` RHS only.
+
+fun main() {
+  let f = [T: Numeric](x: T) -> T => x + 1
+  let g = [U](x: U) -> U => x + 1
+
+  write f(1)
+  write g(2)
+}

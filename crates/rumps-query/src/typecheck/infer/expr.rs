@@ -2086,12 +2086,12 @@ impl InferCtx<'_> {
         type_params.iter().for_each(|tp| {
             let tv = name_to_tv[&tp.name];
             let ty = self.ty_arena.alloc(Ty::Var(tv));
-            self.let_tv_names.insert(tv, tp.name);
+            self.record_let_tv_name(tv, tp.name);
 
             tp.constraints.iter().for_each(|c| {
                 let class =
                     self.convert().ast_class_to_ty_class(c, &type_param_subst);
-                self.let_tv_cs.push((tv, class.clone()));
+                self.record_let_tv_constraint(tv, class.clone());
 
                 // Emit constraint for body inference
                 self.constrain(Constraint::Class {
@@ -2108,7 +2108,7 @@ impl InferCtx<'_> {
                     .into_iter()
                     .for_each(|sup| {
                         if let Some(sc) = class.with_tag(sup) {
-                            self.let_tv_cs.push((tv, sc.clone()));
+                            self.record_let_tv_constraint(tv, sc.clone());
                             self.constrain(Constraint::Class {
                                 ty,
                                 class: sc,

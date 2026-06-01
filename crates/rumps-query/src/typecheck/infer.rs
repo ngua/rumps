@@ -291,9 +291,6 @@ pub(super) struct InstanceMethodInput<'a> {
 /// (finalization). Logically cohesive; methods on this struct take a
 /// `&mut HoistCtx` for access to shared `InferCtx` state.
 pub(super) struct HoistState {
-    /// Simple top-level and module `let` statements inferred before function
-    /// bodies, so Pass `2` skips re-inference.
-    pub(super) final_lets: HashSet<StmtId>,
     /// Finalized simple `let` bindings, keyed by statement.
     ///
     /// Pass `2` rebinds these into the active lexical scope without
@@ -355,10 +352,15 @@ pub(super) struct HoistState {
     replay_var_maps: Vec<SmallVec<[(TyVar, TyVar); 4]>>,
 }
 
+#[derive(Default)]
+pub(super) struct LetTvFrame {
+    names: HashMap<TyVar, StringId>,
+    cs: Vec<(TyVar, TypeClass<TyId>)>,
+}
+
 impl HoistState {
     fn new() -> Self {
         Self {
-            final_lets: HashSet::new(),
             final_let_schemes: HashMap::new(),
             funs: HashMap::new(),
             fun_index: HashMap::new(),
@@ -892,15 +894,12 @@ pub(crate) struct InferCtx<'a> {
     /// Contrast with inference variables (from method calls, etc.) which are NOT
     /// in this set and CAN be pattern-matched since they will unify to concrete types.
     pub(super) poly_param_vars: HashSet<TyVar>,
-    /// Declared type parameter names used by qualified `let` generalization.
+    /// Declared type parameter names and constraints for the current `let` RHS.
     ///
     /// A `let` bound callable with explicit type parameters may capture
     /// declared constraints for those parameters, but inferred constraints
     /// must be reported as missing declarations.
-    pub(super) let_tv_names: HashMap<TyVar, StringId>,
-    /// Declared type parameter constraints used by qualified `let`
-    /// generalization.
-    pub(super) let_tv_cs: Vec<(TyVar, TypeClass<TyId>)>,
+    pub(super) let_tv_frames: Vec<LetTvFrame>,
     /// Recorded `let` annotations for post-solve union narrowing validation.
     ///
     /// Each entry is `(rhs_expr, rhs_ty, ann_ty, span)`. After constraint
@@ -965,8 +964,7 @@ impl<'a> InferCtx<'a> {
             current_module: None,
             interactive,
             poly_param_vars: HashSet::new(),
-            let_tv_names: HashMap::new(),
-            let_tv_cs: Vec::new(),
+            let_tv_frames: Vec::new(),
             let_annotations: Vec::new(),
             read_checks: Vec::new(),
             newtype_edge_checks: Vec::new(),
@@ -974,6 +972,34 @@ impl<'a> InferCtx<'a> {
             defer_missing_import_members: false,
             deferred_imports: Vec::new(),
         }
+    }
+
+    pub(super) fn push_let_tv_frame(&mut self) {
+        self.let_tv_frames.push(LetTvFrame::default());
+    }
+
+    pub(super) fn pop_let_tv_frame(&mut self) {
+        self.let_tv_frames.pop();
+    }
+
+    pub(super) fn record_let_tv_name(&mut self, tv: TyVar, name: StringId) {
+        if let Some(fr) = self.let_tv_frames.last_mut() {
+            fr.names.insert(tv, name);
+        }
+    }
+
+    pub(super) fn record_let_tv_constraint(
+        &mut self,
+        tv: TyVar,
+        class: TypeClass<TyId>,
+    ) {
+        if let Some(fr) = self.let_tv_frames.last_mut() {
+            fr.cs.push((tv, class));
+        }
+    }
+
+    pub(super) fn current_let_tv_frame(&self) -> Option<&LetTvFrame> {
+        self.let_tv_frames.last()
     }
 
     /// Compile a regex pattern, caching it and returning the cache index.

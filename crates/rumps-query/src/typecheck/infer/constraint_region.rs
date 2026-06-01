@@ -97,17 +97,6 @@ impl ConstraintRegion {
             });
     }
 
-    pub(super) fn root_vars(
-        vars: &[TyVar],
-        uf: &mut UnionFind,
-    ) -> HashMap<TyVar, TyVar> {
-        let mut roots = HashMap::with_capacity(vars.len());
-        vars.iter().for_each(|&v| {
-            roots.entry(uf.find(v)).or_insert(v);
-        });
-        roots
-    }
-
     pub(super) fn root_tys(
         map: &HashMap<TyVar, TyId>,
         uf: &mut UnionFind,
