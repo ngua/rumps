@@ -7,20 +7,20 @@ use std::collections::HashMap;
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::quote;
+use quote::{format_ident, quote};
 use smallvec::SmallVec;
 use syn::parse::{Parse, ParseStream};
-use syn::{Ident, Result, Token};
+use syn::{Ident, LitStr, Result, Token};
 
 /// Parse a type scheme with optional universal quantification and constraints.
 ///
 /// # Syntax
 ///
 /// ```text
-/// scheme!(forall T U. (Array[T], (T) -> U) -> Array[U])
-/// scheme!(forall I: Iterable[T], T. (I) -> Int)  // constrained type variable
-/// scheme!(Int -> Bool)  // monomorphic, no forall
-/// scheme!(ctx; { src: FilePath, dest: FilePath } -> Unit)  // with context for objects
+/// scheme!(a, forall T U. (Array[T], (T) -> U) -> Array[U])
+/// scheme!(a, forall I: Iterable, T. (I[T]) -> Int)
+/// scheme!(a, (Int) -> Bool)
+/// scheme!(a, intern, ({ src: FilePath, dest: FilePath }) -> Unit)
 /// ```
 ///
 /// ## Class syntax
@@ -61,7 +61,7 @@ use syn::{Ident, Result, Token};
 /// - Functions: `(A, B) -> C` or `A -> B`
 /// - Tuples: `(A, B)` (without `->` following), `(A,)` for 1-tuple
 /// - Grouping: `(A)` is just `A`
-/// - Objects: `{ field1: Type1, field2: Type2 }` (requires context; use `ctx; ...`)
+/// - Objects: `{ field1: Type1, field2: Type2 }` (requires an interner; use `a, intern, ...`)
 /// - Associated types: `T:Class:Assoc` (e.g., `B:Indexable:Index` for the index type of `B`)
 #[proc_macro]
 pub fn scheme(input: TokenStream) -> TokenStream {
@@ -81,7 +81,9 @@ enum VarClass {
 
 /// Parsed scheme input: optional context + optional `forall` + type.
 struct SchemeInput {
-    /// Optional context identifier for interning object field names.
+    /// `TyArena` identifier used to allocate compound types.
+    arena: Ident,
+    /// Optional callable identifier for interning object field names.
     ctx: Option<Ident>,
     /// Type variables with optional class bounds: `(var_name, class)`
     vars: Vec<(Ident, Option<VarClass>)>,
@@ -94,8 +96,6 @@ const SIMPLE_CLASSES: &[&str] = &[
     "Negatable",
     "BitLike",
     "Monoid",
-    "Storable",
-    "Subscriptable",
     "Ord",
     "Eq",
     "Display",
@@ -113,6 +113,7 @@ const HKT_CLASSES: &[&str] = &[
     "Mappable",
     "Foldable",
     "Filterable",
+    "Bimappable",
 ];
 
 /// Multi-param classes: constraint REQUIRES `[T]` arguments.
@@ -161,38 +162,50 @@ fn parse_type_var(input: ParseStream) -> Result<(Ident, Option<VarClass>)> {
     Ok((name, class))
 }
 
+fn parse_type_vars(
+    input: ParseStream,
+) -> Result<Vec<(Ident, Option<VarClass>)>> {
+    if input.peek(Token![.]) {
+        Ok(Vec::new())
+    } else {
+        let var = parse_type_var(input)?;
+        let _ = input.parse::<Token![,]>();
+        parse_type_vars(input)
+            .map(|tail| std::iter::once(var).chain(tail).collect())
+    }
+}
+
 impl Parse for SchemeInput {
     fn parse(input: ParseStream) -> Result<Self> {
-        // Check for optional context: `ctx; ...`
-        let ctx = input
-            .peek(Ident)
-            .then(|| {
-                input.peek2(Token![;]).then(|| {
-                    let ctx: Ident = input.parse().ok()?;
-                    input.parse::<Token![;]>().ok()?;
-                    Some(ctx)
-                })?
-            })
-            .flatten();
+        let arena: Ident = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let ctx = if input.peek(Ident) && input.peek2(Token![,]) {
+            let ctx = input.parse()?;
+            input.parse::<Token![,]>()?;
+            Some(ctx)
+        } else {
+            None
+        };
 
         // Check for `forall` keyword
         if input.peek(Ident) && input.peek2(Ident) {
             let kw: Ident = input.parse()?;
             if kw == "forall" {
-                // Parse type variables (with optional constraints), comma-separated, until `.`
-                let mut vars = Vec::new();
-                while !input.peek(Token![.]) {
-                    vars.push(parse_type_var(input)?);
-                    // Consume optional comma between variables
-                    let _ = input.parse::<Token![,]>();
-                }
+                // Parse type variables with optional constraints until `.`.
+                let vars = parse_type_vars(input)?;
                 input.parse::<Token![.]>()?;
                 let ty = parse_ty(input)?;
-                Ok(Self { ctx, vars, ty })
+                Ok(Self {
+                    arena,
+                    ctx,
+                    vars,
+                    ty,
+                })
             } else {
                 // Not `forall`; the ident we parsed is part of the type
                 let ty = parse_ty_starting_with(input, kw)?;
                 Ok(Self {
+                    arena,
                     ctx,
                     vars: vec![],
                     ty,
@@ -201,6 +214,7 @@ impl Parse for SchemeInput {
         } else {
             let ty = parse_ty(input)?;
             Ok(Self {
+                arena,
                 ctx,
                 vars: vec![],
                 ty,
@@ -209,19 +223,74 @@ impl Parse for SchemeInput {
     }
 }
 
-/// Generate tokens for a multi-param class.
-///
-/// All parameterized classes use the same form:
-/// `BuiltinClass::Parameterized(BuiltinClassTag::Name, arg)`.
-fn multi_param_class_tokens(name: &str, args: &[TokenStream2]) -> TokenStream2 {
-    let inner = &args[0];
-    let ident = Ident::new(name, proc_macro2::Span::call_site());
-    quote! {
-        crate::typecheck::BuiltinClass::Parameterized(
-            crate::typecheck::BuiltinClassTag::#ident,
-            #inner
-        )
-    }
+fn class_id(name: &str) -> TokenStream2 {
+    let id = match name {
+        "Numeric" => "NUMERIC",
+        "Iterable" => "ITERABLE",
+        "Monoid" => "MONOID",
+        "BitLike" => "BIT_LIKE",
+        "Negatable" => "NEGATABLE",
+        "Fallible" => "FALLIBLE",
+        "Into" => "INTO",
+        "TryInto" => "TRY_INTO",
+        "Indexable" => "INDEXABLE",
+        "Ord" => "ORD",
+        "Mappable" => "MAPPABLE",
+        "Foldable" => "FOLDABLE",
+        "Filterable" => "FILTERABLE",
+        "Display" => "DISPLAY",
+        "Eq" => "EQ",
+        "Wrappable" => "WRAPPABLE",
+        "Chainable" => "CHAINABLE",
+        "Bimappable" => "BIMAPPABLE",
+        _ => panic!("unknown class: `{name}`"),
+    };
+    let id = Ident::new(id, proc_macro2::Span::call_site());
+    quote! { crate::ClassId::#id }
+}
+
+fn primitive_id(name: &str) -> TokenStream2 {
+    let id = match name {
+        "Bool" => "BOOL",
+        "Int" => "INT",
+        "Word" => "WORD",
+        "Float" => "FLOAT",
+        "Char" => "CHAR",
+        "String" => "STRING",
+        "Unit" => "UNIT",
+        "Time" => "TIME",
+        "Range" => "RANGE",
+        "Json" => "JSON",
+        "Ordering" => "ORDERING",
+        "DataStatus" => "DATA_STATUS",
+        "FilePath" => "FILEPATH",
+        "Path" => "PATH",
+        "Regex" => "REGEX",
+        "RuntimeError" => "RUNTIME_ERROR",
+        "Local" => "LOCAL",
+        "Global" => "GLOBAL",
+        "Unknown" => "UNKNOWN",
+        "Error" => "ERROR",
+        _ => panic!("unknown primitive type: `{name}`"),
+    };
+    let id = Ident::new(id, proc_macro2::Span::call_site());
+    quote! { crate::typecheck::TyArena::#id }
+}
+
+fn named_id(name: &str) -> TokenStream2 {
+    let id = Ident::new(name, proc_macro2::Span::call_site());
+    quote! { crate::typecheck::TyArena::#id }
+}
+
+fn bind(
+    stmts: &mut Vec<TokenStream2>,
+    n: &mut usize,
+    expr: TokenStream2,
+) -> TokenStream2 {
+    let id = format_ident!("__rumps_ty_{n}");
+    *n += 1;
+    stmts.push(quote! { let #id = #expr; });
+    quote! { #id }
 }
 
 impl SchemeInput {
@@ -234,11 +303,18 @@ impl SchemeInput {
             .map(|(i, (v, _))| (v.to_string(), i as u32))
             .collect();
 
-        let ty_tokens = self.ty.to_tokens(&var_map, self.ctx.as_ref());
+        let arena = &self.arena;
+        let mut n = 0;
+        let ty = self.ty.to_ty_id(arena, &var_map, self.ctx.as_ref(), &mut n);
+        let mut stmts = ty.stmts;
+        let ty_expr = ty.expr;
 
         if self.vars.is_empty() {
             quote! {
-                crate::typecheck::Scheme::mono(#ty_tokens)
+                {
+                    #(#stmts)*
+                    crate::typecheck::Scheme::mono(#ty_expr)
+                }
             }
         } else {
             let var_indices: Vec<u32> = (0..self.vars.len() as u32).collect();
@@ -253,21 +329,15 @@ impl SchemeInput {
                         let var_idx = i as u32;
                         match c {
                             VarClass::Simple(name) => {
-                                let ident =
-                                    Ident::new(name, proc_macro2::Span::call_site());
+                                let id = class_id(name);
                                 let class_tokens =
                                     if HKT_CLASSES.contains(&name.as_str()) {
                                         quote! {
-                                            crate::typecheck::BuiltinClass::Hkt(
-                                                crate::typecheck::BuiltinClassTag::#ident,
-                                                None
-                                            )
+                                            crate::typecheck::TypeClass::hkt(#id)
                                         }
                                     } else {
                                         quote! {
-                                            crate::typecheck::BuiltinClass::Simple(
-                                                crate::typecheck::BuiltinClassTag::#ident
-                                            )
+                                            crate::typecheck::TypeClass::simple(#id)
                                         }
                                     };
                                 quote! {
@@ -278,6 +348,7 @@ impl SchemeInput {
                                 }
                             }
                             VarClass::Parameterized(name, args) => {
+                                let id = class_id(name);
                                 let arg_tokens: Vec<TokenStream2> = args
                                     .iter()
                                     .map(|arg| {
@@ -289,15 +360,21 @@ impl SchemeInput {
                                                 )
                                                 },
                                             );
-                                        quote! {
-                                            crate::typecheck::Ty::Var(
-                                                crate::typecheck::TyVar::new(#idx)
-                                            )
-                                        }
+                                        bind(
+                                            &mut stmts,
+                                            &mut n,
+                                            quote! { #arena.var(#idx) },
+                                        )
                                     })
                                     .collect();
-                                let class_tokens =
-                                    multi_param_class_tokens(name, &arg_tokens);
+                                let class_tokens = match arg_tokens.as_slice() {
+                                    [arg] => {
+                                        quote! { crate::typecheck::TypeClass::param(#id, #arg) }
+                                    }
+                                    _ => panic!(
+                                        "class `{name}` expects exactly one type argument"
+                                    ),
+                                };
                                 quote! {
                                     (
                                         crate::typecheck::TyVar::new(#var_idx),
@@ -311,14 +388,24 @@ impl SchemeInput {
                 .collect();
 
             quote! {
-                crate::typecheck::Scheme {
-                    vars: vec![#(crate::typecheck::TyVar::new(#var_indices)),*],
-                    ty: #ty_tokens,
-                    constraints: smallvec::smallvec![#(#class_entries),*],
+                {
+                    #(#stmts)*
+                    crate::typecheck::Scheme {
+                        vars: smallvec::smallvec![
+                            #(crate::typecheck::TyVar::new(#var_indices)),*
+                        ],
+                        ty: #ty_expr,
+                        constraints: smallvec::smallvec![#(#class_entries),*],
+                    }
                 }
             }
         }
     }
+}
+
+struct TyBuild {
+    stmts: Vec<TokenStream2>,
+    expr: TokenStream2,
 }
 
 /// A type expression in the scheme DSL.
@@ -354,123 +441,223 @@ enum TyExpr {
 }
 
 impl TyExpr {
-    fn to_tokens(
+    fn to_ty_id(
         &self,
+        arena: &Ident,
         vars: &HashMap<String, u32>,
         ctx: Option<&Ident>,
-    ) -> TokenStream2 {
+        n: &mut usize,
+    ) -> TyBuild {
         match self {
-            Self::Prim(name) => {
-                let ident = Ident::new(name, proc_macro2::Span::call_site());
-                quote! { crate::typecheck::Ty::#ident }
-            }
+            Self::Prim(name) => TyBuild {
+                stmts: vec![],
+                expr: primitive_id(name),
+            },
             Self::Var(name) => {
                 let idx = vars.get(name).copied().unwrap_or_else(|| {
                     panic!("unbound type variable: `{name}`")
                 });
-                quote! { crate::typecheck::Ty::Var(crate::typecheck::TyVar::new(#idx)) }
+                let mut stmts = Vec::new();
+                let expr = bind(&mut stmts, n, quote! { #arena.var(#idx) });
+                TyBuild { stmts, expr }
             }
             Self::App(name, args) => {
-                let arg_tokens: Vec<_> =
-                    args.iter().map(|a| a.to_tokens(vars, ctx)).collect();
-                match name.as_str() {
+                let (mut stmts, arg_tokens): (Vec<_>, Vec<_>) = args
+                    .iter()
+                    .map(|arg| arg.to_ty_id(arena, vars, ctx, n))
+                    .fold((Vec::new(), Vec::new()), |(mut ss, mut es), b| {
+                        ss.extend(b.stmts);
+                        es.push(b.expr);
+                        (ss, es)
+                    });
+                let alloc = match name.as_str() {
                     "Array" => {
                         let inner = &arg_tokens[0];
-                        quote! { crate::typecheck::Ty::Array(Box::new(#inner)) }
+                        quote! { #arena.array(#inner) }
                     }
                     "Option" => {
                         let inner = &arg_tokens[0];
-                        quote! { crate::typecheck::Ty::Option(Box::new(#inner)) }
+                        quote! { #arena.option(#inner) }
                     }
                     "Result" => {
                         let ok = &arg_tokens[0];
                         let err = &arg_tokens[1];
-                        quote! { crate::typecheck::Ty::Result(Box::new(#ok), Box::new(#err)) }
+                        quote! { #arena.result(#ok, #err) }
                     }
                     "Map" => {
                         let k = &arg_tokens[0];
                         let v = &arg_tokens[1];
-                        quote! { crate::typecheck::Ty::Map(Box::new(#k), Box::new(#v)) }
+                        quote! { #arena.map_ty(#k, #v) }
                     }
                     _ => panic!("unknown parameterized type: `{name}`"),
-                }
+                };
+                let expr = bind(&mut stmts, n, alloc);
+                TyBuild { stmts, expr }
             }
             Self::Fn(params, ret) => {
-                let param_tokens: Vec<_> =
-                    params.iter().map(|p| p.to_tokens(vars, ctx)).collect();
-                let ret_tokens = ret.to_tokens(vars, ctx);
-                quote! {
-                    crate::typecheck::Ty::Fn(
-                        vec![#(#param_tokens),*],
-                        Box::new(#ret_tokens)
-                    )
-                }
+                let (mut stmts, param_tokens): (Vec<_>, Vec<_>) = params
+                    .iter()
+                    .map(|p| p.to_ty_id(arena, vars, ctx, n))
+                    .fold((Vec::new(), Vec::new()), |(mut ss, mut es), b| {
+                        ss.extend(b.stmts);
+                        es.push(b.expr);
+                        (ss, es)
+                    });
+                let ret = ret.to_ty_id(arena, vars, ctx, n);
+                stmts.extend(ret.stmts);
+                let ret_tokens = ret.expr;
+                let expr = bind(
+                    &mut stmts,
+                    n,
+                    quote! {
+                        #arena.func(
+                            smallvec::smallvec![#(#param_tokens),*],
+                            #ret_tokens
+                        )
+                    },
+                );
+                TyBuild { stmts, expr }
             }
             Self::Tuple(elems) => {
-                let elem_tokens: Vec<_> =
-                    elems.iter().map(|e| e.to_tokens(vars, ctx)).collect();
-                quote! {
-                    crate::typecheck::Ty::Tuple(vec![#(#elem_tokens),*])
-                }
+                let (mut stmts, elem_tokens): (Vec<_>, Vec<_>) = elems
+                    .iter()
+                    .map(|e| e.to_ty_id(arena, vars, ctx, n))
+                    .fold((Vec::new(), Vec::new()), |(mut ss, mut es), b| {
+                        ss.extend(b.stmts);
+                        es.push(b.expr);
+                        (ss, es)
+                    });
+                let expr = bind(
+                    &mut stmts,
+                    n,
+                    quote! {
+                        #arena.alloc(
+                            crate::typecheck::Ty::Tuple(
+                                smallvec::smallvec![#(#elem_tokens),*]
+                            )
+                        )
+                    },
+                );
+                TyBuild { stmts, expr }
             }
             Self::Union(members) => {
-                let member_tokens: Vec<_> =
-                    members.iter().map(|m| m.to_tokens(vars, ctx)).collect();
-                quote! {
-                    crate::typecheck::Ty::Union(None, vec![#(#member_tokens),*])
-                }
+                let (mut stmts, member_tokens): (Vec<_>, Vec<_>) = members
+                    .iter()
+                    .map(|m| m.to_ty_id(arena, vars, ctx, n))
+                    .fold((Vec::new(), Vec::new()), |(mut ss, mut es), b| {
+                        ss.extend(b.stmts);
+                        es.push(b.expr);
+                        (ss, es)
+                    });
+                let expr = bind(
+                    &mut stmts,
+                    n,
+                    quote! {
+                        #arena.alloc(
+                            crate::typecheck::Ty::Union(
+                                None,
+                                smallvec::smallvec![#(#member_tokens),*]
+                            )
+                        )
+                    },
+                );
+                TyBuild { stmts, expr }
             }
             Self::Object(fields) => {
                 let ctx = ctx.unwrap_or_else(|| {
-                    panic!("object types require a context; use `scheme!(ctx; ...)`")
+                    panic!("object types require a context; use `scheme!(a, ctx, ...)`")
                 });
-                let field_entries: Vec<_> = fields
+                let (mut stmts, field_entries): (Vec<_>, Vec<_>) = fields
                     .iter()
                     .map(|(name, ty)| {
-                        let ty_tokens = ty.to_tokens(vars, Some(ctx));
-                        quote! { #ctx.intern(#name) => #ty_tokens }
+                        let field = format_ident!("__rumps_field_{n}");
+                        *n += 1;
+                        let name = LitStr::new(
+                            name.as_str(),
+                            proc_macro2::Span::call_site(),
+                        );
+                        let ty = ty.to_ty_id(arena, vars, Some(ctx), n);
+                        let ty_expr = ty.expr;
+                        let mut ss = ty.stmts;
+                        ss.push(quote! { let #field = #ctx(#name); });
+                        (ss, quote! { #field => #ty_expr })
                     })
-                    .collect();
-                quote! {
-                    crate::typecheck::Ty::Object(indexmap::indexmap! {
-                        #(#field_entries),*
-                    })
-                }
+                    .fold((Vec::new(), Vec::new()), |(mut ss, mut es), v| {
+                        ss.extend(v.0);
+                        es.push(v.1);
+                        (ss, es)
+                    });
+                let expr = bind(
+                    &mut stmts,
+                    n,
+                    quote! {
+                        #arena.alloc(
+                            crate::typecheck::Ty::Object(indexmap::indexmap! {
+                                #(#field_entries),*
+                            })
+                        )
+                    },
+                );
+                TyBuild { stmts, expr }
             }
-            Self::Named(type_id) => {
-                let id = Ident::new(type_id, proc_macro2::Span::call_site());
-                quote! {
-                    crate::typecheck::Ty::Named(crate::value::TypeId::#id, vec![])
-                }
-            }
+            Self::Named(type_id) => TyBuild {
+                stmts: vec![],
+                expr: named_id(type_id),
+            },
             Self::Apply(var_name, args) => {
                 let idx = vars.get(var_name).copied().unwrap_or_else(|| {
                     panic!("unbound type variable in Apply: `{var_name}`")
                 });
-                let arg_tokens: Vec<_> =
-                    args.iter().map(|a| a.to_tokens(vars, ctx)).collect();
-                quote! {
-                    crate::typecheck::Ty::Apply(
-                        crate::typecheck::TyVar::new(#idx),
-                        vec![#(#arg_tokens),*]
-                    )
-                }
+                let (mut stmts, arg_tokens): (Vec<_>, Vec<_>) = args
+                    .iter()
+                    .map(|a| a.to_ty_id(arena, vars, ctx, n))
+                    .fold((Vec::new(), Vec::new()), |(mut ss, mut es), b| {
+                        ss.extend(b.stmts);
+                        es.push(b.expr);
+                        (ss, es)
+                    });
+                let expr = bind(
+                    &mut stmts,
+                    n,
+                    quote! {
+                        #arena.hkt(
+                            crate::typecheck::TyVar::new(#idx),
+                            smallvec::smallvec![#(#arg_tokens),*]
+                        )
+                    },
+                );
+                TyBuild { stmts, expr }
             }
             Self::AssocType(var_name, class_name, assoc_name) => {
-                // NOTE: This generates code that calls `intern(...)` directly,
-                // so it only works when `intern: impl Fn(&str) -> StringId` is in scope.
-                // Currently this is only used in `BuiltinClassDef::build_all()`.
+                let ctx = ctx.unwrap_or_else(|| {
+                    panic!("associated types require a context; use `scheme!(a, ctx, ...)`")
+                });
                 let idx = vars.get(var_name).copied().unwrap_or_else(|| {
                     panic!("unbound type variable in associated type: `{var_name}`")
                 });
-                let class_ident =
-                    Ident::new(class_name, proc_macro2::Span::call_site());
-                quote! {
-                    crate::typecheck::Ty::AssocType(
-                        crate::typecheck::TyVar::new(#idx),
-                        crate::typecheck::BuiltinClassTag::#class_ident,
-                        intern(#assoc_name)
-                    )
+                let class = class_id(class_name);
+                let assoc = format_ident!("__rumps_assoc_{n}");
+                *n += 1;
+                let expr = format_ident!("__rumps_ty_{n}");
+                *n += 1;
+                let assoc_name = LitStr::new(
+                    assoc_name.as_str(),
+                    proc_macro2::Span::call_site(),
+                );
+                TyBuild {
+                    stmts: vec![
+                        quote! { let #assoc = #ctx(#assoc_name); },
+                        quote! {
+                            let #expr = #arena.alloc(
+                                crate::typecheck::Ty::AssocType(
+                                    crate::typecheck::TyVar::new(#idx),
+                                    #class,
+                                    #assoc
+                                )
+                            );
+                        },
+                    ],
+                    expr: quote! { #expr },
                 }
             }
         }

@@ -8,6 +8,8 @@
 use std::collections::HashMap;
 use std::{f64, mem};
 
+use rumps_query_macros::scheme;
+
 use crate::primitives::{
     Array, Directory, Io, Map, Math, Opt, Prelude, Prim, Random, Res, Str,
     Time, Trig,
@@ -244,66 +246,37 @@ pub(crate) struct IntrinsicDef {
 impl Intrinsic {
     /// Get the definition for this intrinsic.
     pub(crate) fn def(self, a: &mut TyArena) -> IntrinsicDef {
-        let ref_ty = a.ref_ty();
         match self {
-            Self::Get => {
-                let storable = a.storable();
-                let opt = a.option(storable);
-                let ty = a.func(smallvec![ref_ty], opt);
-                IntrinsicDef {
-                    name: "@GET",
-                    ty: Scheme::mono(ty),
-                    txn: TxnReq::None,
-                }
-            }
-            Self::Set => {
-                let storable = a.storable();
-                let ret = a.result(TyArena::UNIT, TyArena::STRING);
-                let ty = a.func(smallvec![ref_ty, storable], ret);
-                IntrinsicDef {
-                    name: "@SET",
-                    ty: Scheme::mono(ty),
-                    txn: TxnReq::Globals,
-                }
-            }
-            Self::Kill => {
-                let ret = a.result(TyArena::UNIT, TyArena::STRING);
-                let ty = a.func(smallvec![ref_ty], ret);
-                IntrinsicDef {
-                    name: "@KILL",
-                    ty: Scheme::mono(ty),
-                    txn: TxnReq::Globals,
-                }
-            }
-            Self::Data => {
-                let ty = a.func(smallvec![ref_ty], TyArena::DATA_STATUS);
-                IntrinsicDef {
-                    name: "@DATA",
-                    ty: Scheme::mono(ty),
-                    txn: TxnReq::None,
-                }
-            }
-            Self::Order => {
-                let subscript = a.subscript();
-                let opt = a.option(subscript);
-                let ty = a.func(smallvec![ref_ty], opt);
-                IntrinsicDef {
-                    name: "@ORDER",
-                    ty: Scheme::mono(ty),
-                    txn: TxnReq::None,
-                }
-            }
-            Self::Query => {
-                let subscript = a.subscript();
-                let arr = a.array(subscript);
-                let opt = a.option(arr);
-                let ty = a.func(smallvec![ref_ty], opt);
-                IntrinsicDef {
-                    name: "@QUERY",
-                    ty: Scheme::mono(ty),
-                    txn: TxnReq::None,
-                }
-            }
+            Self::Get => IntrinsicDef {
+                name: "@get",
+                ty: scheme!(a, (Ref) -> Option[Storable]),
+                txn: TxnReq::None,
+            },
+            Self::Set => IntrinsicDef {
+                name: "@set",
+                ty: scheme!(a, (Ref, Storable) -> Result[Unit, String]),
+                txn: TxnReq::Globals,
+            },
+            Self::Kill => IntrinsicDef {
+                name: "@kill",
+                ty: scheme!(a, (Ref) -> Result[Unit, String]),
+                txn: TxnReq::Globals,
+            },
+            Self::Data => IntrinsicDef {
+                name: "@data",
+                ty: scheme!(a, (Ref) -> DataStatus),
+                txn: TxnReq::None,
+            },
+            Self::Order => IntrinsicDef {
+                name: "@order",
+                ty: scheme!(a, (Ref) -> Option[Subscript]),
+                txn: TxnReq::None,
+            },
+            Self::Query => IntrinsicDef {
+                name: "@query",
+                ty: scheme!(a, (Ref) -> Option[Array[Subscript]]),
+                txn: TxnReq::None,
+            },
         }
     }
 }
@@ -317,168 +290,108 @@ pub(crate) struct BinOpDef {
 impl BinOp {
     /// Get the definition for this binary operator.
     pub(crate) fn def(self, a: &mut TyArena) -> BinOpDef {
-        let v0 = a.var(0);
-
-        // Helper: `forall T: C. (T, T) -> T`
-        let binary_constrained = |a: &mut TyArena, v0: TyId, tag| {
-            let ty = a.func(smallvec![v0, v0], v0);
-            Scheme {
-                vars: smallvec![TyVar::new(0)],
-                ty,
-                constraints: smallvec![(TyVar::new(0), TypeClass::simple(tag))],
-            }
-        };
-
-        // Helper: `forall T: C. (T, T) -> Bool`
-        let cmp_constrained = |a: &mut TyArena, v0: TyId, tag| {
-            let ty = a.func(smallvec![v0, v0], TyArena::BOOL);
-            Scheme {
-                vars: smallvec![TyVar::new(0)],
-                ty,
-                constraints: smallvec![(TyVar::new(0), TypeClass::simple(tag))],
-            }
-        };
-
         match self {
             // Arithmetic: `forall T: Numeric. (T, T) -> T`
             Self::Add => BinOpDef {
                 name: "+",
-                ty: binary_constrained(a, v0, ClassId::NUMERIC),
+                ty: scheme!(a, forall T: Numeric. (T, T) -> T),
             },
             Self::Sub => BinOpDef {
                 name: "-",
-                ty: binary_constrained(a, v0, ClassId::NUMERIC),
+                ty: scheme!(a, forall T: Numeric. (T, T) -> T),
             },
             Self::Mul => BinOpDef {
                 name: "*",
-                ty: binary_constrained(a, v0, ClassId::NUMERIC),
+                ty: scheme!(a, forall T: Numeric. (T, T) -> T),
             },
-            Self::Div => {
-                let ty = a.func(
-                    smallvec![TyArena::FLOAT, TyArena::FLOAT],
-                    TyArena::FLOAT,
-                );
-                BinOpDef {
-                    name: "/",
-                    ty: Scheme::mono(ty),
-                }
-            }
+            Self::Div => BinOpDef {
+                name: "/",
+                ty: scheme!(a, (Float, Float) -> Float),
+            },
             Self::FloorDiv => BinOpDef {
                 name: "//",
-                ty: binary_constrained(a, v0, ClassId::NUMERIC),
+                ty: scheme!(a, forall T: Numeric. (T, T) -> T),
             },
             Self::Mod => BinOpDef {
                 name: "%",
-                ty: binary_constrained(a, v0, ClassId::NUMERIC),
+                ty: scheme!(a, forall T: Numeric. (T, T) -> T),
             },
             Self::Pow => BinOpDef {
                 name: "**",
-                ty: binary_constrained(a, v0, ClassId::NUMERIC),
+                ty: scheme!(a, forall T: Numeric. (T, T) -> T),
             },
 
             // Comparison: `forall T: Eq. (T, T) -> Bool`
             Self::Eq => BinOpDef {
                 name: "==",
-                ty: cmp_constrained(a, v0, ClassId::EQ),
+                ty: scheme!(a, forall T: Eq. (T, T) -> Bool),
             },
             Self::Ne => BinOpDef {
                 name: "!=",
-                ty: cmp_constrained(a, v0, ClassId::EQ),
+                ty: scheme!(a, forall T: Eq. (T, T) -> Bool),
             },
             Self::Lt => BinOpDef {
                 name: "<",
-                ty: cmp_constrained(a, v0, ClassId::ORD),
+                ty: scheme!(a, forall T: Ord. (T, T) -> Bool),
             },
             Self::Gt => BinOpDef {
                 name: ">",
-                ty: cmp_constrained(a, v0, ClassId::ORD),
+                ty: scheme!(a, forall T: Ord. (T, T) -> Bool),
             },
             Self::Le => BinOpDef {
                 name: "<=",
-                ty: cmp_constrained(a, v0, ClassId::ORD),
+                ty: scheme!(a, forall T: Ord. (T, T) -> Bool),
             },
             Self::Ge => BinOpDef {
                 name: ">=",
-                ty: cmp_constrained(a, v0, ClassId::ORD),
+                ty: scheme!(a, forall T: Ord. (T, T) -> Bool),
             },
 
             // Logical: `(Bool, Bool) -> Bool`
-            Self::And => {
-                let ty = a.func(
-                    smallvec![TyArena::BOOL, TyArena::BOOL],
-                    TyArena::BOOL,
-                );
-                BinOpDef {
-                    name: "AND",
-                    ty: Scheme::mono(ty),
-                }
-            }
-            Self::Or => {
-                let ty = a.func(
-                    smallvec![TyArena::BOOL, TyArena::BOOL],
-                    TyArena::BOOL,
-                );
-                BinOpDef {
-                    name: "OR",
-                    ty: Scheme::mono(ty),
-                }
-            }
+            Self::And => BinOpDef {
+                name: "and",
+                ty: scheme!(a, (Bool, Bool) -> Bool),
+            },
+            Self::Or => BinOpDef {
+                name: "or",
+                ty: scheme!(a, (Bool, Bool) -> Bool),
+            },
 
             // Bitwise: `forall T: BitLike. (T, T) -> T`
             Self::BitAnd => BinOpDef {
                 name: "&",
-                ty: binary_constrained(a, v0, ClassId::BIT_LIKE),
+                ty: scheme!(a, forall T: BitLike. (T, T) -> T),
             },
             Self::BitOr => BinOpDef {
                 name: "|",
-                ty: binary_constrained(a, v0, ClassId::BIT_LIKE),
+                ty: scheme!(a, forall T: BitLike. (T, T) -> T),
             },
             Self::Shl => BinOpDef {
                 name: "<<",
-                ty: binary_constrained(a, v0, ClassId::BIT_LIKE),
+                ty: scheme!(a, forall T: BitLike. (T, T) -> T),
             },
             Self::Shr => BinOpDef {
                 name: ">>",
-                ty: binary_constrained(a, v0, ClassId::BIT_LIKE),
+                ty: scheme!(a, forall T: BitLike. (T, T) -> T),
             },
 
             // Concat: `forall T: Monoid. (T, T) -> T`
             Self::Concat => BinOpDef {
                 name: "++",
-                ty: binary_constrained(a, v0, ClassId::MONOID),
+                ty: scheme!(a, forall T: Monoid. (T, T) -> T),
             },
 
             // Coalesce: `forall T, F: Fallible. (F[T], T) -> T`
-            Self::Coalesce => {
-                let hkt = a.hkt(TyVar::new(1), smallvec![v0]);
-                let ty = a.func(smallvec![hkt, v0], v0);
-                BinOpDef {
-                    name: "??",
-                    ty: Scheme {
-                        vars: smallvec![TyVar::new(0), TyVar::new(1)],
-                        ty,
-                        constraints: smallvec![(
-                            TyVar::new(1),
-                            TypeClass::hkt(ClassId::FALLIBLE)
-                        )],
-                    },
-                }
-            }
+            Self::Coalesce => BinOpDef {
+                name: "??",
+                ty: scheme!(a, forall T, F: Fallible. (F[T], T) -> T),
+            },
 
             // Pipe: `forall T, U. (T, (T) -> U) -> U`
-            Self::Pipe => {
-                let v1 = a.var(1);
-                let cb = a.func(smallvec![v0], v1);
-                let ty = a.func(smallvec![v0, cb], v1);
-                BinOpDef {
-                    name: "|>",
-                    ty: Scheme {
-                        vars: smallvec![TyVar::new(0), TyVar::new(1)],
-                        ty,
-                        constraints: smallvec![],
-                    },
-                }
-            }
+            Self::Pipe => BinOpDef {
+                name: "|>",
+                ty: scheme!(a, forall T, U. (T, (T) -> U) -> U),
+            },
         }
     }
 }
@@ -493,44 +406,18 @@ impl UnOp {
     /// Get the definition for this unary operator.
     pub(crate) fn def(self, a: &mut TyArena) -> UnOpDef {
         match self {
-            Self::Neg => {
-                let v0 = a.var(0);
-                let ty = a.func(smallvec![v0], v0);
-                UnOpDef {
-                    name: "-",
-                    ty: Scheme {
-                        vars: smallvec![TyVar::new(0)],
-                        ty,
-                        constraints: smallvec![(
-                            TyVar::new(0),
-                            TypeClass::simple(ClassId::NEGATABLE)
-                        )],
-                    },
-                }
-            }
-            Self::Not => {
-                let ty = a.func(smallvec![TyArena::BOOL], TyArena::BOOL);
-                UnOpDef {
-                    name: "NOT",
-                    ty: Scheme::mono(ty),
-                }
-            }
-            Self::Wrap => {
-                let v0 = a.var(0);
-                let hkt = a.hkt(TyVar::new(1), smallvec![v0]);
-                let ty = a.func(smallvec![v0], hkt);
-                UnOpDef {
-                    name: "?",
-                    ty: Scheme {
-                        vars: smallvec![TyVar::new(0), TyVar::new(1)],
-                        ty,
-                        constraints: smallvec![(
-                            TyVar::new(1),
-                            TypeClass::hkt(ClassId::WRAPPABLE)
-                        )],
-                    },
-                }
-            }
+            Self::Neg => UnOpDef {
+                name: "-",
+                ty: scheme!(a, forall T: Negatable. (T) -> T),
+            },
+            Self::Not => UnOpDef {
+                name: "not",
+                ty: scheme!(a, (Bool) -> Bool),
+            },
+            Self::Wrap => UnOpDef {
+                name: "?",
+                ty: scheme!(a, forall T, F: Wrappable. (T) -> F[T]),
+            },
         }
     }
 }
@@ -545,22 +432,10 @@ impl PostfixOp {
     /// Get the definition for this postfix operator.
     pub(crate) fn def(self, a: &mut TyArena) -> PostfixOpDef {
         match self {
-            Self::Unwrap => {
-                let v0 = a.var(0);
-                let hkt = a.hkt(TyVar::new(1), smallvec![v0]);
-                let ty = a.func(smallvec![hkt], v0);
-                PostfixOpDef {
-                    name: "!",
-                    ty: Scheme {
-                        vars: smallvec![TyVar::new(0), TyVar::new(1)],
-                        ty,
-                        constraints: smallvec![(
-                            TyVar::new(1),
-                            TypeClass::hkt(ClassId::FALLIBLE)
-                        )],
-                    },
-                }
-            }
+            Self::Unwrap => PostfixOpDef {
+                name: "!",
+                ty: scheme!(a, forall T, F: Fallible. (F[T]) -> T),
+            },
         }
     }
 }
