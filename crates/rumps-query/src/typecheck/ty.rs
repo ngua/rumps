@@ -30,8 +30,8 @@ pub(crate) enum ClassShape {
 /// What kind of type tracking a method requires for runtime dispatch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TrackKind {
-    /// Track return type in expression metadata (`Monoid:identity`).
-    Mempty,
+    /// Track return type in expression metadata (`Default:default`).
+    Default,
     /// Track return type in expression metadata (`Into:into`, `Wrappable:wrap`).
     Convert,
     /// Track inner type of `Result` return in expression metadata (`TryInto:try-into`).
@@ -214,33 +214,38 @@ impl ClassRegistry {
                     ),
                 ],
             },
-            // 2: Monoid
+            // 2: Default
             ClassDef {
-                name: s("Monoid"),
+                name: s("Default"),
                 shape: ClassShape::Concrete { params: 0 },
                 assoc_types: smallvec![],
                 supers: smallvec![],
-                methods: vec![
-                    (
-                        s("identity"),
-                        MethodSpec::Tracked {
-                            scheme: simple1(
-                                arena.func(smallvec![], v0),
-                                ClassId::MONOID,
-                            ),
-                            track: TrackKind::Mempty,
-                        },
-                    ),
-                    (
-                        s("concat"),
-                        MethodSpec::Standard(simple1(
-                            binary_v0,
-                            ClassId::MONOID,
-                        )),
-                    ),
-                ],
+                methods: vec![(
+                    s("default"),
+                    MethodSpec::Tracked {
+                        scheme: simple1(
+                            arena.func(smallvec![], v0),
+                            ClassId::DEFAULT,
+                        ),
+                        track: TrackKind::Default,
+                    },
+                )],
             },
-            // 3: BitLike
+            // 3: Concatable
+            ClassDef {
+                name: s("Concatable"),
+                shape: ClassShape::Concrete { params: 0 },
+                assoc_types: smallvec![],
+                supers: smallvec![],
+                methods: vec![(
+                    s("concat"),
+                    MethodSpec::Standard(simple1(
+                        binary_v0,
+                        ClassId::CONCATABLE,
+                    )),
+                )],
+            },
+            // 4: BitLike
             ClassDef {
                 name: s("BitLike"),
                 shape: ClassShape::Concrete { params: 0 },
@@ -277,7 +282,7 @@ impl ClassRegistry {
                     ),
                 ],
             },
-            // 4: Negatable
+            // 5: Negatable
             ClassDef {
                 name: s("Negatable"),
                 shape: ClassShape::Concrete { params: 0 },
@@ -288,7 +293,7 @@ impl ClassRegistry {
                     MethodSpec::Standard(simple1(unary_v0, ClassId::NEGATABLE)),
                 )],
             },
-            // 5: Fallible
+            // 6: Fallible
             ClassDef {
                 name: s("Fallible"),
                 shape: ClassShape::Hkt { kind: 1, params: 0 },
@@ -302,7 +307,7 @@ impl ClassRegistry {
                     )),
                 )],
             },
-            // 6: Into
+            // 7: Into
             ClassDef {
                 name: s("Into"),
                 shape: ClassShape::Concrete { params: 1 },
@@ -323,7 +328,7 @@ impl ClassRegistry {
                     },
                 )],
             },
-            // 7: TryInto
+            // 8: TryInto
             ClassDef {
                 name: s("TryInto"),
                 shape: ClassShape::Concrete { params: 1 },
@@ -347,7 +352,7 @@ impl ClassRegistry {
                     },
                 )],
             },
-            // 8: Indexable
+            // 9: Indexable
             ClassDef {
                 name: s("Indexable"),
                 shape: ClassShape::Concrete { params: 1 },
@@ -381,7 +386,7 @@ impl ClassRegistry {
                     ),
                 ],
             },
-            // 9: Ord
+            // 10: Ord
             ClassDef {
                 name: s("Ord"),
                 shape: ClassShape::Concrete { params: 0 },
@@ -395,7 +400,7 @@ impl ClassRegistry {
                     )),
                 )],
             },
-            // 10: Mappable
+            // 11: Mappable
             ClassDef {
                 name: s("Mappable"),
                 shape: ClassShape::Hkt { kind: 1, params: 0 },
@@ -412,7 +417,7 @@ impl ClassRegistry {
                     }),
                 )],
             },
-            // 11: Foldable
+            // 12: Foldable
             ClassDef {
                 name: s("Foldable"),
                 shape: ClassShape::Hkt { kind: 1, params: 0 },
@@ -429,7 +434,7 @@ impl ClassRegistry {
                     }),
                 )],
             },
-            // 12: Filterable
+            // 13: Filterable
             ClassDef {
                 name: s("Filterable"),
                 shape: ClassShape::Hkt { kind: 1, params: 0 },
@@ -446,7 +451,7 @@ impl ClassRegistry {
                     }),
                 )],
             },
-            // 13: Display
+            // 14: Display
             ClassDef {
                 name: s("Display"),
                 shape: ClassShape::Concrete { params: 0 },
@@ -460,7 +465,7 @@ impl ClassRegistry {
                     )),
                 )],
             },
-            // 14: Eq
+            // 15: Eq
             ClassDef {
                 name: s("Eq"),
                 shape: ClassShape::Concrete { params: 0 },
@@ -474,7 +479,7 @@ impl ClassRegistry {
                     )),
                 )],
             },
-            // 15: Wrappable
+            // 16: Wrappable
             ClassDef {
                 name: s("Wrappable"),
                 shape: ClassShape::Hkt { kind: 1, params: 0 },
@@ -491,7 +496,7 @@ impl ClassRegistry {
                     },
                 )],
             },
-            // 16: Chainable
+            // 17: Chainable
             ClassDef {
                 name: s("Chainable"),
                 shape: ClassShape::Hkt { kind: 1, params: 0 },
@@ -508,7 +513,7 @@ impl ClassRegistry {
                     }),
                 )],
             },
-            // 17: Bimappable
+            // 18: Bimappable
             ClassDef {
                 name: s("Bimappable"),
                 shape: ClassShape::Hkt { kind: 2, params: 0 },

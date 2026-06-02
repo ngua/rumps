@@ -1,14 +1,14 @@
 ; Class method references with type arguments (turbofish syntax)
 
 fun main() {
-  ; Monoid:identity with type parameter
-  let id-opt = Monoid[Option[Int]]:identity
-  write "id-opt() = {id-opt()}"
-  write "direct call = {Monoid[Option[Int]]:identity()}"
+  ; Default:default with type parameter
+  let def-opt = Default[Option[Int]]:default
+  write "def-opt() = {def-opt()}"
+  write "direct call = {Default[Option[Int]]:default()}"
 
-  ; Monoid:identity reference without type arg (inferred from context)
-  let id-inferred = Monoid:identity
-  write "inferred = {id-inferred() : Option[Int]}"
+  ; Default:default reference without type arg (inferred from context)
+  let def-inferred = Default:default
+  write "inferred = {def-inferred() : Option[Int]}"
 
   ; Numeric with type parameter
   let add-int = Numeric[Int]:add

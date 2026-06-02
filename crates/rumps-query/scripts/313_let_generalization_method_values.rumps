@@ -155,7 +155,7 @@ fun main() {
   let id-tag = id(MyTag[Label]:tag)
   write id-tag(w)
 
-  let empty = Monoid[Option[Int]]:identity
+  let empty = Default[Option[Int]]:default
   write empty()
   let into-score = Into[Score]:into
   let score = into-score(77)

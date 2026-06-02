@@ -339,16 +339,16 @@ impl InferCtx<'_> {
             // Transaction block: `transaction { ... }`
             Expr::Transaction(ref txn) => self.transaction(id, txn, span),
 
-            // Mempty: `_` (monoid identity)
+            // Default value: `_`.
             //
-            // Creates a fresh type variable with `Monoid` constraint.
+            // Creates a fresh type variable with the current default value constraint.
             // The concrete type is inferred from context (e.g., `_ ++ [1]` infers `Array[Int]`).
             // Store the type variable for later resolution.
-            Expr::Mempty => {
+            Expr::DefaultValue => {
                 let tv = self.fresh();
                 self.constrain(Constraint::Class {
                     ty: tv,
-                    class: TypeClass::simple(ClassId::MONOID),
+                    class: TypeClass::simple(ClassId::DEFAULT),
                     span,
                 });
                 self.interp.set_concrete_expr_ty(id, tv);
@@ -502,7 +502,7 @@ impl InferCtx<'_> {
                                 }
 
                                 MethodSpec::Tracked {
-                                    track: TrackKind::Mempty,
+                                    track: TrackKind::Default,
                                     ..
                                 } => {
                                     let tv = if let Some(&ty_id) =
@@ -516,7 +516,7 @@ impl InferCtx<'_> {
                                     self.constrain(Constraint::Class {
                                         ty: tv,
                                         class: TypeClass::simple(
-                                            ClassId::MONOID,
+                                            ClassId::DEFAULT,
                                         ),
                                         span,
                                     });
@@ -942,7 +942,7 @@ impl InferCtx<'_> {
                     match spec {
                         MethodSpec::Standard(_) => {}
                         MethodSpec::Tracked { track, .. } => match track {
-                            TrackKind::Mempty => {
+                            TrackKind::Default => {
                                 self.interp.set_concrete_expr_ty(id, ret);
                             }
                             TrackKind::Convert => {
@@ -2380,7 +2380,7 @@ impl InferCtx<'_> {
                 match &spec {
                     MethodSpec::Standard(_) => {}
                     MethodSpec::Tracked { track, .. } => match track {
-                        TrackKind::Mempty => {
+                        TrackKind::Default => {
                             self.interp.set_concrete_expr_ty(call_id, sig_ret);
                         }
                         TrackKind::Convert if is_full => {

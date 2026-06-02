@@ -1139,7 +1139,7 @@ impl<'a> LowerCtx<'a> {
                     modifiers,
                 })
             }
-            cst::ExprKind::Mempty => Expr::Mempty,
+            cst::ExprKind::DefaultValue => Expr::DefaultValue,
             cst::ExprKind::RefLit(dbref) => {
                 let dbref = self.db_ref(dbref)?;
                 Expr::Ref(dbref)
@@ -2377,7 +2377,7 @@ impl<'a> MergeCtx<'a> {
                     },
                 })
             }
-            Expr::Mempty => Expr::Mempty,
+            Expr::DefaultValue => Expr::DefaultValue,
             Expr::Ref(ref dbref) => {
                 let new_dbref = self.dbref(dbref, span)?;
                 Expr::Ref(new_dbref)

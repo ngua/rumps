@@ -156,15 +156,18 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Evaluate a `Mempty` expression (monoid identity: `_`).
+    /// Evaluate a default-value expression: `_`.
     ///
-    /// Dispatches to `Monoid:identity` with the inferred type to produce
-    /// the appropriate empty value.
-    pub(super) fn mempty(&mut self, id: ExprId, span: Span) -> Result<Payload> {
+    /// Dispatches with the inferred type to produce the appropriate default value.
+    pub(super) fn default_value(
+        &mut self,
+        id: ExprId,
+        span: Span,
+    ) -> Result<Payload> {
         let ty_id = self.checked.expr(id).ty;
         let ty = self.checked.types.get(ty_id).clone();
 
-        let mid = self.arena.intern("identity");
+        let mid = self.arena.intern("default");
         let mut ctx = ClassCtx {
             arena: &mut self.arena,
             runtime_types: &mut self.checked.types,
@@ -172,7 +175,11 @@ impl<I: IoContext> Interpreter<'_, I> {
             regex_cache: &self.checked.regex_cache,
             span,
         };
-        self.class_methods
-            .dispatch_nullary(ClassId::MONOID, mid, &mut ctx, &ty)
+        self.class_methods.dispatch_nullary(
+            ClassId::DEFAULT,
+            mid,
+            &mut ctx,
+            &ty,
+        )
     }
 }

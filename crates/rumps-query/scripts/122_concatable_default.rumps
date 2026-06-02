@@ -1,5 +1,5 @@
-; Test: Monoid concatenation (`++` operator)
-; Tests polymorphic `++` on String, Array, and Map
+; Test: Concatable concatenation and Default shorthand
+; Tests polymorphic `++` on String, Array, Map, and Option
 
 fun main() {
   ; === String concatenation ===
@@ -30,13 +30,13 @@ fun main() {
   write Map.lookup(merged, "y")  ; Some(999) - right wins
   write Map.lookup(merged, "z")  ; Some(30)
 
-  ; === Type constraint: Monoid ===
+  ; === Type constraint: Concatable ===
   write concat3("a", "b", "c")
   write concat3([1], [2], [3])
   write concat3({ 1 => "x" }, { 2 => "y" }, { 3 => "z" })
 
   ; === Option alternative (`<|>` semantics) ===
-  ; First `Some` wins; `None` acts as identity
+  ; First `Some` wins; `None` acts as the empty alternative
 
   let some10 = Option.Some(10)
   let some9 = Option.Some(9)
@@ -57,38 +57,38 @@ fun main() {
   ; Chaining: first Some in chain wins
   write none ++ none ++ some10 ++ some9
 
-  ; With generic Monoid function
+  ; With generic Concatable function
   write concat3(none, some10, some9)  ; first non-None wins
   write concat3(none, none, some9)    ; last Some wins
   write concat3(none, none, none)     ; all None
 
-  ; === Mempty: `_` (monoid identity) ===
-  ; `_` produces the empty value for any Monoid type, inferred from context
+  ; === Default: `_` shorthand ===
+  ; `_` produces the default value for any `Default` type, inferred from context
 
-  ; String mempty
+  ; String Default
   write _ ++ "hello"      ; "" ++ "hello" = "hello"
   write "world" ++ _      ; "world" ++ "" = "world"
 
-  ; Array mempty
+  ; Array Default
   write _ ++ [1, 2, 3]    ; [] ++ [1, 2, 3] = [1, 2, 3]
   write [4, 5] ++ _       ; [4, 5] ++ [] = [4, 5]
 
-  ; Map mempty
+  ; Map Default
   let m = { "x" => 10 }
   write _ ++ m            ; {} ++ m = m
   write m ++ _            ; m ++ {} = m
 
-  ; Option mempty (None)
+  ; Option Default (`None`)
   write _ ++ Option.Some(99)   ; None ++ Some(99) = Some(99)
   write Option.Some(77) ++ _   ; Some(77) ++ None = Some(77)
   write Option.None ++ _       ; None ++ None = None
   write _ ++ Option.None       ; None ++ None = None
 
-  ; Mempty with generic Monoid function
+  ; Default with generic Concatable function
   write concat3(_, "a", "b")   ; "" ++ "a" ++ "b" = "ab"
   write concat3([0], _, [2])   ; [0] ++ [] ++ [2] = [0, 2]
 
-  ; Mempty as loop seed (common pattern for accumulating)
+  ; Default as loop seed (common pattern for accumulating)
   ; Collect squares of 1..5 into an array starting from `_` (empty array)
   let squares = loop { i: 1, acc: _ } (state, cont) => {
     if state.i > 5 {
@@ -113,8 +113,18 @@ fun main() {
   }
   write words
 
-  write "Monoid concatenation complete"
+  ; Focused `Default` checks
+  let b: Bool = _
+  write b
+  let u: Unit = _
+  write u
+  let ord: Ordering = _
+  write ord
+  let fp: FilePath = _
+  write fp as String
+
+  write "Concatable and Default complete"
 }
 
-; This function works on any Monoid type
-fun concat3[T: Monoid](a: T, b: T, c: T) -> T { a ++ b ++ c }
+; This function works on any `Concatable` type
+fun concat3[T: Concatable](a: T, b: T, c: T) -> T { a ++ b ++ c }

@@ -31,7 +31,7 @@ use syn::{Ident, LitStr, Result, Token};
 /// - `T: Numeric` ; `T` must be `Int`, `Float`, or `Word`
 /// - `T: Negatable` ; `T` must be `Int` or `Float`
 /// - `T: BitLike` ; `T` must be `Bool`, `Int`, or `Word`
-/// - `T: Monoid` ; `T` must be `String`, `Array[_]`, `Map[_, _]`, or `Option[_]`
+/// - `T: Concatable` ; `T` must be `String`, `Array[_]`, `Map[_, _]`, or `Option[_]`
 /// - `T: Ord` ; `T` must support ordering (`Bool`, `Int`, `Word`, `Float`, `Char`, `String`)
 /// - `T: Eq` ; `T` must support equality (`==`, `!=`)
 /// - `T: Display` ; `T` can be displayed as RUMPS syntax
@@ -95,7 +95,7 @@ const SIMPLE_CLASSES: &[&str] = &[
     "Numeric",
     "Negatable",
     "BitLike",
-    "Monoid",
+    "Concatable",
     "Ord",
     "Eq",
     "Display",
@@ -227,7 +227,7 @@ fn class_id(name: &str) -> TokenStream2 {
     let id = match name {
         "Numeric" => "NUMERIC",
         "Iterable" => "ITERABLE",
-        "Monoid" => "MONOID",
+        "Concatable" => "CONCATABLE",
         "BitLike" => "BIT_LIKE",
         "Negatable" => "NEGATABLE",
         "Fallible" => "FALLIBLE",

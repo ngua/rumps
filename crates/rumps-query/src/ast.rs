@@ -411,7 +411,7 @@ impl BinOp {
             Self::Lt | Self::Gt | Self::Le | Self::Ge => {
                 Some((ClassId::ORD, "compare"))
             }
-            Self::Concat => Some((ClassId::MONOID, "concat")),
+            Self::Concat => Some((ClassId::CONCATABLE, "concat")),
             Self::BitAnd => Some((ClassId::BIT_LIKE, "bit-and")),
             Self::BitOr => Some((ClassId::BIT_LIKE, "bit-or")),
             Self::Shl => Some((ClassId::BIT_LIKE, "shl")),
@@ -1068,14 +1068,14 @@ pub(crate) enum Expr {
     /// Transaction block expression: `transaction { ... }`.
     Transaction(TransactionExpr),
 
-    /// Monoid identity (`mempty`): `_` in expression context.
+    /// Default value: `_` in expression context.
     ///
-    /// Type-inferred from context to produce the empty value for a `Monoid` type:
+    /// Shorthand for `Default:default`, inferred from context:
     /// - `String`: `""`
     /// - `Array[T]`: `[]`
     /// - `Map[K, V]`: `{}`
     /// - `Option[T]`: `Option.None`
-    Mempty,
+    DefaultValue,
 
     /// A database reference literal: `data{1, 2}` or `^global{key}`.
     ///

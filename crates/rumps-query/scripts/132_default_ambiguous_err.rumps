@@ -1,0 +1,7 @@
+; Test: Ambiguous default type error
+; `_` without context cannot infer the `Default` type
+
+fun main() {
+  let x = _
+  write x
+}

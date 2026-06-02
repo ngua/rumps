@@ -1060,10 +1060,10 @@ impl Parser {
             cst::Expr::new(cst::ExprKind::NakedVariant(var, Vec::new()), span)
         });
 
-        // Lexical variable or mempty (`_`)
+        // Lexical variable or `Default:default` shorthand (`_`).
         let var = Self::ident().map_with_span(move |name, span| {
             if name == underscore {
-                cst::Expr::new(cst::ExprKind::Mempty, span)
+                cst::Expr::new(cst::ExprKind::DefaultValue, span)
             } else {
                 cst::Expr::new(cst::ExprKind::Var(name), span)
             }

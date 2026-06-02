@@ -1,7 +1,0 @@
-; Test: Ambiguous mempty type error
-; Using `_` without context to infer the monoid type should fail
-
-fun main() {
-  let x = _
-  write x
-}

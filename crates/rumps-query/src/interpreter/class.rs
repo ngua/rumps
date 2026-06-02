@@ -10,7 +10,8 @@
 //! - `Numeric`: `add`, `sub`, `mul`, `floor-div`, `mod`, `pow`
 //! - `Negatable`: `neg`
 //! - `BitLike`: `bit-and`, `bit-or`, `shl`, `shr`
-//! - `Monoid`: `identity`, `concat`
+//! - `Default`: `default`
+//! - `Concatable`: `concat`
 //! - `Ord`: `compare`
 //! - `Eq`: `eq`
 //! - `Fallible`: `unwrap`
@@ -88,7 +89,7 @@ pub(crate) type BinMethodFn =
 pub(crate) type UnaryMethodFn =
     fn(&mut ClassCtx<'_>, &Payload) -> Result<Payload>;
 
-/// Nullary class method signature (e.g., `Monoid::identity`).
+/// Nullary class method signature, e.g. `Default:default`.
 ///
 /// Takes the statically-inferred type to produce the appropriate value.
 pub(crate) type NullaryMethodFn = fn(&mut ClassCtx<'_>, &Ty) -> Result<Payload>;
@@ -322,14 +323,14 @@ impl ClassMethods {
         self.register(ClassId::EQ, i.intern("eq"), MethodFn::Binary(Eq::eq));
 
         self.register(
-            ClassId::MONOID,
-            i.intern("concat"),
-            MethodFn::Binary(Monoid::concat),
+            ClassId::DEFAULT,
+            i.intern("default"),
+            MethodFn::Nullary(DefaultClass::default),
         );
         self.register(
-            ClassId::MONOID,
-            i.intern("identity"),
-            MethodFn::Nullary(Monoid::identity),
+            ClassId::CONCATABLE,
+            i.intern("concat"),
+            MethodFn::Binary(Concatable::concat),
         );
 
         self.register(
@@ -671,28 +672,37 @@ impl BitLike {
     }
 }
 
-/// Concatenation and identity for `String`, `Array`, `Map`, `Option`.
-pub(crate) struct Monoid;
+/// Default values for builtin `Default` instances.
+pub(crate) struct DefaultClass;
 
-impl Class for Monoid {}
+impl Class for DefaultClass {}
 
-impl Monoid {
-    /// The monoid identity element for a given type.
+impl DefaultClass {
+    /// The default value for a given type.
     ///
-    /// - `String` -> `""`
-    /// - `Array[T]` -> `[]`
-    /// - `Map[K, V]` -> `{}`
-    /// - `Option[T]` -> `Option.None`
-    pub(crate) fn identity(ctx: &mut ClassCtx<'_>, ty: &Ty) -> Result<Payload> {
+    /// Produces `()`, `false`, `""`, `[]`, `{}`, `Option.None`,
+    /// `Ordering.Eq`, or an empty `FilePath`.
+    pub(crate) fn default(ctx: &mut ClassCtx<'_>, ty: &Ty) -> Result<Payload> {
         Ok(match ty {
+            Ty::Unit => Payload::Unit,
+            Ty::Bool => Payload::Bool(false),
             Ty::String => Payload::String(ctx.arena.intern("")),
             Ty::Array(_) => Payload::Array(Arc::new(SmallVec::new())),
             Ty::Map(_, _) => Payload::Map(Arc::new(IndexMap::new())),
             Ty::Option(_) => Payload::none(),
-            _ => typechecked!("identity", "Monoid type"),
+            Ty::Ordering => Payload::eq_ord(),
+            Ty::FilePath => Payload::FilePath(ctx.arena.intern("")),
+            _ => typechecked!("default", "Default type"),
         })
     }
+}
 
+/// Concatenation for `String`, `Array`, `Map`, `Option`.
+pub(crate) struct Concatable;
+
+impl Class for Concatable {}
+
+impl Concatable {
     pub(crate) fn concat(
         ctx: &mut ClassCtx<'_>,
         l: &Payload,
@@ -735,7 +745,7 @@ impl Monoid {
                     }
                 }
             }
-            _ => typechecked!("++", "Monoid"),
+            _ => typechecked!("++", "Concatable"),
         })
     }
 
@@ -771,7 +781,7 @@ impl Monoid {
                 })
             }
             (Payload::Variant { .. }, Payload::Variant { .. }) => {
-                typechecked!("++", "Monoid Option")
+                typechecked!("++", "Concatable Option")
             }
             _ => Self::concat(ctx, &l.payload, &r.payload),
         }

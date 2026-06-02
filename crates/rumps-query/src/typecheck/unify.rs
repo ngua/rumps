@@ -2130,7 +2130,18 @@ impl SolveCtx<'_> {
                 Some(Satisfaction::Direct)
             }
             (
-                ClassId::MONOID,
+                ClassId::DEFAULT,
+                Ty::Unit
+                | Ty::Bool
+                | Ty::String
+                | Ty::Array(_)
+                | Ty::Map(_, _)
+                | Ty::Option(_)
+                | Ty::Ordering
+                | Ty::FilePath,
+            ) => Some(Satisfaction::Direct),
+            (
+                ClassId::CONCATABLE,
                 Ty::String | Ty::Array(_) | Ty::Map(_, _) | Ty::Option(_),
             ) => Some(Satisfaction::Direct),
             (
@@ -2204,8 +2215,8 @@ impl SolveCtx<'_> {
         }
     }
 
-    /// Check a "simple" class (`Numeric`, `BitLike`, `Negatable`, `Monoid`,
-    /// `Ord`, `Eq`, `Display`) against `ty`.
+    /// Check a "simple" class (`Numeric`, `BitLike`, `Negatable`,
+    /// `Default`, `Concatable`, `Ord`, `Eq`, `Display`) against `ty`.
     ///
     /// Per-class dispatch rules:
     /// - `Numeric` on a `Union`: succeeds if any one member directly

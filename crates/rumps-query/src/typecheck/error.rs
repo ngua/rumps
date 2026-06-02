@@ -1032,7 +1032,7 @@ impl TypeError {
             ),
             Self::UnknownClass(name, _) => (
                 format!("unknown class `{name}`"),
-                Some("valid classes: Numeric, Monoid, Ord, Fallible, Indexable, etc.".to_owned()),
+                Some("valid classes: Numeric, Default, Concatable, Ord, Fallible, Indexable, etc.".to_owned()),
             ),
             Self::AmbiguousNakedMethod { method, classes, .. } => (
                 format!("ambiguous method `:{method}`; defined in multiple classes"),

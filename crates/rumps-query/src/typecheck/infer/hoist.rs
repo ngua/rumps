@@ -990,7 +990,7 @@ impl InferCtx<'_> {
                 | Expr::ClassMethodRef(_, _, _)
                 | Expr::NakedClassMethodRef(_)
                 | Expr::Regex(_, _)
-                | Expr::Mempty => {}
+                | Expr::DefaultValue => {}
             }
         }
     }

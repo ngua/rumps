@@ -343,10 +343,10 @@ pub(crate) enum ExprKind {
     /// Transaction block expression: `transaction { ... }`.
     Transaction(Box<TransactionExpr>),
 
-    /// Monoid identity (`mempty`): `_` in expression context.
+    /// Default value: `_` in expression context.
     ///
-    /// Produces the empty/identity value for the inferred `Monoid` type.
-    Mempty,
+    /// Shorthand for `Default:default`, inferred from context.
+    DefaultValue,
 
     /// A database reference literal: `data{1, 2}` or `^global{key}`.
     ///

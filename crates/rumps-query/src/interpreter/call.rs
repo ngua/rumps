@@ -604,7 +604,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Unified entry point for all class methods.
     ///
     /// The `expr_id` parameter is used by nullary methods like
-    /// `Monoid:identity` to look up the inferred type.
+    /// `Default:default` to look up the inferred type.
     #[async_recursion]
     pub(super) async fn dispatch_class_method(
         &mut self,
@@ -1269,7 +1269,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 };
                 Ok(class::Eq::eq_values(&mut ctx, &left, &right))
             }
-            Some(MethodFn::Binary(_)) if class == ClassId::MONOID => {
+            Some(MethodFn::Binary(_)) if class == ClassId::CONCATABLE => {
                 let left =
                     self.arena.value(args[0]).cloned().unwrap_or_else(|| {
                         invariant!("class method arg in arena")
@@ -1285,7 +1285,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     regex_cache: &self.checked.regex_cache,
                     span,
                 };
-                class::Monoid::concat_values(&mut ctx, &left, &right)
+                class::Concatable::concat_values(&mut ctx, &left, &right)
             }
             Some(MethodFn::Binary(_)) => {
                 let left = val(0);

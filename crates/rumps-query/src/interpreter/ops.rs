@@ -131,10 +131,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                 unreachable!("handled in binary")
             }
 
-            // Monoid class method
+            // Concatable class method
             BinOp::Concat => {
                 let id = self.arena.intern("concat");
-                self.dispatch_binary(ClassId::MONOID, id, left, right, span)
+                self.dispatch_binary(ClassId::CONCATABLE, id, left, right, span)
             }
 
             // BitLike class methods
@@ -232,12 +232,12 @@ impl<I: IoContext> Interpreter<'_, I> {
                     regex_cache: &self.checked.regex_cache,
                     span,
                 };
-                class::Monoid::concat_values(&mut ctx, left, right)
+                class::Concatable::concat_values(&mut ctx, left, right)
             }
             BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
                 self.apply_ord_binop(left, op, right, span)
             }
-            _ => typechecked!("value binop", "Eq, Ord, or Monoid"),
+            _ => typechecked!("value binop", "Eq, Ord, or Concatable"),
         }
     }
 

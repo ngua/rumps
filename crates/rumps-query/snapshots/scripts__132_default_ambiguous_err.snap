@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test: Ambiguous default type error\n; `_` without context cannot infer the `Default` type\n\nfun main() {\n  let x = _\n  write x\n}\n"
+---
+ERROR: cannot infer type; add a type annotation

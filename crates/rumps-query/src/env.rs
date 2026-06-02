@@ -375,10 +375,10 @@ impl BinOp {
                 ty: scheme!(a, forall T: BitLike. (T, T) -> T),
             },
 
-            // Concat: `forall T: Monoid. (T, T) -> T`
+            // Concat: `forall T: Concatable. (T, T) -> T`
             Self::Concat => BinOpDef {
                 name: "++",
-                ty: scheme!(a, forall T: Monoid. (T, T) -> T),
+                ty: scheme!(a, forall T: Concatable. (T, T) -> T),
             },
 
             // Coalesce: `forall T, F: Fallible. (F[T], T) -> T`

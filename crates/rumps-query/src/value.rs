@@ -268,24 +268,25 @@ impl ClassId {
 
     pub(crate) const NUMERIC: Self = Self(0);
     pub(crate) const ITERABLE: Self = Self(1);
-    pub(crate) const MONOID: Self = Self(2);
-    pub(crate) const BIT_LIKE: Self = Self(3);
-    pub(crate) const NEGATABLE: Self = Self(4);
-    pub(crate) const FALLIBLE: Self = Self(5);
-    pub(crate) const INTO: Self = Self(6);
-    pub(crate) const TRY_INTO: Self = Self(7);
-    pub(crate) const INDEXABLE: Self = Self(8);
-    pub(crate) const ORD: Self = Self(9);
-    pub(crate) const MAPPABLE: Self = Self(10);
-    pub(crate) const FOLDABLE: Self = Self(11);
-    pub(crate) const FILTERABLE: Self = Self(12);
-    pub(crate) const DISPLAY: Self = Self(13);
-    pub(crate) const EQ: Self = Self(14);
-    pub(crate) const WRAPPABLE: Self = Self(15);
-    pub(crate) const CHAINABLE: Self = Self(16);
-    pub(crate) const BIMAPPABLE: Self = Self(17);
+    pub(crate) const DEFAULT: Self = Self(2);
+    pub(crate) const CONCATABLE: Self = Self(3);
+    pub(crate) const BIT_LIKE: Self = Self(4);
+    pub(crate) const NEGATABLE: Self = Self(5);
+    pub(crate) const FALLIBLE: Self = Self(6);
+    pub(crate) const INTO: Self = Self(7);
+    pub(crate) const TRY_INTO: Self = Self(8);
+    pub(crate) const INDEXABLE: Self = Self(9);
+    pub(crate) const ORD: Self = Self(10);
+    pub(crate) const MAPPABLE: Self = Self(11);
+    pub(crate) const FOLDABLE: Self = Self(12);
+    pub(crate) const FILTERABLE: Self = Self(13);
+    pub(crate) const DISPLAY: Self = Self(14);
+    pub(crate) const EQ: Self = Self(15);
+    pub(crate) const WRAPPABLE: Self = Self(16);
+    pub(crate) const CHAINABLE: Self = Self(17);
+    pub(crate) const BIMAPPABLE: Self = Self(18);
 
-    pub(crate) const BUILTIN_COUNT: usize = 18;
+    pub(crate) const BUILTIN_COUNT: usize = 19;
 
     pub(crate) const fn idx(self) -> usize {
         self.0 as usize
@@ -299,22 +300,23 @@ impl ClassId {
         match self.0 {
             0 => "Numeric",
             1 => "Iterable",
-            2 => "Monoid",
-            3 => "BitLike",
-            4 => "Negatable",
-            5 => "Fallible",
-            6 => "Into",
-            7 => "TryInto",
-            8 => "Indexable",
-            9 => "Ord",
-            10 => "Mappable",
-            11 => "Foldable",
-            12 => "Filterable",
-            13 => "Display",
-            14 => "Eq",
-            15 => "Wrappable",
-            16 => "Chainable",
-            17 => "Bimappable",
+            2 => "Default",
+            3 => "Concatable",
+            4 => "BitLike",
+            5 => "Negatable",
+            6 => "Fallible",
+            7 => "Into",
+            8 => "TryInto",
+            9 => "Indexable",
+            10 => "Ord",
+            11 => "Mappable",
+            12 => "Foldable",
+            13 => "Filterable",
+            14 => "Display",
+            15 => "Eq",
+            16 => "Wrappable",
+            17 => "Chainable",
+            18 => "Bimappable",
             _ => "<user class>",
         }
     }

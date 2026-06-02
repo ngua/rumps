@@ -663,7 +663,9 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             Expr::Transaction(ref txn) => {
                 self.transaction(txn, span).await.map(Evaluated::Payload)
             }
-            Expr::Mempty => self.mempty(id, span).map(Evaluated::Payload),
+            Expr::DefaultValue => {
+                self.default_value(id, span).map(Evaluated::Payload)
+            }
             Expr::Ref(ref dbref) => {
                 self.ref_lit(dbref, span).await.map(Evaluated::Payload)
             }

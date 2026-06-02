@@ -54,11 +54,11 @@ fun main() {
   let piped-contains = nums |> (a => contains(a, 3))
   write "Piped contains: {piped-contains}"
 
-  ; Monoid methods with pipes
-  let piped-concat = [1, 2] |> (a => Monoid:concat(a, [3, 4]))
+  ; Concatable methods with pipes
+  let piped-concat = [1, 2] |> (a => Concatable:concat(a, [3, 4]))
   let hello = "hello"
   let world = " world"
-  let piped-str-concat = hello |> (s => Monoid:concat(s, world))
+  let piped-str-concat = hello |> (s => Concatable:concat(s, world))
   write "Piped concat: {piped-concat}"
   write "Piped string concat: {piped-str-concat}"
 
@@ -93,13 +93,13 @@ fun main() {
   write "Compare lt: {cmp3}"
 
   ; Store method reference and use in higher-order context
-  let arr-concat-fn = Monoid:concat
+  let arr-concat-fn = Concatable:concat
   let arrs = [[1], [2, 3], [4, 5, 6]]
   let flattened = Foldable:reduce(arr-concat-fn, [], arrs)
   write "Flattened arrays: {flattened}"
 
   ; Same with strings
-  let str-concat-fn = Monoid:concat
+  let str-concat-fn = Concatable:concat
   let words = ["hello", " ", "world"]
   let joined = Foldable:reduce(str-concat-fn, "", words)
   write "Joined words: {joined}"
