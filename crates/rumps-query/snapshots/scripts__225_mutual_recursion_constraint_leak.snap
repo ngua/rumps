@@ -1,5 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Mutual recursion where `b` has a body-derived `Numeric`\n; constraint. Forward reference from `a` to `b` must propagate\n; the constraint via Phase 4 finalization. Calling `a(\"hello\")`\n; should be rejected.\n\nfun a(x) {\n  b(x)\n}\n\nfun b(x) {\n  x + 1\n}\n\nfun main() {\n  write a(\"hello\")\n}\n"
+description: "; Mutual recursion where `b` has a body-derived `Additive`\n; constraint. Forward reference from `a` to `b` must propagate\n; the constraint via Phase 4 finalization. Calling `a(\"hello\")`\n; should be rejected.\n\nfun a(x) {\n  b(x)\n}\n\nfun b(x) {\n  x + 1\n}\n\nfun main() {\n  write a(\"hello\")\n}\n"
 ---
 ERROR: type `String` does not satisfy `Numeric` class
+type `String` does not satisfy `Additive` class

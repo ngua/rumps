@@ -1,0 +1,27 @@
+; Missing `Multiplicative` for a type that only implements `Additive`.
+
+fun main() {
+  let a = AddOnly.AddOnly(10)
+  let b = AddOnly.AddOnly(3)
+  let good = a + b
+  write good
+  write a * b
+}
+
+variant AddOnly = AddOnly(Int)
+
+class Additive for AddOnly {
+  fun zero() -> AddOnly {
+    AddOnly.AddOnly(0)
+  }
+
+  fun add(a: AddOnly, b: AddOnly) -> AddOnly {
+    match a {
+      AddOnly.AddOnly(x) => {
+        match b {
+          AddOnly.AddOnly(y) => { AddOnly.AddOnly(x + y) }
+        }
+      }
+    }
+  }
+}

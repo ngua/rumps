@@ -1,5 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Missing constraints are reported against the current `let` RHS only.\n\nfun main() {\n  let f = [T: Numeric](x: T) -> T => x + 1\n  let g = [U](x: U) -> U => x + 1\n\n  write f(1)\n  write g(2)\n}\n"
+description: "; Missing constraints are reported against the current `let` RHS only.\n\nfun main() {\n  let f = [T: Numeric + Additive](x: T) -> T => x + 1\n  let g = [U](x: U) -> U => x + 1\n\n  write f(1)\n  write g(2)\n}\n"
 ---
 ERROR: type parameter `U` requires `Numeric` constraint
+type parameter `U` requires `Additive` constraint

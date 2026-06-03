@@ -1,4 +1,4 @@
-; Body of `foo` requires `Numeric`; calling `foo("hello")`
+; Body of `foo` requires `Additive`; calling `foo("hello")`
 ; must be rejected at typecheck time even though `foo` is
 ; defined before `main`. Verifies Phase 3 generalization.
 

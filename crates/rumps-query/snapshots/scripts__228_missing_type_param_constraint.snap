@@ -1,5 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Explicitly-declared `T` without `Numeric` is used in `x + 1`;\n; the definition must be rejected.\n\nfun foo[T](x: T) -> T { x + 1 }\n\nfun main() {\n  write foo(1)\n}\n"
+description: "; Explicitly-declared `T` without `Additive` is used in `x + 1`;\n; the definition must be rejected.\n\nfun foo[T](x: T) -> T { x + 1 }\n\nfun main() {\n  write foo(1)\n}\n"
 ---
 ERROR: type parameter `T` requires `Numeric` constraint
+type parameter `T` requires `Additive` constraint

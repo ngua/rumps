@@ -721,10 +721,11 @@ pub(crate) enum Constraint {
     /// The `ty` field is the type being constrained, and `class` specifies
     /// which class it must belong to (with any associated types).
     ///
-    /// Examples:
-    /// - `a + b` generates `Class { ty: typeof(a), class: Simple(Numeric), span }`
-    /// - `opt!` generates `Class { ty: typeof(opt), class: Hkt(Fallible, ?inner), span }`
-    /// - `arr[i]` generates `Class { ty: typeof(arr), class: Parameterized(Indexable, ?elem), span }`
+    /// Examples include `a + b` generating
+    /// `Class { ty: typeof(a), class: Simple(Additive), span }`, `opt!`
+    /// generating `Class { ty: typeof(opt), class: Hkt(Fallible, ?inner), span }`,
+    /// and `arr[i]` generating
+    /// `Class { ty: typeof(arr), class: Parameterized(Indexable, ?elem), span }`.
     Class {
         ty: TyId,
         class: TypeClass<TyId>,

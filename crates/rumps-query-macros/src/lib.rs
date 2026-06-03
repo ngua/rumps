@@ -28,13 +28,19 @@ use syn::{Ident, LitStr, Result, Token};
 /// Type variables can have simple, HKT, or multi-param class constraints:
 ///
 /// Simple classes (kind `*`, no type argument):
-/// - `T: Numeric` ; `T` must be `Int`, `Float`, or `Word`
-/// - `T: Negatable` ; `T` must be `Int` or `Float`
-/// - `T: BitLike` ; `T` must be `Bool`, `Int`, or `Word`
-/// - `T: Concatable` ; `T` must be `String`, `Array[_]`, `Map[_, _]`, or `Option[_]`
-/// - `T: Ord` ; `T` must support ordering (`Bool`, `Int`, `Word`, `Float`, `Char`, `String`)
-/// - `T: Eq` ; `T` must support equality (`==`, `!=`)
-/// - `T: Display` ; `T` can be displayed as RUMPS syntax
+/// `T: Numeric` ; `T` satisfies the full numeric marker stack
+/// `T: Additive` ; `T` supports additive identity and addition
+/// `T: Subtractive` ; `T` supports subtraction
+/// `T: Multiplicative` ; `T` supports multiplicative identity and multiplication
+/// `T: Divisible` ; `T` supports division
+/// `T: FloorDivisible` ; `T` supports floor division and modulo
+/// `T: Powerable` ; `T` supports exponentiation
+/// `T: Negatable` ; `T` must be `Int` or `Float`
+/// `T: BitLike` ; `T` must be `Bool`, `Int`, or `Word`
+/// `T: Concatable` ; `T` must be `String`, `Array[_]`, `Map[_, _]`, or `Option[_]`
+/// `T: Ord` ; `T` must support ordering (`Bool`, `Int`, `Word`, `Float`, `Char`, `String`)
+/// `T: Eq` ; `T` must support equality (`==`, `!=`)
+/// `T: Display` ; `T` can be displayed as RUMPS syntax
 ///
 /// HKT classes (kind `* -> *`, no type argument in constraint; element at usage):
 /// - `F: Fallible` ; `F` is a fallible type constructor; use `F[T]` in type position
@@ -93,6 +99,12 @@ struct SchemeInput {
 /// Simple class names (no type argument).
 const SIMPLE_CLASSES: &[&str] = &[
     "Numeric",
+    "Additive",
+    "Subtractive",
+    "Multiplicative",
+    "Divisible",
+    "FloorDivisible",
+    "Powerable",
     "Negatable",
     "BitLike",
     "Concatable",
@@ -226,6 +238,12 @@ impl Parse for SchemeInput {
 fn class_id(name: &str) -> TokenStream2 {
     let id = match name {
         "Numeric" => "NUMERIC",
+        "Additive" => "ADDITIVE",
+        "Subtractive" => "SUBTRACTIVE",
+        "Multiplicative" => "MULTIPLICATIVE",
+        "Divisible" => "DIVISIBLE",
+        "FloorDivisible" => "FLOOR_DIVISIBLE",
+        "Powerable" => "POWERABLE",
         "Iterable" => "ITERABLE",
         "Concatable" => "CONCATABLE",
         "BitLike" => "BIT_LIKE",

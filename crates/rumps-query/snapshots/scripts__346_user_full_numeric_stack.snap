@@ -1,0 +1,12 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; User type with the full `Numeric` capability stack.\n\nfun main() {\n  let a: Full = 10\n  let b: Full = 3\n  write \"numeric marker: {needs-numeric(a)}\"\n  write \"add: {a + b}\"\n  write \"sub: {a - b}\"\n  write \"mul: {a * b}\"\n  write \"div: {a / b}\"\n  write \"floor-div: {a // b}\"\n  write \"mod: {a % b}\"\n  write \"pow: {a ** b}\"\n}\n\nfun needs-numeric[T: Numeric](x: T) -> T {\n  x\n}\n\nnewtype Full = Int\n\nclass Additive for Full {\n  fun zero() -> Full {\n    0\n  }\n\n  fun add(a: Full, b: Full) -> Full {\n    let x: Int = a\n    let y: Int = b\n    x + y + 100\n  }\n}\n\nclass Subtractive for Full {\n  fun sub(a: Full, b: Full) -> Full {\n    let x: Int = a\n    let y: Int = b\n    x - y + 200\n  }\n}\n\nclass Multiplicative for Full {\n  fun one() -> Full {\n    1\n  }\n\n  fun mul(a: Full, b: Full) -> Full {\n    let x: Int = a\n    let y: Int = b\n    x * y + 300\n  }\n}\n\nclass Divisible for Full {\n  fun div(a: Full, b: Full) -> Full {\n    let x: Int = a\n    let y: Int = b\n    x / y + 400\n  }\n}\n\nclass FloorDivisible for Full {\n  fun floor-div(a: Full, b: Full) -> Full {\n    let x: Int = a\n    let y: Int = b\n    x // y + 500\n  }\n\n  fun mod(a: Full, b: Full) -> Full {\n    let x: Int = a\n    let y: Int = b\n    x % y + 600\n  }\n}\n\nclass Powerable for Full {\n  fun pow(a: Full, b: Full) -> Full {\n    let x: Int = a\n    let y: Int = b\n    x ** y + 700\n  }\n}\n\nclass Numeric for Full { }\n"
+---
+"numeric marker: 10"
+"add: 113"
+"sub: 207"
+"mul: 330"
+"div: 403"
+"floor-div: 503"
+"mod: 601"
+"pow: 1700"

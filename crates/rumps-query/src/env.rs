@@ -291,34 +291,34 @@ impl BinOp {
     /// Get the definition for this binary operator.
     pub(crate) fn def(self, a: &mut TyArena) -> BinOpDef {
         match self {
-            // Arithmetic: `forall T: Numeric. (T, T) -> T`
+            // Arithmetic: capability-specific constraints.
             Self::Add => BinOpDef {
                 name: "+",
-                ty: scheme!(a, forall T: Numeric. (T, T) -> T),
+                ty: scheme!(a, forall T: Additive. (T, T) -> T),
             },
             Self::Sub => BinOpDef {
                 name: "-",
-                ty: scheme!(a, forall T: Numeric. (T, T) -> T),
+                ty: scheme!(a, forall T: Subtractive. (T, T) -> T),
             },
             Self::Mul => BinOpDef {
                 name: "*",
-                ty: scheme!(a, forall T: Numeric. (T, T) -> T),
+                ty: scheme!(a, forall T: Multiplicative. (T, T) -> T),
             },
             Self::Div => BinOpDef {
                 name: "/",
-                ty: scheme!(a, (Float, Float) -> Float),
+                ty: scheme!(a, forall T: Divisible. (T, T) -> T),
             },
             Self::FloorDiv => BinOpDef {
                 name: "//",
-                ty: scheme!(a, forall T: Numeric. (T, T) -> T),
+                ty: scheme!(a, forall T: FloorDivisible. (T, T) -> T),
             },
             Self::Mod => BinOpDef {
                 name: "%",
-                ty: scheme!(a, forall T: Numeric. (T, T) -> T),
+                ty: scheme!(a, forall T: FloorDivisible. (T, T) -> T),
             },
             Self::Pow => BinOpDef {
                 name: "**",
-                ty: scheme!(a, forall T: Numeric. (T, T) -> T),
+                ty: scheme!(a, forall T: Powerable. (T, T) -> T),
             },
 
             // Comparison: `forall T: Eq. (T, T) -> Bool`

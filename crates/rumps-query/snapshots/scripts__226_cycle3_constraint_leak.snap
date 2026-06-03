@@ -1,5 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Three-function cycle where `c` has a body-derived `Numeric`\n; constraint. The constraint must propagate transitively through\n; `b` to reach `a` via virtual edges in `enrich_finalized_schemes`.\n; Calling `a(\"hello\")` should be rejected.\n\nfun a(x) {\n  b(x)\n}\n\nfun b(x) {\n  c(x)\n}\n\nfun c(x) {\n  x + 1\n}\n\nfun main() {\n  write a(\"hello\")\n}\n"
+description: "; Three-function cycle where `c` has a body-derived `Additive`\n; constraint. The constraint must propagate transitively through\n; `b` to reach `a` via virtual edges in `enrich_finalized_schemes`.\n; Calling `a(\"hello\")` should be rejected.\n\nfun a(x) {\n  b(x)\n}\n\nfun b(x) {\n  c(x)\n}\n\nfun c(x) {\n  x + 1\n}\n\nfun main() {\n  write a(\"hello\")\n}\n"
 ---
 ERROR: type `String` does not satisfy `Numeric` class
+type `String` does not satisfy `Additive` class

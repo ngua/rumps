@@ -1,5 +1,5 @@
 ; Returning an opaque callable whose signature doesn't match the declared
-; function return type is caught by the typechecker. `Numeric:add` has
+; function return type is caught by the typechecker. `Additive:add` has
 ; arity 2 but the declared return type has arity 1.
 
 fun main() {
@@ -8,5 +8,5 @@ fun main() {
 }
 
 fun bad() -> ((Int) -> Int) {
-  Numeric:add
+  Additive:add
 }

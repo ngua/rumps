@@ -1,5 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Calling `M.foo(\"hello\")` must be rejected because `T` is\n; constrained to `Numeric`. Module member constraint check.\n\nmodule M {\n  +fun foo[T: Numeric](x: T) -> T { x + 1 }\n}\n\nfun main() {\n  write M.foo(\"hello\")\n}\n"
+description: "; Calling `M.foo(\"hello\")` must be rejected because `T` is\n; constrained to `Additive`. Module member constraint check.\n\nmodule M {\n  +fun foo[T: Additive](x: T) -> T { x + 1 }\n}\n\nfun main() {\n  write M.foo(\"hello\")\n}\n"
 ---
-ERROR: type `String` does not satisfy `Numeric` class
+ERROR: type parameter `T` requires `Numeric` constraint
+type `String` does not satisfy `Additive` class

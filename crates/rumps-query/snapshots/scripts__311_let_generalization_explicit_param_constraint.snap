@@ -1,6 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Let-bound closure with explicit `T: Numeric` captures the declared constraint.\n\nfun main() {\n  let f = [T: Numeric](x: T) -> T => x + 1\n\n  write f(1)\n  write f(3.5)\n\n  let g = [T: Numeric](x: T) -> T => {\n    let one = 1\n    x + one\n  }\n\n  write g(3.5)\n\n  let h = [T: Numeric](mk: () -> T) -> T => {\n    let one = 1\n    mk() + one\n  }\n\n  write h(() => 3.5)\n}\n"
+description: "; Let-bound closure with explicit `T: Numeric + Additive` captures the declared constraint.\n\nfun main() {\n  let f = [T: Numeric + Additive](x: T) -> T => x + 1\n\n  write f(1)\n  write f(3.5)\n\n  let g = [T: Numeric + Additive](x: T) -> T => {\n    let one = 1\n    x + one\n  }\n\n  write g(3.5)\n\n  let h = [T: Numeric + Additive](mk: () -> T) -> T => {\n    let one = 1\n    mk() + one\n  }\n\n  write h(() => 3.5)\n}\n"
 ---
 2
 4.5

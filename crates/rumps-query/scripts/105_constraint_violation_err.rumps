@@ -1,9 +1,9 @@
-; Error: constraint violation; calling a Numeric function with String
+; Error: constraint violation; calling an `Additive` function with `String`
 
 fun main() {
   write add-numeric("foo", "bar")
 }
 
-fun add-numeric[T: Numeric](a: T, b: T) -> T {
+fun add-numeric[T: Additive](a: T, b: T) -> T {
   a + b
 }

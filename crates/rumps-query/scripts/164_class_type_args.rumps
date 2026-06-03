@@ -11,9 +11,9 @@ fun main() {
   write "inferred = {def-inferred() : Option[Int]}"
 
   ; Numeric with type parameter
-  let add-int = Numeric[Int]:add
+  let add-int = Additive[Int]:add
   write "add-int(1, 2) = {add-int(1, 2)}"
-  write "direct = {Numeric[Float]:add(1.5, 2.5)}"
+  write "direct = {Additive[Float]:add(1.5, 2.5)}"
 
   ; Wrappable:wrap with type parameter
   let wrap-opt = Wrappable[Option[Int]]:wrap

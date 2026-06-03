@@ -1,0 +1,84 @@
+; User type with the full `Numeric` capability stack.
+
+fun main() {
+  let a: Full = 10
+  let b: Full = 3
+  write "numeric marker: {needs-numeric(a)}"
+  write "add: {a + b}"
+  write "sub: {a - b}"
+  write "mul: {a * b}"
+  write "div: {a / b}"
+  write "floor-div: {a // b}"
+  write "mod: {a % b}"
+  write "pow: {a ** b}"
+}
+
+fun needs-numeric[T: Numeric](x: T) -> T {
+  x
+}
+
+newtype Full = Int
+
+class Additive for Full {
+  fun zero() -> Full {
+    0
+  }
+
+  fun add(a: Full, b: Full) -> Full {
+    let x: Int = a
+    let y: Int = b
+    x + y + 100
+  }
+}
+
+class Subtractive for Full {
+  fun sub(a: Full, b: Full) -> Full {
+    let x: Int = a
+    let y: Int = b
+    x - y + 200
+  }
+}
+
+class Multiplicative for Full {
+  fun one() -> Full {
+    1
+  }
+
+  fun mul(a: Full, b: Full) -> Full {
+    let x: Int = a
+    let y: Int = b
+    x * y + 300
+  }
+}
+
+class Divisible for Full {
+  fun div(a: Full, b: Full) -> Full {
+    let x: Int = a
+    let y: Int = b
+    x / y + 400
+  }
+}
+
+class FloorDivisible for Full {
+  fun floor-div(a: Full, b: Full) -> Full {
+    let x: Int = a
+    let y: Int = b
+    x // y + 500
+  }
+
+  fun mod(a: Full, b: Full) -> Full {
+    let x: Int = a
+    let y: Int = b
+    x % y + 600
+  }
+}
+
+class Powerable for Full {
+  fun pow(a: Full, b: Full) -> Full {
+    let x: Int = a
+    let y: Int = b
+    x ** y + 700
+  }
+}
+
+class Numeric for Full { }

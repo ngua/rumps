@@ -1,13 +1,19 @@
 //! Class method dispatch infrastructure.
 //!
-//! Provides a registry for class methods (like `Numeric:add`, `Fallible:unwrap`)
+//! Provides a registry for class methods (like `Additive:add`, `Fallible:unwrap`)
 //! and dispatch functions to invoke them. The dispatch table is indexed by
 //! `ClassId` for O(1) lookup.
 //!
 //! # Organization
 //!
 //! Each type class is represented by a unit struct implementing `Class`:
-//! - `Numeric`: `add`, `sub`, `mul`, `floor-div`, `mod`, `pow`
+//! - `Numeric`: marker class
+//! - `Additive`: `zero`, `add`
+//! - `Subtractive`: `sub`
+//! - `Multiplicative`: `one`, `mul`
+//! - `Divisible`: `div`
+//! - `FloorDivisible`: `floor-div`, `mod`
+//! - `Powerable`: `pow`
 //! - `Negatable`: `neg`
 //! - `BitLike`: `bit-and`, `bit-or`, `shl`, `shr`
 //! - `Default`: `default`
@@ -257,34 +263,49 @@ impl ClassMethods {
     /// Register all class methods.
     pub(crate) fn register_all(&mut self, i: &mut StringInterner) {
         self.register(
-            ClassId::NUMERIC,
+            ClassId::ADDITIVE,
+            i.intern("zero"),
+            MethodFn::Nullary(Additive::zero),
+        );
+        self.register(
+            ClassId::ADDITIVE,
             i.intern("add"),
-            MethodFn::Binary(Numeric::add),
+            MethodFn::Binary(Additive::add),
         );
         self.register(
-            ClassId::NUMERIC,
+            ClassId::SUBTRACTIVE,
             i.intern("sub"),
-            MethodFn::Binary(Numeric::sub),
+            MethodFn::Binary(Subtractive::sub),
         );
         self.register(
-            ClassId::NUMERIC,
+            ClassId::MULTIPLICATIVE,
+            i.intern("one"),
+            MethodFn::Nullary(Multiplicative::one),
+        );
+        self.register(
+            ClassId::MULTIPLICATIVE,
             i.intern("mul"),
-            MethodFn::Binary(Numeric::mul),
+            MethodFn::Binary(Multiplicative::mul),
         );
         self.register(
-            ClassId::NUMERIC,
+            ClassId::DIVISIBLE,
+            i.intern("div"),
+            MethodFn::Binary(Divisible::div),
+        );
+        self.register(
+            ClassId::FLOOR_DIVISIBLE,
             i.intern("floor-div"),
-            MethodFn::Binary(Numeric::floor_div),
+            MethodFn::Binary(FloorDivisible::floor_div),
         );
         self.register(
-            ClassId::NUMERIC,
+            ClassId::FLOOR_DIVISIBLE,
             i.intern("mod"),
-            MethodFn::Binary(Numeric::modulo),
+            MethodFn::Binary(FloorDivisible::modulo),
         );
         self.register(
-            ClassId::NUMERIC,
+            ClassId::POWERABLE,
             i.intern("pow"),
-            MethodFn::Binary(Numeric::pow),
+            MethodFn::Binary(Powerable::pow),
         );
 
         self.register(
@@ -426,12 +447,26 @@ pub(crate) trait Class {
     }
 }
 
-/// Arithmetic operations for `Int`, `Word`, `Float`.
+/// Marker class for numeric types.
 pub(crate) struct Numeric;
 
 impl Class for Numeric {}
 
-impl Numeric {
+/// Additive identity and addition for `Int`, `Word`, `Float`.
+pub(crate) struct Additive;
+
+impl Class for Additive {}
+
+impl Additive {
+    pub(crate) fn zero(_: &mut ClassCtx<'_>, ty: &Ty) -> Result<Payload> {
+        Ok(match ty {
+            Ty::Int => Payload::Int(0),
+            Ty::Word => Payload::Word(0),
+            Ty::Float => Payload::Float(OrderedFloat(0.0)),
+            _ => typechecked!("zero", "Additive type"),
+        })
+    }
+
     pub(crate) fn add(
         _: &mut ClassCtx<'_>,
         l: &Payload,
@@ -450,7 +485,14 @@ impl Numeric {
             _ => typechecked!("+", "same Numeric type"),
         })
     }
+}
 
+/// Subtraction for `Int`, `Word`, `Float`.
+pub(crate) struct Subtractive;
+
+impl Class for Subtractive {}
+
+impl Subtractive {
     pub(crate) fn sub(
         _: &mut ClassCtx<'_>,
         l: &Payload,
@@ -467,6 +509,22 @@ impl Numeric {
                 Payload::Float(OrderedFloat(a.0 - b.0))
             }
             _ => typechecked!("-", "same Numeric type"),
+        })
+    }
+}
+
+/// Multiplicative identity and multiplication for `Int`, `Word`, `Float`.
+pub(crate) struct Multiplicative;
+
+impl Class for Multiplicative {}
+
+impl Multiplicative {
+    pub(crate) fn one(_: &mut ClassCtx<'_>, ty: &Ty) -> Result<Payload> {
+        Ok(match ty {
+            Ty::Int => Payload::Int(1),
+            Ty::Word => Payload::Word(1),
+            Ty::Float => Payload::Float(OrderedFloat(1.0)),
+            _ => typechecked!("one", "Multiplicative type"),
         })
     }
 
@@ -488,7 +546,52 @@ impl Numeric {
             _ => typechecked!("*", "same Numeric type"),
         })
     }
+}
 
+/// Division for `Int`, `Word`, `Float`.
+pub(crate) struct Divisible;
+
+impl Class for Divisible {}
+
+impl Divisible {
+    pub(crate) fn div(
+        ctx: &mut ClassCtx<'_>,
+        l: &Payload,
+        r: &Payload,
+    ) -> Result<Payload> {
+        match (l, r) {
+            (Payload::Int(a), Payload::Int(b)) => {
+                if *b == 0 {
+                    Err(Error::runtime(ctx.span, "division by zero"))
+                } else {
+                    Ok(Payload::Int(a.div_euclid(*b)))
+                }
+            }
+            (Payload::Word(a), Payload::Word(b)) => {
+                if *b == 0 {
+                    Err(Error::runtime(ctx.span, "division by zero"))
+                } else {
+                    Ok(Payload::Word(a / b))
+                }
+            }
+            (Payload::Float(a), Payload::Float(b)) => {
+                if b.0 == 0.0 {
+                    Err(Error::runtime(ctx.span, "division by zero"))
+                } else {
+                    Ok(Payload::Float(OrderedFloat(a.0 / b.0)))
+                }
+            }
+            _ => typechecked!("/", "same Numeric type"),
+        }
+    }
+}
+
+/// Floor division and modulo for `Int`, `Word`, `Float`.
+pub(crate) struct FloorDivisible;
+
+impl Class for FloorDivisible {}
+
+impl FloorDivisible {
     pub(crate) fn floor_div(
         ctx: &mut ClassCtx<'_>,
         l: &Payload,
@@ -550,7 +653,14 @@ impl Numeric {
             _ => typechecked!("%", "same Numeric type"),
         }
     }
+}
 
+/// Exponentiation for `Int`, `Word`, `Float`.
+pub(crate) struct Powerable;
+
+impl Class for Powerable {}
+
+impl Powerable {
     pub(crate) fn pow(
         _: &mut ClassCtx<'_>,
         l: &Payload,

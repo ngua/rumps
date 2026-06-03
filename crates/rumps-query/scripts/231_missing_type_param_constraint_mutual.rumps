@@ -1,4 +1,4 @@
-; `b` has an undeclared `Numeric` on explicit `T`. The constraint
+; `b` has an undeclared `Additive` on explicit `T`. The constraint
 ; does NOT propagate to `a` (since `b`'s scheme won't include it),
 ; so only `b` errors.
 

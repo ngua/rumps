@@ -3,3 +3,4 @@ source: crates/rumps-query/tests/scripts.rs
 description: "; Same as 221 but with `foo` defined AFTER `main`, exercising\n; Phase 4 retroactive constraint propagation through the\n; hoisted Pass 1 scheme.\n\nfun main() {\n  write foo(\"hello\")\n}\n\nfun foo(x) { x + 1 }\n"
 ---
 ERROR: type `String` does not satisfy `Numeric` class
+type `String` does not satisfy `Additive` class

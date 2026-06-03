@@ -394,19 +394,20 @@ impl BinOp {
     /// Maps a binary operator to its dispatching class and method name.
     ///
     /// Returns `None` for operators that don't dispatch through a class
-    /// (e.g. `And`, `Or`, `Coalesce`, `Pipe`, `Div`).
+    /// (e.g. `And`, `Or`, `Coalesce`, `Pipe`).
     ///
     /// For derived operators (`!=`, `<`, `>`, `<=`, `>=`), returns the
     /// *base* class method (`"eq"` or `"compare"`); the caller is
     /// responsible for post-processing the result.
     pub(crate) fn class_dispatch(self) -> Option<(ClassId, &'static str)> {
         match self {
-            Self::Add => Some((ClassId::NUMERIC, "add")),
-            Self::Sub => Some((ClassId::NUMERIC, "sub")),
-            Self::Mul => Some((ClassId::NUMERIC, "mul")),
-            Self::FloorDiv => Some((ClassId::NUMERIC, "floor-div")),
-            Self::Mod => Some((ClassId::NUMERIC, "mod")),
-            Self::Pow => Some((ClassId::NUMERIC, "pow")),
+            Self::Add => Some((ClassId::ADDITIVE, "add")),
+            Self::Sub => Some((ClassId::SUBTRACTIVE, "sub")),
+            Self::Mul => Some((ClassId::MULTIPLICATIVE, "mul")),
+            Self::Div => Some((ClassId::DIVISIBLE, "div")),
+            Self::FloorDiv => Some((ClassId::FLOOR_DIVISIBLE, "floor-div")),
+            Self::Mod => Some((ClassId::FLOOR_DIVISIBLE, "mod")),
+            Self::Pow => Some((ClassId::POWERABLE, "pow")),
             Self::Eq | Self::Ne => Some((ClassId::EQ, "eq")),
             Self::Lt | Self::Gt | Self::Le | Self::Ge => {
                 Some((ClassId::ORD, "compare"))
@@ -893,7 +894,7 @@ pub(crate) enum Expr {
     /// Dispatches to a typeclass method. Class name is resolved to `ClassId`
     /// during typechecking.
     ///
-    /// Examples: `Numeric:add(a, b)`, `Fallible:unwrap(opt)`, `Mappable:map(fn, arr)`
+    /// Examples: `Additive:add(a, b)`, `Fallible:unwrap(opt)`, `Mappable:map(fn, arr)`
     ClassMethod(StringId, StringId, SmallVec<[ExprId; 4]>),
 
     /// Class method reference: `Class:method` or `Class[T, ...]:method`.

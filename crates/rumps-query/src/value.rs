@@ -285,8 +285,14 @@ impl ClassId {
     pub(crate) const WRAPPABLE: Self = Self(16);
     pub(crate) const CHAINABLE: Self = Self(17);
     pub(crate) const BIMAPPABLE: Self = Self(18);
+    pub(crate) const ADDITIVE: Self = Self(19);
+    pub(crate) const SUBTRACTIVE: Self = Self(20);
+    pub(crate) const MULTIPLICATIVE: Self = Self(21);
+    pub(crate) const DIVISIBLE: Self = Self(22);
+    pub(crate) const FLOOR_DIVISIBLE: Self = Self(23);
+    pub(crate) const POWERABLE: Self = Self(24);
 
-    pub(crate) const BUILTIN_COUNT: usize = 19;
+    pub(crate) const BUILTIN_COUNT: usize = 25;
 
     pub(crate) const fn idx(self) -> usize {
         self.0 as usize
@@ -317,6 +323,12 @@ impl ClassId {
             16 => "Wrappable",
             17 => "Chainable",
             18 => "Bimappable",
+            19 => "Additive",
+            20 => "Subtractive",
+            21 => "Multiplicative",
+            22 => "Divisible",
+            23 => "FloorDivisible",
+            24 => "Powerable",
             _ => "<user class>",
         }
     }

@@ -1,6 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Explicit closure type params are scoped to the current `let` RHS.\n\nfun main() {\n  let f = [T: Numeric](x: T) -> T => x + 1\n  let g = [U](x: U) -> U => x\n\n  write f(1)\n  write g(\"ok\")\n}\n"
+description: "; Explicit closure type params are scoped to the current `let` RHS.\n\nfun main() {\n  let f = [T: Numeric + Additive](x: T) -> T => x + 1\n  let g = [U](x: U) -> U => x\n\n  write f(1)\n  write g(\"ok\")\n}\n"
 ---
 2
 "ok"

@@ -26,15 +26,15 @@ fun main() {
   let my-age: Age = 30
   write Display:display(my-age)
 
-  ; newtype with Numeric (delegates to underlying Int)
+  ; newtype with full `Numeric` stack (delegates to underlying `Int`)
   let a: MyInt = 10
   let b: MyInt = 3
-  write "add: {Numeric:add(a, b)}"
-  write "sub: {Numeric:sub(a, b)}"
-  write "mul: {Numeric:mul(a, b)}"
-  write "floor-div: {Numeric:floor-div(a, b)}"
-  write "mod: {Numeric:mod(a, b)}"
-  write "pow: {Numeric:pow(a, b)}"
+  write "add: {Additive:add(a, b)}"
+  write "sub: {Subtractive:sub(a, b)}"
+  write "mul: {Multiplicative:mul(a, b)}"
+  write "floor-div: {FloorDivisible:floor-div(a, b)}"
+  write "mod: {FloorDivisible:mod(a, b)}"
+  write "pow: {Powerable:pow(a, b)}"
 
   ; newtype with Ord (reversed comparison)
   let low: Priority = 10
@@ -100,14 +100,34 @@ class Display for Age {
 
 newtype MyInt = Int
 
-class Numeric for MyInt {
+class Additive for MyInt {
+  fun zero() -> MyInt { 0 }
   fun add(a: MyInt, b: MyInt) -> MyInt { a + b }
+}
+
+class Subtractive for MyInt {
   fun sub(a: MyInt, b: MyInt) -> MyInt { a - b }
+}
+
+class Multiplicative for MyInt {
+  fun one() -> MyInt { 1 }
   fun mul(a: MyInt, b: MyInt) -> MyInt { a * b }
+}
+
+class Divisible for MyInt {
+  fun div(a: MyInt, b: MyInt) -> MyInt { a / b }
+}
+
+class FloorDivisible for MyInt {
   fun floor-div(a: MyInt, b: MyInt) -> MyInt { a // b }
   fun mod(a: MyInt, b: MyInt) -> MyInt { a % b }
+}
+
+class Powerable for MyInt {
   fun pow(a: MyInt, b: MyInt) -> MyInt { a ** b }
 }
+
+class Numeric for MyInt { }
 
 newtype Priority = Int
 

@@ -1,4 +1,4 @@
-; Three-function cycle where `c` has a body-derived `Numeric`
+; Three-function cycle where `c` has a body-derived `Additive`
 ; constraint. The constraint must propagate transitively through
 ; `b` to reach `a` via virtual edges in `enrich_finalized_schemes`.
 ; Calling `a("hello")` should be rejected.

@@ -23,11 +23,11 @@ fun main() {
 }
 
 fun mk-add() -> ((Int, Int) -> Int) {
-  Numeric:add
+  Additive:add
 }
 
 fun mk-sub() -> ((Int, Int) -> Int) {
-  Numeric:sub
+  Subtractive:sub
 }
 
 fun mk-upper() -> ((String) -> String) {
@@ -35,5 +35,5 @@ fun mk-upper() -> ((String) -> String) {
 }
 
 fun mk-inc() -> ((Int) -> Int) {
-  Numeric:add(1)
+  Additive:add(1)
 }

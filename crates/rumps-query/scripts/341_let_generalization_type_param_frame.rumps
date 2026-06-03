@@ -1,7 +1,7 @@
 ; Explicit closure type params are scoped to the current `let` RHS.
 
 fun main() {
-  let f = [T: Numeric](x: T) -> T => x + 1
+  let f = [T: Numeric + Additive](x: T) -> T => x + 1
   let g = [U](x: U) -> U => x
 
   write f(1)

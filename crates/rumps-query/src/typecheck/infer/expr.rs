@@ -49,6 +49,10 @@ impl InferCtx<'_> {
         ty
     }
 
+    fn track_concrete_return(&mut self, id: ExprId, ret: TyId) {
+        self.interp.set_concrete_expr_ty(id, ret);
+    }
+
     /// Inner expression inference; dispatches on expression variant.
     fn expr_inner(&mut self, id: ExprId, expr: &Expr, span: Span) -> TyId {
         match expr {
@@ -502,9 +506,26 @@ impl InferCtx<'_> {
                                 }
 
                                 MethodSpec::Tracked {
-                                    track: TrackKind::Default,
+                                    track:
+                                        track @ (TrackKind::Default
+                                        | TrackKind::Zero
+                                        | TrackKind::One),
                                     ..
                                 } => {
+                                    let class = match track {
+                                        TrackKind::Default => ClassId::DEFAULT,
+                                        TrackKind::Zero => ClassId::ADDITIVE,
+                                        TrackKind::One => {
+                                            ClassId::MULTIPLICATIVE
+                                        }
+                                        TrackKind::Convert
+                                        | TrackKind::ConvertResultInner => {
+                                            typechecked!(
+                                                "nullary tracked method",
+                                                "non-convert track"
+                                            )
+                                        }
+                                    };
                                     let tv = if let Some(&ty_id) =
                                         type_args.first()
                                     {
@@ -515,14 +536,11 @@ impl InferCtx<'_> {
                                     };
                                     self.constrain(Constraint::Class {
                                         ty: tv,
-                                        class: TypeClass::simple(
-                                            ClassId::DEFAULT,
-                                        ),
+                                        class: TypeClass::simple(class),
                                         span,
                                     });
                                     if !type_args.is_empty() {
-                                        self.interp
-                                            .set_concrete_expr_ty(id, tv);
+                                        self.track_concrete_return(id, tv);
                                     }
                                     self.ty_arena.func(smallvec![], tv)
                                 }
@@ -942,8 +960,10 @@ impl InferCtx<'_> {
                     match spec {
                         MethodSpec::Standard(_) => {}
                         MethodSpec::Tracked { track, .. } => match track {
-                            TrackKind::Default => {
-                                self.interp.set_concrete_expr_ty(id, ret);
+                            TrackKind::Default
+                            | TrackKind::Zero
+                            | TrackKind::One => {
+                                self.track_concrete_return(id, ret);
                             }
                             TrackKind::Convert => {
                                 self.interp.set_expr_ty(id, ret);
@@ -1000,8 +1020,8 @@ impl InferCtx<'_> {
     /// - `[1, "a", true]` (1 unifies with Json via heterogeneous array)
     ///
     /// Unresolved integer type variables default to `Int` during constraint
-    /// solving. The `Numeric` constraint is enforced by OPERATORS (like `+`),
-    /// not by the literals themselves.
+    /// solving. Arithmetic operators emit their matching capability constraints,
+    /// such as `Additive` for `+`.
     ///
     /// Float literals are NOT polymorphic; they are always `Float`.
     ///
@@ -1242,7 +1262,7 @@ impl InferCtx<'_> {
         // `Class:method(...)` calls.
         //
         // Skip when inside a class instance body for the same (class, type);
-        // otherwise operators like `a + b` inside `class Numeric FOR MyInt`
+        // otherwise operators like `a + b` inside `class Additive FOR MyInt`
         // would recurse infinitely instead of auto-deriving from the inner type.
         let class_tag = op.class_dispatch().map(|(tag, _)| tag);
 
@@ -2380,8 +2400,10 @@ impl InferCtx<'_> {
                 match &spec {
                     MethodSpec::Standard(_) => {}
                     MethodSpec::Tracked { track, .. } => match track {
-                        TrackKind::Default => {
-                            self.interp.set_concrete_expr_ty(call_id, sig_ret);
+                        TrackKind::Default
+                        | TrackKind::Zero
+                        | TrackKind::One => {
+                            self.track_concrete_return(call_id, sig_ret);
                         }
                         TrackKind::Convert if is_full => {
                             self.interp.set_expr_ty(call_id, sig_ret);

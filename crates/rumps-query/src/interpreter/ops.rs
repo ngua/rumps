@@ -1,7 +1,6 @@
 //! Binary and unary operator implementations.
 
 use async_recursion::async_recursion;
-use ordered_float::OrderedFloat;
 use smallvec::SmallVec;
 
 use super::call::ClassDispatch;
@@ -12,7 +11,7 @@ use crate::intern::StringId;
 use crate::io::IoContext;
 use crate::typecheck::Ty;
 use crate::value::{Payload, TypeId, Value};
-use crate::{ClassId, Error, Result, Span};
+use crate::{ClassId, Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
     /// Apply a binary operation to two values.
@@ -33,7 +32,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         span: Span,
     ) -> Result<Payload> {
         match op {
-            // Numeric class methods with Int fast-path
+            // Arithmetic class methods with `Int` fast-path
             BinOp::Add => match (left, right) {
                 (Payload::Int(a), Payload::Int(b)) => {
                     Ok(Payload::Int(a.wrapping_add(*b)))
@@ -41,7 +40,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 _ => {
                     let id = self.arena.intern("add");
                     self.dispatch_binary(
-                        ClassId::NUMERIC,
+                        ClassId::ADDITIVE,
                         id,
                         left,
                         right,
@@ -56,7 +55,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 _ => {
                     let id = self.arena.intern("sub");
                     self.dispatch_binary(
-                        ClassId::NUMERIC,
+                        ClassId::SUBTRACTIVE,
                         id,
                         left,
                         right,
@@ -71,7 +70,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 _ => {
                     let id = self.arena.intern("mul");
                     self.dispatch_binary(
-                        ClassId::NUMERIC,
+                        ClassId::MULTIPLICATIVE,
                         id,
                         left,
                         right,
@@ -79,18 +78,33 @@ impl<I: IoContext> Interpreter<'_, I> {
                     )
                 }
             },
-            BinOp::Div => self.binop_div(left, right, span),
+            BinOp::Div => {
+                let id = self.arena.intern("div");
+                self.dispatch_binary(ClassId::DIVISIBLE, id, left, right, span)
+            }
             BinOp::FloorDiv => {
                 let id = self.arena.intern("floor-div");
-                self.dispatch_binary(ClassId::NUMERIC, id, left, right, span)
+                self.dispatch_binary(
+                    ClassId::FLOOR_DIVISIBLE,
+                    id,
+                    left,
+                    right,
+                    span,
+                )
             }
             BinOp::Mod => {
                 let id = self.arena.intern("mod");
-                self.dispatch_binary(ClassId::NUMERIC, id, left, right, span)
+                self.dispatch_binary(
+                    ClassId::FLOOR_DIVISIBLE,
+                    id,
+                    left,
+                    right,
+                    span,
+                )
             }
             BinOp::Pow => {
                 let id = self.arena.intern("pow");
-                self.dispatch_binary(ClassId::NUMERIC, id, left, right, span)
+                self.dispatch_binary(ClassId::POWERABLE, id, left, right, span)
             }
 
             // Equality via Eq class
@@ -458,28 +472,6 @@ impl<I: IoContext> Interpreter<'_, I> {
         match ord {
             Payload::Int(n) => Ok(Payload::Bool(pred(n))),
             _ => typechecked!("compare result", "Int"),
-        }
-    }
-
-    /// Division (Float operands only).
-    ///
-    /// Type checker guarantees both operands are `Float`.
-    /// Division by zero remains a runtime error (not type-level).
-    fn binop_div(
-        &self,
-        left: &Payload,
-        right: &Payload,
-        span: Span,
-    ) -> Result<Payload> {
-        match (left, right) {
-            (Payload::Float(a), Payload::Float(b)) => {
-                if b.0 == 0.0 {
-                    Err(Error::runtime(span, "division by zero"))
-                } else {
-                    Ok(Payload::Float(OrderedFloat(a.0 / b.0)))
-                }
-            }
-            _ => typechecked!("/", "Float"),
         }
     }
 

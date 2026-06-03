@@ -1,4 +1,4 @@
-; Closure with explicitly-declared `T` but missing `Numeric`.
+; Closure with explicitly-declared `T` but missing `Additive`.
 
 let inc = [T](x: T) -> T => x + 1
 

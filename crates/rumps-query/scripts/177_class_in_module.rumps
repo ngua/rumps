@@ -26,12 +26,12 @@ fun main() {
   write Ord:compare(high, low)
   write Ord:compare(low, low)
 
-  ; ============ Numeric class in module ============
+  ; ============ `Numeric` stack in module ============
 
   let a: Nums.MyInt = 10
   let b: Nums.MyInt = 3
-  write Numeric:add(a, b)
-  write Numeric:mul(a, b)
+  write Additive:add(a, b)
+  write Multiplicative:mul(a, b)
 
   ; ============ Constrained type params in module ============
 
@@ -80,14 +80,34 @@ module Prio {
 module Nums {
   +newtype MyInt = +Int
 
-  class Numeric for Nums.MyInt {
+  class Additive for Nums.MyInt {
+    fun zero() -> Nums.MyInt { 0 }
     fun add(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a + b }
+  }
+
+  class Subtractive for Nums.MyInt {
     fun sub(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a - b }
+  }
+
+  class Multiplicative for Nums.MyInt {
+    fun one() -> Nums.MyInt { 1 }
     fun mul(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a * b }
+  }
+
+  class Divisible for Nums.MyInt {
+    fun div(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a / b }
+  }
+
+  class FloorDivisible for Nums.MyInt {
     fun floor-div(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a // b }
     fun mod(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a % b }
+  }
+
+  class Powerable for Nums.MyInt {
     fun pow(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a ** b }
   }
+
+  class Numeric for Nums.MyInt { }
 }
 
 module Container {

@@ -29,8 +29,8 @@ fun main() {
   ; Closures with constraints
   ; ============================================================================
 
-  ; Closure with constrained type parameter; works with ANY Numeric type
-  let double = [T: Numeric](x: T) -> T => x + x
+  ; Closure with constrained type parameter; works with any `Additive` type
+  let double = [T: Additive](x: T) -> T => x + x
 
   write double(10)    ; 20
   write double(1.5)   ; 3.0
@@ -65,8 +65,8 @@ fun main() {
 ; Basic constrained functions
 ; ============================================================================
 
-; Numeric constraint: `T` must be `Int` or `Float`
-fun add-numeric[T: Numeric](a: T, b: T) -> T {
+; `Additive` constraint: `T` supports `+`
+fun add-numeric[T: Additive](a: T, b: T) -> T {
   a + b
 }
 
@@ -81,17 +81,17 @@ fun to-json[T: Into[Json]](x: T) -> Json {
 }
 
 ; Multiple constraints with `+`
-fun numeric-to-str[T: Numeric + Into[String]](x: T) -> String {
+fun numeric-to-str[T: Additive + Into[String]](x: T) -> String {
   (x + x) as String
 }
 
 ; Mix of constrained and unconstrained type parameters
-fun pair-numeric[T: Numeric, U](x: T, y: U) -> (T, U) {
+fun pair-numeric[T: Additive, U](x: T, y: U) -> (T, U) {
   (x + x, y)
 }
 
 ; Higher-order function taking a constrained closure
-fun apply-numeric[T: Numeric](f: (T) -> T, x: T) -> T {
+fun apply-numeric[T: Additive](f: (T) -> T, x: T) -> T {
   f(x)
 }
 
@@ -106,6 +106,6 @@ fun identity-storable[V: Into[Storable]](v: V) -> V {
 }
 
 ; Iterable: type must be Array or Range (HKT constraint)
-fun sum-all[T: Numeric, C: Iterable](coll: C[T]) -> T {
+fun sum-all[T: Numeric + Additive, C: Iterable](coll: C[T]) -> T {
   Foldable:reduce((acc, x) => acc + x, 0, coll)
 }

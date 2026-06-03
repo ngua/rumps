@@ -1,0 +1,26 @@
+; User type with only `Additive`.
+
+fun main() {
+  let a = AddOnly.AddOnly(10)
+  let b = AddOnly.AddOnly(3)
+  write "operator add: {a + b}"
+  write "method add: {Additive:add(a, b)}"
+}
+
+variant AddOnly = AddOnly(Int)
+
+class Additive for AddOnly {
+  fun zero() -> AddOnly {
+    AddOnly.AddOnly(0)
+  }
+
+  fun add(a: AddOnly, b: AddOnly) -> AddOnly {
+    match a {
+      AddOnly.AddOnly(x) => {
+        match b {
+          AddOnly.AddOnly(y) => { AddOnly.AddOnly(x + y + 100) }
+        }
+      }
+    }
+  }
+}

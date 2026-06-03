@@ -12,5 +12,5 @@ fun main() {
 }
 
 let id = [T](x: T) -> T => x
-let twice = [T: Numeric](x: T) -> T => x + x
+let twice = [T: Additive](x: T) -> T => x + x
 let inc = (x: Int) -> Int => x + 1

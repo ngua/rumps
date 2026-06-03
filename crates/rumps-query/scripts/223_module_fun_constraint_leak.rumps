@@ -1,8 +1,8 @@
 ; Calling `M.foo("hello")` must be rejected because `T` is
-; constrained to `Numeric`. Module member constraint check.
+; constrained to `Additive`. Module member constraint check.
 
 module M {
-  +fun foo[T: Numeric](x: T) -> T { x + 1 }
+  +fun foo[T: Additive](x: T) -> T { x + 1 }
 }
 
 fun main() {

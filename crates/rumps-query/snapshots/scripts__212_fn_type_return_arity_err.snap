@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Returning an opaque callable whose signature doesn't match the declared\n; function return type is caught by the typechecker. `Numeric:add` has\n; arity 2 but the declared return type has arity 1.\n\nfun main() {\n  let f = bad()\n  write f(1)\n}\n\nfun bad() -> ((Int) -> Int) {\n  Numeric:add\n}\n"
+description: "; Returning an opaque callable whose signature doesn't match the declared\n; function return type is caught by the typechecker. `Additive:add` has\n; arity 2 but the declared return type has arity 1.\n\nfun main() {\n  let f = bad()\n  write f(1)\n}\n\nfun bad() -> ((Int) -> Int) {\n  Additive:add\n}\n"
 ---
 ERROR: expected 2 argument(s), got 1

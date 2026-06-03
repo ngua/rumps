@@ -954,10 +954,9 @@ impl Parser {
         //
         // Dispatches to a typeclass method. Uses `ColonNoSpace` to require
         // no space around the colon, distinguishing from type annotations.
-        // Examples:
-        // - `Numeric:add(a, b)` (binary method)
-        // - `Fallible:unwrap(opt)` (unary method)
-        // - `Mappable:map(fn, arr)` (higher-order method)
+        // Examples include `Additive:add(a, b)` as a binary method,
+        // `Fallible:unwrap(opt)` as a unary method, and `Mappable:map(fn, arr)`
+        // as a higher-order method.
         let class_method_sep =
             just(Token::Comma).then_ignore(Self::opt_newlines());
         let class_method = Self::ident()

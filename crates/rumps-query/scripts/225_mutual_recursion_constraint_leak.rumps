@@ -1,4 +1,4 @@
-; Mutual recursion where `b` has a body-derived `Numeric`
+; Mutual recursion where `b` has a body-derived `Additive`
 ; constraint. Forward reference from `a` to `b` must propagate
 ; the constraint via Phase 4 finalization. Calling `a("hello")`
 ; should be rejected.

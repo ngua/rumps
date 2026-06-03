@@ -1,5 +1,5 @@
 ; Module mutual recursion: `M.a` calls `M.b` which has a body-derived
-; `Numeric` constraint. The enriched scheme must also update the
+; `Additive` constraint. The enriched scheme must also update the
 ; module member registry so `M.a("hello")` is rejected.
 
 module M {

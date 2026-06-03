@@ -112,6 +112,19 @@ enum Satisfaction {
 }
 
 impl SolveCtx<'_> {
+    fn is_numeric_capability(id: ClassId) -> bool {
+        matches!(
+            id,
+            ClassId::NUMERIC
+                | ClassId::ADDITIVE
+                | ClassId::SUBTRACTIVE
+                | ClassId::MULTIPLICATIVE
+                | ClassId::DIVISIBLE
+                | ClassId::FLOOR_DIVISIBLE
+                | ClassId::POWERABLE
+        )
+    }
+
     /// Map a primitive `Ty` shape to its `TypeId`, if applicable.
     fn primitive_type_id(ty: &Ty) -> Option<TypeId> {
         match ty {
@@ -2120,7 +2133,9 @@ impl SolveCtx<'_> {
         shape: &Ty,
     ) -> Option<Satisfaction> {
         match (class_id, shape) {
-            (ClassId::NUMERIC, Ty::Int | Ty::Word | Ty::Float) => {
+            (id, Ty::Int | Ty::Word | Ty::Float)
+                if Self::is_numeric_capability(id) =>
+            {
                 Some(Satisfaction::Direct)
             }
             (ClassId::BIT_LIKE, Ty::Bool | Ty::Int | Ty::Word) => {
@@ -2215,17 +2230,15 @@ impl SolveCtx<'_> {
         }
     }
 
-    /// Check a "simple" class (`Numeric`, `BitLike`, `Negatable`,
-    /// `Default`, `Concatable`, `Ord`, `Eq`, `Display`) against `ty`.
+    /// Check a "simple" class (`Numeric`, numeric capabilities, `BitLike`,
+    /// `Negatable`, `Default`, `Concatable`, `Ord`, `Eq`, `Display`) against `ty`.
     ///
-    /// Per-class dispatch rules:
-    /// - `Numeric` on a `Union`: succeeds if any one member directly
-    ///   satisfies (the "any" strategy). On a `Named` with no instance:
-    ///   fall back to alias expansion.
-    /// - `BitLike` on a `Named` with no instance: fall back to alias
-    ///   expansion.
-    /// - All others: every `Union` member must satisfy, and a `Named`
-    ///   with no instance is an error.
+    /// Per-class dispatch rules: Numeric capabilities on a `Union` succeed if
+    /// any one member directly satisfies using the "any" strategy; on a
+    /// `Named` with no instance, fall back to alias expansion. `BitLike` on a
+    /// `Named` with no instance falls back to alias expansion. All others
+    /// require every `Union` member to satisfy, and a `Named` with no instance
+    /// is an error.
     fn check_simple_class(
         &mut self,
         class_id: ClassId,
@@ -2255,7 +2268,7 @@ impl SolveCtx<'_> {
                             None,
                         ),
                         None => {
-                            if class_id == ClassId::NUMERIC {
+                            if Self::is_numeric_capability(class_id) {
                                 let any_sat = members.iter().any(|&m| {
                                     let sh = self.ty_arena.get(m).clone();
                                     matches!(
@@ -2290,14 +2303,14 @@ impl SolveCtx<'_> {
                             &inst, &args, span, None,
                         ),
                         None => {
-                            let expanded = if matches!(
-                                class_id,
-                                ClassId::NUMERIC | ClassId::BIT_LIKE
-                            ) {
-                                self.expand_alias_fully_for_class(ty, span)
-                            } else {
-                                None
-                            };
+                            let expanded =
+                                if Self::is_numeric_capability(class_id)
+                                    || class_id == ClassId::BIT_LIKE
+                                {
+                                    self.expand_alias_fully_for_class(ty, span)
+                                } else {
+                                    None
+                                };
                             match expanded {
                                 Some(e) => self.satisfies_class(class, e, span),
                                 None => self.errors.push(

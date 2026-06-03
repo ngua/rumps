@@ -2,7 +2,7 @@
 
 fun main() {
   ; Class methods can be referenced as values
-  let add-fn = Numeric:add
+  let add-fn = Additive:add
   let neg-fn = Negatable:neg
   let cmp-fn = Ord:compare
 
@@ -14,28 +14,28 @@ fun main() {
   ; Pass method references to higher-order functions
   let nums = [1, 2, 3, 4, 5]
 
-  ; Use Numeric:add in reduce
+  ; Use `Additive:add` in reduce
   let sum = Foldable:reduce(add-fn, 0, nums)
   write "Sum via add-fn: {sum}"
 
   ; Pipe with class methods (multi-arg wrapped in closures)
-  let pipe-add = 10 |> (x => Numeric:add(x, 5))
-  let pipe-sub = 10 |> (x => Numeric:sub(x, 3))
-  let pipe-mul = 4 |> (x => Numeric:mul(x, 5))
+  let pipe-add = 10 |> (x => Additive:add(x, 5))
+  let pipe-sub = 10 |> (x => Subtractive:sub(x, 3))
+  let pipe-mul = 4 |> (x => Multiplicative:mul(x, 5))
   write "Pipe add: {pipe-add}"
   write "Pipe sub: {pipe-sub}"
   write "Pipe mul: {pipe-mul}"
 
   ; Closure in second position
-  let pipe-add2 = 5 |> (x => Numeric:add(10, x))
-  let pipe-sub2 = 3 |> (x => Numeric:sub(10, x))
+  let pipe-add2 = 5 |> (x => Additive:add(10, x))
+  let pipe-sub2 = 3 |> (x => Subtractive:sub(10, x))
   write "Pipe add (second): {pipe-add2}"
   write "Pipe sub (second): {pipe-sub2}"
 
   ; Chain pipes with class methods
   let chained = 5
-    |> (x => Numeric:add(x, 3))
-    |> (x => Numeric:mul(x, 2))
+    |> (x => Additive:add(x, 3))
+    |> (x => Multiplicative:mul(x, 2))
   write "Chained: {chained}"
 
   ; Pipe into HoF class methods

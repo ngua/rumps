@@ -1,0 +1,22 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Arithmetic capability method references.\n\nfun main() {\n  write \"direct add: {Additive:add(2, 3)}\"\n  write \"direct zero: {Additive[Int]:zero()}\"\n  write \"direct sub: {Subtractive:sub(8, 3)}\"\n  write \"direct mul: {Multiplicative:mul(4, 5)}\"\n  write \"direct one: {Multiplicative[Int]:one()}\"\n  write \"direct div: {Divisible:div(8, 2)}\"\n  write \"direct floor-div: {FloorDivisible:floor-div(8, 3)}\"\n  write \"direct mod: {FloorDivisible:mod(8, 3)}\"\n  write \"direct pow: {Powerable:pow(2, 5)}\"\n\n  let add-fn = Additive:add\n  let zero-fn = Additive[Int]:zero\n  let sub-fn = Subtractive:sub\n  let mul-fn = Multiplicative:mul\n  let one-fn = Multiplicative[Int]:one\n  let div-fn = Divisible:div\n  let floor-div-fn = FloorDivisible:floor-div\n  let mod-fn = FloorDivisible:mod\n  let pow-fn = Powerable:pow\n\n  write \"stored add: {add-fn(2, 3)}\"\n  write \"stored zero: {zero-fn()}\"\n  write \"stored sub: {sub-fn(8, 3)}\"\n  write \"stored mul: {mul-fn(4, 5)}\"\n  write \"stored one: {one-fn()}\"\n  write \"stored div: {div-fn(8, 2)}\"\n  write \"stored floor-div: {floor-div-fn(8, 3)}\"\n  write \"stored mod: {mod-fn(8, 3)}\"\n  write \"stored pow: {pow-fn(2, 5)}\"\n}\n"
+---
+"direct add: 5"
+"direct zero: 0"
+"direct sub: 5"
+"direct mul: 20"
+"direct one: 1"
+"direct div: 4"
+"direct floor-div: 2"
+"direct mod: 2"
+"direct pow: 32"
+"stored add: 5"
+"stored zero: 0"
+"stored sub: 5"
+"stored mul: 20"
+"stored one: 1"
+"stored div: 4"
+"stored floor-div: 2"
+"stored mod: 2"
+"stored pow: 32"

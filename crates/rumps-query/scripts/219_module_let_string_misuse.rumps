@@ -1,4 +1,4 @@
-; Module member is a String; using it as Numeric must be
+; Module member is a `String`; using it as `Additive` must be
 ; rejected at typecheck time, not panic at runtime.
 
 fun main() {

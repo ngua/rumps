@@ -32,6 +32,10 @@ pub(crate) enum ClassShape {
 pub(crate) enum TrackKind {
     /// Track return type in expression metadata (`Default:default`).
     Default,
+    /// Track return type in expression metadata (`Additive:zero`).
+    Zero,
+    /// Track return type in expression metadata (`Multiplicative:one`).
+    One,
     /// Track return type in expression metadata (`Into:into`, `Wrappable:wrap`).
     Convert,
     /// Track inner type of `Result` return in expression metadata (`TryInto:try-into`).
@@ -112,8 +116,14 @@ impl ClassRegistry {
         let array_v0 = arena.array(v0);
         let binary_v0 = arena.func(smallvec![v0, v0], v0);
         let unary_v0 = arena.func(smallvec![v0], v0);
+        let nullary_v0 = arena.func(smallvec![], v0);
 
         let simple1 = |ty: TyId, tag: ClassId| Scheme {
+            vars: smallvec![TyVar::new(0)],
+            ty,
+            constraints: smallvec![(TyVar::new(0), TypeClass::simple(tag))],
+        };
+        let nullary1 = |ty: TyId, tag: ClassId| Scheme {
             vars: smallvec![TyVar::new(0)],
             ty,
             constraints: smallvec![(TyVar::new(0), TypeClass::simple(tag))],
@@ -140,56 +150,20 @@ impl ClassRegistry {
         let s = intern;
 
         let defs = vec![
-            // 0: Numeric
+            // `0`: `Numeric`
             ClassDef {
                 name: s("Numeric"),
                 shape: ClassShape::Concrete { params: 0 },
                 assoc_types: smallvec![],
-                supers: smallvec![],
-                methods: vec![
-                    (
-                        s("add"),
-                        MethodSpec::Standard(simple1(
-                            binary_v0,
-                            ClassId::NUMERIC,
-                        )),
-                    ),
-                    (
-                        s("sub"),
-                        MethodSpec::Standard(simple1(
-                            binary_v0,
-                            ClassId::NUMERIC,
-                        )),
-                    ),
-                    (
-                        s("mul"),
-                        MethodSpec::Standard(simple1(
-                            binary_v0,
-                            ClassId::NUMERIC,
-                        )),
-                    ),
-                    (
-                        s("floor-div"),
-                        MethodSpec::Standard(simple1(
-                            binary_v0,
-                            ClassId::NUMERIC,
-                        )),
-                    ),
-                    (
-                        s("mod"),
-                        MethodSpec::Standard(simple1(
-                            binary_v0,
-                            ClassId::NUMERIC,
-                        )),
-                    ),
-                    (
-                        s("pow"),
-                        MethodSpec::Standard(simple1(
-                            binary_v0,
-                            ClassId::NUMERIC,
-                        )),
-                    ),
+                supers: smallvec![
+                    ClassId::ADDITIVE,
+                    ClassId::SUBTRACTIVE,
+                    ClassId::MULTIPLICATIVE,
+                    ClassId::DIVISIBLE,
+                    ClassId::FLOOR_DIVISIBLE,
+                    ClassId::POWERABLE,
                 ],
+                methods: vec![],
             },
             // 1: Iterable
             ClassDef {
@@ -545,6 +519,120 @@ impl ClassRegistry {
                             )],
                         }
                     }),
+                )],
+            },
+            // `19`: `Additive`
+            ClassDef {
+                name: s("Additive"),
+                shape: ClassShape::Concrete { params: 0 },
+                assoc_types: smallvec![],
+                supers: smallvec![],
+                methods: vec![
+                    (
+                        s("zero"),
+                        MethodSpec::Tracked {
+                            scheme: nullary1(nullary_v0, ClassId::ADDITIVE),
+                            track: TrackKind::Zero,
+                        },
+                    ),
+                    (
+                        s("add"),
+                        MethodSpec::Standard(simple1(
+                            binary_v0,
+                            ClassId::ADDITIVE,
+                        )),
+                    ),
+                ],
+            },
+            // `20`: `Subtractive`
+            ClassDef {
+                name: s("Subtractive"),
+                shape: ClassShape::Concrete { params: 0 },
+                assoc_types: smallvec![],
+                supers: smallvec![ClassId::ADDITIVE],
+                methods: vec![(
+                    s("sub"),
+                    MethodSpec::Standard(simple1(
+                        binary_v0,
+                        ClassId::SUBTRACTIVE,
+                    )),
+                )],
+            },
+            // `21`: `Multiplicative`
+            ClassDef {
+                name: s("Multiplicative"),
+                shape: ClassShape::Concrete { params: 0 },
+                assoc_types: smallvec![],
+                supers: smallvec![],
+                methods: vec![
+                    (
+                        s("one"),
+                        MethodSpec::Tracked {
+                            scheme: nullary1(
+                                nullary_v0,
+                                ClassId::MULTIPLICATIVE,
+                            ),
+                            track: TrackKind::One,
+                        },
+                    ),
+                    (
+                        s("mul"),
+                        MethodSpec::Standard(simple1(
+                            binary_v0,
+                            ClassId::MULTIPLICATIVE,
+                        )),
+                    ),
+                ],
+            },
+            // `22`: `Divisible`
+            ClassDef {
+                name: s("Divisible"),
+                shape: ClassShape::Concrete { params: 0 },
+                assoc_types: smallvec![],
+                supers: smallvec![ClassId::MULTIPLICATIVE],
+                methods: vec![(
+                    s("div"),
+                    MethodSpec::Standard(simple1(
+                        binary_v0,
+                        ClassId::DIVISIBLE,
+                    )),
+                )],
+            },
+            // `23`: `FloorDivisible`
+            ClassDef {
+                name: s("FloorDivisible"),
+                shape: ClassShape::Concrete { params: 0 },
+                assoc_types: smallvec![],
+                supers: smallvec![ClassId::DIVISIBLE],
+                methods: vec![
+                    (
+                        s("floor-div"),
+                        MethodSpec::Standard(simple1(
+                            binary_v0,
+                            ClassId::FLOOR_DIVISIBLE,
+                        )),
+                    ),
+                    (
+                        s("mod"),
+                        MethodSpec::Standard(simple1(
+                            binary_v0,
+                            ClassId::FLOOR_DIVISIBLE,
+                        )),
+                    ),
+                ],
+            },
+            // `24`: `Powerable`
+            ClassDef {
+                name: s("Powerable"),
+                shape: ClassShape::Concrete { params: 0 },
+                assoc_types: smallvec![],
+                supers: smallvec![ClassId::MULTIPLICATIVE],
+                methods: vec![(
+                    s("pow"),
+                    MethodSpec::Standard(simple1(
+                        binary_v0,
+                        ClassId::POWERABLE,
+                    )),
                 )],
             },
         ];
