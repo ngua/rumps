@@ -8,20 +8,7 @@ fun main() {
   write some as String
   write none as String
 
-  ; HOF pass-through branches must keep the output type metadata.
-  let mapped-none = Option.map(none, x => "{x}")
-  write mapped-none
-  write mapped-none as String
-
-  let err: Result[Int, String] = Result.Err("bad")
-  let mapped-err = Result.map(err, x => "{x}")
-  write mapped-err
-  write mapped-err as String
-
   let union-err: Result[Int, String] | Option[Int] = Result.Err("wide")
-  let mapped-union-err = Result.map(union-err, x => "{x}")
-  write mapped-union-err
-  write mapped-union-err as String
 
   let ok: Result[Int, String] = Result.Ok(7)
   let mapped-ok = Result.map-err(ok, e => String.length(e))

@@ -190,7 +190,7 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
     class_methods: class::ClassMethods,
 
     /// Registry of module-level HoFs for dispatch.
-    module_hofs: hof::ModuleHofs,
+    module_hofs: hof::Registry,
 
     /// Registry of user-defined class instances for runtime dispatch.
     ///
@@ -285,7 +285,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         )
         .check(stmts, &registry, &arena)?;
 
-        let module_hofs = hof::ModuleHofs::new(&mut arena.strings);
+        let module_hofs = hof::Registry::new(&mut arena.strings);
         let class_methods = {
             let mut cm = class::ClassMethods::new();
             cm.register_all(&mut arena.strings);
@@ -427,7 +427,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         mut arena: ValueArena,
         registry: TypeRegistry,
     ) -> Self {
-        let module_hofs = hof::ModuleHofs::new(&mut arena.strings);
+        let module_hofs = hof::Registry::new(&mut arena.strings);
         let class_methods = {
             let mut cm = class::ClassMethods::new();
             cm.register_all(&mut arena.strings);

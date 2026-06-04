@@ -44,9 +44,7 @@ use itertools::Itertools;
 use ordered_float::OrderedFloat;
 use smallvec::{smallvec, SmallVec};
 
-use super::hof::{
-    ChainWrapper, Continuation, HofMethodFn, HofState, IterKind, MethodResult,
-};
+use super::hof;
 use crate::intern::{StringId, StringInterner};
 use crate::typecheck::{RuntimeTyId, RuntimeTypes, Ty};
 use crate::value::{
@@ -113,7 +111,7 @@ pub(crate) enum MethodFn {
     Unary(UnaryMethodFn),
     Nullary(NullaryMethodFn),
     Convert(ConvertMethodFn),
-    Hof(HofMethodFn),
+    Hof(hof::MethodFn),
 }
 
 /// Per-class method table.
@@ -2425,7 +2423,7 @@ impl Mappable {
     pub(crate) fn map(
         ctx: &mut ClassCtx<'_>,
         args: &[ValueId],
-    ) -> Result<MethodResult> {
+    ) -> Result<hof::Step> {
         let fn_id = *args
             .first()
             .unwrap_or_else(|| typechecked!("Mappable:map", "2 args"));
@@ -2482,40 +2480,42 @@ impl Mappable {
         };
 
         match kind {
-            Kind::EmptyArray => Ok(MethodResult::Done(Payload::Array(
-                Arc::new(SmallVec::new()),
-            ))),
-            Kind::Array(first) => Ok(MethodResult::Invoke(Continuation {
+            Kind::EmptyArray => {
+                Ok(hof::Step::Done(Payload::Array(Arc::new(SmallVec::new()))))
+            }
+            Kind::Array(first) => Ok(hof::Step::Invoke(hof::Continuation {
                 callee: fn_id,
                 args: smallvec![first],
-                state: HofState::MapIter {
-                    kind: IterKind::Array {
+                state: hof::State::MapIter {
+                    kind: hof::IterKind::Array {
                         source: src,
                         idx: 0,
                     },
                     acc: SmallVec::new(),
                 },
             })),
-            Kind::OptionSome(inner) => Ok(MethodResult::Invoke(Continuation {
-                callee: fn_id,
-                args: smallvec![inner],
-                state: HofState::MapContainer {
-                    ctor_ty: TypeId::OPTION,
-                    tag: 1, // Some
-                },
-            })),
-            Kind::OptionNone => Ok(MethodResult::Done(Payload::none())),
-            Kind::ResultOk(inner) => {
-                Ok(MethodResult::Invoke(Continuation {
+            Kind::OptionSome(inner) => {
+                Ok(hof::Step::Invoke(hof::Continuation {
                     callee: fn_id,
                     args: smallvec![inner],
-                    state: HofState::MapContainer {
+                    state: hof::State::MapContainer {
+                        ctor_ty: TypeId::OPTION,
+                        tag: 1, // Some
+                    },
+                }))
+            }
+            Kind::OptionNone => Ok(hof::Step::Done(Payload::none())),
+            Kind::ResultOk(inner) => {
+                Ok(hof::Step::Invoke(hof::Continuation {
+                    callee: fn_id,
+                    args: smallvec![inner],
+                    state: hof::State::MapContainer {
                         ctor_ty: TypeId::RESULT,
                         tag: 0, // Ok
                     },
                 }))
             }
-            Kind::ResultErr(v) => Ok(MethodResult::Done(v)),
+            Kind::ResultErr(v) => Ok(hof::Step::Done(v)),
             Kind::Other => typechecked!("Mappable:map", "Mappable"),
         }
     }
@@ -2529,7 +2529,7 @@ impl Filterable {
     pub(crate) fn filter(
         ctx: &mut ClassCtx<'_>,
         args: &[ValueId],
-    ) -> Result<MethodResult> {
+    ) -> Result<hof::Step> {
         let pred_id = *args
             .first()
             .unwrap_or_else(|| typechecked!("Filterable:filter", "2 args"));
@@ -2538,15 +2538,15 @@ impl Filterable {
             .unwrap_or_else(|| typechecked!("Filterable:filter", "2 args"));
 
         match ctx.arena.payload(src) {
-            Some(Payload::Array(elems)) if elems.is_empty() => Ok(
-                MethodResult::Done(Payload::Array(Arc::new(SmallVec::new()))),
-            ),
+            Some(Payload::Array(elems)) if elems.is_empty() => {
+                Ok(hof::Step::Done(Payload::Array(Arc::new(SmallVec::new()))))
+            }
             Some(Payload::Array(elems)) => {
                 let first = elems[0];
-                Ok(MethodResult::Invoke(Continuation {
+                Ok(hof::Step::Invoke(hof::Continuation {
                     callee: pred_id,
                     args: smallvec![first],
-                    state: HofState::FilterArray {
+                    state: hof::State::FilterArray {
                         source: src,
                         idx: 0,
                         acc: SmallVec::new(),
@@ -2567,7 +2567,7 @@ impl Foldable {
     pub(crate) fn reduce(
         ctx: &mut ClassCtx<'_>,
         args: &[ValueId],
-    ) -> Result<MethodResult> {
+    ) -> Result<hof::Step> {
         let fn_id = *args
             .first()
             .unwrap_or_else(|| typechecked!("Foldable:reduce", "3 args"));
@@ -2605,12 +2605,12 @@ impl Foldable {
         };
         match kind {
             Kind::EmptyArray | Kind::EmptyRange => {
-                Ok(MethodResult::DoneValue(init))
+                Ok(hof::Step::DoneValue(init))
             }
-            Kind::Array(first) => Ok(MethodResult::Invoke(Continuation {
+            Kind::Array(first) => Ok(hof::Step::Invoke(hof::Continuation {
                 callee: fn_id,
                 args: smallvec![init, first],
-                state: HofState::ReduceArray {
+                state: hof::State::ReduceArray {
                     source: src,
                     idx: 0,
                     acc: init,
@@ -2622,10 +2622,10 @@ impl Foldable {
                     ctx.runtime_types.meta_int(),
                     ctx.span,
                 );
-                Ok(MethodResult::Invoke(Continuation {
+                Ok(hof::Step::Invoke(hof::Continuation {
                     callee: fn_id,
                     args: smallvec![init, int_id],
-                    state: HofState::ReduceRange {
+                    state: hof::State::ReduceRange {
                         current: start + 1,
                         end,
                         acc: init,
@@ -2696,7 +2696,7 @@ impl Chainable {
     pub(crate) fn chain(
         ctx: &mut ClassCtx<'_>,
         args: &[ValueId],
-    ) -> Result<MethodResult> {
+    ) -> Result<hof::Step> {
         let src = *args
             .first()
             .unwrap_or_else(|| typechecked!("Chainable:chain", "2 args"));
@@ -2710,7 +2710,7 @@ impl Chainable {
             Some(Payload::Variant { tag: 0, .. })
                 if src_ty == Some(TypeId::OPTION) =>
             {
-                Ok(MethodResult::Done(Payload::none()))
+                Ok(hof::Step::Done(Payload::none()))
             }
             // Option.Some(v) -> invoke fn(v)
             Some(Payload::Variant {
@@ -2721,11 +2721,11 @@ impl Chainable {
                     .first()
                     .copied()
                     .unwrap_or_else(|| invariant!("Some has payload"));
-                Ok(MethodResult::Invoke(Continuation {
+                Ok(hof::Step::Invoke(hof::Continuation {
                     callee: fn_id,
                     args: smallvec![inner],
-                    state: HofState::Chain {
-                        wrapper: ChainWrapper::OptionSome,
+                    state: hof::State::Chain {
+                        wrapper: hof::ChainWrapper::OptionSome,
                     },
                 }))
             }
@@ -2738,11 +2738,11 @@ impl Chainable {
                     .first()
                     .copied()
                     .unwrap_or_else(|| invariant!("Ok has payload"));
-                Ok(MethodResult::Invoke(Continuation {
+                Ok(hof::Step::Invoke(hof::Continuation {
                     callee: fn_id,
                     args: smallvec![inner],
-                    state: HofState::Chain {
-                        wrapper: ChainWrapper::ResultOk,
+                    state: hof::State::Chain {
+                        wrapper: hof::ChainWrapper::ResultOk,
                     },
                 }))
             }
@@ -2755,7 +2755,7 @@ impl Chainable {
                     .first()
                     .copied()
                     .unwrap_or_else(|| invariant!("Err has payload"));
-                Ok(MethodResult::Done(Payload::Variant {
+                Ok(hof::Step::Done(Payload::Variant {
                     tag: 1,
                     vals: smallvec![err],
                 }))
@@ -2772,7 +2772,7 @@ impl Bimappable {
     pub(crate) fn bimap(
         ctx: &mut ClassCtx<'_>,
         args: &[ValueId],
-    ) -> Result<MethodResult> {
+    ) -> Result<hof::Step> {
         let f = *args
             .first()
             .unwrap_or_else(|| typechecked!("Bimappable:bimap", "3 args"));
@@ -2821,20 +2821,22 @@ impl Bimappable {
         };
 
         match kind {
-            Kind::ResultOk(inner) => Ok(MethodResult::Invoke(Continuation {
+            Kind::ResultOk(inner) => Ok(hof::Step::Invoke(hof::Continuation {
                 callee: f,
                 args: smallvec![inner],
-                state: HofState::BimapResult { tag: 0 },
+                state: hof::State::BimapResult { tag: 0 },
             })),
-            Kind::ResultErr(inner) => Ok(MethodResult::Invoke(Continuation {
-                callee: g,
-                args: smallvec![inner],
-                state: HofState::BimapResult { tag: 1 },
-            })),
-            Kind::Tuple(a, b) => Ok(MethodResult::Invoke(Continuation {
+            Kind::ResultErr(inner) => {
+                Ok(hof::Step::Invoke(hof::Continuation {
+                    callee: g,
+                    args: smallvec![inner],
+                    state: hof::State::BimapResult { tag: 1 },
+                }))
+            }
+            Kind::Tuple(a, b) => Ok(hof::Step::Invoke(hof::Continuation {
                 callee: f,
                 args: smallvec![a],
-                state: HofState::BimapTuple {
+                state: hof::State::BimapTuple {
                     second_fn: g,
                     second_elem: b,
                     first_result: None,

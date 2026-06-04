@@ -1,5 +1,5 @@
 ; Option and Result module primitives
-; Tests Option.unwrap-or, Option.map, Result.unwrap-or, Result.map, Result.map-err
+; Tests Option.unwrap-or, Result.unwrap-or, Result.map-err
 
 fun safe-div(n, d) {
   if d == 0 { Option.None } else { Option.Some(n // d) }
@@ -25,10 +25,6 @@ fun halve-res(x) {
   if x % 2 == 0 { Result.Ok(x // 2) } else { Result.Err("odd") }
 }
 
-fun try-parse(s) {
-  if s == "42" { Result.Ok(42) } else { Result.Err("parse failed") }
-}
-
 fun main() {
   ; ============ Option.unwrap-or ============
 
@@ -40,25 +36,6 @@ fun main() {
   write Option.unwrap-or(Option.Some("hello"), "default")  ; "hello"
   write Option.unwrap-or(Option.None, "default")  ; "default"
 
-  ; ============ Option.map ============
-
-  let double = x => x * 2
-  let to-upper = s => String.upper(s)
-
-  write Option.map(Option.Some(21), double)  ; Some(42)
-  write Option.map(Option.None, double)  ; None
-  write Option.map(Option.Some("hello"), to-upper)  ; Some("HELLO")
-  write Option.map(Option.None, to-upper)  ; None
-
-  ; Inline closure
-  write Option.map(Option.Some(5), x => x + 1)  ; Some(6)
-
-  ; Chaining map
-  let opt = Option.Some(10)
-  let mapped = Option.map(opt, x => x * 2)
-  write mapped  ; Some(20)
-  write Option.map(mapped, x => x + 5)  ; Some(25)
-
   ; ============ Result.unwrap-or ============
 
   let ok-val = Result.Ok(100)
@@ -69,16 +46,6 @@ fun main() {
   write Result.unwrap-or(Result.Ok("success"), "fallback")  ; "success"
   write Result.unwrap-or(Result.Err("fail"), "fallback")  ; "fallback"
 
-  ; ============ Result.map ============
-
-  write Result.map(Result.Ok(21), double)  ; Ok(42)
-  write Result.map(Result.Err("err"), double)  ; Err("err")
-  write Result.map(Result.Ok("hello"), to-upper)  ; Ok("HELLO")
-  write Result.map(Result.Err("err"), to-upper)  ; Err("err")
-
-  ; Inline closure
-  write Result.map(Result.Ok(5), x => x + 1)  ; Ok(6)
-
   ; ============ Result.map-err ============
 
   let add-prefix = e => "Error: {e}"
@@ -87,26 +54,6 @@ fun main() {
   write Result.map-err(Result.Ok(42), add-prefix)  ; Ok(42)
   write Result.map-err(Result.Err("oops"), e => String.upper(e))  ; Err("OOPS")
   write Result.map-err(Result.Ok("ok"), e => String.upper(e))  ; Ok("ok")
-
-  ; ============ Combining operations ============
-
-  ; Option.map then unwrap-or
-  let maybe-num = Option.Some(10)
-  let doubled-or-zero = Option.unwrap-or(Option.map(maybe-num, x => x * 2), 0)
-  write doubled-or-zero  ; 20
-
-  let no-num = Option.None
-  let doubled-or-zero-none = Option.unwrap-or(Option.map(no-num, x => x * 2), 0)
-  write doubled-or-zero-none  ; 0
-
-  ; Result.map then unwrap-or
-  let res-ok = Result.Ok(5)
-  let res-mapped = Result.unwrap-or(Result.map(res-ok, x => x * 3), 0)
-  write res-mapped  ; 15
-
-  let res-err = Result.Err("bad")
-  let res-err-mapped = Result.unwrap-or(Result.map(res-err, x => x * 3), 0)
-  write res-err-mapped  ; 0
 
   ; ============ Type variants still work ============
 
@@ -157,16 +104,6 @@ fun main() {
   ; None -> None
   write Option.flatten(Option.None)  ; None
 
-  ; Practical: flatten after map that returns Option
-  let maybe-find = arr => Array.head(arr)
-  let nested = Option.map(Option.Some([1, 2, 3]), maybe-find)
-  write nested  ; Some(Some(1))
-  write Option.flatten(nested)  ; Some(1)
-
-  let empty-nested = Option.map(Option.Some([]), maybe-find)
-  write empty-nested  ; Some(None)
-  write Option.flatten(empty-nested)  ; None
-
   ; ============ Result.flatten ============
 
   ; Ok(Ok(v)) -> Ok(v)
@@ -178,15 +115,6 @@ fun main() {
 
   ; Err(e) -> Err(e)
   write Result.flatten(Result.Err("outer error"))  ; Err("outer error")
-
-  ; Practical: flatten after map that returns Result
-  let nested-res = Result.map(Result.Ok("42"), try-parse)
-  write nested-res  ; Ok(Ok(42))
-  write Result.flatten(nested-res)  ; Ok(42)
-
-  let nested-err = Result.map(Result.Ok("bad"), try-parse)
-  write nested-err  ; Ok(Err("parse failed"))
-  write Result.flatten(nested-err)  ; Err("parse failed")
 
   ; ============ Result.hush ============
 

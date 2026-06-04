@@ -6,8 +6,7 @@ use async_recursion::async_recursion;
 use smallvec::SmallVec;
 
 use super::class::{self, ClassCtx, MethodFn};
-use super::hof::{HofMethodFn, HofResult, MethodResult};
-use super::Interpreter;
+use super::{hof, Interpreter};
 use crate::ast::{Expr, ExprId};
 use crate::env::{PrimCtx, PrimFn};
 use crate::intern::{QualifiedName, StringId};
@@ -403,8 +402,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             // Some HoFs (e.g. `foreach`) delegate to another HoF but discard
             // the produced value, evaluating to `Unit` instead.
             match result {
-                HofResult::Keep => Ok(value),
-                HofResult::Discard => {
+                hof::ResultMode::Keep => Ok(value),
+                hof::ResultMode::Discard => {
                     Ok(self.value_from_payload(Payload::Unit))
                 }
             }
@@ -1419,7 +1418,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     async fn run_hof_trampoline(
         &mut self,
         output: OutputMeta,
-        starter: HofMethodFn,
+        starter: hof::MethodFn,
         args: &[ValueId],
         span: Span,
     ) -> Result<Value> {
@@ -1436,11 +1435,11 @@ impl<I: IoContext> Interpreter<'_, I> {
         let mut flow = ControlFlow::Continue(result);
         while let ControlFlow::Continue(result) = flow {
             match result {
-                MethodResult::Done(v) => {
+                hof::Step::Done(v) => {
                     let output = self.refine_variant_output(output, &v, args);
                     flow = ControlFlow::Break(self.value_for_output(output, v));
                 }
-                MethodResult::DoneValue(id) => {
+                hof::Step::DoneValue(id) => {
                     let value =
                         self.arena.value(id).cloned().unwrap_or_else(|| {
                             invariant!("HoF result in arena")
@@ -1454,7 +1453,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                         self.value_for_output_value(output, value),
                     );
                 }
-                MethodResult::Invoke(cont) => {
+                hof::Step::Invoke(cont) => {
                     let call_result = self
                         .invoke_callable(cont.callee, &cont.args, span)
                         .await?;
