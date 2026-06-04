@@ -2,92 +2,66 @@ mod trig;
 
 use std::f64;
 
-use smallvec::smallvec;
+use ordered_float::OrderedFloat;
+use rumps_query_macros::scheme;
 
 use super::super::{Environment, Module, PrimDef};
 use crate::primitives::Math;
-use crate::typecheck::{RuntimeTyId, Scheme, TyArena, TyId, TyVar, TypeClass};
+use crate::typecheck::{RuntimeTyId, TyArena};
 use crate::value::{Payload, ValueMeta};
-use crate::{ClassId, Span};
+use crate::Span;
 
 impl Environment {
     pub(super) fn register_math_builtin(&mut self) {
-        // Math module
         let a = &mut self.ty_arena;
-        let v0 = a.var(0);
-
-        // `forall T: Numeric. (T) -> T`
-        let num_unary = |ty: TyId| Scheme {
-            vars: smallvec![TyVar::new(0)],
-            ty,
-            constraints: smallvec![(
-                TyVar::new(0),
-                TypeClass::simple(ClassId::NUMERIC)
-            )],
-        };
-        // `forall T: Numeric. (T, T) -> T`
-        let num_binary = |ty: TyId| Scheme {
-            vars: smallvec![TyVar::new(0)],
-            ty,
-            constraints: smallvec![(
-                TyVar::new(0),
-                TypeClass::simple(ClassId::NUMERIC)
-            )],
-        };
-
-        let abs_ty = a.func(smallvec![v0], v0);
-        let minmax_ty = a.func(smallvec![v0, v0], v0);
-        let float_to_int = a.func(smallvec![TyArena::FLOAT], TyArena::INT);
-        let float_to_float = a.func(smallvec![TyArena::FLOAT], TyArena::FLOAT);
 
         let mut math_module = Module::from_prims(
             &[
                 PrimDef {
                     name: "abs",
                     f: Math::abs,
-                    ty: num_unary(abs_ty),
+                    ty: scheme!(a, forall T: Numeric. (T) -> T),
                 },
                 PrimDef {
                     name: "min",
                     f: Math::min,
-                    ty: num_binary(minmax_ty),
+                    ty: scheme!(a, forall T: Numeric. (T, T) -> T),
                 },
                 PrimDef {
                     name: "max",
                     f: Math::max,
-                    ty: num_binary(minmax_ty),
+                    ty: scheme!(a, forall T: Numeric. (T, T) -> T),
                 },
                 PrimDef {
                     name: "floor",
                     f: Math::floor,
-                    ty: Scheme::mono(float_to_int),
+                    ty: scheme!(a, (Float) -> Int),
                 },
                 PrimDef {
                     name: "ceil",
                     f: Math::ceil,
-                    ty: Scheme::mono(float_to_int),
+                    ty: scheme!(a, (Float) -> Int),
                 },
                 PrimDef {
                     name: "round",
                     f: Math::round,
-                    ty: Scheme::mono(float_to_int),
+                    ty: scheme!(a, (Float) -> Int),
                 },
                 PrimDef {
                     name: "sqrt",
                     f: Math::sqrt,
-                    ty: Scheme::mono(float_to_float),
+                    ty: scheme!(a, (Float) -> Float),
                 },
                 PrimDef {
                     name: "log",
                     f: Math::log,
-                    ty: Scheme::mono(float_to_float),
+                    ty: scheme!(a, (Float) -> Float),
                 },
             ],
             &mut self.consts.strings,
         );
 
         // Math constants (intern into `consts` arena)
-        use ordered_float::OrderedFloat;
         [
             ("pi", f64::consts::PI),
             ("e", f64::consts::E),

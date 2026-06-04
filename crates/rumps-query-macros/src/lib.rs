@@ -768,7 +768,7 @@ fn parse_ty_fn(input: ParseStream) -> Result<TyExpr> {
 
     if input.peek(Token![->]) {
         input.parse::<Token![->]>()?;
-        let ret = parse_ty_fn(input)?;
+        let ret = parse_ty_union(input)?;
         // Require parentheses for function params
         if !was_paren {
             panic!("function arguments must be parenthesized: use `(T) -> U` not `T -> U`");
@@ -939,7 +939,7 @@ fn parse_ty_starting_with(input: ParseStream, ident: Ident) -> Result<TyExpr> {
     // Continue parsing for `->` or `|`
     if input.peek(Token![->]) {
         input.parse::<Token![->]>()?;
-        let ret = parse_ty_fn(input)?;
+        let ret = parse_ty_union(input)?;
         let params = match lhs {
             TyExpr::Tuple(elems) => elems,
             other => vec![other],

@@ -1,41 +1,11 @@
-use smallvec::smallvec;
+use rumps_query_macros::scheme;
 
 use super::super::{Environment, Module, PrimDef};
 use crate::primitives::Random;
-use crate::typecheck::{Scheme, TyArena, TyId, TyVar};
 
 impl Environment {
     pub(super) fn register_random_builtin(&mut self) {
-        // Random module
         let a = &mut self.ty_arena;
-        let v0 = a.var(0);
-        let arr_v0 = a.array(v0);
-        let opt_v0 = a.option(v0);
-
-        let thunk_float = a.func(smallvec![], TyArena::FLOAT);
-        let float2_to_float =
-            a.func(smallvec![TyArena::FLOAT, TyArena::FLOAT], TyArena::FLOAT);
-        let int2_to_int =
-            a.func(smallvec![TyArena::INT, TyArena::INT], TyArena::INT);
-        let thunk_bool = a.func(smallvec![], TyArena::BOOL);
-        let choice_ty = a.func(smallvec![arr_v0], opt_v0);
-        let shuffle_ty = a.func(smallvec![arr_v0], arr_v0);
-        let sample_ret = {
-            let r = a.result(arr_v0, TyArena::STRING);
-            a.func(smallvec![arr_v0, TyArena::INT], r)
-        };
-        let thunk_str = a.func(smallvec![], TyArena::STRING);
-
-        let poly1 = |ty: TyId| Scheme {
-            vars: smallvec![TyVar::new(0)],
-            ty,
-            constraints: smallvec![],
-        };
-        let _poly2 = |ty: TyId| Scheme {
-            vars: smallvec![TyVar::new(0), TyVar::new(1)],
-            ty,
-            constraints: smallvec![],
-        };
 
         let rand_id = self.consts.strings.intern("Random");
         self.modules.insert(
@@ -45,42 +15,45 @@ impl Environment {
                     PrimDef {
                         name: "random",
                         f: Random::random,
-                        ty: Scheme::mono(thunk_float),
+                        ty: scheme!(a, () -> Float),
                     },
                     PrimDef {
                         name: "range",
                         f: Random::range,
-                        ty: Scheme::mono(float2_to_float),
+                        ty: scheme!(a, (Float, Float) -> Float),
                     },
                     PrimDef {
                         name: "int",
                         f: Random::int,
-                        ty: Scheme::mono(int2_to_int),
+                        ty: scheme!(a, (Int, Int) -> Int),
                     },
                     PrimDef {
                         name: "bool",
                         f: Random::bool,
-                        ty: Scheme::mono(thunk_bool),
+                        ty: scheme!(a, () -> Bool),
                     },
                     PrimDef {
                         name: "choice",
                         f: Random::choice,
-                        ty: poly1(choice_ty),
+                        ty: scheme!(a, forall T. (Array[T]) -> Option[T]),
                     },
                     PrimDef {
                         name: "shuffle",
                         f: Random::shuffle,
-                        ty: poly1(shuffle_ty),
+                        ty: scheme!(a, forall T. (Array[T]) -> Array[T]),
                     },
                     PrimDef {
                         name: "sample",
                         f: Random::sample,
-                        ty: poly1(sample_ret),
+                        ty: scheme!(
+                            a,
+                            forall T. (Array[T], Int) -> Result[Array[T], String]
+                        ),
                     },
                     PrimDef {
                         name: "uuid",
                         f: Random::uuid,
-                        ty: Scheme::mono(thunk_str),
+                        ty: scheme!(a, () -> String),
                     },
                 ],
                 &mut self.consts.strings,
