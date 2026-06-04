@@ -486,7 +486,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// naive recursive implementation overflows the stack after ~5k iterations.
     /// Since this is tail-recursive (all state captured in `state_id`), using
     /// an explicit loop is safe and uses constant stack space.
-    pub(super) async fn loop_expr(
+    pub(super) async fn r#loop(
         &mut self,
         seed: ExprId,
         state_name_id: StringId,

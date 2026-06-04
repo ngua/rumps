@@ -108,7 +108,7 @@ impl Parser {
             })
     }
 
-    fn loop_expr(
+    fn r#loop(
         interner: &mut StringInterner,
         primary: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
             + Clone
@@ -791,8 +791,7 @@ impl Parser {
 
         // `loop seed (state, cont) => body`
         // Use primary for seed (no postfix ops) to avoid parsing (state, cont) as a call
-        let loop_expr =
-            Self::loop_expr(interner, primary, intrinsic_op.clone());
+        let loop_expr = Self::r#loop(interner, primary, intrinsic_op.clone());
 
         recursive(move |unary| {
             let with_op = op.clone().then(unary.clone()).map_with_span(

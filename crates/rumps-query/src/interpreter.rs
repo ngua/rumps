@@ -657,7 +657,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 cont_param,
                 body,
             } => self
-                .loop_expr(seed, state_param.0, cont_param.0, body, span)
+                .r#loop(seed, state_param.0, cont_param.0, body, span)
                 .await
                 .map(Evaluated::Value),
             Expr::Transaction(ref txn) => {

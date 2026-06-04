@@ -338,7 +338,7 @@ impl InferCtx<'_> {
                 state_param,
                 cont_param,
                 body,
-            } => self.loop_expr(*seed, state_param, cont_param, *body, span),
+            } => self.r#loop(*seed, state_param, cont_param, *body, span),
 
             // Transaction block: `transaction { ... }`
             Expr::Transaction(ref txn) => self.transaction(id, txn, span),
@@ -4136,7 +4136,7 @@ impl InferCtx<'_> {
     /// - `state` has the same type as `seed` (or its annotation)
     /// - `cont` has type `(StateType) -> BodyType`
     /// - The overall expression returns `BodyType`
-    pub(super) fn loop_expr(
+    pub(super) fn r#loop(
         &mut self,
         seed: ExprId,
         state_param: &(StringId, Option<AstTypeExprId>),
