@@ -26,6 +26,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::{iter, ops};
 
 use smallvec::{smallvec, SmallVec};
 
@@ -469,6 +470,11 @@ impl ClassCtx<'_> {
         mut stack: Vec<SortFrame>,
         cmp_result: Option<ValueId>,
     ) -> Result<MethodResult> {
+        enum Flow {
+            Done(SmallVec<[ValueId; 4]>),
+            Invoke { a: ValueId, b: ValueId },
+        }
+
         // Get source array elements
         let elems = match self.arena.payload(source) {
             Some(Payload::Array(e)) => e.clone(),
@@ -477,6 +483,7 @@ impl ClassCtx<'_> {
 
         // Handle comparison result from previous step
         let mut pending: Option<SmallVec<[ValueId; 4]>> = None;
+
         if let Some(result) = cmp_result {
             // We were in a Merge; process the comparison result
             match stack.pop() {
@@ -546,20 +553,13 @@ impl ClassCtx<'_> {
             }
         }
 
-        // Main loop: advance until we need a comparison or are done
-        loop {
-            // If we have a pending result, propagate it up
+        let flow = iter::repeat(()).try_fold((), |_, _| {
             if let Some(sorted) = pending.take() {
+                // If we have a pending result, propagate it up
                 match stack.pop() {
-                    None => {
-                        // Done! Return sorted array
-                        break Ok(MethodResult::Done(Payload::Array(
-                            Arc::new(sorted),
-                        )));
-                    }
+                    None => ops::ControlFlow::Break(Flow::Done(sorted)),
                     Some(SortFrame::MergeAfterRight { left, lo, hi }) => {
                         if left.is_empty() {
-                            // This was waiting for left half; now sort right
                             let mid = lo + (hi - lo) / 2;
                             stack.push(SortFrame::MergeAfterRight {
                                 left: sorted,
@@ -577,6 +577,7 @@ impl ClassCtx<'_> {
                                 merged: SmallVec::new(),
                             });
                         }
+                        ops::ControlFlow::Continue(())
                     }
                     Some(other) => {
                         // Shouldn't happen
@@ -586,63 +587,68 @@ impl ClassCtx<'_> {
                         );
                     }
                 }
-                continue;
-            }
-
-            // Process next frame on stack
-            match stack.pop() {
-                None => {
-                    // Stack empty with no pending = shouldn't happen
-                    invariant!("Sort stack empty unexpectedly");
-                }
-                Some(SortFrame::Sort { lo, hi }) => {
-                    if hi - lo <= 1 {
-                        // Base case
-                        pending = Some(elems[lo..hi].iter().copied().collect());
-                    } else {
-                        // Split and sort left first
-                        let mid = lo + (hi - lo) / 2;
-                        stack.push(SortFrame::MergeAfterRight {
-                            left: SmallVec::new(),
-                            lo,
-                            hi,
+            } else {
+                // Process next frame on stack
+                match stack.pop() {
+                    None => {
+                        // Stack empty with no pending = shouldn't happen
+                        invariant!("Sort stack empty unexpectedly");
+                    }
+                    Some(SortFrame::Sort { lo, hi }) => {
+                        if hi - lo <= 1 {
+                            pending =
+                                Some(elems[lo..hi].iter().copied().collect());
+                        } else {
+                            let mid = lo + (hi - lo) / 2;
+                            stack.push(SortFrame::MergeAfterRight {
+                                left: SmallVec::new(),
+                                lo,
+                                hi,
+                            });
+                            stack.push(SortFrame::Sort { lo, hi: mid });
+                        }
+                        ops::ControlFlow::Continue(())
+                    }
+                    Some(SortFrame::MergeAfterRight { left, lo, hi }) => {
+                        // This shouldn't be on top without a pending result
+                        stack.push(SortFrame::MergeAfterRight { left, lo, hi });
+                        invariant!("MergeAfterRight without pending result");
+                    }
+                    Some(SortFrame::Merge {
+                        left,
+                        right,
+                        li,
+                        ri,
+                        merged,
+                    }) => {
+                        let a = left[li];
+                        let b = right[ri];
+                        stack.push(SortFrame::Merge {
+                            left,
+                            right,
+                            li,
+                            ri,
+                            merged,
                         });
-                        stack.push(SortFrame::Sort { lo, hi: mid });
+                        ops::ControlFlow::Break(Flow::Invoke { a, b })
                     }
                 }
-                Some(SortFrame::MergeAfterRight { left, lo, hi }) => {
-                    // This shouldn't be on top without a pending result
-                    stack.push(SortFrame::MergeAfterRight { left, lo, hi });
-                    invariant!("MergeAfterRight without pending result");
-                }
-                Some(SortFrame::Merge {
-                    left,
-                    right,
-                    li,
-                    ri,
-                    merged,
-                }) => {
-                    // Need to compare left[li] and right[ri]
-                    let a = left[li];
-                    let b = right[ri];
-                    break Ok(MethodResult::Invoke(Continuation {
-                        callee: cmp_fn,
-                        args: smallvec![a, b],
-                        state: HofState::SortBy {
-                            source,
-                            stack: {
-                                stack.push(SortFrame::Merge {
-                                    left,
-                                    right,
-                                    li,
-                                    ri,
-                                    merged,
-                                });
-                                stack
-                            },
-                        },
-                    }));
-                }
+            }
+        });
+
+        match flow {
+            ops::ControlFlow::Break(Flow::Done(sorted)) => {
+                Ok(MethodResult::Done(Payload::Array(Arc::new(sorted))))
+            }
+            ops::ControlFlow::Break(Flow::Invoke { a, b }) => {
+                Ok(MethodResult::Invoke(Continuation {
+                    callee: cmp_fn,
+                    args: smallvec![a, b],
+                    state: HofState::SortBy { source, stack },
+                }))
+            }
+            ops::ControlFlow::Continue(()) => {
+                invariant!("Sort driver terminated")
             }
         }
     }
