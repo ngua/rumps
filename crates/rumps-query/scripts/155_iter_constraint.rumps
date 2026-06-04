@@ -35,9 +35,9 @@ fun main() {
   write "Generic count (array): {count-iter(arr)}"
   write "Generic count (range): {count-iter(1 ..= 10)}"
 
-  ; reverse on Array and Range
-  write "Reversed array: {reverse(arr)}"
-  write "Reversed range: {reverse(1 ..= 5)}"
+  ; `Reversible:reverse` on `Array` and `Range`
+  write "Reversed array: {Reversible:reverse(arr)}"
+  write "Reversed range: {Reversible:reverse(1 ..= 5)}"
 
   ; foreach on Array and Range (Range must be collected first)
   foreach(x => write "foreach array: {x}", [10, 20])

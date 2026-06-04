@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use smallvec::SmallVec;
 
 use super::Prim;
@@ -62,52 +60,6 @@ impl Prelude {
                 ctx.runtime_types.meta_bool(),
                 ctx.span,
             ))
-        })
-    }
-
-    /// `forall T. (Array[T] | Range) -> Array[T] | Range`
-    ///
-    /// Reverses an array or range. Range reversal swaps bounds
-    /// without materialization.
-    pub(crate) fn reverse<'a>(
-        ctx: &'a mut PrimCtx<'a>,
-        args: SmallVec<[ValueId; 4]>,
-    ) -> PrimResult<'a> {
-        Box::pin(async move {
-            let v = ctx
-                .arena
-                .payload(args[0])
-                .cloned()
-                .unwrap_or_else(|| typechecked!("reverse", "value"));
-            let res = match v {
-                Payload::Array(elems) => {
-                    let reversed: SmallVec<[ValueId; 4]> =
-                        elems.iter().rev().copied().collect();
-                    Payload::Array(Arc::new(reversed))
-                }
-                Payload::Range {
-                    start,
-                    end,
-                    inclusive,
-                } => {
-                    if inclusive {
-                        Payload::Range {
-                            start: end,
-                            end: start,
-                            inclusive: true,
-                        }
-                    } else {
-                        // `start .. end` reversed is `end - 1 ..= start`
-                        Payload::Range {
-                            start: end - 1,
-                            end: start,
-                            inclusive: true,
-                        }
-                    }
-                }
-                _ => typechecked!("reverse", "Array or Range"),
-            };
-            Ok(ctx.add(res))
         })
     }
 }

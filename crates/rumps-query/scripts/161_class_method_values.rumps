@@ -49,8 +49,8 @@ fun main() {
   ; Iterable:length with pipe (unary; no wrapper needed)
   write "Piped length: {nums |> Iterable:length}"
 
-  ; Prelude functions with pipes
-  write "Piped reverse: {nums |> reverse}"
+  ; Prelude functions and class methods with pipes
+  write "Piped reverse: {nums |> Reversible:reverse}"
   let piped-contains = nums |> (a => contains(a, 3))
   write "Piped contains: {piped-contains}"
 

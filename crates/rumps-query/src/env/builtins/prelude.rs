@@ -31,14 +31,6 @@ impl Environment {
                         ),
                     },
                     PrimDef {
-                        name: "reverse",
-                        f: Prelude::reverse,
-                        ty: scheme!(
-                            a,
-                            forall T. (Array[T] | Range) -> Array[T] | Range
-                        ),
-                    },
-                    PrimDef {
                         name: "identity",
                         f: Prelude::identity,
                         ty: scheme!(a, forall T. (T) -> T),

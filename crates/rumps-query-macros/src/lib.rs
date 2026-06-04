@@ -38,6 +38,7 @@ use syn::{Ident, LitStr, Result, Token};
 /// `T: Negatable` ; `T` must be `Int` or `Float`
 /// `T: BitLike` ; `T` must be `Bool`, `Int`, or `Word`
 /// `T: Concatable` ; `T` must be `String`, `Array[_]`, `Map[_, _]`, or `Option[_]`
+/// `T: Reversible` ; `T` must be `Array[_]` or `Range`
 /// `T: Ord` ; `T` must support ordering (`Bool`, `Int`, `Word`, `Float`, `Char`, `String`)
 /// `T: Eq` ; `T` must support equality (`==`, `!=`)
 /// `T: Display` ; `T` can be displayed as RUMPS syntax
@@ -108,6 +109,7 @@ const SIMPLE_CLASSES: &[&str] = &[
     "Negatable",
     "BitLike",
     "Concatable",
+    "Reversible",
     "Ord",
     "Eq",
     "Display",
@@ -246,6 +248,7 @@ fn class_id(name: &str) -> TokenStream2 {
         "Powerable" => "POWERABLE",
         "Iterable" => "ITERABLE",
         "Concatable" => "CONCATABLE",
+        "Reversible" => "REVERSIBLE",
         "BitLike" => "BIT_LIKE",
         "Negatable" => "NEGATABLE",
         "Fallible" => "FALLIBLE",

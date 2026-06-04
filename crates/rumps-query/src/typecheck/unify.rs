@@ -2159,6 +2159,9 @@ impl SolveCtx<'_> {
                 ClassId::CONCATABLE,
                 Ty::String | Ty::Array(_) | Ty::Map(_, _) | Ty::Option(_),
             ) => Some(Satisfaction::Direct),
+            (ClassId::REVERSIBLE, Ty::Array(_) | Ty::Range) => {
+                Some(Satisfaction::Direct)
+            }
             (
                 ClassId::ORD,
                 Ty::Bool

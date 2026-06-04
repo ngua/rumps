@@ -18,6 +18,7 @@
 //! - `BitLike`: `bit-and`, `bit-or`, `shl`, `shr`
 //! - `Default`: `default`
 //! - `Concatable`: `concat`
+//! - `Reversible`: `reverse`
 //! - `Ord`: `compare`
 //! - `Eq`: `eq`
 //! - `Fallible`: `unwrap`
@@ -350,6 +351,11 @@ impl ClassMethods {
             ClassId::CONCATABLE,
             i.intern("concat"),
             MethodFn::Binary(Concatable::concat),
+        );
+        self.register(
+            ClassId::REVERSIBLE,
+            i.intern("reverse"),
+            MethodFn::Unary(Reversible::reverse),
         );
 
         self.register(
@@ -893,6 +899,46 @@ impl Concatable {
             }
             _ => Self::concat(ctx, &l.payload, &r.payload),
         }
+    }
+}
+
+/// Reversal for `Array` and `Range`.
+pub(crate) struct Reversible;
+
+impl Class for Reversible {}
+
+impl Reversible {
+    pub(crate) fn reverse(
+        _: &mut ClassCtx<'_>,
+        v: &Payload,
+    ) -> Result<Payload> {
+        Ok(match v {
+            Payload::Array(elems) => {
+                let rev: SmallVec<[ValueId; 4]> =
+                    elems.iter().rev().copied().collect();
+                Payload::Array(Arc::new(rev))
+            }
+            Payload::Range {
+                start,
+                end,
+                inclusive,
+            } => {
+                if *inclusive {
+                    Payload::Range {
+                        start: *end,
+                        end: *start,
+                        inclusive: true,
+                    }
+                } else {
+                    Payload::Range {
+                        start: *end - 1,
+                        end: *start,
+                        inclusive: true,
+                    }
+                }
+            }
+            _ => typechecked!("Reversible:reverse", "Reversible"),
+        })
     }
 }
 

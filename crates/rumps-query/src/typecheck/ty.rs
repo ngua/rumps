@@ -635,6 +635,20 @@ impl ClassRegistry {
                     )),
                 )],
             },
+            // `25`: `Reversible`
+            ClassDef {
+                name: s("Reversible"),
+                shape: ClassShape::Concrete { params: 0 },
+                assoc_types: smallvec![],
+                supers: smallvec![],
+                methods: vec![(
+                    s("reverse"),
+                    MethodSpec::Standard(simple1(
+                        unary_v0,
+                        ClassId::REVERSIBLE,
+                    )),
+                )],
+            },
         ];
 
         let by_name = defs

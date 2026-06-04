@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Annotating with the full union type should succeed (no narrowing).\n\nfun main() {\n  let r = 1 ..= 10\n  let revd: Array[Int] | Range = reverse(r)\n  write revd\n}\n"
+description: "; Annotating with the full union type should succeed (no narrowing).\n\nfun main() {\n  let r = 1 ..= 10\n  let revd: Array[Int] | Range = Reversible:reverse(r)\n  write revd\n}\n"
 ---
 10 ..= 1

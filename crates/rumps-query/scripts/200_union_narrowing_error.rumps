@@ -3,7 +3,7 @@
 
 fun main() {
   let r = 1 ..= 10
-  ; reverse returns Array[Int] | Range; cannot narrow to Array[Int]
-  let revd: Array[Int] = reverse(r)
+  ; `Reversible:reverse` on `Range` returns `Range`
+  let revd: Array[Char] = Reversible:reverse(r)
   write revd
 }

@@ -2,6 +2,6 @@
 
 fun main() {
   let r = 1 ..= 10
-  let revd: Array[Int] | Range = reverse(r)
+  let revd: Array[Int] | Range = Reversible:reverse(r)
   write revd
 }

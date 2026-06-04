@@ -14,7 +14,7 @@
 //!
 //! Iterable operations (`length`, `collect`, `map`, `filter`, `reduce`)
 //! are handled via class method syntax (e.g. `Iterable:length`, `Mappable:map`).
-//! `foreach`, `contains`, and `reverse` are standalone Prelude functions.
+//! `foreach` and `contains` are standalone `Prelude` functions.
 //!
 //! When adding a new RUMPS module, create a new type implementing [`Prim`]
 //! and add its functions as associated functions.
