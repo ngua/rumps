@@ -1,30 +1,6 @@
-; Iterable:collect; materializes an iterable into an Array
+; `Iterable:collect` was removed; use `Range.collect`.
 
 fun main() {
-  ; Collect exclusive range
-  write Iterable:collect(1 .. 5)
-
-  ; Collect inclusive range
-  write Iterable:collect(1 ..= 3)
-
-  ; Collect empty range
-  write Iterable:collect(5 .. 5)
-
-  ; Collect negative range
-  write Iterable:collect(-2 .. 2)
-
-  ; Collect array (identity)
-  write Iterable:collect([10, 20, 30])
-
-  ; Collect then map
-  let squares = Mappable:map(x => x * x, Iterable:collect(1 .. 5))
-  write squares
-
-  ; Collect then filter
-  let evens = Filterable:filter(x => x % 2 == 0, Iterable:collect(1 ..= 10))
-  write evens
-
-  ; Collect then reduce
-  let sum = Foldable:reduce((a, x) => a + x, 0, Iterable:collect(1 ..= 5))
-  write sum
+  let xs = Iterable:collect(1 .. 10)
+  write xs
 }

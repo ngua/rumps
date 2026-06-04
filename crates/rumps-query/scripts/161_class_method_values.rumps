@@ -50,7 +50,7 @@ fun main() {
   write "Piped length: {nums |> Iterable:length}"
 
   ; Prelude functions and class methods with pipes
-  write "Piped reverse: {nums |> Reversible:reverse}"
+  write "Piped reverse: {nums |> Iterable:reverse}"
   let piped-contains = nums |> (a => contains(a, 3))
   write "Piped contains: {piped-contains}"
 
@@ -82,7 +82,7 @@ fun main() {
   ; Method reference stored and used later
   let len-fn = Iterable:length
   write "Stored length fn: {len-fn([1, 2, 3, 4])}"
-  write "Stored length fn (range): {len-fn(1 ..= 100)}"
+  write "Stored length fn (range): {len-fn(Range.collect(1 ..= 100))}"
 
   ; Ord compare with closures
   let cmp1 = 5 |> (x => Ord:compare(x, 3))

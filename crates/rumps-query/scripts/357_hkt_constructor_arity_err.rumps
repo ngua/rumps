@@ -1,0 +1,9 @@
+; Malformed HKT constructor applications must not truncate extra args
+
+fun bad[F: Mappable](x: F[Int, String]) {
+  write x
+}
+
+fun main() {
+  bad([1, 2, 3])
+}

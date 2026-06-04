@@ -18,7 +18,7 @@ use syn::{Ident, LitStr, Result, Token};
 ///
 /// ```text
 /// scheme!(a, forall T U. (Array[T], (T) -> U) -> Array[U])
-/// scheme!(a, forall I: Iterable, T. (I[T]) -> Int)
+/// scheme!(a, forall I: Iterable. (I) -> Int)
 /// scheme!(a, (Int) -> Bool)
 /// scheme!(a, intern, ({ src: FilePath, dest: FilePath }) -> Unit)
 /// ```
@@ -38,7 +38,8 @@ use syn::{Ident, LitStr, Result, Token};
 /// `T: Negatable` ; `T` must be `Int` or `Float`
 /// `T: BitLike` ; `T` must be `Bool`, `Int`, or `Word`
 /// `T: Concatable` ; `T` must be `String`, `Array[_]`, `Map[_, _]`, or `Option[_]`
-/// `T: Reversible` ; `T` must be `Array[_]` or `Range`
+/// `T: Iterable` ; `T` must be `Array[_]` or `Range`
+/// `T: Default` ; `T` has a default value
 /// `T: Ord` ; `T` must support ordering (`Bool`, `Int`, `Word`, `Float`, `Char`, `String`)
 /// `T: Eq` ; `T` must support equality (`==`, `!=`)
 /// `T: Display` ; `T` can be displayed as RUMPS syntax
@@ -47,7 +48,6 @@ use syn::{Ident, LitStr, Result, Token};
 /// - `F: Fallible` ; `F` is a fallible type constructor; use `F[T]` in type position
 /// - `W: Wrappable` ; `W` supports wrapping a value (`wrap`); use `W[T]` in type position
 /// - `C: Chainable` ; `C` supports monadic chaining (`chain`); use `C[T]` in type position
-/// - `I: Iterable` ; `I` is an iterable type constructor; use `I[T]` in type position
 /// - `M: Mappable` ; `M` is a functor; use `M[T]` in type position
 /// - `F: Foldable` ; `F` supports fold/reduce; use `F[T]` in type position
 /// - `F: Filterable` ; `F` supports filter; use `F[T]` in type position
@@ -82,7 +82,7 @@ pub fn scheme(input: TokenStream) -> TokenStream {
 enum VarClass {
     /// Simple class (no type arguments): `Numeric`, `Storable`, etc.
     Simple(String),
-    /// Parameterized class with type arguments: `Iterable[T]`, `Into[T, U]`, etc.
+    /// Parameterized class with type arguments: `Into[T]`, `Indexable[T]`, etc.
     Parameterized(String, SmallVec<[String; 2]>),
 }
 
@@ -109,7 +109,8 @@ const SIMPLE_CLASSES: &[&str] = &[
     "Negatable",
     "BitLike",
     "Concatable",
-    "Reversible",
+    "Iterable",
+    "Default",
     "Ord",
     "Eq",
     "Display",
@@ -123,7 +124,6 @@ const HKT_CLASSES: &[&str] = &[
     "Fallible",
     "Wrappable",
     "Chainable",
-    "Iterable",
     "Mappable",
     "Foldable",
     "Filterable",
@@ -248,9 +248,9 @@ fn class_id(name: &str) -> TokenStream2 {
         "Powerable" => "POWERABLE",
         "Iterable" => "ITERABLE",
         "Concatable" => "CONCATABLE",
-        "Reversible" => "REVERSIBLE",
         "BitLike" => "BIT_LIKE",
         "Negatable" => "NEGATABLE",
+        "Default" => "DEFAULT",
         "Fallible" => "FALLIBLE",
         "Into" => "INTO",
         "TryInto" => "TRY_INTO",

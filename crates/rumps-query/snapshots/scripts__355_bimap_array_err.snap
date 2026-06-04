@@ -1,0 +1,6 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; HKT `Bimappable` rejects `Array`\n\nfun main() {\n  let xs = Bimappable:bimap(x => x + 1, x => x + 1, [1, 2])\n  write xs\n}\n"
+---
+ERROR: expected 2 argument(s), got 1
+type `Array[<error>]` does not satisfy `Bimappable` class

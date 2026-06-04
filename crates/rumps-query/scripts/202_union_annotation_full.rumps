@@ -1,7 +1,7 @@
-; Annotating with the full union type should succeed (no narrowing).
+; Old union-return annotations for `Iterable:reverse` fail statically.
 
 fun main() {
   let r = 1 ..= 10
-  let revd: Array[Int] | Range = Reversible:reverse(r)
+  let revd: Array[Int] | Range = Iterable:reverse(r)
   write revd
 }

@@ -18,7 +18,6 @@
 //! - `BitLike`: `bit-and`, `bit-or`, `shl`, `shr`
 //! - `Default`: `default`
 //! - `Concatable`: `concat`
-//! - `Reversible`: `reverse`
 //! - `Ord`: `compare`
 //! - `Eq`: `eq`
 //! - `Fallible`: `unwrap`
@@ -28,7 +27,7 @@
 //! - `Mappable`: `map`
 //! - `Filterable`: `filter`
 //! - `Foldable`: `reduce`
-//! - `Iterable`: `length`, `collect`
+//! - `Iterable`: `length`, `reverse`
 //! - `Bimappable`: `bimap`
 //!
 //! Higher-order class methods use a continuation/trampoline pattern defined in
@@ -47,7 +46,8 @@ use smallvec::{smallvec, SmallVec};
 
 use super::hof;
 use crate::intern::{StringId, StringInterner};
-use crate::typecheck::{RuntimeTyId, RuntimeTypes, Ty};
+use crate::primitives::Range;
+use crate::typecheck::{RuntimeTyId, RuntimeTypes, Ty, TyArena};
 use crate::value::{
     MapKey, Payload, TypeId, TypeRegistry, Value, ValueArena, ValueId,
 };
@@ -353,12 +353,6 @@ impl ClassMethods {
             MethodFn::Binary(Concatable::concat),
         );
         self.register(
-            ClassId::REVERSIBLE,
-            i.intern("reverse"),
-            MethodFn::Unary(Reversible::reverse),
-        );
-
-        self.register(
             ClassId::FALLIBLE,
             i.intern("unwrap"),
             MethodFn::Unary(Fallible::unwrap),
@@ -421,8 +415,8 @@ impl ClassMethods {
         );
         self.register(
             ClassId::ITERABLE,
-            i.intern("collect"),
-            MethodFn::Unary(Iterable::collect),
+            i.intern("reverse"),
+            MethodFn::Unary(Iterable::reverse),
         );
         self.register(
             ClassId::CHAINABLE,
@@ -899,46 +893,6 @@ impl Concatable {
             }
             _ => Self::concat(ctx, &l.payload, &r.payload),
         }
-    }
-}
-
-/// Reversal for `Array` and `Range`.
-pub(crate) struct Reversible;
-
-impl Class for Reversible {}
-
-impl Reversible {
-    pub(crate) fn reverse(
-        _: &mut ClassCtx<'_>,
-        v: &Payload,
-    ) -> Result<Payload> {
-        Ok(match v {
-            Payload::Array(elems) => {
-                let rev: SmallVec<[ValueId; 4]> =
-                    elems.iter().rev().copied().collect();
-                Payload::Array(Arc::new(rev))
-            }
-            Payload::Range {
-                start,
-                end,
-                inclusive,
-            } => {
-                if *inclusive {
-                    Payload::Range {
-                        start: *end,
-                        end: *start,
-                        inclusive: true,
-                    }
-                } else {
-                    Payload::Range {
-                        start: *end - 1,
-                        end: *start,
-                        inclusive: true,
-                    }
-                }
-            }
-            _ => typechecked!("Reversible:reverse", "Reversible"),
-        })
     }
 }
 
@@ -1539,10 +1493,9 @@ impl Into {
                     end,
                     inclusive,
                 },
-                Ty::Named(id, _),
-            ) if *id == TypeId::ARRAY => {
-                let end = if *inclusive { *end + 1 } else { *end };
-                let elems = (*start..end)
+                Ty::Array(elem),
+            ) if *elem == TyArena::INT => {
+                let elems = Range::vals(*start, *end, *inclusive)
                     .map(|n| {
                         ctx.arena.add_typed(
                             Payload::Int(n),
@@ -2481,6 +2434,7 @@ impl Mappable {
         enum Kind {
             EmptyArray,
             Array(ValueId),
+            Tuple(ValueId, ValueId),
             OptionSome(ValueId),
             OptionNone,
             ResultOk(ValueId),
@@ -2490,7 +2444,20 @@ impl Mappable {
         let src_ty = ctx.value_base_type(src);
         let kind = match ctx.arena.payload(src) {
             Some(Payload::Array(elems)) if elems.is_empty() => Kind::EmptyArray,
-            Some(Payload::Array(elems)) => Kind::Array(elems[0]),
+            Some(Payload::Array(elems)) => Kind::Array(
+                *elems
+                    .first()
+                    .unwrap_or_else(|| invariant!("Array has first elem")),
+            ),
+            Some(Payload::Tuple(elems)) if elems.len() == 2 => {
+                let first = *elems
+                    .first()
+                    .unwrap_or_else(|| invariant!("Tuple has first elem"));
+                let second = *elems
+                    .get(1)
+                    .unwrap_or_else(|| invariant!("Tuple has second elem"));
+                Kind::Tuple(first, second)
+            }
             // Option.Some(v) -> map inner
             Some(Payload::Variant {
                 tag: 1,
@@ -2540,6 +2507,13 @@ impl Mappable {
                     acc: SmallVec::new(),
                 },
             })),
+            Kind::Tuple(first, second) => {
+                Ok(hof::Step::Invoke(hof::Continuation {
+                    callee: fn_id,
+                    args: smallvec![second],
+                    state: hof::State::MapTuple { first },
+                }))
+            }
             Kind::OptionSome(inner) => {
                 Ok(hof::Step::Invoke(hof::Continuation {
                     callee: fn_id,
@@ -2588,7 +2562,9 @@ impl Filterable {
                 Ok(hof::Step::Done(Payload::Array(Arc::new(SmallVec::new()))))
             }
             Some(Payload::Array(elems)) => {
-                let first = elems[0];
+                let first = *elems
+                    .first()
+                    .unwrap_or_else(|| invariant!("Array has first elem"));
                 Ok(hof::Step::Invoke(hof::Continuation {
                     callee: pred_id,
                     args: smallvec![first],
@@ -2683,7 +2659,7 @@ impl Foldable {
     }
 }
 
-/// `Iterable` class: `length`, `collect` methods.
+/// `Iterable` class: `length`, `reverse` methods.
 pub(crate) struct Iterable;
 
 impl Iterable {
@@ -2696,42 +2672,30 @@ impl Iterable {
                 end,
                 inclusive,
             } => {
-                let len = if *inclusive {
-                    end - start + 1
-                } else {
-                    end - start
-                };
-                Payload::Int(len.max(0))
+                let len = Range::len(*start, *end, *inclusive);
+                Payload::Int(len)
             }
             _ => typechecked!("Iterable:length", "Iterable"),
         })
     }
 
-    /// `Iterable:collect`; materializes an iterable into an `Array`.
-    pub(crate) fn collect(
-        ctx: &mut ClassCtx<'_>,
+    /// `Iterable:reverse`; preserves the input type.
+    pub(crate) fn reverse(
+        _: &mut ClassCtx<'_>,
         v: &Payload,
     ) -> Result<Payload> {
         Ok(match v {
-            Payload::Array(elems) => Payload::Array(elems.clone()),
+            Payload::Array(elems) => {
+                let rev: SmallVec<[ValueId; 4]> =
+                    elems.iter().rev().copied().collect();
+                Payload::Array(Arc::new(rev))
+            }
             Payload::Range {
                 start,
                 end,
                 inclusive,
-            } => {
-                let actual_end = if *inclusive { *end + 1 } else { *end };
-                let elems: SmallVec<[ValueId; 4]> = (*start..actual_end)
-                    .map(|i| {
-                        ctx.arena.add_typed(
-                            Payload::Int(i),
-                            ctx.runtime_types.meta_int(),
-                            ctx.span,
-                        )
-                    })
-                    .collect();
-                Payload::Array(Arc::new(elems))
-            }
-            _ => typechecked!("Iterable:collect", "Iterable"),
+            } => Range::rev(*start, *end, *inclusive),
+            _ => typechecked!("Iterable:reverse", "Iterable"),
         })
     }
 }

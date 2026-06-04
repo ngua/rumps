@@ -1,10 +1,10 @@
-; Iterable constraint rejects Range for String (Range is Iterable over Int only)
+; `Iterable` constraint rejects non-iterable values
 
 fun main() {
-  ; This should fail: Range is Iterable over Int, not String
-  write process-strings(1 .. 10)
+  ; This should fail: `Int` does not satisfy `Iterable`
+  write process(42)
 }
 
-fun process-strings[I: Iterable](i: I[String]) -> Int {
+fun process[T: Iterable](i: T) -> Int {
   Iterable:length(i)
 }

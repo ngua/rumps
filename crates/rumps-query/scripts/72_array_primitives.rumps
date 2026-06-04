@@ -1,6 +1,6 @@
 ; Array module primitives
 ; Tests Iterable:length, Array.push, Array.pop, Array.head, Array.tail,
-; `Reversible:reverse`, `Array.sort`, `Array.slice`, `contains`, `Array.concat`
+; `Iterable:reverse`, `Array.sort`, `Array.slice`, `contains`, `Array.concat`
 
 fun main() {
   ; ============ Iterable:length ============
@@ -69,18 +69,18 @@ fun main() {
   let tail-empty = Array.tail([])
   write tail-empty  ; []
 
-  ; ============ `Reversible:reverse` ============
+  ; ============ `Iterable:reverse` ============
 
   let to-reverse = [1, 2, 3, 4, 5]
-  let reversed = Reversible:reverse(to-reverse)
+  let reversed = Iterable:reverse(to-reverse)
   write reversed  ; [5, 4, 3, 2, 1]
 
   ; Reverse single element
-  let rev-single = Reversible:reverse([42])
+  let rev-single = Iterable:reverse([42])
   write rev-single  ; [42]
 
   ; Reverse empty
-  let rev-empty = Reversible:reverse([])
+  let rev-empty = Iterable:reverse([])
   write rev-empty  ; []
 
   ; ============ Array.sort ============
@@ -186,11 +186,11 @@ fun main() {
 
   ; Get first element of sorted reversed array
   let chain-arr = [3, 1, 4, 1, 5]
-  let chain-result = Array.head(Reversible:reverse(Array.sort(chain-arr)))!
+  let chain-result = Array.head(Iterable:reverse(Array.sort(chain-arr)))!
   write chain-result  ; 5
 
   ; Slice then reverse
-  let slice-rev = Reversible:reverse(Array.slice([0, 1, 2, 3, 4], 1, 4))
+  let slice-rev = Iterable:reverse(Array.slice([0, 1, 2, 3, 4], 1, 4))
   write slice-rev  ; [3, 2, 1]
 
   ; Push then length
@@ -202,7 +202,7 @@ fun main() {
   let pipeline-arr = [5, 3, 8, 1, 9]
   let pipeline-result = pipeline-arr
     |> Array.sort
-    |> Reversible:reverse
+    |> Iterable:reverse
     |> (arr => Array.slice(arr, 0, 3))
   write pipeline-result  ; [9, 8, 5]
 }

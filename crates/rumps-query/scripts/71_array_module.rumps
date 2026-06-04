@@ -33,11 +33,11 @@ fun cmp-by-age(pa: SortPerson, pb: SortPerson) -> Ordering {
   cmp-int(pa.age, pb.age)
 }
 
-fun iter-len(i: Range | Array[Int]) -> Int {
+fun iter-len(i: Array[Int]) -> Int {
   Iterable:length(i)
 }
 
-fun iter-sum(i: Range | Array[Int]) -> Int {
+fun iter-sum(i: Array[Int]) -> Int {
   Foldable:reduce((acc, x) => acc + x, 0, i)
 }
 
@@ -133,9 +133,9 @@ fun main() {
   let fe-empty = foreach(x => { write x }, [])
   write fe-empty  ; Unit
 
-  ; foreach with range (collect first; Range is Iterable but not Mappable)
+  ; `foreach` with collected `Range`
   write "range foreach:"
-  let fe-range = foreach(n => { write n }, Iterable:collect(1 .. 4))
+  let fe-range = foreach(n => { write n }, Range.collect(1 .. 4))
   write fe-range  ; Unit
 
   ; === Array.zip ===
@@ -228,13 +228,13 @@ fun main() {
   let diffs = Array.zip-with((db, da) => da - db, before, after)
   write diffs
 
-  ; === Union types with Iterable constraint ===
+  ; === Collected ranges with array constraints ===
 
-  ; Union of iterable types should satisfy Iterable constraint
-  write iter-len(1 ..= 20)
+  ; Collected ranges should satisfy `Iterable` constraints
+  write iter-len(Range.collect(1 ..= 20))
   write iter-len([1, 2, 3, 4, 5])
 
-  ; Using Mappable:map with union type
-  write iter-sum(1 ..= 5)
+  ; Collected ranges should satisfy `Foldable` constraints
+  write iter-sum(Range.collect(1 ..= 5))
   write iter-sum([10, 20, 30])
 }

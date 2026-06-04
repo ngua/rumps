@@ -8,6 +8,7 @@ use std::hash::{Hash, Hasher};
 use std::{fmt, iter, mem, result};
 
 use indexmap::IndexMap;
+use rumps_query_macros::scheme;
 use smallvec::{smallvec, SmallVec};
 
 use super::error::TypeError;
@@ -106,48 +107,10 @@ impl ClassRegistry {
         intern: &mut impl FnMut(&str) -> StringId,
         arena: &mut TyArena,
     ) -> Self {
-        // Pre-allocate common type variable ids
-        let v0 = arena.var(0);
-        let v1 = arena.var(1);
-        let tv1_of_v0 = arena.hkt(TyVar::new(1), smallvec![v0]);
-        let tv2_of_v0 = arena.hkt(TyVar::new(2), smallvec![v0]);
-        let tv2_of_v1 = arena.hkt(TyVar::new(2), smallvec![v1]);
-
-        let array_v0 = arena.array(v0);
-        let binary_v0 = arena.func(smallvec![v0, v0], v0);
-        let unary_v0 = arena.func(smallvec![v0], v0);
-        let nullary_v0 = arena.func(smallvec![], v0);
-
-        let simple1 = |ty: TyId, tag: ClassId| Scheme {
-            vars: smallvec![TyVar::new(0)],
-            ty,
-            constraints: smallvec![(TyVar::new(0), TypeClass::simple(tag))],
-        };
-        let nullary1 = |ty: TyId, tag: ClassId| Scheme {
-            vars: smallvec![TyVar::new(0)],
-            ty,
-            constraints: smallvec![(TyVar::new(0), TypeClass::simple(tag))],
-        };
-        let hkt2 = |ty: TyId, tag: ClassId| Scheme {
-            vars: smallvec![TyVar::new(0), TyVar::new(1)],
-            ty,
-            constraints: smallvec![(TyVar::new(1), TypeClass::hkt(tag))],
-        };
-        let hkt3 = |ty: TyId, tag: ClassId| Scheme {
-            vars: smallvec![TyVar::new(0), TyVar::new(1), TyVar::new(2)],
-            ty,
-            constraints: smallvec![(TyVar::new(2), TypeClass::hkt(tag))],
-        };
-
         let idx_name = intern("Index");
-        let assoc_idx = arena.alloc(Ty::AssocType(
-            TyVar::new(0),
-            ClassId::INDEXABLE,
-            idx_name,
-        ));
 
         // Shorthand for interning
-        let s = intern;
+        let s = &mut *intern;
 
         let defs = vec![
             // `0`: `Numeric`
@@ -168,22 +131,22 @@ impl ClassRegistry {
             // 1: Iterable
             ClassDef {
                 name: s("Iterable"),
-                shape: ClassShape::Hkt { kind: 1, params: 0 },
+                shape: ClassShape::Concrete { params: 0 },
                 assoc_types: smallvec![],
                 supers: smallvec![],
                 methods: vec![
                     (
                         s("length"),
-                        MethodSpec::Standard(hkt2(
-                            arena.func(smallvec![tv1_of_v0], TyArena::INT),
-                            ClassId::ITERABLE,
+                        MethodSpec::Standard(scheme!(
+                            arena,
+                            forall T: Iterable. (T) -> Int
                         )),
                     ),
                     (
-                        s("collect"),
-                        MethodSpec::Standard(hkt2(
-                            arena.func(smallvec![tv1_of_v0], array_v0),
-                            ClassId::ITERABLE,
+                        s("reverse"),
+                        MethodSpec::Standard(scheme!(
+                            arena,
+                            forall T: Iterable. (T) -> T
                         )),
                     ),
                 ],
@@ -197,10 +160,7 @@ impl ClassRegistry {
                 methods: vec![(
                     s("default"),
                     MethodSpec::Tracked {
-                        scheme: simple1(
-                            arena.func(smallvec![], v0),
-                            ClassId::DEFAULT,
-                        ),
+                        scheme: scheme!(arena, forall T: Default. () -> T),
                         track: TrackKind::Default,
                     },
                 )],
@@ -213,9 +173,9 @@ impl ClassRegistry {
                 supers: smallvec![],
                 methods: vec![(
                     s("concat"),
-                    MethodSpec::Standard(simple1(
-                        binary_v0,
-                        ClassId::CONCATABLE,
+                    MethodSpec::Standard(scheme!(
+                        arena,
+                        forall T: Concatable. (T, T) -> T
                     )),
                 )],
             },
@@ -228,30 +188,30 @@ impl ClassRegistry {
                 methods: vec![
                     (
                         s("bit-and"),
-                        MethodSpec::Standard(simple1(
-                            binary_v0,
-                            ClassId::BIT_LIKE,
+                        MethodSpec::Standard(scheme!(
+                            arena,
+                            forall T: BitLike. (T, T) -> T
                         )),
                     ),
                     (
                         s("bit-or"),
-                        MethodSpec::Standard(simple1(
-                            binary_v0,
-                            ClassId::BIT_LIKE,
+                        MethodSpec::Standard(scheme!(
+                            arena,
+                            forall T: BitLike. (T, T) -> T
                         )),
                     ),
                     (
                         s("shl"),
-                        MethodSpec::Standard(simple1(
-                            binary_v0,
-                            ClassId::BIT_LIKE,
+                        MethodSpec::Standard(scheme!(
+                            arena,
+                            forall T: BitLike. (T, T) -> T
                         )),
                     ),
                     (
                         s("shr"),
-                        MethodSpec::Standard(simple1(
-                            binary_v0,
-                            ClassId::BIT_LIKE,
+                        MethodSpec::Standard(scheme!(
+                            arena,
+                            forall T: BitLike. (T, T) -> T
                         )),
                     ),
                 ],
@@ -264,7 +224,10 @@ impl ClassRegistry {
                 supers: smallvec![],
                 methods: vec![(
                     s("neg"),
-                    MethodSpec::Standard(simple1(unary_v0, ClassId::NEGATABLE)),
+                    MethodSpec::Standard(scheme!(
+                        arena,
+                        forall T: Negatable. (T) -> T
+                    )),
                 )],
             },
             // 6: Fallible
@@ -275,9 +238,9 @@ impl ClassRegistry {
                 supers: smallvec![ClassId::WRAPPABLE],
                 methods: vec![(
                     s("unwrap"),
-                    MethodSpec::Standard(hkt2(
-                        arena.func(smallvec![tv1_of_v0], v0),
-                        ClassId::FALLIBLE,
+                    MethodSpec::Standard(scheme!(
+                        arena,
+                        forall T, F: Fallible. (F[T]) -> T
                     )),
                 )],
             },
@@ -290,14 +253,7 @@ impl ClassRegistry {
                 methods: vec![(
                     s("into"),
                     MethodSpec::Tracked {
-                        scheme: Scheme {
-                            vars: smallvec![TyVar::new(0), TyVar::new(1)],
-                            ty: arena.func(smallvec![v0], v1),
-                            constraints: smallvec![(
-                                TyVar::new(0),
-                                TypeClass::param(ClassId::INTO, v1)
-                            )],
-                        },
+                        scheme: scheme!(arena, forall T: Into[U], U. (T) -> U),
                         track: TrackKind::Convert,
                     },
                 )],
@@ -311,17 +267,10 @@ impl ClassRegistry {
                 methods: vec![(
                     s("try-into"),
                     MethodSpec::Tracked {
-                        scheme: Scheme {
-                            vars: smallvec![TyVar::new(0), TyVar::new(1)],
-                            ty: {
-                                let ret = arena.result(v1, TyArena::STRING);
-                                arena.func(smallvec![v0], ret)
-                            },
-                            constraints: smallvec![(
-                                TyVar::new(0),
-                                TypeClass::param(ClassId::TRY_INTO, v1)
-                            )],
-                        },
+                        scheme: scheme!(
+                            arena,
+                            forall T: TryInto[U], U. (T) -> Result[U, String]
+                        ),
                         track: TrackKind::ConvertResultInner,
                     },
                 )],
@@ -335,28 +284,19 @@ impl ClassRegistry {
                 methods: vec![
                     (
                         s("index"),
-                        MethodSpec::Standard(Scheme {
-                            vars: smallvec![TyVar::new(0), TyVar::new(1)],
-                            ty: arena.func(smallvec![v0, assoc_idx], v1),
-                            constraints: smallvec![(
-                                TyVar::new(0),
-                                TypeClass::param(ClassId::INDEXABLE, v1)
-                            )],
-                        }),
+                        MethodSpec::Standard(scheme!(
+                            arena,
+                            s,
+                            forall T: Indexable[E], E. (T, T:Indexable:Index) -> E
+                        )),
                     ),
                     (
                         s("get"),
-                        MethodSpec::Standard(Scheme {
-                            vars: smallvec![TyVar::new(0), TyVar::new(1)],
-                            ty: {
-                                let ret = arena.option(v1);
-                                arena.func(smallvec![v0, assoc_idx], ret)
-                            },
-                            constraints: smallvec![(
-                                TyVar::new(0),
-                                TypeClass::param(ClassId::INDEXABLE, v1)
-                            )],
-                        }),
+                        MethodSpec::Standard(scheme!(
+                            arena,
+                            s,
+                            forall T: Indexable[E], E. (T, T:Indexable:Index) -> Option[E]
+                        )),
                     ),
                 ],
             },
@@ -368,9 +308,9 @@ impl ClassRegistry {
                 supers: smallvec![],
                 methods: vec![(
                     s("compare"),
-                    MethodSpec::Standard(simple1(
-                        arena.func(smallvec![v0, v0], TyArena::ORDERING),
-                        ClassId::ORD,
+                    MethodSpec::Standard(scheme!(
+                        arena,
+                        forall T: Ord. (T, T) -> Ordering
                     )),
                 )],
             },
@@ -382,13 +322,10 @@ impl ClassRegistry {
                 supers: smallvec![],
                 methods: vec![(
                     s("map"),
-                    MethodSpec::Standard({
-                        let cb = arena.func(smallvec![v0], v1);
-                        hkt3(
-                            arena.func(smallvec![cb, tv2_of_v0], tv2_of_v1),
-                            ClassId::MAPPABLE,
-                        )
-                    }),
+                    MethodSpec::Standard(scheme!(
+                        arena,
+                        forall T, U, F: Mappable. ((T) -> U, F[T]) -> F[U]
+                    )),
                 )],
             },
             // 12: Foldable
@@ -399,13 +336,10 @@ impl ClassRegistry {
                 supers: smallvec![],
                 methods: vec![(
                     s("reduce"),
-                    MethodSpec::Standard({
-                        let cb = arena.func(smallvec![v1, v0], v1);
-                        hkt3(
-                            arena.func(smallvec![cb, v1, tv2_of_v0], v1),
-                            ClassId::FOLDABLE,
-                        )
-                    }),
+                    MethodSpec::Standard(scheme!(
+                        arena,
+                        forall T, U, F: Foldable. ((U, T) -> U, U, F[T]) -> U
+                    )),
                 )],
             },
             // 13: Filterable
@@ -416,13 +350,10 @@ impl ClassRegistry {
                 supers: smallvec![],
                 methods: vec![(
                     s("filter"),
-                    MethodSpec::Standard({
-                        let pred = arena.func(smallvec![v0], TyArena::BOOL);
-                        hkt2(
-                            arena.func(smallvec![pred, tv1_of_v0], tv1_of_v0),
-                            ClassId::FILTERABLE,
-                        )
-                    }),
+                    MethodSpec::Standard(scheme!(
+                        arena,
+                        forall T, F: Filterable. ((T) -> Bool, F[T]) -> F[T]
+                    )),
                 )],
             },
             // 14: Display
@@ -433,9 +364,9 @@ impl ClassRegistry {
                 supers: smallvec![],
                 methods: vec![(
                     s("display"),
-                    MethodSpec::Standard(simple1(
-                        arena.func(smallvec![v0], TyArena::STRING),
-                        ClassId::DISPLAY,
+                    MethodSpec::Standard(scheme!(
+                        arena,
+                        forall T: Display. (T) -> String
                     )),
                 )],
             },
@@ -447,9 +378,9 @@ impl ClassRegistry {
                 supers: smallvec![],
                 methods: vec![(
                     s("eq"),
-                    MethodSpec::Standard(simple1(
-                        arena.func(smallvec![v0, v0], TyArena::BOOL),
-                        ClassId::EQ,
+                    MethodSpec::Standard(scheme!(
+                        arena,
+                        forall T: Eq. (T, T) -> Bool
                     )),
                 )],
             },
@@ -462,9 +393,9 @@ impl ClassRegistry {
                 methods: vec![(
                     s("wrap"),
                     MethodSpec::Tracked {
-                        scheme: hkt2(
-                            arena.func(smallvec![v0], tv1_of_v0),
-                            ClassId::WRAPPABLE,
+                        scheme: scheme!(
+                            arena,
+                            forall T, F: Wrappable. (T) -> F[T]
                         ),
                         track: TrackKind::Convert,
                     },
@@ -478,13 +409,10 @@ impl ClassRegistry {
                 supers: smallvec![ClassId::WRAPPABLE],
                 methods: vec![(
                     s("chain"),
-                    MethodSpec::Standard({
-                        let cb = arena.func(smallvec![v0], tv2_of_v1);
-                        hkt3(
-                            arena.func(smallvec![tv2_of_v0, cb], tv2_of_v1),
-                            ClassId::CHAINABLE,
-                        )
-                    }),
+                    MethodSpec::Standard(scheme!(
+                        arena,
+                        forall T, U, F: Chainable. (F[T], (T) -> F[U]) -> F[U]
+                    )),
                 )],
             },
             // 18: Bimappable
@@ -495,30 +423,11 @@ impl ClassRegistry {
                 supers: smallvec![],
                 methods: vec![(
                     s("bimap"),
-                    MethodSpec::Standard({
-                        let v2 = arena.var(2);
-                        let v3 = arena.var(3);
-                        let tv4_ab =
-                            arena.hkt(TyVar::new(4), smallvec![v0, v1]);
-                        let tv4_cd =
-                            arena.hkt(TyVar::new(4), smallvec![v2, v3]);
-                        let f = arena.func(smallvec![v0], v2);
-                        let g = arena.func(smallvec![v1], v3);
-                        Scheme {
-                            vars: smallvec![
-                                TyVar::new(0),
-                                TyVar::new(1),
-                                TyVar::new(2),
-                                TyVar::new(3),
-                                TyVar::new(4),
-                            ],
-                            ty: arena.func(smallvec![f, g, tv4_ab], tv4_cd),
-                            constraints: smallvec![(
-                                TyVar::new(4),
-                                TypeClass::hkt(ClassId::BIMAPPABLE),
-                            )],
-                        }
-                    }),
+                    MethodSpec::Standard(scheme!(
+                        arena,
+                        forall A, B, C, D, F: Bimappable.
+                            ((A) -> C, (B) -> D, F[A, B]) -> F[C, D]
+                    )),
                 )],
             },
             // `19`: `Additive`
@@ -531,15 +440,15 @@ impl ClassRegistry {
                     (
                         s("zero"),
                         MethodSpec::Tracked {
-                            scheme: nullary1(nullary_v0, ClassId::ADDITIVE),
+                            scheme: scheme!(arena, forall T: Additive. () -> T),
                             track: TrackKind::Zero,
                         },
                     ),
                     (
                         s("add"),
-                        MethodSpec::Standard(simple1(
-                            binary_v0,
-                            ClassId::ADDITIVE,
+                        MethodSpec::Standard(scheme!(
+                            arena,
+                            forall T: Additive. (T, T) -> T
                         )),
                     ),
                 ],
@@ -552,9 +461,9 @@ impl ClassRegistry {
                 supers: smallvec![ClassId::ADDITIVE],
                 methods: vec![(
                     s("sub"),
-                    MethodSpec::Standard(simple1(
-                        binary_v0,
-                        ClassId::SUBTRACTIVE,
+                    MethodSpec::Standard(scheme!(
+                        arena,
+                        forall T: Subtractive. (T, T) -> T
                     )),
                 )],
             },
@@ -568,18 +477,18 @@ impl ClassRegistry {
                     (
                         s("one"),
                         MethodSpec::Tracked {
-                            scheme: nullary1(
-                                nullary_v0,
-                                ClassId::MULTIPLICATIVE,
+                            scheme: scheme!(
+                                arena,
+                                forall T: Multiplicative. () -> T
                             ),
                             track: TrackKind::One,
                         },
                     ),
                     (
                         s("mul"),
-                        MethodSpec::Standard(simple1(
-                            binary_v0,
-                            ClassId::MULTIPLICATIVE,
+                        MethodSpec::Standard(scheme!(
+                            arena,
+                            forall T: Multiplicative. (T, T) -> T
                         )),
                     ),
                 ],
@@ -592,9 +501,9 @@ impl ClassRegistry {
                 supers: smallvec![ClassId::MULTIPLICATIVE],
                 methods: vec![(
                     s("div"),
-                    MethodSpec::Standard(simple1(
-                        binary_v0,
-                        ClassId::DIVISIBLE,
+                    MethodSpec::Standard(scheme!(
+                        arena,
+                        forall T: Divisible. (T, T) -> T
                     )),
                 )],
             },
@@ -607,16 +516,16 @@ impl ClassRegistry {
                 methods: vec![
                     (
                         s("floor-div"),
-                        MethodSpec::Standard(simple1(
-                            binary_v0,
-                            ClassId::FLOOR_DIVISIBLE,
+                        MethodSpec::Standard(scheme!(
+                            arena,
+                            forall T: FloorDivisible. (T, T) -> T
                         )),
                     ),
                     (
                         s("mod"),
-                        MethodSpec::Standard(simple1(
-                            binary_v0,
-                            ClassId::FLOOR_DIVISIBLE,
+                        MethodSpec::Standard(scheme!(
+                            arena,
+                            forall T: FloorDivisible. (T, T) -> T
                         )),
                     ),
                 ],
@@ -629,23 +538,9 @@ impl ClassRegistry {
                 supers: smallvec![ClassId::MULTIPLICATIVE],
                 methods: vec![(
                     s("pow"),
-                    MethodSpec::Standard(simple1(
-                        binary_v0,
-                        ClassId::POWERABLE,
-                    )),
-                )],
-            },
-            // `25`: `Reversible`
-            ClassDef {
-                name: s("Reversible"),
-                shape: ClassShape::Concrete { params: 0 },
-                assoc_types: smallvec![],
-                supers: smallvec![],
-                methods: vec![(
-                    s("reverse"),
-                    MethodSpec::Standard(simple1(
-                        unary_v0,
-                        ClassId::REVERSIBLE,
+                    MethodSpec::Standard(scheme!(
+                        arena,
+                        forall T: Powerable. (T, T) -> T
                     )),
                 )],
             },
@@ -1994,8 +1889,8 @@ pub(crate) struct Scheme {
     /// User-specified class constraints on type variables.
     ///
     /// These are re-emitted when the scheme is instantiated at call sites.
-    /// Each tuple is `(type_var, class)` where parameterized classes like
-    /// `Iterable` carry the element type directly.
+    /// Each tuple is `(type_var, class)`. Parameterized classes carry any
+    /// fixed type arguments directly.
     pub(crate) constraints: SmallVec<[(TyVar, TypeClass<TyId>); 2]>,
 }
 

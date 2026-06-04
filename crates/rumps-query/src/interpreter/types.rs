@@ -2,6 +2,7 @@
 
 use super::Interpreter;
 use crate::io::IoContext;
+use crate::typecheck::Ty;
 use crate::value::{Payload, TypeDef, TypeId, Value};
 use crate::{ClassId, Result, Span};
 
@@ -10,19 +11,17 @@ impl<I: IoContext> Interpreter<'_, I> {
     pub(super) fn coerce_value(
         &mut self,
         val: &Value,
-        target: TypeId,
+        target_base: TypeId,
+        target: &Ty,
         span: Span,
     ) -> Result<Payload> {
-        let is_wrap = self.registry.get_def(target).is_some_and(|def| {
+        if self.registry.get_def(target_base).is_some_and(|def| {
             matches!(def, TypeDef::Union { .. } | TypeDef::Alias { .. })
-        });
-        if is_wrap {
+        }) {
             Ok(val.payload.clone())
         } else {
-            let ty_id = self.checked.types.type_id(target);
-            let ty = self.checked.types.get(ty_id).clone();
             let mid = self.arena.intern("into");
-            self.dispatch_convert_value(ClassId::INTO, mid, val, &ty, span)
+            self.dispatch_convert_value(ClassId::INTO, mid, val, target, span)
         }
     }
 

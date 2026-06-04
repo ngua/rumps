@@ -1,0 +1,6 @@
+; HKT `Filterable` rejects raw `Range`
+
+fun main() {
+  let xs = Filterable:filter(x => x > 3, 1 .. 10)
+  write xs
+}

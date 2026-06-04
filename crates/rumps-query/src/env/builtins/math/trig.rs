@@ -7,7 +7,7 @@ impl Environment {
     pub(super) fn build_math_trig_module(&mut self) -> Module {
         let a = &mut self.ty_arena;
 
-        let trig_mod = Module::from_prims(
+        Module::from_prims(
             &[
                 PrimDef {
                     name: "sin",
@@ -46,7 +46,6 @@ impl Environment {
                 },
             ],
             &mut self.consts.strings,
-        );
-        trig_mod
+        )
     }
 }

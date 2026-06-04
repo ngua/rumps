@@ -2087,7 +2087,7 @@ impl InferCtx<'_> {
         span: Span,
     ) -> TyId {
         // Two-pass approach: first create all type variables, then emit
-        // constraints (needed for Iterable[T] where T references another param)
+        // constraints (needed for `Into[T]` where `T` references another param)
         // Keep track of name -> TyVar for scheme building
         let name_to_tv: HashMap<StringId, TyVar> = type_params
             .iter()

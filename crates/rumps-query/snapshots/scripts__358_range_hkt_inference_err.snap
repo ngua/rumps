@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Raw `Range` must not infer as fake `Range[Int]`\n\nfun bad[F](x: F[Int]) {\n  write x\n}\n\nfun main() {\n  bad(1 .. 10)\n}\n"
+---
+ERROR: type mismatch: expected `Range`, got `T[Int]`

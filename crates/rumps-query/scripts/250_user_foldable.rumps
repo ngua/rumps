@@ -2,7 +2,7 @@
 
 variant Box[T] = Full(T) | Empty
 newtype Bag[T] = Array[T]
-union Flex = Array[Int] | Range
+union Flex = Array[Int] | Bag[Int]
 
 class Foldable for Box {
   fun reduce(f, init, x) {
@@ -26,6 +26,6 @@ fun main() {
   let a: Flex = [10, 20, 30]
   write Foldable:reduce((acc, x) => acc + x, 0, a)
 
-  let r: Flex = 1 .. 5
-  write Foldable:reduce((acc, x) => acc + x, 0, r)
+  let c: Flex = b
+  write Foldable:reduce((acc, x) => acc + x, 0, c)
 }

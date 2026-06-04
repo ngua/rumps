@@ -2210,7 +2210,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let json = self.jsonify_value(&val);
                 Ok(self.value_for_expr(id, Payload::Json(Arc::new(json))))
             } else {
-                self.coerce_value(&val, target_base, span)
+                let target = self.checked.types.get(rty).clone();
+                self.coerce_value(&val, target_base, &target, span)
                     .map(|payload| self.value_for_expr(id, payload))
             }
         } else if matches!(
@@ -2340,6 +2341,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             typecheck::Ty::Object(fields) => {
                 self.read_to_object(&val.payload, target, &fields, span)
             }
+            typecheck::Ty::Range => self.read_range_value(val, span),
             typecheck::Ty::Json => {
                 let mut ctx = class::ClassCtx {
                     arena: &mut self.arena,
@@ -2364,6 +2366,59 @@ impl<I: IoContext> Interpreter<'_, I> {
                     span,
                 )
             }
+        }
+    }
+
+    fn read_range_value(&mut self, val: &Value, span: Span) -> Result<Payload> {
+        match &val.payload {
+            Payload::Array(elems) => {
+                let vals: SmallVec<[i64; 4]> = elems
+                    .iter()
+                    .map(|id| match self.arena.payload(*id) {
+                        Some(Payload::Int(n)) => *n,
+                        _ => typechecked!("Array[Int] read Range", "Int"),
+                    })
+                    .collect();
+                let step = vals.windows(2).next().map(|w| match w {
+                    [a, b] => (*b as i128) - (*a as i128),
+                    _ => typechecked!("Array[Int] read Range", "pair window"),
+                });
+                let contiguous = step.is_none_or(|s| {
+                    matches!(s, 1 | -1)
+                        && vals.windows(2).all(|w| match w {
+                            [a, b] => (*b as i128) - (*a as i128) == s,
+                            _ => {
+                                typechecked!(
+                                    "Array[Int] read Range",
+                                    "pair window"
+                                )
+                            }
+                        })
+                });
+                Ok(if contiguous {
+                    let range =
+                        vals.first().copied().zip(vals.last().copied()).map_or(
+                            Payload::Range {
+                                start: 0,
+                                end: 0,
+                                inclusive: false,
+                            },
+                            |(start, end)| Payload::Range {
+                                start,
+                                end,
+                                inclusive: true,
+                            },
+                        );
+                    self.make_result_ok_typed(
+                        range,
+                        RuntimeTyId::from(typecheck::TyArena::RANGE),
+                        span,
+                    )
+                } else {
+                    self.make_result_err("expected contiguous range", span)
+                })
+            }
+            _ => Ok(self.make_result_err("expected array", span)),
         }
     }
 

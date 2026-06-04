@@ -3,7 +3,7 @@
 
 fun main() {
   let r = 1 ..= 10
-  ; `Reversible:reverse` on `Range` returns `Range`
-  let revd: Array[Char] = Reversible:reverse(r)
+  ; `Iterable:reverse` on `Range` returns `Range`
+  let revd: Array[Char] = Iterable:reverse(r)
   write revd
 }

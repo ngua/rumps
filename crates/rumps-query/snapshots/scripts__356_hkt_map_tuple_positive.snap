@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; HKT `Mappable` support for tuple\n\nfun main() {\n  write Mappable:map(x => x + 1, (\"label\", 41))\n}\n"
+---
+("label", 42)

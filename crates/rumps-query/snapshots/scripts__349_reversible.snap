@@ -1,10 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; `Reversible` class preserves concrete return types.\n\nfun keep-chars(xs: Array[Char]) -> Array[Char] {\n  Reversible:reverse(xs)\n}\n\nfun keep-range(r: Range) -> Range {\n  Reversible:reverse(r)\n}\n\nfun main() {\n  let chars = ['a', 'b', 'c']\n  let rev-chars: Array[Char] = Reversible:reverse(chars)\n  write rev-chars\n\n  let r = 1 .. 5\n  let rev-range: Range = Reversible:reverse(r)\n  write rev-range\n\n  let rev-arr = Reversible:reverse\n  write rev-arr([1, 2, 3])\n\n  let rev-r = Reversible:reverse\n  write rev-r(1 ..= 3)\n\n  write keep-chars(chars)\n  write keep-range(1 ..= 4)\n}\n"
+description: "; `Reversible` was removed; use `Iterable:reverse`.\n\nfun main() {\n  write Reversible:reverse([1, 2, 3])\n}\n"
 ---
-[ 'c', 'b', 'a' ]
-4 ..= 1
-[ 3, 2, 1 ]
-3 ..= 1
-[ 'c', 'b', 'a' ]
-4 ..= 1
+ERROR: unknown class `Reversible`

@@ -119,7 +119,7 @@ fun use-front(map: ((String, Int, Int), ((Int) -> Int), (String, Int)) -> (Strin
 fun main() {
   let len = Iterable:length
   write len([1, 2, 3])
-  write len(1 ..= 5)
+  write len(Range.collect(1 ..= 5))
 
   let neg = Negatable:neg
   write neg(5)

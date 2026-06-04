@@ -35,6 +35,9 @@ pub(crate) enum State {
         kind: IterKind,
         acc: SmallVec<[ValueId; 4]>,
     },
+    MapTuple {
+        first: ValueId,
+    },
     /// `Mappable:map` over single-value containers (Option.Some, Result.Ok).
     MapContainer {
         /// Type constructor (`OPTION` or `RESULT`).
@@ -63,7 +66,9 @@ pub(crate) enum State {
         acc: ValueId,
     },
     /// `Chainable:chain`; single invocation, wraps result.
-    Chain { wrapper: ChainWrapper },
+    Chain {
+        wrapper: ChainWrapper,
+    },
     /// `Array.zip-with`.
     ArrayZipWith {
         arr_a: ValueId,
@@ -72,7 +77,10 @@ pub(crate) enum State {
         acc: SmallVec<[ValueId; 4]>,
     },
     /// `Prelude.foreach` over an array; discards each invocation result.
-    PreludeForeachArray { source: ValueId, idx: usize },
+    PreludeForeachArray {
+        source: ValueId,
+        idx: usize,
+    },
     /// `Prelude.foreach` over a single-value container.
     PreludeForeachOnce,
     /// `Array.sort-by` merge sort; stack-based to avoid recursion.

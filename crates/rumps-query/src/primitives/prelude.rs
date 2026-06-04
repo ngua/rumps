@@ -17,7 +17,7 @@ impl Prelude {
         Box::pin(async move { Ok(args[0]) })
     }
 
-    /// `forall T, F: Iterable. (F[T], T) -> Bool`
+    /// `forall T. (Array[T], T) -> Bool`
     ///
     /// Checks if `needle` is contained in the iterable.
     pub(crate) fn contains<'a>(

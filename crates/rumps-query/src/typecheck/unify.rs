@@ -1379,15 +1379,27 @@ impl SolveCtx<'_> {
                                         ),
                                         smallvec![k, v],
                                     ))
+                                } else if self
+                                    .hkt_var_classes
+                                    .get(&self.uf.find(tv))
+                                    .is_some_and(|&id| {
+                                        matches!(
+                                            id,
+                                            ClassId::MAPPABLE
+                                                | ClassId::FILTERABLE
+                                        )
+                                    })
+                                {
+                                    Some((
+                                        self.ty_arena.map_ty(k, TyArena::ERROR),
+                                        smallvec![v],
+                                    ))
                                 } else {
                                     Some((
                                         self.ty_arena.map_ty(TyArena::ERROR, v),
                                         smallvec![k],
                                     ))
                                 }
-                            }
-                            Ty::Range => {
-                                Some((TyArena::RANGE, smallvec![TyArena::INT]))
                             }
                             Ty::Named(id, ref type_args) => {
                                 if type_args.is_empty() {
@@ -1484,14 +1496,6 @@ impl SolveCtx<'_> {
                     }
                 }
             }
-
-            Ty::Range => self.unify_apply_inner(
-                tv,
-                args,
-                TyArena::RANGE,
-                &[TyArena::INT],
-                span,
-            ),
 
             // User-defined named types: decompose into constructor + element
             // Element type is the LAST type arg (Haskell curried convention).
@@ -1634,7 +1638,7 @@ impl SolveCtx<'_> {
         span: Span,
     ) -> UnifyResult {
         self.unify_var(tv, ctor, span)?;
-        self.unify_sequence(args.iter().copied(), elems.iter().copied(), span)
+        self.unify_hkt_args(args, elems, span)
     }
 
     /// Unify two sequences of types element-wise.
@@ -1646,6 +1650,60 @@ impl SolveCtx<'_> {
     ) -> UnifyResult {
         ts1.zip(ts2)
             .try_for_each(|(t1, t2)| self.unify_inner(t1, t2, span))
+    }
+
+    fn hkt_arity(exp: usize, got: usize, span: Span) -> TypeError {
+        TypeError::ArityMismatch {
+            expected: exp,
+            got,
+            span,
+        }
+    }
+
+    fn unify_hkt_args(
+        &mut self,
+        exp: &[TyId],
+        got: &[TyId],
+        span: Span,
+    ) -> UnifyResult {
+        if exp.len() == got.len() {
+            self.unify_sequence(exp.iter().copied(), got.iter().copied(), span)
+        } else {
+            Err(Self::hkt_arity(exp.len(), got.len(), span))
+        }
+    }
+
+    fn unify_hkt_known_args(&mut self, exp: &[TyId], got: &[TyId], span: Span) {
+        let res = if exp.is_empty() {
+            Ok(())
+        } else {
+            self.unify_hkt_args(exp, got, span)
+        };
+        if let Err(e) = res {
+            self.errors.push(e);
+        }
+    }
+
+    fn unify_hkt_inst_args(
+        &mut self,
+        exp: &[TyId],
+        got: &[TyId],
+        subst: &Rename,
+        span: Span,
+    ) {
+        if exp.is_empty() {
+            Ok(())
+        } else if exp.len() == got.len() {
+            exp.iter().zip(got.iter()).try_for_each(|(&e, &g)| {
+                let resolved = self.ty_arena.apply(g, subst);
+                self.unify_types(e, resolved, span)
+            })
+        } else {
+            Err(Self::hkt_arity(exp.len(), got.len(), span))
+        }
+        .unwrap_or_else(|e| {
+            self.errors.push(e);
+        });
     }
 
     /// Find a bijective matching between union members via backtracking.
@@ -1911,7 +1969,7 @@ impl SolveCtx<'_> {
             }
         });
 
-        // First pass: process Unify, Callable, HasField, Iterable, Indexable.
+        // First pass: process `Unify`, `Callable`, `HasField`, and `Indexable`.
         // These constraints generate type bindings (via union-find) that
         // other constraints (Numeric, Into[String], etc.) depend on.
         constraints.iter().for_each(|(c, module)| {
@@ -1955,16 +2013,6 @@ impl SolveCtx<'_> {
                     self.check_has_field(base, *field, field_ty, *span);
                 }
                 Constraint::Class { ty, class, span } => match class {
-                    // Iterable (with element type) and Indexable: first pass
-                    TypeClass::Hkt {
-                        id: ClassId::ITERABLE,
-                        ref elems,
-                        ..
-                    } if !elems.is_empty() => {
-                        let ty = self.uf.resolve(*ty, self.ty_arena);
-                        let class = class.resolve_inner(self.uf, self.ty_arena);
-                        self.satisfies_class(&class, ty, *span);
-                    }
                     TypeClass::Concrete {
                         id: ClassId::INDEXABLE,
                         ..
@@ -2033,8 +2081,8 @@ impl SolveCtx<'_> {
     ///
     /// This is the unified constraint checking method that handles all class
     /// constraints. The `class` parameter contains any associated types (e.g.,
-    /// `Into(target)`, `Iterable(elem)`). The union-find is updated in-place
-    /// when the constraint involves unification (e.g., `Fallible`, `Iterable`,
+    /// `Into(target)`, `Indexable(elem)`). The union-find is updated in-place
+    /// when the constraint involves unification (e.g., `Fallible`, `Indexable`,
     /// `Indexable`).
     fn satisfies_class(
         &mut self,
@@ -2100,11 +2148,20 @@ impl SolveCtx<'_> {
             {
                 self.check_user_parameterized(*id, params, class, ty, span)
             }
+            TypeClass::Hkt {
+                id: ClassId::ITERABLE,
+                ..
+            } => {
+                self.errors.push(TypeError::UnsatisfiedClass(
+                    class.clone(),
+                    ty,
+                    span,
+                ));
+            }
             TypeClass::Hkt { id, ref elems, .. }
                 if matches!(
                     *id,
-                    ClassId::ITERABLE
-                        | ClassId::MAPPABLE
+                    ClassId::MAPPABLE
                         | ClassId::FILTERABLE
                         | ClassId::FOLDABLE
                         | ClassId::BIMAPPABLE
@@ -2159,7 +2216,7 @@ impl SolveCtx<'_> {
                 ClassId::CONCATABLE,
                 Ty::String | Ty::Array(_) | Ty::Map(_, _) | Ty::Option(_),
             ) => Some(Satisfaction::Direct),
-            (ClassId::REVERSIBLE, Ty::Array(_) | Ty::Range) => {
+            (ClassId::ITERABLE, Ty::Array(_) | Ty::Range) => {
                 Some(Satisfaction::Direct)
             }
             (
@@ -2366,7 +2423,7 @@ impl SolveCtx<'_> {
         }
     }
 
-    /// Check an HKT class (`Iterable`, `Mappable`, `Filterable`, `Foldable`, `Bimappable`)
+    /// Check an HKT class (`Mappable`, `Filterable`, `Foldable`, `Bimappable`)
     /// against `ty`, optionally unifying element types with `elems`.
     fn check_hkt_class(
         &mut self,
@@ -2380,11 +2437,13 @@ impl SolveCtx<'_> {
         let shape = self.ty_arena.get(ty).clone();
         let builtin_elems: Option<SmallVec<[TyId; 2]>> =
             match (class_id, &shape) {
-                (_, Ty::Array(e)) => Some(smallvec![*e]),
                 (
-                    ClassId::ITERABLE | ClassId::FILTERABLE | ClassId::FOLDABLE,
-                    Ty::Range,
-                ) => Some(smallvec![TyArena::INT]),
+                    ClassId::MAPPABLE | ClassId::FILTERABLE | ClassId::FOLDABLE,
+                    Ty::Array(e),
+                ) => Some(smallvec![*e]),
+                (ClassId::MAPPABLE, Ty::Tuple(ts)) if ts.len() == 2 => {
+                    ts.get(1).copied().map(|e| smallvec![e])
+                }
                 (ClassId::MAPPABLE, Ty::Option(e)) => Some(smallvec![*e]),
                 (ClassId::MAPPABLE, Ty::Result(ok, _)) => Some(smallvec![*ok]),
                 (ClassId::BIMAPPABLE, Ty::Result(ok, err)) => {
@@ -2397,11 +2456,7 @@ impl SolveCtx<'_> {
             };
         match builtin_elems {
             Some(ref inner) => {
-                elems.iter().zip(inner.iter()).for_each(|(&e, &b)| {
-                    if let Err(e) = self.unify_types(e, b, span) {
-                        self.errors.push(e);
-                    }
-                });
+                self.unify_hkt_known_args(elems, inner, span);
             }
             None => match shape {
                 Ty::Union(_, members) => {
@@ -2415,17 +2470,11 @@ impl SolveCtx<'_> {
                         Some(inst) => {
                             let param_subst = self
                                 .build_instance_subst(&inst, &type_args, span);
-                            elems.iter().zip(inst.class_args.iter()).for_each(
-                                |(&elem, &inst_elem)| {
-                                    let resolved = self
-                                        .ty_arena
-                                        .apply(inst_elem, &param_subst);
-                                    if let Err(e) =
-                                        self.unify_types(elem, resolved, span)
-                                    {
-                                        self.errors.push(e);
-                                    }
-                                },
+                            self.unify_hkt_inst_args(
+                                elems,
+                                &inst.class_args,
+                                &param_subst,
+                                span,
                             );
                             self.check_instance_constraints(
                                 &inst,
@@ -2435,24 +2484,11 @@ impl SolveCtx<'_> {
                             );
                         }
                         None => {
-                            if class_id == ClassId::ITERABLE {
-                                let exp = elems
-                                    .first()
-                                    .copied()
-                                    .unwrap_or(TyArena::UNKNOWN);
-                                let arr = self.ty_arena.array(exp);
-                                self.errors.push(TypeError::Mismatch {
-                                    expected: arr,
-                                    got: ty,
-                                    span,
-                                });
-                            } else {
-                                self.errors.push(TypeError::UnsatisfiedClass(
-                                    class.clone(),
-                                    ty,
-                                    span,
-                                ));
-                            }
+                            self.errors.push(TypeError::UnsatisfiedClass(
+                                class.clone(),
+                                ty,
+                                span,
+                            ));
                         }
                     }
                 }
@@ -2465,16 +2501,11 @@ impl SolveCtx<'_> {
                         Some(inst) => {
                             let subst =
                                 self.build_instance_subst(&inst, &ts, span);
-                            elems.iter().zip(inst.class_args.iter()).for_each(
-                                |(&elem, &ie)| {
-                                    let resolved =
-                                        self.ty_arena.apply(ie, &subst);
-                                    if let Err(e) =
-                                        self.unify_types(elem, resolved, span)
-                                    {
-                                        self.errors.push(e);
-                                    }
-                                },
+                            self.unify_hkt_inst_args(
+                                elems,
+                                &inst.class_args,
+                                &subst,
+                                span,
                             );
                             self.check_instance_constraints(
                                 &inst,
@@ -2491,22 +2522,11 @@ impl SolveCtx<'_> {
                     }
                 }
                 _ => {
-                    if class_id == ClassId::ITERABLE {
-                        let exp =
-                            elems.first().copied().unwrap_or(TyArena::UNKNOWN);
-                        let arr = self.ty_arena.array(exp);
-                        self.errors.push(TypeError::Mismatch {
-                            expected: arr,
-                            got: ty,
-                            span,
-                        });
-                    } else {
-                        self.errors.push(TypeError::UnsatisfiedClass(
-                            class.clone(),
-                            ty,
-                            span,
-                        ));
-                    }
+                    self.errors.push(TypeError::UnsatisfiedClass(
+                        class.clone(),
+                        ty,
+                        span,
+                    ));
                 }
             },
         }
@@ -2661,8 +2681,6 @@ impl SolveCtx<'_> {
                     (Ty::Path, Ty::FilePath) => {}
                     (Ty::Named(id, _), Ty::FilePath) if *id == TypeId::PATH => {
                     }
-
-                    // `Range -> Array[Int]`
                     (Ty::Range, Ty::Array(elem)) if *elem == TyArena::INT => {}
 
                     // `Storable` to member type
@@ -2832,6 +2850,7 @@ impl SolveCtx<'_> {
                         });
                     }
                     _ if self.check_try_into_instance(ty, to, span) => {}
+                    (Ty::Array(elem), Ty::Range) if *elem == TyArena::INT => {}
                     (Ty::Array(elem), Ty::Json) => self.satisfies_class(
                         &TypeClass::param(ClassId::TRY_INTO, TyArena::JSON),
                         *elem,
@@ -3118,14 +3137,7 @@ impl SolveCtx<'_> {
 
         match self.ty_arena.get(ty).clone() {
             Ty::Option(opt_elem) => {
-                elems
-                    .iter()
-                    .zip([opt_elem].iter())
-                    .for_each(|(&inner, &b)| {
-                        if let Err(e) = self.unify_types(inner, b, span) {
-                            self.errors.push(e);
-                        }
-                    });
+                self.unify_hkt_known_args(elems, &[opt_elem], span);
             }
             Ty::Result(ok, err) => {
                 let builtin: SmallVec<[TyId; 2]> = if elems.len() <= 1 {
@@ -3133,11 +3145,7 @@ impl SolveCtx<'_> {
                 } else {
                     smallvec![ok, err]
                 };
-                elems.iter().zip(builtin.iter()).for_each(|(&inner, &b)| {
-                    if let Err(e) = self.unify_types(inner, b, span) {
-                        self.errors.push(e);
-                    }
-                });
+                self.unify_hkt_known_args(elems, &builtin, span);
             }
             Ty::Tuple(ts) => {
                 match self
@@ -3147,15 +3155,11 @@ impl SolveCtx<'_> {
                 {
                     Some(inst) => {
                         let subst = self.build_instance_subst(&inst, &ts, span);
-                        elems.iter().zip(inst.class_args.iter()).for_each(
-                            |(&inner, &ie)| {
-                                let resolved = self.ty_arena.apply(ie, &subst);
-                                if let Err(e) =
-                                    self.unify_types(inner, resolved, span)
-                                {
-                                    self.errors.push(e);
-                                }
-                            },
+                        self.unify_hkt_inst_args(
+                            elems,
+                            &inst.class_args,
+                            &subst,
+                            span,
                         );
                         self.check_instance_constraints(
                             &inst,
@@ -3165,12 +3169,8 @@ impl SolveCtx<'_> {
                         );
                     }
                     None => {
-                        // Fallback: direct zip (fully-unapplied tuples)
-                        elems.iter().zip(ts.iter()).for_each(|(&inner, &b)| {
-                            if let Err(e) = self.unify_types(inner, b, span) {
-                                self.errors.push(e);
-                            }
-                        });
+                        // Fallback for fully-unapplied tuple constructors.
+                        self.unify_hkt_known_args(elems, &ts, span);
                     }
                 }
             }
@@ -3197,17 +3197,11 @@ impl SolveCtx<'_> {
                     Some(inst) => {
                         let param_subst =
                             self.build_instance_subst(&inst, &type_args, span);
-                        elems.iter().zip(inst.class_args.iter()).for_each(
-                            |(&inner, &inst_inner)| {
-                                let resolved = self
-                                    .ty_arena
-                                    .apply(inst_inner, &param_subst);
-                                if let Err(e) =
-                                    self.unify_types(inner, resolved, span)
-                                {
-                                    self.errors.push(e);
-                                }
-                            },
+                        self.unify_hkt_inst_args(
+                            elems,
+                            &inst.class_args,
+                            &param_subst,
+                            span,
                         );
                         self.check_instance_constraints(
                             &inst,
@@ -3387,16 +3381,11 @@ impl SolveCtx<'_> {
                         Some(inst) => {
                             let subst =
                                 self.build_instance_subst(&inst, &args, span);
-                            elems.iter().zip(inst.class_args.iter()).for_each(
-                                |(&elem, &inst_elem)| {
-                                    let resolved =
-                                        self.ty_arena.apply(inst_elem, &subst);
-                                    if let Err(e) =
-                                        self.unify_types(elem, resolved, span)
-                                    {
-                                        self.errors.push(e);
-                                    }
-                                },
+                            self.unify_hkt_inst_args(
+                                elems,
+                                &inst.class_args,
+                                &subst,
+                                span,
                             );
                             self.check_instance_constraints(
                                 &inst,
@@ -3431,8 +3420,8 @@ impl SolveCtx<'_> {
         type_args: &[TyId],
         span: Span,
     ) -> Rename {
-        // Partition into var mappings and concrete pairs first to
-        // avoid borrow-checker issues with `ty_arena` vs `unify_types`.
+        // Partition into var mappings and concrete pairs first to avoid
+        // borrow-checker issues with `ty_arena` vs `unify_types`.
         let (vars, concretes): (
             SmallVec<[(TyVar, TyId); 2]>,
             SmallVec<[(TyId, TyId); 2]>,
@@ -4018,7 +4007,7 @@ mod tests {
         let mut a = TyArena::new();
         let t = TyVar::new(0);
         let var_id = a.var(0);
-        let constraint = TypeClass::hkt_elem(ClassId::ITERABLE, var_id);
+        let constraint = TypeClass::hkt_elem(ClassId::MAPPABLE, var_id);
 
         // Create rename: T -> Int
         let rename = Rename::singleton(t, TyArena::INT);
@@ -4026,13 +4015,13 @@ mod tests {
         // Apply rename to constraint
         let resolved = constraint.apply(&rename, &mut a);
 
-        // Should now be `Iterable` with `elems: [Int]`
+        // Should now be `Mappable` with `elems: [Int]`.
         assert!(
             matches!(
                 resolved,
-                TypeClass::Hkt { id: ClassId::ITERABLE, ref elems, .. } if elems.first() == Some(&TyArena::INT)
+                TypeClass::Hkt { id: ClassId::MAPPABLE, ref elems, .. } if elems.first() == Some(&TyArena::INT)
             ),
-            "constraint should be Iterable with elems=[Int] after rename"
+            "constraint should be Mappable with elems=[Int] after rename"
         );
     }
 }

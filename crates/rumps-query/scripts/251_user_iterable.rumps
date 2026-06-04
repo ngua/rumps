@@ -1,41 +1,8 @@
-; User Iterable for type, newtype, and union
-
-variant Box[T] = Full(T) | Empty
-newtype Bag[T] = Array[T]
-union Flex = Array[Int] | Range
-
-class Iterable for Box {
-  fun length(x) {
-    match x {
-      Box.Full(_) => { 1 }
-      Box.Empty => { 0 }
-    }
-  }
-
-  fun collect(x) {
-    match x {
-      Box.Full(v) => { [v] }
-      Box.Empty => { [] }
-    }
-  }
-}
+; Simple builtin `Iterable` instances
 
 fun main() {
-  ; type with user instance
-  write Iterable:length(Box.Full(42))
-  write Iterable:length(Box.Empty)
-  write Iterable:collect(Box.Full(99))
-  write Iterable:collect(Box.Empty)
-
-  ; newtype auto-derive
-  let b: Bag[Int] = [10, 20, 30]
-  write Iterable:length(b)
-  write Iterable:collect(b)
-
-  ; union auto-derive
-  let a: Flex = [10, 20, 30]
-  write Iterable:length(a)
-
-  let r: Flex = 1 .. 4
-  write Iterable:length(r)
+  write Iterable:length([1, 2, 3])
+  write Iterable:length(1 .. 10)
+  write Iterable:reverse([1, 2, 3])
+  write Iterable:reverse(1 .. 10)
 }

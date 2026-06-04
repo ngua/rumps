@@ -1,28 +1,5 @@
-; `Reversible` class preserves concrete return types.
-
-fun keep-chars(xs: Array[Char]) -> Array[Char] {
-  Reversible:reverse(xs)
-}
-
-fun keep-range(r: Range) -> Range {
-  Reversible:reverse(r)
-}
+; `Reversible` was removed; use `Iterable:reverse`.
 
 fun main() {
-  let chars = ['a', 'b', 'c']
-  let rev-chars: Array[Char] = Reversible:reverse(chars)
-  write rev-chars
-
-  let r = 1 .. 5
-  let rev-range: Range = Reversible:reverse(r)
-  write rev-range
-
-  let rev-arr = Reversible:reverse
-  write rev-arr([1, 2, 3])
-
-  let rev-r = Reversible:reverse
-  write rev-r(1 ..= 3)
-
-  write keep-chars(chars)
-  write keep-range(1 ..= 4)
+  write Reversible:reverse([1, 2, 3])
 }

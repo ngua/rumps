@@ -1,0 +1,4 @@
+fun main() {
+  let xs: Array[Int] = Range.collect(1 .. 10)
+  write xs
+}

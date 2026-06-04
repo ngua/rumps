@@ -54,11 +54,11 @@ fun main() {
   write identity-storable(true)     ; true
 
   ; ============================================================================
-  ; Iterable constraint with element type
+  ; Foldable constraint with element type
   ; ============================================================================
 
   write sum-all([1, 2, 3, 4, 5])     ; 15
-  write sum-all(1 .. 4)             ; 6 (1+2+3)
+  write sum-all(Range.collect(1 .. 4)) ; 6 (1+2+3)
 }
 
 ; ============================================================================
@@ -105,7 +105,7 @@ fun identity-storable[V: Into[Storable]](v: V) -> V {
   v
 }
 
-; Iterable: type must be Array or Range (HKT constraint)
-fun sum-all[T: Numeric + Additive, C: Iterable](coll: C[T]) -> T {
+; Foldable: type must support element-wise reduction
+fun sum-all[T: Numeric + Additive, F: Foldable](coll: F[T]) -> T {
   Foldable:reduce((acc, x) => acc + x, 0, coll)
 }

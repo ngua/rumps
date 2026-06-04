@@ -1643,7 +1643,13 @@ impl<'a> InferCtx<'a> {
             |(expr, rhs, ann, span)| {
                 let rhs = self.uf.resolve(rhs, &mut self.ty_arena);
                 let ann = self.uf.resolve(ann, &mut self.ty_arena);
-                if matches!(self.ty_arena.get(rhs), Ty::Union(..))
+                if self.reject_iterable_reverse_union_ann(expr, rhs, ann) {
+                    self.errors.push(TypeError::Mismatch {
+                        expected: ann,
+                        got: rhs,
+                        span,
+                    });
+                } else if matches!(self.ty_arena.get(rhs), Ty::Union(..))
                     && !matches!(
                         self.ty_arena.get(ann),
                         Ty::Union(..) | Ty::Error
@@ -1660,6 +1666,28 @@ impl<'a> InferCtx<'a> {
                 }
             },
         );
+    }
+
+    fn reject_iterable_reverse_union_ann(
+        &self,
+        expr: ExprId,
+        rhs: TyId,
+        ann: TyId,
+    ) -> bool {
+        self.is_iterable_reverse_call(expr)
+            && !matches!(self.ty_arena.get(rhs), Ty::Union(..) | Ty::Error)
+            && matches!(self.ty_arena.get(ann), Ty::Union(None, ms) if ms.len() > 1)
+    }
+
+    fn is_iterable_reverse_call(&self, expr: ExprId) -> bool {
+        self.ast.get_expr(expr).is_some_and(|e| match e {
+            ast::Expr::ClassMethod(class, method, args) => {
+                args.len() == 1
+                    && self.env.resolve_str(*class) == "Iterable"
+                    && self.env.resolve_str(*method) == "reverse"
+            }
+            _ => false,
+        })
     }
 
     /// After constraint solving and substitution application, any remaining

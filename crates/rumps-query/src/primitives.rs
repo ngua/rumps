@@ -12,9 +12,11 @@
 //! - [`Array`]: `push`, `pop`, `head`, `tail`, `sort`, `slice`, `concat`,
 //!   `sort-by`, `zip`, `zip-with`, `unzip`, `intersperse`
 //!
-//! Iterable operations (`length`, `collect`, `map`, `filter`, `reduce`)
-//! are handled via class method syntax (e.g. `Iterable:length`, `Mappable:map`).
-//! `foreach` and `contains` are standalone `Prelude` functions.
+//! Iterable operations include simple class methods such as
+//! `Iterable:length` and `Iterable:reverse`, plus higher-kinded class methods
+//! such as `Mappable:map`, `Filterable:filter`, and `Foldable:reduce`.
+//! `Range.collect` materializes a `Range` into an `Array`. `foreach` and
+//! `contains` are standalone `Prelude` functions.
 //!
 //! When adding a new RUMPS module, create a new type implementing [`Prim`]
 //! and add its functions as associated functions.
@@ -48,6 +50,7 @@ mod math;
 mod option;
 mod prelude;
 mod random;
+mod range;
 mod result;
 mod string;
 mod time;
@@ -59,6 +62,7 @@ pub(crate) use math::{Math, Trig};
 pub(crate) use option::Opt;
 pub(crate) use prelude::Prelude;
 pub(crate) use random::Random;
+pub(crate) use range::Range;
 pub(crate) use result::Res;
 use smallvec::SmallVec;
 pub(crate) use string::Str;

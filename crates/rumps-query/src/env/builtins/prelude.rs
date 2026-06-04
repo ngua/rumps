@@ -27,7 +27,7 @@ impl Environment {
                         f: Prelude::contains,
                         ty: scheme!(
                             a,
-                            forall T, F: Iterable. (F[T], T) -> Bool
+                            forall T. (Array[T], T) -> Bool
                         ),
                     },
                     PrimDef {

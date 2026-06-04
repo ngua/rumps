@@ -109,6 +109,11 @@ impl ClassCtx<'_> {
                     vals: smallvec![result],
                 }))
             }
+            State::MapTuple { first } => {
+                Ok(Step::Done(Payload::Tuple(Arc::new(smallvec![
+                    first, result
+                ]))))
+            }
             State::FilterArray {
                 source,
                 idx,

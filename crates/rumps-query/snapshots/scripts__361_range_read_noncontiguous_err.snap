@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "fun main() {\n  let r = [1, 3] read Range\n  write r\n}\n"
+---
+Result.Err("expected contiguous range")

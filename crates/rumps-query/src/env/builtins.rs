@@ -5,6 +5,7 @@ mod math;
 mod option;
 mod prelude;
 mod random;
+mod range;
 mod result;
 mod string;
 mod time;
@@ -24,5 +25,6 @@ impl Environment {
         self.register_result_builtin();
         self.register_io_builtin();
         self.register_prelude_builtin();
+        self.register_range_builtin();
     }
 }

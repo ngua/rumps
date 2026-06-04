@@ -1,0 +1,6 @@
+; HKT `Mappable` rejects raw `Range`
+
+fun main() {
+  let xs = Mappable:map(x => x + 1, 1 .. 10)
+  write xs
+}
