@@ -3,7 +3,10 @@ use std::{iter, ops};
 
 use smallvec::{smallvec, SmallVec};
 
-use super::{Continuation, Registry, ResultMode, SortFrame, State, Step};
+use super::{
+    Compare, Continuation, Registry, ResultMode, SortCmp, SortFrame, State,
+    Step,
+};
 use crate::intern::StringInterner;
 use crate::interpreter::class::ClassCtx;
 use crate::value::{Payload, TypeId, ValueId};
@@ -15,14 +18,39 @@ pub(super) struct Fns;
 impl Fns {
     pub(super) fn register(reg: &mut Registry, i: &mut StringInterner) {
         let array = i.intern("Array");
+        let sort = i.intern("sort");
         let zip_with = i.intern("zip-with");
         let sort_by = i.intern("sort-by");
         let k = ResultMode::Keep;
+        reg.register(array, sort, Self::sort, k);
         reg.register(array, zip_with, Self::zip_with, k);
         reg.register(array, sort_by, Self::sort_by, k);
     }
 
-    /// `Array.zip-with(fn, arr_a, arr_b)` - zips two arrays applying fn to pairs.
+    /// `Array.sort(arr)`; sorts array using `Ord:compare`.
+    fn sort(ctx: &mut ClassCtx<'_>, args: &[ValueId]) -> Result<Step> {
+        let arr = *args
+            .first()
+            .unwrap_or_else(|| typechecked!("Array.sort", "1 arg"));
+
+        match ctx.arena.payload(arr) {
+            Some(Payload::Array(elems)) if elems.len() <= 1 => {
+                Ok(Step::Done(Payload::Array(elems.clone())))
+            }
+            Some(Payload::Array(elems)) => ctx.resume_sort_by(
+                SortCmp::Ord,
+                arr,
+                vec![SortFrame::Sort {
+                    lo: 0,
+                    hi: elems.len(),
+                }],
+                None,
+            ),
+            _ => typechecked!("Array.sort", "Array"),
+        }
+    }
+
+    /// `Array.zip-with(fn, arr_a, arr_b)`; zips two arrays applying fn to pairs.
     fn zip_with(ctx: &mut ClassCtx<'_>, args: &[ValueId]) -> Result<Step> {
         let fn_id = *args
             .first()
@@ -71,7 +99,7 @@ impl Fns {
         }
     }
 
-    /// `Array.sort-by(cmp_fn, arr)` - sorts array using comparison function.
+    /// `Array.sort-by(cmp_fn, arr)`; sorts array using comparison function.
     ///
     /// Uses stack-based merge sort to avoid recursion.
     fn sort_by(ctx: &mut ClassCtx<'_>, args: &[ValueId]) -> Result<Step> {
@@ -91,7 +119,7 @@ impl Fns {
                 let len = elems.len();
                 // Kick off merge sort via resume_sort_by with no comparison result
                 ctx.resume_sort_by(
-                    cmp_fn,
+                    SortCmp::Fn(cmp_fn),
                     arr,
                     vec![SortFrame::Sort { lo: 0, hi: len }],
                     None,
@@ -109,7 +137,7 @@ impl ClassCtx<'_> {
     /// it needs a comparison (returns `Invoke`) or is done (returns `Done`).
     pub(super) fn resume_sort_by(
         &mut self,
-        cmp_fn: ValueId,
+        cmp: SortCmp,
         source: ValueId,
         mut stack: Vec<SortFrame>,
         cmp_result: Option<ValueId>,
@@ -138,22 +166,7 @@ impl ClassCtx<'_> {
                     ri,
                     mut merged,
                 }) => {
-                    // Check comparison result (expecting Ordering value)
-                    let take_left = match self.arena.value(result) {
-                        Some(v)
-                            if self
-                                .runtime_types
-                                .to_type_id(v.repr)
-                                .or_else(|| self.runtime_types.to_type_id(v.ty))
-                                .is_some_and(|ty| ty == TypeId::ORDERING) =>
-                        {
-                            match &v.payload {
-                                Payload::Variant { tag, .. } => *tag <= 1,
-                                _ => true,
-                            }
-                        }
-                        _ => true, // Default to left on unexpected
-                    };
+                    let take_left = self.sort_take_left(cmp, result);
                     if take_left {
                         merged.push(left[li]);
                         let new_li = li + 1;
@@ -285,15 +298,64 @@ impl ClassCtx<'_> {
                 Ok(Step::Done(Payload::Array(Arc::new(sorted))))
             }
             ops::ControlFlow::Break(Flow::Invoke { a, b }) => {
-                Ok(Step::Invoke(Continuation {
-                    callee: cmp_fn,
-                    args: smallvec![a, b],
-                    state: State::ArraySortBy { source, stack },
-                }))
+                let args = smallvec![a, b];
+                match cmp {
+                    SortCmp::Ord => Ok(Step::Compare(Compare {
+                        args,
+                        state: State::ArraySortBy { source, cmp, stack },
+                    })),
+                    SortCmp::Fn(callee) => Ok(Step::Invoke(Continuation {
+                        callee,
+                        args,
+                        state: State::ArraySortBy { source, cmp, stack },
+                    })),
+                }
             }
             ops::ControlFlow::Continue(()) => {
                 invariant!("Sort driver terminated")
             }
+        }
+    }
+
+    fn sort_take_left(&self, cmp: SortCmp, result: ValueId) -> bool {
+        match (cmp, self.arena.value(result)) {
+            (SortCmp::Ord, Some(v)) => match &v.payload {
+                Payload::Int(n) => *n <= 0,
+                Payload::Variant { tag, .. }
+                    if self
+                        .runtime_types
+                        .to_type_id(v.repr)
+                        .or_else(|| self.runtime_types.to_type_id(v.ty))
+                        .is_some_and(|ty| ty == TypeId::ORDERING) =>
+                {
+                    *tag <= 1
+                }
+                _ => typechecked!("Array.sort", "Ord:compare result"),
+            },
+            (SortCmp::Fn(_), Some(v))
+                if matches!(v.payload, Payload::Int(_)) =>
+            {
+                match &v.payload {
+                    Payload::Int(n) => *n <= 0,
+                    _ => invariant!("matched Int payload"),
+                }
+            }
+            (SortCmp::Fn(_), Some(v))
+                if self
+                    .runtime_types
+                    .to_type_id(v.repr)
+                    .or_else(|| self.runtime_types.to_type_id(v.ty))
+                    .is_some_and(|ty| ty == TypeId::ORDERING) =>
+            {
+                match &v.payload {
+                    Payload::Variant { tag, .. } => *tag <= 1,
+                    _ => typechecked!("Array.sort-by", "Ordering"),
+                }
+            }
+            (SortCmp::Fn(_), Some(_)) => {
+                typechecked!("Array.sort-by", "Ordering")
+            }
+            (_, None) => invariant!("sort comparison result in arena"),
         }
     }
 }

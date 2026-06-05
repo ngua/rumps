@@ -9,8 +9,16 @@ pub(crate) enum Step {
     Done(Payload),
     /// Method completed by forwarding a value already stored in the arena.
     DoneValue(ValueId),
+    /// Method needs to compare two values with `Ord:compare` and continue.
+    Compare(Compare),
     /// Method needs to invoke a callable and continue.
     Invoke(Continuation),
+}
+
+/// Internal `Ord:compare` request for HoFs.
+pub(crate) struct Compare {
+    pub(crate) args: SmallVec<[ValueId; 2]>,
+    pub(crate) state: State,
 }
 
 /// Continuation for HoF methods; uses zero-copy index tracking.
@@ -86,6 +94,7 @@ pub(crate) enum State {
     /// `Array.sort-by` merge sort; stack-based to avoid recursion.
     ArraySortBy {
         source: ValueId,
+        cmp: SortCmp,
         stack: Vec<SortFrame>,
     },
     /// `Result.map-err`; wraps mapped error back into `Result.Err`.
@@ -134,6 +143,13 @@ pub(crate) enum SortFrame {
         ri: usize,
         merged: SmallVec<[ValueId; 4]>,
     },
+}
+
+/// Comparison source for `Array` sorting.
+#[derive(Clone, Copy)]
+pub(crate) enum SortCmp {
+    Ord,
+    Fn(ValueId),
 }
 
 /// Whether to keep or discard a module HoF's result after the trampoline

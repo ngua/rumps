@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "fun main() {\n  write Array.sort([{ a: 2 }, { a: 1 }])\n}\n"
+---
+ERROR: type `{ a: Int }` does not satisfy `Ord` class

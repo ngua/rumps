@@ -196,6 +196,7 @@ fun main() {
 
   let unsorted = [3, 1, 4, 1, 5, 9, 2, 6]
   write Array.sort-by(cmp-int, unsorted)
+  write Array.sort-by(Ord:compare, unsorted)
 
   ; Sort descending (reverse comparator)
   write Array.sort-by(cmp-desc, unsorted)

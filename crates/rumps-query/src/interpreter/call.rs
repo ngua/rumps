@@ -1453,6 +1453,30 @@ impl<I: IoContext> Interpreter<'_, I> {
                         self.value_for_output_value(output, value),
                     );
                 }
+                hof::Step::Compare(cmp) => {
+                    let method = self.arena.intern("compare");
+                    let value = self
+                        .dispatch_class_method_value(ClassDispatch {
+                            dispatch_expr_id: None,
+                            output_expr_id: None,
+                            class: ClassId::ORD,
+                            method,
+                            args: cmp.args.iter().copied().collect(),
+                            span,
+                        })
+                        .await?;
+                    let id = self.add_value(value, span);
+                    let mut ctx = ClassCtx {
+                        arena: &mut self.arena,
+                        runtime_types: &mut self.checked.types,
+                        registry: &self.registry,
+                        regex_cache: &self.checked.regex_cache,
+                        span,
+                    };
+                    flow = ControlFlow::Continue(
+                        ctx.resume_compare(cmp.state, id)?,
+                    );
+                }
                 hof::Step::Invoke(cont) => {
                     let call_result = self
                         .invoke_callable(cont.callee, &cont.args, span)

@@ -1,8 +1,14 @@
 ; Test Array.sort with various types
 
-variant Priority = Low | Medium | High
+newtype Priority = Int
 
-variant Event = Click(Int, Int) | Scroll(Int) | Resize(Int, Int)
+class Ord for Priority {
+  fun compare(a: Priority, b: Priority) -> Ordering {
+    if a > b { Ordering.Lt } else {
+      if a == b { Ordering.Eq } else { Ordering.Gt }
+    }
+  }
+}
 
 fun main() {
   ; --- Scalars ---
@@ -27,17 +33,18 @@ fun main() {
   ; --- Nested Options ---
   write Array.sort([Option.Some(Option.Some(2)), Option.Some(Option.None), Option.None, Option.Some(Option.Some(1))])
 
-  ; --- User-defined sum type ---
-  let tasks = [Priority.High, Priority.Low, Priority.Medium, Priority.Low, Priority.High]
+  ; --- User-defined Ord instance ---
+  let low: Priority = 1
+  let med: Priority = 2
+  let high: Priority = 3
+  let tasks = [low, high, med, low, high]
   write Array.sort(tasks)
 
-  ; --- Sum type with payloads ---
-  let events = [Event.Resize(100, 200), Event.Click(5, 5), Event.Scroll(10), Event.Click(1, 1), Event.Scroll(5)]
-  write Array.sort(events)
-
-  ; --- Objects ---
-  write Array.sort([{ a: 2 }, { a: 1 }, { a: 3 }])
-  write Array.sort([{ x: 1, y: 2 }, { x: 1, y: 1 }, { x: 0, y: 9 }])
+  ; --- Time ---
+  let epoch = Time.epoch()
+  let t1 = Time.add-seconds(epoch, 1)
+  let t2 = Time.add-seconds(epoch, 2)
+  write Array.sort([t2, t1])
 
   ; --- Arrays of arrays ---
   write Array.sort([[3, 1], [1, 2], [1, 1], [2, 0]])

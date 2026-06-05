@@ -9,6 +9,7 @@
 //! HoF methods return [`Step`] which is either:
 //! - `Done(Payload)`: the method completed synchronously
 //! - `DoneValue(ValueId)`: the method completed by forwarding an existing value
+//! - `Compare(Compare)`: the method needs `Ord:compare` and resume
 //! - `Invoke(Continuation)`: the method needs to call a closure and resume
 //!
 //! The trampoline loop in `call.rs` handles the async closure invocation:
@@ -35,7 +36,8 @@ use std::sync::Arc;
 pub(crate) use registry::Registry;
 use smallvec::smallvec;
 pub(crate) use state::{
-    ChainWrapper, Continuation, IterKind, ResultMode, SortFrame, State, Step,
+    ChainWrapper, Compare, Continuation, IterKind, ResultMode, SortCmp,
+    SortFrame, State, Step,
 };
 
 use super::class::ClassCtx;
@@ -254,8 +256,8 @@ impl ClassCtx<'_> {
                 }
             }
             State::PreludeForeachOnce => Ok(Step::Done(Payload::Unit)),
-            State::ArraySortBy { source, stack } => {
-                self.resume_sort_by(cont.callee, source, stack, Some(result))
+            State::ArraySortBy { source, cmp, stack } => {
+                self.resume_sort_by(cmp, source, stack, Some(result))
             }
             State::ResultMapErr { ok_ty } => {
                 let err_ty =
@@ -296,6 +298,19 @@ impl ClassCtx<'_> {
             } => {
                 Ok(Step::Done(Payload::Tuple(Arc::new(smallvec![fst, result]))))
             }
+        }
+    }
+
+    pub(crate) fn resume_compare(
+        &mut self,
+        state: State,
+        result: ValueId,
+    ) -> Result<Step> {
+        match state {
+            State::ArraySortBy { source, cmp, stack } => {
+                self.resume_sort_by(cmp, source, stack, Some(result))
+            }
+            _ => invariant!("compare continuation state"),
         }
     }
 }

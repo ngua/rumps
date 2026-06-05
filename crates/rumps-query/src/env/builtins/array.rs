@@ -34,8 +34,11 @@ impl Environment {
                     },
                     PrimDef {
                         name: "sort",
-                        f: Array::sort,
-                        ty: scheme!(a, forall T. (Array[T]) -> Array[T]),
+                        f: Array::placeholder,
+                        ty: scheme!(
+                            a,
+                            forall T: Ord. (Array[T]) -> Array[T]
+                        ),
                     },
                     PrimDef {
                         name: "slice",
