@@ -54,6 +54,16 @@ struct ClassMethodCtx {
     assoc_map: HashMap<StringId, TyId>,
 }
 
+struct HktNamedReq<'a> {
+    class: ClassId,
+    kind: u8,
+    name: QualifiedName,
+    args: SmallVec<[AstTypeExprId; 2]>,
+    subst: &'a mut IndexMap<StringId, TyId>,
+    module: &'a Option<QualifiedName>,
+    span: Span,
+}
+
 impl InferCtx<'_> {
     fn child_mod_path(
         parent: Option<&QualifiedName>,
@@ -1143,9 +1153,17 @@ impl InferCtx<'_> {
             ForHead::TupleCtor { arity, fixed } => self.resolve_hkt_tuple_ctor(
                 class, kind, arity, &fixed, subst, span,
             ),
-            ForHead::Named(type_name, ast_args) => self.resolve_hkt_named(
-                class, kind, type_name, ast_args, subst, module, span,
-            ),
+            ForHead::Named(type_name, ast_args) => {
+                self.resolve_hkt_named(HktNamedReq {
+                    class,
+                    kind,
+                    name: type_name,
+                    args: ast_args,
+                    subst,
+                    module,
+                    span,
+                })
+            }
         }
     }
 
@@ -1222,17 +1240,20 @@ impl InferCtx<'_> {
         Some((TypeId::TUPLE, for_ty, elem_tys))
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn resolve_hkt_named(
         &mut self,
-        class: ClassId,
-        kind: u8,
-        type_name: QualifiedName,
-        ast_args: SmallVec<[AstTypeExprId; 2]>,
-        subst: &mut IndexMap<StringId, TyId>,
-        module: &Option<QualifiedName>,
-        span: Span,
+        req: HktNamedReq<'_>,
     ) -> Option<(TypeId, TyId, SmallVec<[TyId; 2]>)> {
+        let HktNamedReq {
+            class,
+            kind,
+            name: type_name,
+            args: ast_args,
+            subst,
+            module,
+            span,
+        } = req;
+
         // Resolve type name (with module fallback)
         let (type_id, qn) = self
             .convert()

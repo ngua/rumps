@@ -32,6 +32,16 @@ use crate::typecheck::ty::{
 use crate::value::{TypeDef, TypeId};
 use crate::{ClassId, Span};
 
+struct FunReq<'a> {
+    stmt: StmtId,
+    name: StringId,
+    tps: &'a SmallVec<[TypeParam; 2]>,
+    params: &'a SmallVec<[(StringId, Option<AstTypeExprId>); 4]>,
+    ret: Option<&'a AstTypeExprId>,
+    body: ExprId,
+    span: Span,
+}
+
 impl InferCtx<'_> {
     /// Infer types for a statement.
     ///
@@ -64,15 +74,15 @@ impl InferCtx<'_> {
                 ..
             }) => {
                 self.env.mark_non_import();
-                self.fun(
-                    id,
+                self.fun(FunReq {
+                    stmt: id,
                     name,
-                    &type_params,
-                    &params,
-                    ret.as_ref(),
+                    tps: &type_params,
+                    params: &params,
+                    ret: ret.as_ref(),
                     body,
                     span,
-                );
+                });
             }
 
             Some(Stmt::Let(pattern, ann, rhs, _)) => {
@@ -689,17 +699,17 @@ impl InferCtx<'_> {
     ///
     /// For generic functions (`fn foo[T](x: T) -> T`), explicit type parameters
     /// are bound as fresh type variables before inferring parameter/return types.
-    #[allow(clippy::too_many_arguments)]
-    fn fun(
-        &mut self,
-        stmt_id: StmtId,
-        name: StringId,
-        type_params: &SmallVec<[TypeParam; 2]>,
-        params: &SmallVec<[(StringId, Option<AstTypeExprId>); 4]>,
-        ret: Option<&AstTypeExprId>,
-        body: ExprId,
-        span: Span,
-    ) {
+    fn fun(&mut self, req: FunReq<'_>) {
+        let FunReq {
+            stmt: stmt_id,
+            name,
+            tps: type_params,
+            params,
+            ret,
+            body,
+            span,
+        } = req;
+
         // Capture outer env free vars BEFORE binding function (for generalization)
         let outer_free = self.env.free_vars(&self.ty_arena, &mut self.uf);
         let constraint_start = self.constraints.len();

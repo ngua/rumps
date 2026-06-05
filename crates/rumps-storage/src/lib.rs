@@ -21,6 +21,11 @@
 //! Operations use interior mutability via `RwLock` for concurrent access.
 
 #![warn(missing_docs)]
+#![allow(dead_code)]
+#![cfg_attr(
+    test,
+    allow(clippy::approx_constant, clippy::expect_used, clippy::unwrap_used)
+)]
 
 #[cfg(not(target_pointer_width = "64"))]
 compile_error!("RUMPS requires a 64-bit platform (usize must be 64 bits)");

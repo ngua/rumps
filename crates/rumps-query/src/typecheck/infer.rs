@@ -1173,32 +1173,13 @@ impl<'a> InferCtx<'a> {
     /// `SolveCtx::solve_constraints`.
     fn solve(&mut self) {
         let constraints = mem::take(&mut self.constraints);
-        SolveCtx {
-            ty_arena: &mut self.ty_arena,
-            uf: &mut self.uf,
-            registry: self.registry,
-            decls: &self.decls,
-            instance_registry: &self.instance_registry,
-            env: &self.env,
-            errors: &mut self.errors,
-            ast: self.ast,
-            current_module: self.current_module.clone(),
-            class_context: &self.class_context,
-            hkt_var_classes: HashMap::new(),
-        }
-        .solve_constraints(constraints, &self.numeric_vars);
+        let nums = self.numeric_vars.clone();
+        self.solve_ctx(self.current_module.clone())
+            .solve_constraints(constraints, &nums);
     }
 
-    pub(super) fn newtype_edge_status(
-        &mut self,
-        from: TyId,
-        to: TyId,
-        module: Option<QualifiedName>,
-        span: Span,
-    ) -> NewtypeEdgeStatus {
-        let snap = self.uf.snapshot();
-        let err_len = self.errors.len();
-        let st = SolveCtx {
+    fn solve_ctx(&mut self, module: Option<QualifiedName>) -> SolveCtx<'_> {
+        SolveCtx {
             ty_arena: &mut self.ty_arena,
             uf: &mut self.uf,
             registry: self.registry,
@@ -1211,7 +1192,18 @@ impl<'a> InferCtx<'a> {
             class_context: &self.class_context,
             hkt_var_classes: HashMap::new(),
         }
-        .newtype_edge_status(from, to, span);
+    }
+
+    pub(super) fn newtype_edge_status(
+        &mut self,
+        from: TyId,
+        to: TyId,
+        module: Option<QualifiedName>,
+        span: Span,
+    ) -> NewtypeEdgeStatus {
+        let snap = self.uf.snapshot();
+        let err_len = self.errors.len();
+        let st = self.solve_ctx(module).newtype_edge_status(from, to, span);
         self.uf.rollback(snap);
         self.errors.truncate(err_len);
         st
@@ -1275,20 +1267,7 @@ impl<'a> InferCtx<'a> {
     ) -> Option<NewtypeEdge> {
         let snap = self.uf.snapshot();
         let err_len = self.errors.len();
-        let edge = SolveCtx {
-            ty_arena: &mut self.ty_arena,
-            uf: &mut self.uf,
-            registry: self.registry,
-            decls: &self.decls,
-            instance_registry: &self.instance_registry,
-            env: &self.env,
-            errors: &mut self.errors,
-            ast: self.ast,
-            current_module: module,
-            class_context: &self.class_context,
-            hkt_var_classes: HashMap::new(),
-        }
-        .newtype_edge(from, to, span);
+        let edge = self.solve_ctx(module).newtype_edge(from, to, span);
         self.uf.rollback(snap);
         self.errors.truncate(err_len);
         edge
@@ -1303,20 +1282,7 @@ impl<'a> InferCtx<'a> {
     ) -> Option<NewtypeEdge> {
         let snap = self.uf.snapshot();
         let err_len = self.errors.len();
-        let edge = SolveCtx {
-            ty_arena: &mut self.ty_arena,
-            uf: &mut self.uf,
-            registry: self.registry,
-            decls: &self.decls,
-            instance_registry: &self.instance_registry,
-            env: &self.env,
-            errors: &mut self.errors,
-            ast: self.ast,
-            current_module: module,
-            class_context: &self.class_context,
-            hkt_var_classes: HashMap::new(),
-        }
-        .newtype_edge_any(from, to, span);
+        let edge = self.solve_ctx(module).newtype_edge_any(from, to, span);
         self.uf.rollback(snap);
         self.errors.truncate(err_len);
         edge

@@ -19,6 +19,10 @@
 // we silence them here.
 #![allow(clippy::result_large_err)]
 #![allow(clippy::only_used_in_recursion)]
+#![cfg_attr(
+    test,
+    allow(clippy::approx_constant, clippy::expect_used, clippy::unwrap_used)
+)]
 
 /// Marks a branch as unreachable due to static type checking.
 ///

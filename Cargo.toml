@@ -5,6 +5,15 @@ members = [
 ]
 resolver = "2"
 
+[workspace.lints.clippy]
+obfuscated_if_else = "allow"
+option_map_unit_fn = "allow"
+type_complexity = "allow"
+use_self = "warn"
+unwrap_used = "deny"
+expect_used = "deny"
+too_many_arguments = "deny"
+
 [workspace.dependencies]
 async-recursion = "1"
 async-trait = "0.1"

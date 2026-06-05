@@ -14,10 +14,5 @@ syn.workspace = true
 [dev-dependencies]
 rumps-types = { path = "../rumps-types" }
 
-[lints.clippy]
-obfuscated_if_else = "allow"
-option_map_unit_fn = "allow"
-type_complexity = "allow"
-use_self = "warn"
-unwrap_used = "deny"
-expect_used = "deny"
+[lints]
+workspace = true

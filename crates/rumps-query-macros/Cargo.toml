@@ -12,9 +12,5 @@ quote.workspace = true
 smallvec.workspace = true
 syn.workspace = true
 
-[lints.clippy]
-obfuscated_if_else = "allow"
-type_complexity = "allow"
-use_self = "warn"
-unwrap_used = "deny"
-expect_used = "deny"
+[lints]
+workspace = true
