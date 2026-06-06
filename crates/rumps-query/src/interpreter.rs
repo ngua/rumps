@@ -67,7 +67,7 @@
 //!
 //! ## Subscript Coercion
 //!
-//! Only scalar types can be used as database key subscripts
+//! Database subscripts support the payloads accepted by
 //! ([`Interpreter::subscript`]):
 //!
 //! - `Bool`, `Int`, `Float`, `String` are valid subscripts
@@ -101,6 +101,7 @@ mod db;
 mod hof;
 mod hoist;
 pub(crate) mod instance;
+mod map;
 mod modules;
 mod ops;
 mod pattern;
@@ -599,6 +600,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                     self.dispatch_class_method_value(call::ClassDispatch {
                         dispatch_expr_id: Some(id),
                         output_expr_id: Some(id),
+                        output_ty: None,
                         class: ClassId::FALLIBLE,
                         method: mid,
                         args: SmallVec::from_slice(&[val_id]),
@@ -2058,6 +2060,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                         .dispatch_class_method_value(call::ClassDispatch {
                             dispatch_expr_id: Some(id),
                             output_expr_id: Some(id),
+                            output_ty: None,
                             class: ClassId::FALLIBLE,
                             method: mid,
                             args: SmallVec::from_slice(&[val_id]),
@@ -2104,7 +2107,8 @@ impl<I: IoContext> Interpreter<'_, I> {
                 ) {
                     let left = self.eval(lhs).await?;
                     let right = self.eval(rhs).await?;
-                    self.apply_value_binop(&left, op, &right, span)
+                    self.apply_value_binop_async(left, op, right, span)
+                        .await
                         .map(|payload| self.value_for_expr(id, payload))
                 } else {
                     let left = self.eval_payload(lhs).await?;
@@ -2139,6 +2143,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             self.dispatch_class_method_value(call::ClassDispatch {
                 dispatch_expr_id: Some(id),
                 output_expr_id: Some(id),
+                output_ty: None,
                 class: ClassId::WRAPPABLE,
                 method: mid,
                 args: SmallVec::from_slice(&[val_id]),
@@ -2258,6 +2263,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             self.dispatch_class_method_value(call::ClassDispatch {
                 dispatch_expr_id: Some(id),
                 output_expr_id: Some(id),
+                output_ty: None,
                 class: ClassId::TRY_INTO,
                 method: mid,
                 args: SmallVec::from_slice(&[val_id]),

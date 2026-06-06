@@ -1,5 +1,7 @@
 //! Binary and unary operator implementations.
 
+use std::cmp::Ordering;
+
 use async_recursion::async_recursion;
 use smallvec::SmallVec;
 
@@ -9,7 +11,7 @@ use super::Interpreter;
 use crate::ast::{BinOp, ExprId, UnOp};
 use crate::intern::StringId;
 use crate::io::IoContext;
-use crate::typecheck::Ty;
+use crate::typecheck::{RuntimeTyId, Ty, TyArena};
 use crate::value::{Payload, TypeId, Value};
 use crate::{ClassId, Result, Span};
 
@@ -255,6 +257,183 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
+    pub(super) async fn apply_value_binop_async(
+        &mut self,
+        left: Value,
+        op: BinOp,
+        right: Value,
+        span: Span,
+    ) -> Result<Payload> {
+        match op {
+            BinOp::Eq | BinOp::Ne => {
+                match self.fast_eq_payload(&left.payload, &right.payload) {
+                    Some(b) => Ok(Payload::Bool(
+                        if matches!(op, BinOp::Ne) { !b } else { b },
+                    )),
+                    None => {
+                        let result = self
+                            .dispatch_value_binop_method(left, op, right, span)
+                            .await?;
+                        self.binop_result_payload(op, result, span)
+                    }
+                }
+            }
+            BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
+                match self.fast_ord_payload(&left.payload, &right.payload) {
+                    Some(ord) => Ok(Payload::Bool(Self::ord_matches(op, ord))),
+                    None => {
+                        let result = self
+                            .dispatch_value_binop_method(left, op, right, span)
+                            .await?;
+                        self.binop_result_payload(op, result, span)
+                    }
+                }
+            }
+            BinOp::Concat => {
+                let result = self
+                    .dispatch_value_binop_method(left, op, right, span)
+                    .await?;
+                self.binop_result_payload(op, result, span)
+            }
+            _ => typechecked!("value binop", "Eq, Ord, or Concatable"),
+        }
+    }
+
+    fn fast_eq_payload(&self, left: &Payload, right: &Payload) -> Option<bool> {
+        match (left, right) {
+            (Payload::Unit, Payload::Unit) => Some(true),
+            (Payload::Bool(a), Payload::Bool(b)) => Some(a == b),
+            (Payload::Int(a), Payload::Int(b)) => Some(a == b),
+            (Payload::Word(a), Payload::Word(b)) => Some(a == b),
+            (Payload::Float(a), Payload::Float(b)) => Some(a == b),
+            (Payload::Char(a), Payload::Char(b)) => Some(a == b),
+            (Payload::String(a), Payload::String(b)) => Some(a == b),
+            (Payload::Time(a), Payload::Time(b)) => Some(a == b),
+            (Payload::FilePath(a), Payload::FilePath(b)) => Some(a == b),
+            (Payload::Json(a), Payload::Json(b)) => Some(a == b),
+            _ => None,
+        }
+    }
+
+    fn fast_ord_payload(
+        &self,
+        left: &Payload,
+        right: &Payload,
+    ) -> Option<Ordering> {
+        match (left, right) {
+            (Payload::Bool(a), Payload::Bool(b)) => Some(a.cmp(b)),
+            (Payload::Int(a), Payload::Int(b)) => Some(a.cmp(b)),
+            (Payload::Word(a), Payload::Word(b)) => Some(a.cmp(b)),
+            (Payload::Float(a), Payload::Float(b)) => Some(a.cmp(b)),
+            (Payload::Char(a), Payload::Char(b)) => Some(a.cmp(b)),
+            (Payload::String(a), Payload::String(b)) => {
+                let a = self.arena.get_str(*a).unwrap_or("");
+                let b = self.arena.get_str(*b).unwrap_or("");
+                Some(a.cmp(b))
+            }
+            (Payload::Time(a), Payload::Time(b)) => Some(a.cmp(b)),
+            _ => None,
+        }
+    }
+
+    async fn dispatch_value_binop_method(
+        &mut self,
+        left: Value,
+        op: BinOp,
+        right: Value,
+        span: Span,
+    ) -> Result<Value> {
+        let output_ty = Self::binop_method_output_ty(&left, op);
+        let (class, method_str) = op.class_dispatch().unwrap_or_else(|| {
+            typechecked!("value binop dispatch", "class-dispatched op")
+        });
+        let method = self.arena.intern(method_str);
+        let l = self.add_value(left, span);
+        let r = self.add_value(right, span);
+        self.dispatch_class_method_value(ClassDispatch {
+            dispatch_expr_id: None,
+            output_expr_id: None,
+            output_ty: Some(output_ty),
+            class,
+            method,
+            args: SmallVec::from_slice(&[l, r]),
+            span,
+        })
+        .await
+    }
+
+    fn binop_method_output_ty(left: &Value, op: BinOp) -> RuntimeTyId {
+        match op {
+            BinOp::Eq | BinOp::Ne => RuntimeTyId::from(TyArena::BOOL),
+            BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
+                RuntimeTyId::from(TyArena::ORDERING)
+            }
+            BinOp::Concat => left.ty,
+            _ => typechecked!("value binop dispatch", "class-dispatched op"),
+        }
+    }
+
+    fn binop_result_payload(
+        &mut self,
+        op: BinOp,
+        result: Value,
+        span: Span,
+    ) -> Result<Payload> {
+        match op {
+            BinOp::Ne => match result.payload {
+                Payload::Bool(b) => Ok(Payload::Bool(!b)),
+                _ => typechecked!("!=", "Bool"),
+            },
+            BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => self
+                .result_ordering(result, span)
+                .map(|ord| Payload::Bool(Self::ord_matches(op, ord))),
+            _ => Ok(result.payload),
+        }
+    }
+
+    fn result_ordering(
+        &mut self,
+        result: Value,
+        _span: Span,
+    ) -> Result<Ordering> {
+        let ty = self
+            .checked
+            .types
+            .to_type_id(result.repr)
+            .or_else(|| self.checked.types.to_type_id(result.ty));
+        match result.payload {
+            Payload::Variant { tag: 0, .. }
+                if ty.is_none_or(|ty| ty == TypeId::ORDERING) =>
+            {
+                Ok(Ordering::Less)
+            }
+            Payload::Variant { tag: 1, .. }
+                if ty.is_none_or(|ty| ty == TypeId::ORDERING) =>
+            {
+                Ok(Ordering::Equal)
+            }
+            Payload::Variant { tag: 2, .. }
+                if ty.is_none_or(|ty| ty == TypeId::ORDERING) =>
+            {
+                Ok(Ordering::Greater)
+            }
+            Payload::Int(n) if n < 0 => Ok(Ordering::Less),
+            Payload::Int(0) => Ok(Ordering::Equal),
+            Payload::Int(_) => Ok(Ordering::Greater),
+            _ => typechecked!("compare result", "Ordering"),
+        }
+    }
+
+    fn ord_matches(op: BinOp, ord: Ordering) -> bool {
+        match op {
+            BinOp::Lt => ord == Ordering::Less,
+            BinOp::Gt => ord == Ordering::Greater,
+            BinOp::Le => ord != Ordering::Greater,
+            BinOp::Ge => ord != Ordering::Less,
+            _ => typechecked!("comparison", "Ord operator"),
+        }
+    }
+
     /// Dispatch a binary class method.
     fn dispatch_binary(
         &mut self,
@@ -299,53 +478,15 @@ impl<I: IoContext> Interpreter<'_, I> {
             .dispatch_class_method_value(ClassDispatch {
                 dispatch_expr_id: Some(id),
                 output_expr_id: Some(id),
+                output_ty: None,
                 class,
                 method,
                 args: SmallVec::from_slice(&[l, r]),
                 span,
             })
             .await?;
-
-        // Post-process for operators that transform the class method result.
-        // User `compare` returns `Ordering`; tags are `0`=Lt, `1`=Eq, `2`=Gt.
-        let result_ty = self
-            .checked
-            .types
-            .to_type_id(result.repr)
-            .or_else(|| self.checked.types.to_type_id(result.ty));
-        match op {
-            BinOp::Ne => match result.payload {
-                Payload::Bool(b) => {
-                    Ok(self.value_for_expr(id, Payload::Bool(!b)))
-                }
-                _ => typechecked!("!=", "Bool"),
-            },
-            BinOp::Lt => match (result_ty, result.payload) {
-                (Some(TypeId::ORDERING), Payload::Variant { tag, .. }) => {
-                    Ok(self.value_for_expr(id, Payload::Bool(tag == 0)))
-                }
-                _ => typechecked!("compare result", "Ordering"),
-            },
-            BinOp::Gt => match (result_ty, result.payload) {
-                (Some(TypeId::ORDERING), Payload::Variant { tag, .. }) => {
-                    Ok(self.value_for_expr(id, Payload::Bool(tag == 2)))
-                }
-                _ => typechecked!("compare result", "Ordering"),
-            },
-            BinOp::Le => match (result_ty, result.payload) {
-                (Some(TypeId::ORDERING), Payload::Variant { tag, .. }) => {
-                    Ok(self.value_for_expr(id, Payload::Bool(tag <= 1)))
-                }
-                _ => typechecked!("compare result", "Ordering"),
-            },
-            BinOp::Ge => match (result_ty, result.payload) {
-                (Some(TypeId::ORDERING), Payload::Variant { tag, .. }) => {
-                    Ok(self.value_for_expr(id, Payload::Bool(tag >= 1)))
-                }
-                _ => typechecked!("compare result", "Ordering"),
-            },
-            _ => Ok(result),
-        }
+        self.binop_result_payload(op, result, span)
+            .map(|payload| self.value_for_expr(id, payload))
     }
 
     /// Unary operation application.

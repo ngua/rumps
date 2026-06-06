@@ -5,6 +5,8 @@ enum Satisfaction {
     Direct,
     /// Recurse into inner types (for containers like `Array[T]`).
     Recurse(SmallVec<[TyId; 4]>),
+    /// Check specific classes on inner types.
+    Require(SmallVec<[(TyId, ClassId); 4]>),
 }
 
 impl SolveCtx<'_> {
@@ -197,15 +199,20 @@ impl SolveCtx<'_> {
                 | Ty::Bool
                 | Ty::String
                 | Ty::Array(_)
-                | Ty::Map(_, _)
                 | Ty::Option(_)
                 | Ty::Ordering
                 | Ty::FilePath,
             ) => Some(Satisfaction::Direct),
+            (ClassId::DEFAULT, Ty::Map(k, _)) => {
+                Some(Satisfaction::Require(smallvec![(*k, ClassId::ORD)]))
+            }
             (
                 ClassId::CONCATABLE,
-                Ty::String | Ty::Array(_) | Ty::Map(_, _) | Ty::Option(_),
+                Ty::String | Ty::Array(_) | Ty::Option(_),
             ) => Some(Satisfaction::Direct),
+            (ClassId::CONCATABLE, Ty::Map(k, _)) => {
+                Some(Satisfaction::Require(smallvec![(*k, ClassId::ORD)]))
+            }
             (ClassId::ITERABLE, Ty::Array(_) | Ty::Range) => {
                 Some(Satisfaction::Direct)
             }
@@ -233,7 +240,10 @@ impl SolveCtx<'_> {
                 Some(Satisfaction::Recurse(smallvec![*a, *b]))
             }
             (ClassId::ORD, Ty::Map(k, v)) => {
-                Some(Satisfaction::Recurse(smallvec![*k, *v]))
+                Some(Satisfaction::Require(smallvec![
+                    (*k, ClassId::ORD),
+                    (*v, ClassId::ORD)
+                ]))
             }
             (
                 ClassId::EQ,
@@ -257,8 +267,14 @@ impl SolveCtx<'_> {
             (ClassId::EQ, Ty::Tuple(es)) => {
                 Some(Satisfaction::Recurse(SmallVec::from_slice(es)))
             }
-            (ClassId::EQ, Ty::Result(a, b) | Ty::Map(a, b)) => {
+            (ClassId::EQ, Ty::Result(a, b)) => {
                 Some(Satisfaction::Recurse(smallvec![*a, *b]))
+            }
+            (ClassId::EQ, Ty::Map(k, v)) => {
+                Some(Satisfaction::Require(smallvec![
+                    (*k, ClassId::ORD),
+                    (*v, ClassId::EQ)
+                ]))
             }
             (ClassId::EQ, Ty::Object(fields)) => {
                 Some(Satisfaction::Recurse(fields.values().copied().collect()))
@@ -302,6 +318,11 @@ impl SolveCtx<'_> {
                 inners
                     .iter()
                     .for_each(|&t| self.satisfies_class(class, t, span));
+            }
+            Some(Satisfaction::Require(reqs)) => {
+                reqs.iter().for_each(|&(t, c)| {
+                    self.satisfies_class(&TypeClass::simple(c), t, span)
+                });
             }
             None => match shape {
                 Ty::Var(_) | Ty::Error | Ty::Unknown => {}

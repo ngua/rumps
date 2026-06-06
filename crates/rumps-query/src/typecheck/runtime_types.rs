@@ -13,7 +13,7 @@ use super::ty::{ClassRegistry, Ty, TyArena, TyId};
 use super::Scheme;
 use crate::ast::{ExprId, MatchPatternId};
 use crate::intern::StringId;
-use crate::value::{MapKey, Payload, Value, ValueArena, ValueMeta};
+use crate::value::{Payload, Value, ValueArena, ValueMeta};
 use crate::TypeId;
 
 /// A solved `TyId`; guaranteed by the caller (the typechecker) to contain no
@@ -605,15 +605,21 @@ impl RuntimeTypes {
                     .collect(),
             ),
             Payload::Map(entries) => {
-                let key = entries
-                    .keys()
-                    .next()
-                    .map(Self::map_key_ty)
-                    .unwrap_or_else(|| RuntimeTyId::from(TyArena::UNIT));
-                let val = entries
-                    .values()
-                    .find_map(|id| arena.meta(*id).map(|m| m.ty))
-                    .unwrap_or_else(|| RuntimeTyId::from(TyArena::UNIT));
+                let (key, val) = entries
+                    .entries()
+                    .into_iter()
+                    .find_map(|(k, v)| {
+                        arena
+                            .meta(k)
+                            .zip(arena.meta(v))
+                            .map(|(k, v)| (k.ty, v.ty))
+                    })
+                    .unwrap_or_else(|| {
+                        (
+                            RuntimeTyId::from(TyArena::UNIT),
+                            RuntimeTyId::from(TyArena::UNIT),
+                        )
+                    });
                 self.map(key, val)
             }
             Payload::Variant { .. } => {
@@ -641,16 +647,6 @@ impl RuntimeTypes {
                     "explicit module constant metadata"
                 )
             }
-        }
-    }
-
-    fn map_key_ty(key: &MapKey) -> RuntimeTyId {
-        match key {
-            MapKey::Bool(_) => RuntimeTyId::from(TyArena::BOOL),
-            MapKey::Int(_) => RuntimeTyId::from(TyArena::INT),
-            MapKey::Float(_) => RuntimeTyId::from(TyArena::FLOAT),
-            MapKey::Char(_) => RuntimeTyId::from(TyArena::CHAR),
-            MapKey::String(_) => RuntimeTyId::from(TyArena::STRING),
         }
     }
 

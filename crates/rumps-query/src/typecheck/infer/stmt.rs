@@ -122,7 +122,9 @@ impl InferCtx<'_> {
                 // fully saturated.
                 let subst = self.type_param_subst(type_params);
                 members.iter().for_each(|m| {
-                    self.convert().ast_type_to_ty(*m, &subst);
+                    let ty = self.convert().ast_type_to_ty(*m, &subst);
+                    let span = self.ast.type_expr_span(*m).unwrap_or(span);
+                    self.require_wf_ty(ty, span);
                 });
             }
 
@@ -137,7 +139,9 @@ impl InferCtx<'_> {
                 // saturated (e.g. `newtype G = Array` is invalid because
                 // `Array` expects a type argument).
                 let subst = self.type_param_subst(type_params);
-                self.convert().ast_type_to_ty(target, &subst);
+                let ty = self.convert().ast_type_to_ty(target, &subst);
+                let span = self.ast.type_expr_span(target).unwrap_or(span);
+                self.require_wf_ty(ty, span);
             }
 
             Some(Stmt::Module { name, body }) => {
@@ -2744,7 +2748,10 @@ impl InferCtx<'_> {
             TypeDefAst::Sum(variants) => {
                 variants.iter().for_each(|v| {
                     v.payloads.iter().for_each(|p| {
-                        self.convert().ast_type_to_ty(*p, &subst);
+                        let ty = self.convert().ast_type_to_ty(*p, &subst);
+                        let span =
+                            self.ast.type_expr_span(*p).unwrap_or_default();
+                        self.require_wf_ty(ty, span);
                     });
                 });
             }

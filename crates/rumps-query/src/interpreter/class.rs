@@ -49,7 +49,7 @@ use crate::intern::{StringId, StringInterner};
 use crate::primitives::Range;
 use crate::typecheck::{RuntimeTyId, RuntimeTypes, Ty, TyArena};
 use crate::value::{
-    MapKey, Payload, TypeId, TypeRegistry, Value, ValueArena, ValueId,
+    Map as RumpsMap, Payload, TypeId, TypeRegistry, Value, ValueArena, ValueId,
 };
 use crate::{ClassId, Error, Result, Span};
 
@@ -438,12 +438,7 @@ impl Default for ClassMethods {
 }
 
 /// Shared utilities for class method implementations.
-pub(crate) trait Class {
-    fn map_key(v: &Payload) -> MapKey {
-        MapKey::from_payload(v)
-            .unwrap_or_else(|| typechecked!("map key", "valid key type"))
-    }
-}
+pub(crate) trait Class {}
 
 /// Marker class for numeric types.
 pub(crate) struct Numeric;
@@ -796,7 +791,7 @@ impl DefaultClass {
             Ty::Bool => Payload::Bool(false),
             Ty::String => Payload::String(ctx.arena.intern("")),
             Ty::Array(_) => Payload::Array(Arc::new(SmallVec::new())),
-            Ty::Map(_, _) => Payload::Map(Arc::new(IndexMap::new())),
+            Ty::Map(_, _) => Payload::Map(Arc::new(RumpsMap::new())),
             Ty::Option(_) => Payload::none(),
             Ty::Ordering => Payload::eq_ord(),
             Ty::FilePath => Payload::FilePath(ctx.arena.intern("")),
@@ -827,10 +822,8 @@ impl Concatable {
                 elems.extend(r.iter().copied());
                 Payload::Array(Arc::new(elems))
             }
-            (Payload::Map(l), Payload::Map(r)) => {
-                let mut merged = Arc::unwrap_or_clone(l.clone());
-                merged.extend(r.iter().map(|(k, v)| (k.clone(), *v)));
-                Payload::Map(Arc::new(merged))
+            (Payload::Map(_), Payload::Map(_)) => {
+                typechecked!("concat", "async Map concat")
             }
             (
                 Payload::Variant { tag: i1, vals: p1 },
@@ -954,8 +947,9 @@ impl Ord {
             (Payload::Tuple(a), Payload::Tuple(b)) => {
                 Self::cmp_seqs(ctx, a.as_slice(), b.as_slice())
             }
-            // Maps: lexicographic comparison by (key, value) pairs sorted by key
-            (Payload::Map(a), Payload::Map(b)) => Self::cmp_maps(ctx, a, b),
+            (Payload::Map(_), Payload::Map(_)) => {
+                typechecked!("compare", "async Map compare")
+            }
             // Variants compare by tag, then payload.
             (
                 Payload::Variant { tag: i1, vals: p1 },
@@ -1027,35 +1021,6 @@ impl Ord {
             .find(|o| *o != Ordering::Equal)
             .unwrap_or_else(|| a.len().cmp(&b.len()))
     }
-
-    /// Compare two maps by sorting entries by key, then comparing lexicographically.
-    fn cmp_maps(
-        ctx: &mut ClassCtx<'_>,
-        a: &IndexMap<MapKey, ValueId>,
-        b: &IndexMap<MapKey, ValueId>,
-    ) -> Ordering {
-        // Collect and sort entries by key (convert MapKey to Payload for comparison)
-        let mut a_entries: Vec<_> =
-            a.iter().map(|(k, v)| (k.to_payload(), *v)).collect();
-        let mut b_entries: Vec<_> =
-            b.iter().map(|(k, v)| (k.to_payload(), *v)).collect();
-        a_entries.sort_by(|(k1, _), (k2, _)| Self::cmp_values(ctx, k1, k2));
-        b_entries.sort_by(|(k1, _), (k2, _)| Self::cmp_values(ctx, k1, k2));
-        // Compare lexicographically by (key, value) pairs
-        a_entries
-            .iter()
-            .zip(b_entries.iter())
-            .map(|((k1, v1), (k2, v2))| {
-                let key_ord = Self::cmp_values(ctx, k1, k2);
-                if key_ord != Ordering::Equal {
-                    key_ord
-                } else {
-                    Self::cmp_value_ids(ctx, *v1, *v2)
-                }
-            })
-            .find(|o| *o != Ordering::Equal)
-            .unwrap_or_else(|| a.len().cmp(&b.len()))
-    }
 }
 
 /// Equality comparison.
@@ -1112,8 +1077,8 @@ impl Eq {
             (Payload::Object(a), Payload::Object(b)) => {
                 a.len() == b.len() && Self::objects_equal(ctx, a, b)
             }
-            (Payload::Map(a), Payload::Map(b)) => {
-                a.len() == b.len() && Self::maps_equal(ctx, a, b)
+            (Payload::Map(_), Payload::Map(_)) => {
+                typechecked!("==", "async Map equality")
             }
             (
                 Payload::Variant {
@@ -1198,23 +1163,6 @@ impl Eq {
                 .map(|bv| Self::value_ids_equal(ctx, *av, *bv))
                 .unwrap_or(false)
         })
-    }
-
-    /// Equality for maps (order-independent, compare entries).
-    fn maps_equal(
-        ctx: &mut ClassCtx<'_>,
-        a: &IndexMap<MapKey, ValueId>,
-        b: &IndexMap<MapKey, ValueId>,
-    ) -> bool {
-        if !a.keys().all(|k| b.contains_key(k)) {
-            false
-        } else {
-            a.iter().all(|(k, av)| {
-                b.get(k)
-                    .map(|bv| Self::value_ids_equal(ctx, *av, *bv))
-                    .unwrap_or(false)
-            })
-        }
     }
 }
 
@@ -1348,15 +1296,9 @@ impl Indexable {
                         )
                     })
             }
-            (Payload::Map(entries), key) => entries
-                .get(&Self::map_key(key))
-                .and_then(|id| ctx.arena.payload(*id).cloned())
-                .ok_or_else(|| {
-                    Error::runtime(
-                        ctx.span,
-                        format!("map key not found: {key:?}"),
-                    )
-                }),
+            (Payload::Map(_), _) => {
+                typechecked!("index", "async Map index")
+            }
             (Payload::String(sid), Payload::Int(i)) => {
                 let s = ctx.arena.get_str(*sid).unwrap_or("");
                 let len = s.chars().count() as i64;
@@ -1391,10 +1333,9 @@ impl Indexable {
                     .map(|id| Payload::some(*id))
                     .unwrap_or_else(Payload::none))
             }
-            (Payload::Map(entries), key) => Ok(entries
-                .get(&Self::map_key(key))
-                .map(|id| Payload::some(*id))
-                .unwrap_or_else(Payload::none)),
+            (Payload::Map(_), _) => {
+                typechecked!("get", "async Map get")
+            }
             (Payload::String(sid), Payload::Int(i)) => {
                 let s = ctx.arena.get_str(*sid).unwrap_or("");
                 let len = s.chars().count() as i64;
@@ -1780,12 +1721,17 @@ impl Into {
             }
             Payload::Map(entries) => {
                 let map: serde_json::Map<_, _> = entries
-                    .iter()
+                    .entries()
+                    .into_iter()
                     .map(|(k, vid)| {
-                        let key = Self::jsonify_map_key(ctx, k);
+                        let key = ctx
+                            .arena
+                            .value(k)
+                            .map(|v| Self::jsonify_value(ctx, v).to_string())
+                            .unwrap_or_else(|| "?".to_owned());
                         let val = ctx
                             .arena
-                            .value(*vid)
+                            .value(vid)
                             .unwrap_or_else(|| invariant!("ValueId in arena"));
                         (key, Self::jsonify_value(ctx, val))
                     })
@@ -1906,19 +1852,6 @@ impl Into {
                 "variant": variant,
                 "payload": payload_json
             })
-        }
-    }
-
-    /// Convert a map key to a JSON-compatible string key.
-    fn jsonify_map_key(ctx: &ClassCtx<'_>, k: &MapKey) -> String {
-        match k {
-            MapKey::Bool(b) => b.to_string(),
-            MapKey::Int(n) => n.to_string(),
-            MapKey::Float(f) => f.to_string(),
-            MapKey::Char(c) => c.to_string(),
-            MapKey::String(id) => {
-                ctx.arena.get_str(*id).unwrap_or("").to_owned()
-            }
         }
     }
 }
@@ -2287,12 +2220,17 @@ impl Display {
             }
             Payload::Map(entries) => {
                 let items = entries
-                    .iter()
+                    .entries()
+                    .into_iter()
                     .map(|(k, vid)| {
-                        let key = Self::format_map_key(ctx, k);
+                        let key = ctx
+                            .arena
+                            .value(k)
+                            .map(|v| Self::format_value(ctx, v))
+                            .unwrap_or_else(|| "?".to_owned());
                         let val = ctx
                             .arena
-                            .value(*vid)
+                            .value(vid)
                             .map(|v| Self::format_value(ctx, v))
                             .unwrap_or_else(|| "?".to_owned());
                         format!("{key} => {val}")
@@ -2393,21 +2331,6 @@ impl Display {
                 .map(|v| Self::format_value(ctx, v))
                 .join(", ");
             format!("{ty_name}.{var_name}({args})")
-        }
-    }
-
-    /// Format a map key for display.
-    fn format_map_key(ctx: &ClassCtx<'_>, k: &MapKey) -> String {
-        match k {
-            MapKey::Bool(b) => b.to_string(),
-            MapKey::Int(n) => n.to_string(),
-            MapKey::Float(f) => f.to_string(),
-            MapKey::Char(c) => format!("'{c}'"),
-            MapKey::String(id) => ctx
-                .arena
-                .get_str(*id)
-                .map(|s| format!("\"{s}\""))
-                .unwrap_or_else(|| "\"?\"".to_owned()),
         }
     }
 }

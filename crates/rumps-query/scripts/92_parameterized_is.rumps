@@ -65,6 +65,13 @@ fun main() {
   write empty-map is Map[String, Int]
   ; false - annotated as Map[Int, Bool]
 
+  let tuple-key-map = { (1, "a") => true }
+  write tuple-key-map is TupleKeyBoolMap
+  ; true
+
+  write tuple-key-map is ReversedTupleKeyBoolMap
+  ; false - key tuple fields are ordered
+
   ; === Inline annotation syntax ===
 
   ; Verify inline annotations also refine types
@@ -119,3 +126,5 @@ fun main() {
 ; === User-defined parameterized types ===
 
 newtype Box[T] = { inner: T }
+newtype TupleKeyBoolMap = Map[(Int, String), Bool]
+newtype ReversedTupleKeyBoolMap = Map[(String, Int), Bool]

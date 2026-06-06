@@ -21,20 +21,23 @@
 //! When adding a new RUMPS module, create a new type implementing [`Prim`]
 //! and add its functions as associated functions.
 //!
-//! # Primitives with Higher-Order Functions Cannot Go Here
+//! # Primitives Requiring Interpreter Services Cannot Go Here
 //!
 //! **Important**: Any function that needs to invoke closures or user-defined
-//! functions (i.e., higher-order functions) MUST be implemented through interpreter module dispatch, NOT here.
+//! functions (i.e., higher-order functions), class dispatch, or other
+//! interpreter-owned services MUST be implemented through interpreter module
+//! dispatch, NOT here.
 //!
 //! **Why?** The [`PrimFn`] type signature only receives [`ValueId`]s; it has
-//! no access to the interpreter's closure invocation machinery. Calling a
-//! closure requires [`Interpreter::invoke_callable`], which isn't available
-//! from [`PrimCtx`].
+//! no access to the interpreter's closure invocation machinery or async class
+//! method dispatch. Calling a closure requires [`Interpreter::invoke_callable`],
+//! and comparing values through user `Ord` instances requires interpreter
+//! dispatch, neither of which is available from [`PrimCtx`].
 //!
-//! **Placeholders**: For each HoF, a placeholder function is registered here
-//! so that [`Environment::module_fn_exists`] returns `true` during name
-//! resolution. The placeholders are intercepted by interpreter module dispatch before
-//! primitive dispatch and never actually called.
+//! **Placeholders**: For each such builtin, a placeholder function is
+//! registered here so that [`Environment::module_fn_exists`] returns `true`
+//! during name resolution. The placeholders are intercepted by interpreter
+//! module dispatch before primitive dispatch and never actually called.
 //!
 //! [`Interpreter`]: crate::interpreter::Interpreter
 //! [`PrimFn`]: crate::env::PrimFn
@@ -103,7 +106,7 @@ impl RuntimeTypes {
 /// Primitives can now directly index `args[i]` and pattern-match on values
 /// without runtime checks. Use `typechecked!` for impossible branches.
 pub(crate) trait Prim {
-    /// Placeholder for higher-order functions (`Iter.map`, `Iterable.filter`, etc.).
+    /// Placeholder for functions requiring interpreter services.
     ///
     /// This should never be called directly; `invoke_module_fn` intercepts
     /// these calls and handles them specially. If this is called, it indicates

@@ -1,0 +1,7 @@
+; `Map.insert` requires `Ord` keys.
+
+fun main() {
+  let f = (x: Int) -> Int => x + 1
+  let m = Map.insert(Map.empty(), f, "bad")
+  write m
+}

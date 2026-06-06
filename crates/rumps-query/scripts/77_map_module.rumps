@@ -4,6 +4,40 @@
 ;
 ; Note: `{}` is ambiguous and parsed as an empty object. Use Map.empty() for empty maps.
 
+newtype Down = Int
+
+class Ord for Down {
+  fun compare(a: Down, b: Down) -> Ordering {
+    if a > b { Ordering.Lt } else {
+      if a == b { Ordering.Eq } else { Ordering.Gt }
+    }
+  }
+}
+
+variant Band = Band(Int)
+
+fun bucket(b: Band) -> Int {
+  match b {
+    Band.Band(n) => { n // 10 }
+  }
+}
+
+class Ord for Band {
+  fun compare(a: Band, b: Band) -> Ordering {
+    let ba = bucket(a)
+    let bb = bucket(b)
+    if ba > bb { Ordering.Lt } else {
+      if ba == bb { Ordering.Eq } else { Ordering.Gt }
+    }
+  }
+}
+
+class Eq for Band {
+  fun eq(a: Band, b: Band) -> Bool {
+    bucket(a) == bucket(b)
+  }
+}
+
 fun main() {
   ; ============ Map literals ============
 
@@ -156,4 +190,153 @@ fun main() {
   ; Chaining with optional unwrap
   write m?[1] ?? "default"  ; "one"
   write m?[99] ?? "default"  ; "default"
+
+  ; ============ Canonical order and overwrite semantics ============
+
+  let unordered-a = Map.from-entries([("b", 2), ("a", 1)])
+  let unordered-b = Map.from-entries([("a", 1), ("b", 2)])
+  write Map.keys(unordered-a)
+  write Map.values(unordered-a)
+  write Map.entries(unordered-a)
+  write unordered-a == unordered-b
+  write unordered-a <= unordered-b
+  write unordered-b <= unordered-a
+
+  let dup = Map.from-entries([("a", 1), ("b", 2), ("a", 3)])
+  write Map.length(dup)
+  write Map.entries(dup)
+  write Map.lookup(dup, "a")
+
+  let ml = Map.from-entries([("a", 1), ("b", 2)])
+  let mr = Map.from-entries([("b", 20), ("c", 30)])
+  let merged2 = Map.merge(ml, mr)
+  let removed2 = Map.remove(merged2, "missing")
+  write Map.entries(merged2)
+  write Map.entries(removed2)
+  write Map.lookup(merged2, "missing")
+
+  ; ============ Required key shapes ============
+
+  let bools = Map.from-entries([(true, "true"), (false, "false")])
+  write Map.keys(bools)
+
+  let ints = Map.from-entries([(10, "ten"), (1, "one")])
+  write Map.keys(ints)
+
+  let floats = Map.from-entries([(2.5, "two"), (1.5, "one")])
+  write Map.keys(floats)
+
+  let chars = Map.from-entries([('b', "bee"), ('a', "aye")])
+  write Map.keys(chars)
+
+  let strings = Map.from-entries([("b", 2), ("a", 1)])
+  write Map.keys(strings)
+
+  let tuples = Map.from-entries([((2, "b"), 20), ((1, "a"), 10)])
+  write Map.keys(tuples)
+  write Map.lookup(tuples, (1, "a"))
+
+  let arrays = Map.from-entries([([2], "two"), ([1, 2], "one-two"), ([1], "one")])
+  write Map.keys(arrays)
+
+  let none: Option[Int] = Option.None
+  let some1 = Option.Some(1)
+  let some2 = Option.Some(2)
+  let opts = Map.from-entries([(some2, "two"), (none, "none"), (some1, "one")])
+  write Map.keys(opts)
+
+  let err-a: Result[Int, String] = Result.Err("a")
+  let err-b: Result[Int, String] = Result.Err("b")
+  let ok1: Result[Int, String] = Result.Ok(1)
+  let ress = Map.from-entries([(ok1, "ok"), (err-b, "err-b"), (err-a, "err-a")])
+  write Map.keys(ress)
+
+  let ords = Map.from-entries([
+    (Ordering.Gt, "gt"),
+    (Ordering.Lt, "lt"),
+    (Ordering.Eq, "eq"),
+  ])
+  write Map.keys(ords)
+
+  let key1 = Map.from-entries([(1, "one")])
+  let key2 = Map.from-entries([(1, "one"), (2, "two")])
+  let nested = Map.from-entries([(key2, "long"), (key1, "short")])
+  write Map.keys(nested)
+
+  ; ============ Persistent update shapes ============
+
+  let empty: Map[Int, String] = Map.empty()
+
+  let asc1 = Map.insert(empty, 1, "one")
+  let asc2 = Map.insert(asc1, 2, "two")
+  let asc3 = Map.insert(asc2, 3, "three")
+  let asc4 = Map.insert(asc3, 4, "four")
+  let asc5 = Map.insert(asc4, 5, "five")
+  write Map.keys(asc5)
+  write Map.lookup(asc5, 1)
+  write Map.lookup(asc5, 3)
+  write Map.lookup(asc5, 5)
+
+  let desc1 = Map.insert(empty, 5, "five")
+  let desc2 = Map.insert(desc1, 4, "four")
+  let desc3 = Map.insert(desc2, 3, "three")
+  let desc4 = Map.insert(desc3, 2, "two")
+  let desc5 = Map.insert(desc4, 1, "one")
+  write Map.keys(desc5)
+  write Map.lookup(desc5, 1)
+  write Map.lookup(desc5, 3)
+  write Map.lookup(desc5, 5)
+
+  let mixed1 = Map.insert(empty, 3, "three")
+  let mixed2 = Map.insert(mixed1, 1, "one")
+  let mixed3 = Map.insert(mixed2, 5, "five")
+  let mixed4 = Map.insert(mixed3, 2, "two")
+  let mixed5 = Map.insert(mixed4, 4, "four")
+  write Map.keys(mixed5)
+  write Map.lookup(mixed5, 1)
+  write Map.lookup(mixed5, 3)
+  write Map.lookup(mixed5, 5)
+
+  write Map.keys(empty)
+  write Map.keys(asc1)
+  write Map.keys(asc5)
+
+  let removed3 = Map.remove(asc5, 1)
+  let removed4 = Map.remove(removed3, 3)
+  write Map.keys(asc5)
+  write Map.keys(removed3)
+  write Map.keys(removed4)
+  write Map.lookup(asc5, 1)
+  write Map.lookup(removed3, 1)
+  write Map.lookup(removed4, 3)
+
+  ; ============ User-defined key ordering ============
+
+  let ds: Array[(Down, String)] = [(1, "one"), (3, "three"), (2, "two")]
+  let dm = Map.from-entries(ds)
+  write Map.keys(dm)
+
+  let three: Down = 3
+  let dups: Array[(Down, String)] = [(three, "three"), (three, "THREE")]
+  let dup-dm = Map.from-entries(dups)
+  write Map.keys(dup-dm)
+  write Map.lookup(dup-dm, three)
+
+  let b5 = Band.Band(5)
+  let b10 = Band.Band(10)
+  let b12 = Band.Band(12)
+  let b20 = Band.Band(20)
+
+  let bands = Map.from-entries([
+    (b10, "ten"),
+    (b20, "twenty"),
+    (b5, "five"),
+    (b12, "twelve"),
+  ])
+
+  write Map.length(bands)
+  write Map.keys(bands)
+  write Map.lookup(bands, Band.Band(11))
+  write Map.lookup(bands, b10)
+  write Map.lookup(bands, b20)
 }

@@ -1,0 +1,6 @@
+; Object keys do not satisfy `Ord`.
+
+fun main() {
+  let m: Map[{ a: Int }, String] = Map.empty()
+  write m
+}

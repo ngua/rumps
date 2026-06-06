@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Map literals require `Ord` keys.\n\nfun main() {\n  let f = (x: Int) -> Int => x + 1\n  let fs = (f,)\n  let m = { fs.0 => \"bad\" }\n  write m\n}\n"
+---
+ERROR: type `(Int) -> Int` does not satisfy `Ord` class

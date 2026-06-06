@@ -1,7 +1,7 @@
 use rumps_query_macros::scheme;
 
 use super::super::{Environment, Module, PrimDef};
-use crate::primitives::Map;
+use crate::primitives::{Map, Prim};
 
 impl Environment {
     pub(super) fn register_map_builtin(&mut self) {
@@ -15,74 +15,84 @@ impl Environment {
                     PrimDef {
                         name: "empty",
                         f: Map::empty,
-                        ty: scheme!(a, forall T, U. () -> Map[T, U]),
+                        ty: scheme!(a, forall T: Ord, U. () -> Map[T, U]),
                     },
                     PrimDef {
                         name: "length",
                         f: Map::length,
-                        ty: scheme!(a, forall T, U. (Map[T, U]) -> Int),
+                        ty: scheme!(a, forall T: Ord, U. (Map[T, U]) -> Int),
                     },
                     PrimDef {
                         name: "keys",
                         f: Map::keys,
-                        ty: scheme!(a, forall T, U. (Map[T, U]) -> Array[T]),
+                        ty: scheme!(
+                            a,
+                            forall T: Ord, U. (Map[T, U]) -> Array[T]
+                        ),
                     },
                     PrimDef {
                         name: "values",
                         f: Map::values,
-                        ty: scheme!(a, forall T, U. (Map[T, U]) -> Array[U]),
+                        ty: scheme!(
+                            a,
+                            forall T: Ord, U. (Map[T, U]) -> Array[U]
+                        ),
                     },
                     PrimDef {
                         name: "entries",
                         f: Map::entries,
                         ty: scheme!(
                             a,
-                            forall T, U. (Map[T, U]) -> Array[(T, U)]
+                            forall T: Ord, U. (Map[T, U]) -> Array[(T, U)]
                         ),
                     },
                     PrimDef {
                         name: "has",
-                        f: Map::has,
-                        ty: scheme!(a, forall T, U. (Map[T, U], T) -> Bool),
+                        f: Map::placeholder,
+                        ty: scheme!(
+                            a,
+                            forall T: Ord, U. (Map[T, U], T) -> Bool
+                        ),
                     },
                     PrimDef {
                         name: "lookup",
-                        f: Map::get,
+                        f: Map::placeholder,
                         ty: scheme!(
                             a,
-                            forall T, U. (Map[T, U], T) -> Option[U]
+                            forall T: Ord, U. (Map[T, U], T) -> Option[U]
                         ),
                     },
                     PrimDef {
                         name: "insert",
-                        f: Map::set,
+                        f: Map::placeholder,
                         ty: scheme!(
                             a,
-                            forall T, U. (Map[T, U], T, U) -> Map[T, U]
+                            forall T: Ord, U. (Map[T, U], T, U) -> Map[T, U]
                         ),
                     },
                     PrimDef {
                         name: "remove",
-                        f: Map::remove,
+                        f: Map::placeholder,
                         ty: scheme!(
                             a,
-                            forall T, U. (Map[T, U], T) -> Map[T, U]
+                            forall T: Ord, U. (Map[T, U], T) -> Map[T, U]
                         ),
                     },
                     PrimDef {
                         name: "merge",
-                        f: Map::merge,
+                        f: Map::placeholder,
                         ty: scheme!(
                             a,
-                            forall T, U. (Map[T, U], Map[T, U]) -> Map[T, U]
+                            forall T: Ord, U. (Map[T, U], Map[T, U])
+                                -> Map[T, U]
                         ),
                     },
                     PrimDef {
                         name: "from-entries",
-                        f: Map::from_entries,
+                        f: Map::placeholder,
                         ty: scheme!(
                             a,
-                            forall T, U. (Array[(T, U)]) -> Map[T, U]
+                            forall T: Ord, U. (Array[(T, U)]) -> Map[T, U]
                         ),
                     },
                 ],

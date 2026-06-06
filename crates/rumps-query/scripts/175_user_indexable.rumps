@@ -25,6 +25,24 @@ fun main() {
   write im[1]
   write im[2]
   write im?[3]
+
+  ; Builtin `Map` uses `Indexable:Index = K` and `Indexable[V]`.
+  let m: Map[String, Int] = { "a" => 1 }
+  let map-index: Int = Indexable:index(m, "a")
+  write map-index
+
+  let map-get: Option[Int] = Indexable:get(m, "a")
+  write map-get
+
+  let map-missing: Option[Int] = m?["missing"]
+  write map-missing
+
+  let arr = [10]
+  let arr-index: Int = Indexable:index(arr, 0)
+  write arr-index
+
+  let arr-get: Option[Int] = Indexable:get(arr, 0)
+  write arr-get
 }
 
 ; === Type and Class Definitions ===

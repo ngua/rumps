@@ -16,7 +16,7 @@ use smallvec::SmallVec;
 use super::class::{self, ClassCtx};
 use super::Interpreter;
 use crate::io::IoContext;
-use crate::value::{MapKey, Payload, Value, ValueId};
+use crate::value::{Payload, Value, ValueId};
 use crate::Span;
 
 impl<I: IoContext> Interpreter<'_, I> {
@@ -177,22 +177,25 @@ impl<I: IoContext> Interpreter<'_, I> {
                 format!("{{ {fields} }}")
             }
             Payload::Map(entries) => {
-                // Collect keys and values first to avoid borrow conflicts
                 let data: Vec<_> = entries
-                    .iter()
+                    .entries()
+                    .into_iter()
                     .map(|(k, vid)| {
-                        let key = self.stringify_map_key(k);
-                        let val = self.arena.value(*vid).cloned();
+                        let key = self.arena.value(k).cloned();
+                        let val = self.arena.value(vid).cloned();
                         (key, val)
                     })
                     .collect();
                 let items = data
                     .into_iter()
                     .map(|(k, v)| {
+                        let ks = k
+                            .map(|v| self.display_raw_value(&v))
+                            .unwrap_or_else(|| "?".to_owned());
                         let vs = v
                             .map(|v| self.display_raw_value(&v))
                             .unwrap_or_else(|| "?".to_owned());
-                        format!("{k} => {vs}")
+                        format!("{ks} => {vs}")
                     })
                     .join(", ");
                 format!("{{ {items} }}")
@@ -470,21 +473,6 @@ impl<I: IoContext> Interpreter<'_, I> {
             Subscript::Char(c) => Payload::Char(c),
             Subscript::String(s) => Payload::String(self.arena.intern(&s)),
             Subscript::Json(j) => Payload::Json(Arc::new(j)),
-        }
-    }
-
-    /// Stringify a map key for display.
-    fn stringify_map_key(&self, k: &MapKey) -> String {
-        match k {
-            MapKey::Bool(b) => b.to_string(),
-            MapKey::Int(n) => n.to_string(),
-            MapKey::Float(f) => f.to_string(),
-            MapKey::Char(c) => format!("'{c}'"),
-            MapKey::String(id) => self
-                .arena
-                .get_str(*id)
-                .map(|s| format!("\"{s}\""))
-                .unwrap_or_else(|| "\"?\"".to_owned()),
         }
     }
 

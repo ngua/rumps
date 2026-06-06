@@ -13,7 +13,7 @@ use crate::intern::{QualifiedName, StringId};
 use crate::io::IoContext;
 use crate::typecheck::{RuntimeTyId, Ty};
 use crate::value::{
-    MapKey, Payload, TypeDef, TypeId, Value, ValueId, ValueMeta,
+    Map as RumpsMap, Payload, TypeDef, TypeId, Value, ValueId, ValueMeta,
 };
 use crate::{ClassId, Error, Result, Span};
 
@@ -360,7 +360,6 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     /// Evaluate a map literal: `{ k1 => v1, k2 => v2, ... }`.
     ///
-    /// Keys must be scalar types (Bool, Int, Float, Char, String).
     /// Type checker guarantees key/value type homogeneity.
     #[async_recursion]
     pub(super) async fn map_lit(
@@ -368,23 +367,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         entries: &[(ExprId, ExprId)],
         span: Span,
     ) -> Result<Payload> {
-        match entries.split_first() {
-            None => Ok(Payload::Map(Arc::new(IndexMap::new()))),
-            Some(((k_expr, v_expr), rest)) => {
-                let v_span = self.ast.expr_span(*v_expr).unwrap_or(span);
-
-                let k_val = self.eval_payload(*k_expr).await?;
-                let v_val = self.eval(*v_expr).await?;
-
-                let map_key = self.value_to_map_key(&k_val);
-                let v_id = self.add_value(v_val, v_span);
-
-                let mut acc = IndexMap::new();
-                acc.insert(map_key, v_id);
-
-                self.map_lit_entries(rest, acc, span).await
-            }
-        }
+        self.map_lit_entries(entries, RumpsMap::new(), span).await
     }
 
     /// Recursively evaluate map entries.
@@ -394,32 +377,29 @@ impl<I: IoContext> Interpreter<'_, I> {
     async fn map_lit_entries(
         &mut self,
         entries: &[(ExprId, ExprId)],
-        mut acc: IndexMap<MapKey, ValueId>,
+        acc: RumpsMap,
         span: Span,
     ) -> Result<Payload> {
         match entries.split_first() {
             None => Ok(Payload::Map(Arc::new(acc))),
             Some(((k_expr, v_expr), tail)) => {
+                let k_span = self.ast.expr_span(*k_expr).unwrap_or(span);
                 let v_span = self.ast.expr_span(*v_expr).unwrap_or(span);
 
-                let k_val = self.eval_payload(*k_expr).await?;
+                let k_val = self.eval(*k_expr).await?;
                 let v_val = self.eval(*v_expr).await?;
 
-                let map_key = self.value_to_map_key(&k_val);
+                let k_meta = self.expr_meta(*k_expr);
+                let v_meta = self.expr_meta(*v_expr);
+                let k_val = self.value_with_context_meta(k_val, k_meta);
+                let v_val = self.value_with_context_meta(v_val, v_meta);
+                let k_id = self.add_value(k_val, k_span);
                 let v_id = self.add_value(v_val, v_span);
-                acc.insert(map_key, v_id);
+                let acc = self.map_insert_id(&acc, k_id, v_id, span).await?;
 
                 self.map_lit_entries(tail, acc, span).await
             }
         }
-    }
-
-    /// Convert a value to a `MapKey`.
-    ///
-    /// Type checker guarantees map keys are scalar types.
-    fn value_to_map_key(&self, v: &Payload) -> MapKey {
-        MapKey::from_payload(v)
-            .unwrap_or_else(|| typechecked!("map key", "Scalar"))
     }
 
     fn value_type_id(&self, v: &Value) -> Option<TypeId> {
@@ -491,10 +471,12 @@ impl<I: IoContext> Interpreter<'_, I> {
                     })
             }
             (Payload::Map(entries), key) => {
-                let map_key = self.value_to_map_key(key);
-                entries
-                    .get(&map_key)
-                    .and_then(|id| self.arena.value(*id).cloned())
+                let map = entries.as_ref().clone();
+                let key = key.clone();
+                let idx_id = self.add_value(idx_val, span);
+                self.map_lookup_id(&map, idx_id, span)
+                    .await?
+                    .and_then(|id| self.arena.value(id).cloned())
                     .ok_or_else(|| {
                         Error::runtime(
                             span,
@@ -524,6 +506,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 self.dispatch_class_method_value(ClassDispatch {
                     dispatch_expr_id: Some(expr_id),
                     output_expr_id: Some(expr_id),
+                    output_ty: None,
                     class: ClassId::INDEXABLE,
                     method: mid,
                     args: SmallVec::from_slice(&[base_id, idx_id]),
@@ -564,11 +547,12 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .map(Payload::some)
                     .unwrap_or_else(Payload::none))
             }
-            (Payload::Map(entries), key) => {
-                let map_key = self.value_to_map_key(key);
-                Ok(entries
-                    .get(&map_key)
-                    .copied()
+            (Payload::Map(entries), _) => {
+                let map = entries.as_ref().clone();
+                let idx_id = self.add_value(idx_val, span);
+                Ok(self
+                    .map_lookup_id(&map, idx_id, span)
+                    .await?
                     .map(Payload::some)
                     .unwrap_or_else(Payload::none))
             }

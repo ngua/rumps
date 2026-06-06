@@ -45,43 +45,9 @@ use crate::intern::{QualifiedName, StringId, StringInterner};
 use crate::typecheck::RuntimeTyId;
 use crate::Span;
 
-/// A hashable key for `Map` values.
-///
-/// Map keys are restricted to scalar types for hashability. This enum wraps
-/// scalar values with proper `Hash` and `Eq` implementations.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum MapKey {
-    Bool(bool),
-    Int(i64),
-    Float(OrderedFloat<f64>),
-    Char(char),
-    String(StringId),
-}
+mod map;
 
-impl MapKey {
-    /// Convert a `Payload` to a `MapKey`, or `None` if not a scalar type.
-    pub(crate) fn from_payload(v: &Payload) -> Option<Self> {
-        match v {
-            Payload::Bool(b) => Some(Self::Bool(*b)),
-            Payload::Int(n) => Some(Self::Int(*n)),
-            Payload::Float(f) => Some(Self::Float(*f)),
-            Payload::Char(c) => Some(Self::Char(*c)),
-            Payload::String(sid) => Some(Self::String(*sid)),
-            _ => None,
-        }
-    }
-
-    /// Convert a `MapKey` back to a `Payload`.
-    pub(crate) fn to_payload(&self) -> Payload {
-        match self {
-            Self::Bool(b) => Payload::Bool(*b),
-            Self::Int(n) => Payload::Int(*n),
-            Self::Float(f) => Payload::Float(*f),
-            Self::Char(c) => Payload::Char(*c),
-            Self::String(sid) => Payload::String(*sid),
-        }
-    }
-}
+pub(crate) use map::{Map, MapNode};
 
 /// Index into the value arena.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -521,25 +487,16 @@ impl ValueArena {
     /// Get map contents by ID (no cloning; returns a reference into the `Arc`).
     ///
     /// Returns `None` if the value doesn't exist or isn't a map.
-    pub(crate) fn get_map(
-        &self,
-        id: ValueId,
-    ) -> Option<&IndexMap<MapKey, ValueId>> {
+    pub(crate) fn get_map(&self, id: ValueId) -> Option<&Map> {
         match self.payload(id)? {
             Payload::Map(entries) => Some(entries),
             _ => None,
         }
     }
 
-    /// Get owned map contents by ID, avoiding a clone when the `Arc`
-    /// refcount is `1`.
-    ///
-    /// Use this instead of `get_map` at mutation sites (insert, remove, etc.)
-    /// where you need a mutable `IndexMap`.
-    pub(crate) fn take_map(
-        &self,
-        id: ValueId,
-    ) -> Option<IndexMap<MapKey, ValueId>> {
+    /// Get owned map contents by ID, avoiding a clone when the `Arc` refcount
+    /// is `1`.
+    pub(crate) fn take_map(&self, id: ValueId) -> Option<Map> {
         match self.payload(id)? {
             Payload::Map(entries) => {
                 Some(Arc::unwrap_or_clone(entries.clone()))
@@ -655,11 +612,8 @@ pub(crate) enum Payload {
     /// access (`.0`, `.1`, etc.).
     Tuple(Arc<SmallVec<[ValueId; 4]>>),
 
-    /// A homogeneous map with typed keys and values.
-    ///
-    /// Keys are restricted to scalar types (Bool, Int, Float, Char, String).
-    /// Insertion order is preserved.
-    Map(Arc<IndexMap<MapKey, ValueId>>),
+    /// A homogeneous ordered map with typed keys and values.
+    Map(Arc<Map>),
 
     /// A point in time (UTC).
     Time(DateTime<Utc>),

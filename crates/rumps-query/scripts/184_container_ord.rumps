@@ -113,6 +113,29 @@ fun main() {
   write m1 >= m4
   ; Expected: true (equal after sorting by key)
 
+  ; `Map` operators use async tree semantics.
+  write m1 == m4
+  ; Expected: `true`
+
+  write m1 != m4
+  ; Expected: `false`
+
+  write m1 < m2
+  ; Expected: `true`
+
+  write m1 < m3
+  ; Expected: `true`
+
+  write Ord:compare(m1, m4) == Ordering.Eq
+  ; Expected: `true`
+
+  write Eq:eq(m1, m4)
+  ; Expected: `true`
+
+  let merged = Concatable:concat(m1, Map.from-entries([("b", 4)]))
+  write merged["b"]
+  ; Expected: `4`
+
   ; === Time comparisons ===
 
   let epoch = Time.epoch()

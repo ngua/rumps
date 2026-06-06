@@ -87,7 +87,7 @@ impl Parser {
             .then_ignore(just(Token::RParen))
             .map_with_span(|e, span| PostfixOp::JsonArrow(Box::new(e), span));
 
-        // JSON scalar access with dynamic key: `->>(expr)` (returns Option[T])
+        // JSON typed access with dynamic key: `->>(expr)` (returns `Option[T]`)
         let json_arrow_arrow_expr = just(Token::ArrowArrow)
             .ignore_then(just(Token::LParen))
             .ignore_then(expr)
@@ -213,7 +213,7 @@ pub(super) enum PostfixOp {
     JsonScalarField(StringId, Span),
     /// JSON access with dynamic key: `->(expr)` (returns `Json`).
     JsonArrow(Box<cst::Expr>, Span),
-    /// JSON scalar access with dynamic key: `->>(expr)` (returns `Option[T]`).
+    /// JSON typed access with dynamic key: `->>(expr)` (returns `Option[T]`).
     JsonArrowArrow(Box<cst::Expr>, Span),
 }
 

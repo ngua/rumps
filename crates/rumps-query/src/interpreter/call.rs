@@ -1,6 +1,8 @@
 //! Function and closure calling.
 
+use std::cmp::Ordering;
 use std::ops::ControlFlow;
+use std::sync::Arc;
 
 use async_recursion::async_recursion;
 use smallvec::SmallVec;
@@ -15,8 +17,7 @@ use crate::typecheck::{
     ClassShape, ExprAux, RuntimeTyId, Ty, TyArena, TyId, TyVar, TypeClass,
 };
 use crate::value::{
-    CapturedEnv, FunctionDef, MapKey, Payload, TypeId, Value, ValueId,
-    ValueMeta,
+    CapturedEnv, FunctionDef, Payload, TypeId, Value, ValueId, ValueMeta,
 };
 use crate::{ClassId, Error, Result, Span};
 
@@ -44,6 +45,7 @@ struct ClosureCall<'a> {
 pub(super) struct ClassDispatch {
     pub(super) dispatch_expr_id: Option<ExprId>,
     pub(super) output_expr_id: Option<ExprId>,
+    pub(super) output_ty: Option<RuntimeTyId>,
     pub(super) class: ClassId,
     pub(super) method: StringId,
     pub(super) args: SmallVec<[ValueId; 4]>,
@@ -390,12 +392,14 @@ impl<I: IoContext> Interpreter<'_, I> {
         args: &[ValueId],
         span: Span,
     ) -> Result<Value> {
-        // Higher-order functions (those that invoke closures/functions passed as
-        // arguments) are dispatched via `module_hofs` registry. The `PrimFn`
-        // signature only receives values; it has no access to the interpreter's
-        // closure invocation machinery (`invoke_callable`). See `primitives.rs`
-        // module docs for details.
-        if let Some((hof, result)) = self.module_hofs.lookup(path) {
+        // Builtins that need interpreter services are intercepted before sync
+        // primitive dispatch. This includes HoFs that invoke closures and async
+        // builtins that need class dispatch or other interpreter-owned context.
+        if let Some(value) =
+            self.invoke_async_map_module_fn(path, args, span).await?
+        {
+            Ok(value)
+        } else if let Some((hof, result)) = self.module_hofs.lookup(path) {
             let value = self
                 .run_hof_trampoline(OutputMeta::Payload, hof, args, span)
                 .await?;
@@ -538,6 +542,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             self.dispatch_class_method_value(ClassDispatch {
                 dispatch_expr_id: Some(expr_id),
                 output_expr_id: Some(expr_id),
+                output_ty: None,
                 class: kind,
                 method,
                 args: arg_ids.into(),
@@ -590,6 +595,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         self.dispatch_class_method_value(ClassDispatch {
             dispatch_expr_id: invoke.dispatch_expr_id,
             output_expr_id: invoke.output_expr_id,
+            output_ty: None,
             class: kind,
             method: invoke.method,
             args: invoke.args,
@@ -616,6 +622,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         self.dispatch_class_method_value(ClassDispatch {
             dispatch_expr_id: expr_id,
             output_expr_id: expr_id,
+            output_ty: None,
             class,
             method,
             args: SmallVec::from_slice(args),
@@ -846,15 +853,29 @@ impl<I: IoContext> Interpreter<'_, I> {
         let output = self.class_output_meta(
             dispatch.output_expr_id,
             dispatch.dispatch_expr_id,
+            dispatch.output_ty,
             dispatch.class,
         );
-        if let Some(result) = self.dispatch_forwarding_builtin_class_method(
-            dispatch.output_expr_id,
-            dispatch.class,
-            dispatch.method,
-            &dispatch.args,
-            dispatch.span,
-        ) {
+        if let Some(value) = self
+            .dispatch_async_map_class_method(
+                output,
+                dispatch.class,
+                dispatch.method,
+                &dispatch.args,
+                dispatch.span,
+            )
+            .await?
+        {
+            Ok(value)
+        } else if let Some(result) = self
+            .dispatch_forwarding_builtin_class_method(
+                dispatch.output_expr_id,
+                dispatch.class,
+                dispatch.method,
+                &dispatch.args,
+                dispatch.span,
+            )
+        {
             result
         } else if let Some(MethodFn::Hof(f)) =
             self.class_methods.lookup(dispatch.class, dispatch.method)
@@ -915,54 +936,56 @@ impl<I: IoContext> Interpreter<'_, I> {
         &mut self,
         output_expr_id: Option<ExprId>,
         dispatch_expr_id: Option<ExprId>,
+        output_ty: Option<RuntimeTyId>,
         class: ClassId,
     ) -> OutputMeta {
-        match output_expr_id {
-            Some(id) => {
-                let info = self.checked.expr(id);
-                match &info.aux {
-                    ExprAux::HofCall { out, .. } => OutputMeta::Ty(*out),
-                    _ if class == ClassId::TRY_INTO => {
-                        let target = self
-                            .approved_newtype_edge_meta(id)
-                            .map(|meta| meta.ty)
-                            .or_else(|| {
-                                let ty = self.checked_expr_meta(id).ty;
-                                if self.checked.types.to_type_id(ty)
-                                    == Some(TypeId::RESULT)
-                                {
-                                    None
-                                } else {
-                                    Some(ty)
-                                }
-                            });
-                        target.map_or(OutputMeta::Expr(id), |ty| {
-                            OutputMeta::Ty(
-                                self.checked.types.result(
+        match output_ty {
+            Some(ty) => OutputMeta::Ty(ty),
+            None => match output_expr_id {
+                Some(id) => {
+                    let info = self.checked.expr(id);
+                    match &info.aux {
+                        ExprAux::HofCall { out, .. } => OutputMeta::Ty(*out),
+                        _ if class == ClassId::TRY_INTO => {
+                            let target = self
+                                .approved_newtype_edge_meta(id)
+                                .map(|meta| meta.ty)
+                                .or_else(|| {
+                                    let ty = self.checked_expr_meta(id).ty;
+                                    if self.checked.types.to_type_id(ty)
+                                        == Some(TypeId::RESULT)
+                                    {
+                                        None
+                                    } else {
+                                        Some(ty)
+                                    }
+                                });
+                            target.map_or(OutputMeta::Expr(id), |ty| {
+                                OutputMeta::Ty(self.checked.types.result(
                                     ty,
                                     RuntimeTyId::from(TyArena::STRING),
-                                ),
-                            )
-                        })
-                    }
-                    _ => OutputMeta::Expr(id),
-                }
-            }
-            None => dispatch_expr_id
-                .map(|id| {
-                    let meta = self.checked_expr_meta(id);
-                    self.callable_ret(meta.ty).unwrap_or_else(|| {
-                        if class == ClassId::TRY_INTO {
-                            self.checked.types.result(
-                                meta.ty,
-                                RuntimeTyId::from(TyArena::STRING),
-                            )
-                        } else {
-                            meta.ty
+                                ))
+                            })
                         }
+                        _ => OutputMeta::Expr(id),
+                    }
+                }
+                None => dispatch_expr_id
+                    .map(|id| {
+                        let meta = self.checked_expr_meta(id);
+                        self.callable_ret(meta.ty).unwrap_or_else(|| {
+                            if class == ClassId::TRY_INTO {
+                                self.checked.types.result(
+                                    meta.ty,
+                                    RuntimeTyId::from(TyArena::STRING),
+                                )
+                            } else {
+                                meta.ty
+                            }
+                        })
                     })
-                })
-                .map_or(OutputMeta::Payload, OutputMeta::Ty),
+                    .map_or(OutputMeta::Payload, OutputMeta::Ty),
+            },
         }
     }
 
@@ -1139,6 +1162,104 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
+    async fn dispatch_async_map_class_method(
+        &mut self,
+        output: OutputMeta,
+        class: ClassId,
+        method: StringId,
+        args: &[ValueId],
+        span: Span,
+    ) -> Result<Option<Value>> {
+        let index = self.arena.intern("index");
+        let get = self.arena.intern("get");
+        let eq = self.arena.intern("eq");
+        let compare = self.arena.intern("compare");
+        let concat = self.arena.intern("concat");
+        let base_id = args.first().copied();
+        let idx_id = args.get(1).copied();
+        let map = base_id.and_then(|id| self.arena.get_map(id).cloned());
+
+        if class == ClassId::EQ && method == eq {
+            let other =
+                args.get(1).and_then(|id| self.arena.get_map(*id)).cloned();
+            match (map, other) {
+                (Some(map), Some(other)) => {
+                    let b = self.map_eq_maps(&map, &other, span).await?;
+                    Ok(Some(self.value_for_output(output, Payload::Bool(b))))
+                }
+                (Some(_), None) => typechecked!("Eq:eq", "Map"),
+                _ => Ok(None),
+            }
+        } else if class == ClassId::ORD && method == compare {
+            let other =
+                args.get(1).and_then(|id| self.arena.get_map(*id)).cloned();
+            match (map, other) {
+                (Some(map), Some(other)) => {
+                    let payload =
+                        match self.map_cmp_maps(&map, &other, span).await? {
+                            Ordering::Less => Payload::lt(),
+                            Ordering::Equal => Payload::eq_ord(),
+                            Ordering::Greater => Payload::gt(),
+                        };
+                    let value = match output {
+                        OutputMeta::Payload => self.value_from_meta(
+                            payload,
+                            self.checked.types.meta_ordering(),
+                        ),
+                        _ => self.value_for_output(output, payload),
+                    };
+                    Ok(Some(value))
+                }
+                (Some(_), None) => typechecked!("Ord:compare", "Map"),
+                _ => Ok(None),
+            }
+        } else if class == ClassId::CONCATABLE && method == concat {
+            let other =
+                args.get(1).and_then(|id| self.arena.get_map(*id)).cloned();
+            match (map, other) {
+                (Some(map), Some(other)) => {
+                    let map = self.map_merge_maps(&map, &other, span).await?;
+                    Ok(Some(
+                        self.value_for_output(
+                            output,
+                            Payload::Map(Arc::new(map)),
+                        ),
+                    ))
+                }
+                (Some(_), None) => typechecked!("Concatable:concat", "Map"),
+                _ => Ok(None),
+            }
+        } else if class == ClassId::INDEXABLE && method == index {
+            match (map, idx_id) {
+                (Some(map), Some(idx_id)) => {
+                    let value = self
+                        .map_lookup_id(&map, idx_id, span)
+                        .await?
+                        .and_then(|id| self.arena.value(id).cloned())
+                        .ok_or_else(|| {
+                            Error::runtime(span, "map key not found")
+                        })?;
+                    Ok(Some(self.value_for_output_value(output, value)))
+                }
+                _ => Ok(None),
+            }
+        } else if class == ClassId::INDEXABLE && method == get {
+            match (map, idx_id) {
+                (Some(map), Some(idx_id)) => {
+                    let payload = self
+                        .map_lookup_id(&map, idx_id, span)
+                        .await?
+                        .map(Payload::some)
+                        .unwrap_or_else(Payload::none);
+                    Ok(Some(self.value_for_output(output, payload)))
+                }
+                _ => Ok(None),
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
     fn indexable_index_value(
         &mut self,
         output_expr_id: Option<ExprId>,
@@ -1179,15 +1300,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                         )
                     })
             }
-            (Payload::Map(entries), key) => entries
-                .get(
-                    &MapKey::from_payload(key)
-                        .unwrap_or_else(|| typechecked!("Map key", "Scalar")),
-                )
-                .and_then(|id| self.arena.value(*id).cloned())
-                .ok_or_else(|| {
-                    Error::runtime(span, format!("map key not found: {key:?}"))
-                }),
+            (Payload::Map(_), _) => {
+                typechecked!("Indexable:index", "async Map index")
+            }
             (Payload::String(sid), Payload::Int(i)) => {
                 let s = self.arena.get_str(*sid).unwrap_or("");
                 let len = s.chars().count() as i64;
@@ -1459,6 +1574,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                         .dispatch_class_method_value(ClassDispatch {
                             dispatch_expr_id: None,
                             output_expr_id: None,
+                            output_ty: Some(RuntimeTyId::from(
+                                TyArena::ORDERING,
+                            )),
                             class: ClassId::ORD,
                             method,
                             args: cmp.args.iter().copied().collect(),

@@ -1584,6 +1584,11 @@ impl InferCtx<'_> {
         if let Some(((first_k, first_v), rest)) = entries.split_first() {
             let k_ty = self.expr(*first_k);
             let v_ty = self.expr(*first_v);
+            self.constrain(Constraint::Class {
+                ty: k_ty,
+                class: TypeClass::simple(ClassId::ORD),
+                span,
+            });
             rest.iter().for_each(|(k, v)| {
                 let k = self.expr(*k);
                 let v = self.expr(*v);
@@ -1594,6 +1599,11 @@ impl InferCtx<'_> {
         } else {
             let k = self.fresh();
             let v = self.fresh();
+            self.constrain(Constraint::Class {
+                ty: k,
+                class: TypeClass::simple(ClassId::ORD),
+                span,
+            });
             self.ty_arena.map_ty(k, v)
         }
     }
@@ -1762,7 +1772,7 @@ impl InferCtx<'_> {
     /// Infer type of index access: `base[idx]`.
     ///
     /// Works for `Array[T]` (index must be `Int`, returns `T`),
-    /// `Map[K, V]` (index unifies with `K`, returns `Option[V]`),
+    /// `Map[K, V]` (index unifies with `K`, returns `V`),
     /// and `String` (index must be `Int`, returns `Char`).
     fn index(&mut self, base_id: ExprId, idx_id: ExprId, span: Span) -> TyId {
         let base_ty = self.expr(base_id);
@@ -1891,7 +1901,7 @@ impl InferCtx<'_> {
             Ty::Map(key, val) => {
                 let (key, val) = (*key, *val);
                 self.unify(idx_ty, key, span);
-                // Map?[k] is the same as Map[k] since both return Option[V]
+                // Optional map indexing wraps successful lookup in `Option`.
                 self.ty_arena.option(val)
             }
 

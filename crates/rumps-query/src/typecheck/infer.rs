@@ -1907,6 +1907,65 @@ impl<'a> InferCtx<'a> {
 
     pub(super) fn ast_ty(&mut self, id: AstTypeExprId) -> TyId {
         let subst = self.cur_subst();
-        self.convert().ast_type_to_ty(id, &subst)
+        let ty = self.convert().ast_type_to_ty(id, &subst);
+        let span = self.ast.type_expr_span(id).unwrap_or_default();
+        self.require_wf_ty(ty, span);
+        ty
+    }
+
+    pub(super) fn require_wf_ty(&mut self, ty: TyId, span: Span) {
+        match self.ty_arena.get(ty).clone() {
+            Ty::Map(k, v) => {
+                self.require_wf_ty(k, span);
+                self.require_wf_ty(v, span);
+                self.constrain(Constraint::Class {
+                    ty: k,
+                    class: TypeClass::simple(ClassId::ORD),
+                    span,
+                });
+            }
+            Ty::Array(t) | Ty::Option(t) => self.require_wf_ty(t, span),
+            Ty::Result(ok, err) => {
+                self.require_wf_ty(ok, span);
+                self.require_wf_ty(err, span);
+            }
+            Ty::Tuple(ts) | Ty::Union(_, ts) => {
+                ts.iter().for_each(|&t| self.require_wf_ty(t, span));
+            }
+            Ty::Object(fields) => {
+                let ts: SmallVec<[TyId; 4]> =
+                    fields.values().copied().collect();
+                ts.iter().for_each(|&t| self.require_wf_ty(t, span));
+            }
+            Ty::Named(_, args) | Ty::Apply(_, args) => {
+                args.iter().for_each(|&t| self.require_wf_ty(t, span));
+            }
+            Ty::Fn(params, ret) => {
+                params.iter().for_each(|&t| self.require_wf_ty(t, span));
+                self.require_wf_ty(ret, span);
+            }
+            Ty::Var(_)
+            | Ty::Bool
+            | Ty::Int
+            | Ty::Word
+            | Ty::Float
+            | Ty::Char
+            | Ty::String
+            | Ty::Unit
+            | Ty::Time
+            | Ty::Range
+            | Ty::Json
+            | Ty::Ordering
+            | Ty::DataStatus
+            | Ty::FilePath
+            | Ty::Path
+            | Ty::Regex
+            | Ty::RuntimeError
+            | Ty::Local
+            | Ty::Global
+            | Ty::AssocType(_, _, _)
+            | Ty::Unknown
+            | Ty::Error => {}
+        }
     }
 }

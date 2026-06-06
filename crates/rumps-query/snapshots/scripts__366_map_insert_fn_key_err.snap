@@ -1,0 +1,6 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; `Map.insert` requires `Ord` keys.\n\nfun main() {\n  let f = (x: Int) -> Int => x + 1\n  let m = Map.insert(Map.empty(), f, \"bad\")\n  write m\n}\n"
+---
+ERROR: type `(Int) -> Int` does not satisfy `Ord` class
+type `(Int) -> Int` does not satisfy `Ord` class

@@ -1,0 +1,7 @@
+; `Json` keys do not satisfy `Ord`.
+
+fun main() {
+  let j = { "a": 1 }
+  let m = Map.from-entries([(j, "bad")])
+  write m
+}

@@ -452,12 +452,16 @@ impl SolveCtx<'_> {
                     self.errors.push(e);
                 }
             }
-            Ty::Map(_key, val) => {
-                // `Map[K, V]`: `elem = Option[V]` (index type is `K`, via `.Index`)
-                let opt_val = self.ty_arena.option(val);
-                if let Err(e) = self.unify_types(elem, opt_val, span) {
+            Ty::Map(key, val) => {
+                // `Map[K, V]`: `elem = V` (index type is `K`, via `.Index`)
+                if let Err(e) = self.unify_types(elem, val, span) {
                     self.errors.push(e);
                 }
+                self.satisfies_class(
+                    &TypeClass::simple(ClassId::ORD),
+                    key,
+                    span,
+                );
             }
             Ty::String => {
                 // `String`: `elem = Char` (index type is `Int`, via `.Index`)
