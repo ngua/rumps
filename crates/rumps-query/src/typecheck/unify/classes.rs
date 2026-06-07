@@ -327,17 +327,21 @@ impl SolveCtx<'_> {
             None => match shape {
                 Ty::Var(_) | Ty::Error | Ty::Unknown => {}
                 Ty::Union(prov, members) => {
-                    let inst = prov.and_then(|id| {
-                        self.instance_registry.lookup(class_id, id).cloned()
-                    });
-                    match inst {
-                        Some(inst) => self.check_instance_constraints(
-                            &inst,
-                            &[],
+                    let lookup = prov.map(|id| {
+                        self.instance_for(
+                            InstanceUse::Evidence,
+                            class_id,
+                            id,
                             span,
-                            None,
-                        ),
-                        None => {
+                        )
+                    });
+                    match lookup {
+                        Some(InstanceLookup::Found(inst)) => self
+                            .check_instance_constraints(&inst, &[], span, None),
+                        Some(InstanceLookup::BlockedSelf) => {}
+                        Some(InstanceLookup::Missing)
+                        | Some(InstanceLookup::NotImported)
+                        | None => {
                             if Self::is_numeric_capability(class_id) {
                                 let any_sat = members.iter().any(|&m| {
                                     let sh = self.ty_arena.get(m).clone();
@@ -366,18 +370,26 @@ impl SolveCtx<'_> {
                     }
                 }
                 Ty::Named(id, args) => {
-                    let inst =
-                        self.instance_registry.lookup(class_id, id).cloned();
-                    match inst {
-                        Some(inst) => self.check_instance_constraints(
-                            &inst, &args, span, None,
-                        ),
-                        None => {
+                    match self.instance_for(
+                        InstanceUse::Evidence,
+                        class_id,
+                        id,
+                        span,
+                    ) {
+                        InstanceLookup::Found(inst) => self
+                            .check_instance_constraints(
+                                &inst, &args, span, None,
+                            ),
+                        InstanceLookup::BlockedSelf => {}
+                        InstanceLookup::Missing
+                        | InstanceLookup::NotImported => {
                             let expanded =
                                 if Self::is_numeric_capability(class_id)
                                     || class_id == ClassId::BIT_LIKE
                                 {
-                                    self.expand_alias_fully_for_class(ty, span)
+                                    self.expand_alias_fully_for_class(
+                                        class_id, ty, span,
+                                    )
                                 } else {
                                     None
                                 };
@@ -398,21 +410,25 @@ impl SolveCtx<'_> {
                 _ if class_id.idx() >= ClassId::BUILTIN_COUNT => {
                     match self.ty_to_type_id_and_args(ty) {
                         Some((tid, args)) => {
-                            match self
-                                .instance_registry
-                                .lookup(class_id, tid)
-                                .cloned()
-                            {
-                                Some(inst) => self.check_instance_constraints(
-                                    &inst, &args, span, None,
-                                ),
-                                None => self.errors.push(
-                                    TypeError::UnsatisfiedClass(
+                            match self.instance_for(
+                                InstanceUse::Evidence,
+                                class_id,
+                                tid,
+                                span,
+                            ) {
+                                InstanceLookup::Found(inst) => self
+                                    .check_instance_constraints(
+                                        &inst, &args, span, None,
+                                    ),
+                                InstanceLookup::BlockedSelf => {}
+                                InstanceLookup::Missing
+                                | InstanceLookup::NotImported => self
+                                    .errors
+                                    .push(TypeError::UnsatisfiedClass(
                                         class.clone(),
                                         ty,
                                         span,
-                                    ),
-                                ),
+                                    )),
                             }
                         }
                         None => self.errors.push(TypeError::UnsatisfiedClass(
@@ -442,7 +458,9 @@ impl SolveCtx<'_> {
         ty: TyId,
         span: Span,
     ) {
-        let ty = self.expand_alias_fully_for_class(ty, span).unwrap_or(ty);
+        let ty = self
+            .expand_alias_fully_for_class(class_id, ty, span)
+            .unwrap_or(ty);
         let shape = self.ty_arena.get(ty).clone();
         let builtin_elems: Option<SmallVec<[TyId; 2]>> =
             match (class_id, &shape) {
@@ -475,8 +493,13 @@ impl SolveCtx<'_> {
                 }
                 Ty::Var(_) | Ty::Apply(_, _) | Ty::Error | Ty::Unknown => {}
                 Ty::Named(id, type_args) => {
-                    match self.instance_registry.lookup(class_id, id).cloned() {
-                        Some(inst) => {
+                    match self.instance_for(
+                        InstanceUse::Evidence,
+                        class_id,
+                        id,
+                        span,
+                    ) {
+                        InstanceLookup::Found(inst) => {
                             let param_subst = self
                                 .build_instance_subst(&inst, &type_args, span);
                             self.unify_hkt_inst_args(
@@ -492,7 +515,9 @@ impl SolveCtx<'_> {
                                 Some(&param_subst),
                             );
                         }
-                        None => {
+                        InstanceLookup::BlockedSelf => {}
+                        InstanceLookup::Missing
+                        | InstanceLookup::NotImported => {
                             self.errors.push(TypeError::UnsatisfiedClass(
                                 class.clone(),
                                 ty,
@@ -502,32 +527,43 @@ impl SolveCtx<'_> {
                     }
                 }
                 Ty::Tuple(ts) => {
-                    match self
-                        .instance_registry
-                        .lookup_tuple(class_id, ts.len())
-                        .cloned()
-                    {
-                        Some(inst) => {
-                            let subst =
-                                self.build_instance_subst(&inst, &ts, span);
-                            self.unify_hkt_inst_args(
-                                elems,
-                                &inst.class_args,
-                                &subst,
-                                span,
-                            );
-                            self.check_instance_constraints(
-                                &inst,
-                                &ts,
-                                span,
-                                Some(&subst),
-                            );
+                    match self.instances_for(
+                        InstanceUse::Evidence,
+                        class_id,
+                        TypeId::TUPLE,
+                        span,
+                    ) {
+                        InstancesLookup::Found(insts) => {
+                            match insts
+                                .into_iter()
+                                .find(|i| i.type_params.len() == ts.len())
+                            {
+                                Some(inst) => {
+                                    let subst = self
+                                        .build_instance_subst(&inst, &ts, span);
+                                    self.unify_hkt_inst_args(
+                                        elems,
+                                        &inst.class_args,
+                                        &subst,
+                                        span,
+                                    );
+                                    self.check_instance_constraints(
+                                        &inst,
+                                        &ts,
+                                        span,
+                                        Some(&subst),
+                                    );
+                                }
+                                None => self.errors.push(
+                                    TypeError::UnsatisfiedClass(
+                                        class.clone(),
+                                        ty,
+                                        span,
+                                    ),
+                                ),
+                            }
                         }
-                        None => self.errors.push(TypeError::UnsatisfiedClass(
-                            class.clone(),
-                            ty,
-                            span,
-                        )),
+                        InstancesLookup::BlockedSelf => {}
                     }
                 }
                 _ => {
@@ -553,7 +589,9 @@ impl SolveCtx<'_> {
         ty: TyId,
         span: Span,
     ) {
-        let ty = self.expand_alias_fully_for_class(ty, span).unwrap_or(ty);
+        let ty = self
+            .expand_alias_fully_for_class(tag, ty, span)
+            .unwrap_or(ty);
 
         match self.ty_arena.get(ty).clone() {
             Ty::Option(opt_elem) => {
@@ -568,30 +606,40 @@ impl SolveCtx<'_> {
                 self.unify_hkt_known_args(elems, &builtin, span);
             }
             Ty::Tuple(ts) => {
-                match self
-                    .instance_registry
-                    .lookup_tuple(tag, ts.len())
-                    .cloned()
-                {
-                    Some(inst) => {
-                        let subst = self.build_instance_subst(&inst, &ts, span);
-                        self.unify_hkt_inst_args(
-                            elems,
-                            &inst.class_args,
-                            &subst,
-                            span,
-                        );
-                        self.check_instance_constraints(
-                            &inst,
-                            &ts,
-                            span,
-                            Some(&subst),
-                        );
+                match self.instances_for(
+                    InstanceUse::Evidence,
+                    tag,
+                    TypeId::TUPLE,
+                    span,
+                ) {
+                    InstancesLookup::Found(insts) => {
+                        let inst = insts
+                            .into_iter()
+                            .find(|i| i.type_params.len() == ts.len());
+                        match inst {
+                            Some(inst) => {
+                                let subst =
+                                    self.build_instance_subst(&inst, &ts, span);
+                                self.unify_hkt_inst_args(
+                                    elems,
+                                    &inst.class_args,
+                                    &subst,
+                                    span,
+                                );
+                                self.check_instance_constraints(
+                                    &inst,
+                                    &ts,
+                                    span,
+                                    Some(&subst),
+                                );
+                            }
+                            None => {
+                                // Fallback for fully-unapplied tuple constructors.
+                                self.unify_hkt_known_args(elems, &ts, span);
+                            }
+                        }
                     }
-                    None => {
-                        // Fallback for fully-unapplied tuple constructors.
-                        self.unify_hkt_known_args(elems, &ts, span);
-                    }
+                    InstancesLookup::BlockedSelf => {}
                 }
             }
             Ty::Union(_, members) => {
@@ -613,8 +661,8 @@ impl SolveCtx<'_> {
             Ty::Apply(_, _) => {}
             Ty::Error | Ty::Unknown => {}
             Ty::Named(id, type_args) => {
-                match self.instance_registry.lookup(tag, id).cloned() {
-                    Some(inst) => {
+                match self.instance_for(InstanceUse::Evidence, tag, id, span) {
+                    InstanceLookup::Found(inst) => {
                         let param_subst =
                             self.build_instance_subst(&inst, &type_args, span);
                         self.unify_hkt_inst_args(
@@ -630,7 +678,8 @@ impl SolveCtx<'_> {
                             Some(&param_subst),
                         );
                     }
-                    None => {
+                    InstanceLookup::BlockedSelf => {}
+                    InstanceLookup::Missing | InstanceLookup::NotImported => {
                         self.errors.push(TypeError::UnsatisfiedClass(
                             class.clone(),
                             ty,
@@ -662,57 +711,83 @@ impl SolveCtx<'_> {
         match shape {
             Ty::Var(_) | Ty::Error | Ty::Unknown => {}
             Ty::Union(prov, members) => {
-                let insts = prov
-                    .map(|id| self.instance_registry.lookup_all(class_id, id))
-                    .unwrap_or(&[]);
-                if insts.is_empty() {
-                    members
-                        .iter()
-                        .for_each(|&m| self.satisfies_class(class, m, span));
-                } else {
-                    let matched =
-                        self.find_matching_instance(insts, class_arg, &[]);
-                    match matched {
-                        Some(inst) => self.check_instance_constraints(
-                            &inst,
+                match prov.map(|id| {
+                    self.instances_for(
+                        InstanceUse::Evidence,
+                        class_id,
+                        id,
+                        span,
+                    )
+                }) {
+                    Some(InstancesLookup::BlockedSelf) => {}
+                    Some(InstancesLookup::Found(insts))
+                        if !insts.is_empty() =>
+                    {
+                        match self.find_matching_instance(
+                            &insts,
+                            class_arg,
                             &[],
-                            span,
-                            None,
-                        ),
-                        None => members.iter().for_each(|&m| {
+                        ) {
+                            Some(inst) => self.check_instance_constraints(
+                                &inst,
+                                &[],
+                                span,
+                                None,
+                            ),
+                            None => members.iter().for_each(|&m| {
+                                self.satisfies_class(class, m, span)
+                            }),
+                        }
+                    }
+                    Some(InstancesLookup::Found(_)) | None => {
+                        members.iter().for_each(|&m| {
                             self.satisfies_class(class, m, span)
-                        }),
+                        });
                     }
                 }
             }
             _ => match self.ty_to_type_id_and_args(ty) {
                 Some((tid, args)) => {
-                    let insts =
-                        self.instance_registry.lookup_all(class_id, tid);
-                    match self.find_matching_instance(insts, class_arg, &args) {
-                        Some(inst) => {
-                            let subst =
-                                self.build_instance_subst(&inst, &args, span);
-                            if let Some(&ia) = inst.class_args.first() {
-                                let resolved = self.ty_arena.apply(ia, &subst);
-                                if let Err(e) =
-                                    self.unify_types(class_arg, resolved, span)
-                                {
-                                    self.errors.push(e);
+                    match self.instances_for(
+                        InstanceUse::Evidence,
+                        class_id,
+                        tid,
+                        span,
+                    ) {
+                        InstancesLookup::Found(insts) => {
+                            match self.find_matching_instance(
+                                &insts, class_arg, &args,
+                            ) {
+                                Some(inst) => {
+                                    let subst = self.build_instance_subst(
+                                        &inst, &args, span,
+                                    );
+                                    if let Some(&ia) = inst.class_args.first() {
+                                        let resolved =
+                                            self.ty_arena.apply(ia, &subst);
+                                        if let Err(e) = self.unify_types(
+                                            class_arg, resolved, span,
+                                        ) {
+                                            self.errors.push(e);
+                                        }
+                                    }
+                                    self.check_instance_constraints(
+                                        &inst,
+                                        &args,
+                                        span,
+                                        Some(&subst),
+                                    );
                                 }
+                                None => self.errors.push(
+                                    TypeError::UnsatisfiedClass(
+                                        class.clone(),
+                                        ty,
+                                        span,
+                                    ),
+                                ),
                             }
-                            self.check_instance_constraints(
-                                &inst,
-                                &args,
-                                span,
-                                Some(&subst),
-                            );
                         }
-                        None => self.errors.push(TypeError::UnsatisfiedClass(
-                            class.clone(),
-                            ty,
-                            span,
-                        )),
+                        InstancesLookup::BlockedSelf => {}
                     }
                 }
                 None => self.errors.push(TypeError::UnsatisfiedClass(
@@ -745,35 +820,79 @@ impl SolveCtx<'_> {
             }
             _ => match self.ty_to_type_id_and_args(ty) {
                 Some((tid, args)) => {
-                    let found = if tid == TypeId::TUPLE {
-                        self.instance_registry
-                            .lookup_tuple(class_id, args.len())
-                            .cloned()
-                    } else {
-                        self.instance_registry.lookup(class_id, tid).cloned()
-                    };
-                    match found {
-                        Some(inst) => {
-                            let subst =
-                                self.build_instance_subst(&inst, &args, span);
-                            self.unify_hkt_inst_args(
-                                elems,
-                                &inst.class_args,
-                                &subst,
-                                span,
-                            );
-                            self.check_instance_constraints(
-                                &inst,
-                                &args,
-                                span,
-                                Some(&subst),
-                            );
-                        }
-                        None => self.errors.push(TypeError::UnsatisfiedClass(
-                            class.clone(),
-                            ty,
+                    if tid == TypeId::TUPLE {
+                        match self.instances_for(
+                            InstanceUse::Evidence,
+                            class_id,
+                            TypeId::TUPLE,
                             span,
-                        )),
+                        ) {
+                            InstancesLookup::Found(insts) => {
+                                match insts
+                                    .into_iter()
+                                    .find(|i| i.type_params.len() == args.len())
+                                {
+                                    Some(inst) => {
+                                        let subst = self.build_instance_subst(
+                                            &inst, &args, span,
+                                        );
+                                        self.unify_hkt_inst_args(
+                                            elems,
+                                            &inst.class_args,
+                                            &subst,
+                                            span,
+                                        );
+                                        self.check_instance_constraints(
+                                            &inst,
+                                            &args,
+                                            span,
+                                            Some(&subst),
+                                        );
+                                    }
+                                    None => self.errors.push(
+                                        TypeError::UnsatisfiedClass(
+                                            class.clone(),
+                                            ty,
+                                            span,
+                                        ),
+                                    ),
+                                }
+                            }
+                            InstancesLookup::BlockedSelf => {}
+                        }
+                    } else {
+                        match self.instance_for(
+                            InstanceUse::Evidence,
+                            class_id,
+                            tid,
+                            span,
+                        ) {
+                            InstanceLookup::Found(inst) => {
+                                let subst = self
+                                    .build_instance_subst(&inst, &args, span);
+                                self.unify_hkt_inst_args(
+                                    elems,
+                                    &inst.class_args,
+                                    &subst,
+                                    span,
+                                );
+                                self.check_instance_constraints(
+                                    &inst,
+                                    &args,
+                                    span,
+                                    Some(&subst),
+                                );
+                            }
+                            InstanceLookup::BlockedSelf => {}
+                            InstanceLookup::Missing
+                            | InstanceLookup::NotImported => {
+                                self.errors.push(TypeError::UnsatisfiedClass(
+                                    class.clone(),
+                                    ty,
+                                    span,
+                                ));
+                            }
+                        }
                     }
                 }
                 None => self.errors.push(TypeError::UnsatisfiedClass(

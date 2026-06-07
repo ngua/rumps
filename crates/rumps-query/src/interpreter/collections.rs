@@ -452,69 +452,84 @@ impl<I: IoContext> Interpreter<'_, I> {
         let base_payload = base_val.payload.clone();
         let idx_payload = idx_val.payload.clone();
 
-        match (&base_payload, &idx_payload) {
-            (Payload::Array(elems), Payload::Int(i)) => {
-                let index = if *i < 0 {
-                    // Negative indexing from end
-                    elems.len().checked_sub((-*i) as usize)
-                } else {
-                    Some(*i as usize)
-                };
-                index
-                    .and_then(|idx| elems.get(idx))
-                    .and_then(|id| self.arena.value(*id).cloned())
-                    .ok_or_else(|| {
-                        Error::runtime(
-                            span,
-                            format!("array index {i} out of bounds"),
-                        )
+        if let Some(value) = self
+            .nominal_indexable_dispatch(
+                expr_id,
+                base_val.clone(),
+                idx_val.clone(),
+                "index",
+                span,
+            )
+            .await?
+        {
+            Ok(value)
+        } else {
+            match (&base_payload, &idx_payload) {
+                (Payload::Array(elems), Payload::Int(i)) => {
+                    let index = if *i < 0 {
+                        // Negative indexing from end
+                        elems.len().checked_sub((-*i) as usize)
+                    } else {
+                        Some(*i as usize)
+                    };
+                    index
+                        .and_then(|idx| elems.get(idx))
+                        .and_then(|id| self.arena.value(*id).cloned())
+                        .ok_or_else(|| {
+                            Error::runtime(
+                                span,
+                                format!("array index {i} out of bounds"),
+                            )
+                        })
+                }
+                (Payload::Map(entries), key) => {
+                    let map = entries.as_ref().clone();
+                    let key = key.clone();
+                    let idx_id = self.add_value(idx_val, span);
+                    self.map_lookup_id(&map, idx_id, span)
+                        .await?
+                        .and_then(|id| self.arena.value(id).cloned())
+                        .ok_or_else(|| {
+                            Error::runtime(
+                                span,
+                                format!("map key not found: {key:?}"),
+                            )
+                        })
+                }
+                (Payload::String(sid), Payload::Int(i)) => {
+                    let s = self.arena.get_str(*sid).unwrap_or("");
+                    let len = s.chars().count() as i64;
+                    let index = if *i < 0 { len + *i } else { *i };
+                    s.chars()
+                        .nth(index as usize)
+                        .map(|c| self.value_for_expr(expr_id, Payload::Char(c)))
+                        .ok_or_else(|| {
+                            Error::runtime(
+                                span,
+                                format!("string index {i} out of bounds"),
+                            )
+                        })
+                }
+                // Sum-type `Indexable` instance.
+                (Payload::Variant { .. }, _)
+                    if self.is_sum_value(&base_val) =>
+                {
+                    let base_id = self.add_value(base_val, span);
+                    let idx_id = self.add_value(idx_val, span);
+                    let mid = self.arena.intern("index");
+                    self.dispatch_class_method_value(ClassDispatch {
+                        dispatch_expr_id: Some(expr_id),
+                        output_expr_id: Some(expr_id),
+                        output_ty: None,
+                        class: ClassId::INDEXABLE,
+                        method: mid,
+                        args: SmallVec::from_slice(&[base_id, idx_id]),
+                        span,
                     })
+                    .await
+                }
+                _ => typechecked!("[]", "Indexable"),
             }
-            (Payload::Map(entries), key) => {
-                let map = entries.as_ref().clone();
-                let key = key.clone();
-                let idx_id = self.add_value(idx_val, span);
-                self.map_lookup_id(&map, idx_id, span)
-                    .await?
-                    .and_then(|id| self.arena.value(id).cloned())
-                    .ok_or_else(|| {
-                        Error::runtime(
-                            span,
-                            format!("map key not found: {key:?}"),
-                        )
-                    })
-            }
-            (Payload::String(sid), Payload::Int(i)) => {
-                let s = self.arena.get_str(*sid).unwrap_or("");
-                let len = s.chars().count() as i64;
-                let index = if *i < 0 { len + *i } else { *i };
-                s.chars()
-                    .nth(index as usize)
-                    .map(|c| self.value_for_expr(expr_id, Payload::Char(c)))
-                    .ok_or_else(|| {
-                        Error::runtime(
-                            span,
-                            format!("string index {i} out of bounds"),
-                        )
-                    })
-            }
-            // Sum-type `Indexable` instance.
-            (Payload::Variant { .. }, _) if self.is_sum_value(&base_val) => {
-                let base_id = self.add_value(base_val, span);
-                let idx_id = self.add_value(idx_val, span);
-                let mid = self.arena.intern("index");
-                self.dispatch_class_method_value(ClassDispatch {
-                    dispatch_expr_id: Some(expr_id),
-                    output_expr_id: Some(expr_id),
-                    output_ty: None,
-                    class: ClassId::INDEXABLE,
-                    method: mid,
-                    args: SmallVec::from_slice(&[base_id, idx_id]),
-                    span,
-                })
-                .await
-            }
-            _ => typechecked!("[]", "Indexable"),
         }
     }
 
@@ -535,58 +550,113 @@ impl<I: IoContext> Interpreter<'_, I> {
         let base_payload = base_val.payload.clone();
         let idx_payload = idx_val.payload.clone();
 
-        match (&base_payload, &idx_payload) {
-            (Payload::Array(elems), Payload::Int(i)) => {
-                let index = if *i < 0 {
-                    elems.len().checked_sub((-*i) as usize)
-                } else {
-                    Some(*i as usize)
-                };
-                Ok(index
-                    .and_then(|idx| elems.get(idx).copied())
-                    .map(Payload::some)
-                    .unwrap_or_else(Payload::none))
+        if let Some(value) = self
+            .nominal_indexable_dispatch(
+                expr_id,
+                base_val.clone(),
+                idx_val.clone(),
+                "get",
+                span,
+            )
+            .await?
+        {
+            Ok(value.payload)
+        } else {
+            match (&base_payload, &idx_payload) {
+                (Payload::Array(elems), Payload::Int(i)) => {
+                    let index = if *i < 0 {
+                        elems.len().checked_sub((-*i) as usize)
+                    } else {
+                        Some(*i as usize)
+                    };
+                    Ok(index
+                        .and_then(|idx| elems.get(idx).copied())
+                        .map(Payload::some)
+                        .unwrap_or_else(Payload::none))
+                }
+                (Payload::Map(entries), _) => {
+                    let map = entries.as_ref().clone();
+                    let idx_id = self.add_value(idx_val, span);
+                    Ok(self
+                        .map_lookup_id(&map, idx_id, span)
+                        .await?
+                        .map(Payload::some)
+                        .unwrap_or_else(Payload::none))
+                }
+                (Payload::String(sid), Payload::Int(i)) => {
+                    let s = self.arena.get_str(*sid).unwrap_or("");
+                    let len = s.chars().count() as i64;
+                    let index = if *i < 0 { len + *i } else { *i };
+                    Ok(s.chars()
+                        .nth(index as usize)
+                        .map(|c| {
+                            let char_id = self.add_val(
+                                Payload::Char(c),
+                                self.checked.types.meta_char(),
+                                span,
+                            );
+                            Payload::some(char_id)
+                        })
+                        .unwrap_or_else(Payload::none))
+                }
+                // Sum-type `Indexable` instance.
+                (Payload::Variant { .. }, _)
+                    if self.is_sum_value(&base_val) =>
+                {
+                    let base_id = self.add_value(base_val, span);
+                    let idx_id = self.add_value(idx_val, span);
+                    let mid = self.arena.intern("get");
+                    self.dispatch_class_method(
+                        Some(expr_id),
+                        ClassId::INDEXABLE,
+                        mid,
+                        &[base_id, idx_id],
+                        span,
+                    )
+                    .await
+                }
+                _ => typechecked!("?[]", "Indexable"),
             }
-            (Payload::Map(entries), _) => {
-                let map = entries.as_ref().clone();
-                let idx_id = self.add_value(idx_val, span);
-                Ok(self
-                    .map_lookup_id(&map, idx_id, span)
-                    .await?
-                    .map(Payload::some)
-                    .unwrap_or_else(Payload::none))
-            }
-            (Payload::String(sid), Payload::Int(i)) => {
-                let s = self.arena.get_str(*sid).unwrap_or("");
-                let len = s.chars().count() as i64;
-                let index = if *i < 0 { len + *i } else { *i };
-                Ok(s.chars()
-                    .nth(index as usize)
-                    .map(|c| {
-                        let char_id = self.add_val(
-                            Payload::Char(c),
-                            self.checked.types.meta_char(),
-                            span,
-                        );
-                        Payload::some(char_id)
-                    })
-                    .unwrap_or_else(Payload::none))
-            }
-            // Sum-type `Indexable` instance.
-            (Payload::Variant { .. }, _) if self.is_sum_value(&base_val) => {
-                let base_id = self.add_value(base_val, span);
-                let idx_id = self.add_value(idx_val, span);
-                let mid = self.arena.intern("get");
-                self.dispatch_class_method(
-                    Some(expr_id),
+        }
+    }
+
+    async fn nominal_indexable_dispatch(
+        &mut self,
+        expr_id: ExprId,
+        base_val: Value,
+        idx_val: Value,
+        method: &str,
+        span: Span,
+    ) -> Result<Option<Value>> {
+        let method = self.arena.intern(method);
+        if self
+            .checked
+            .types
+            .to_type_id(base_val.ty)
+            .and_then(|tid| {
+                self.user_instances.lookup_method(
                     ClassId::INDEXABLE,
-                    mid,
-                    &[base_id, idx_id],
-                    span,
+                    tid,
+                    method,
                 )
-                .await
-            }
-            _ => typechecked!("?[]", "Indexable"),
+            })
+            .is_some()
+        {
+            let base_id = self.add_value(base_val, span);
+            let idx_id = self.add_value(idx_val, span);
+            self.dispatch_class_method_value(ClassDispatch {
+                dispatch_expr_id: Some(expr_id),
+                output_expr_id: Some(expr_id),
+                output_ty: None,
+                class: ClassId::INDEXABLE,
+                method,
+                args: SmallVec::from_slice(&[base_id, idx_id]),
+                span,
+            })
+            .await
+            .map(Some)
+        } else {
+            Ok(None)
         }
     }
 

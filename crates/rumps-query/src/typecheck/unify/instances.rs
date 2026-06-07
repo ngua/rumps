@@ -1,6 +1,73 @@
 use super::*;
 
 impl SolveCtx<'_> {
+    pub(super) fn instance_for(
+        &mut self,
+        use_: InstanceUse,
+        class: ClassId,
+        tid: TypeId,
+        span: Span,
+    ) -> InstanceLookup {
+        if self.blocks_self_instance(use_, class, tid) {
+            self.errors.push(TypeError::SelfInstanceUse {
+                class,
+                type_id: tid,
+                span,
+            });
+            InstanceLookup::BlockedSelf
+        } else {
+            self.instance_registry
+                .lookup(class, tid)
+                .cloned()
+                .map_or(InstanceLookup::Missing, InstanceLookup::Found)
+        }
+    }
+
+    pub(super) fn instances_for(
+        &mut self,
+        use_: InstanceUse,
+        class: ClassId,
+        tid: TypeId,
+        span: Span,
+    ) -> InstancesLookup {
+        if self.blocks_self_instance(use_, class, tid) {
+            self.errors.push(TypeError::SelfInstanceUse {
+                class,
+                type_id: tid,
+                span,
+            });
+            InstancesLookup::BlockedSelf
+        } else {
+            InstancesLookup::Found(
+                self.instance_registry
+                    .lookup_all(class, tid)
+                    .iter()
+                    .cloned()
+                    .collect(),
+            )
+        }
+    }
+
+    fn blocks_self_instance(
+        &self,
+        use_: InstanceUse,
+        class: ClassId,
+        tid: TypeId,
+    ) -> bool {
+        let checks_self = matches!(
+            use_,
+            InstanceUse::Evidence
+                | InstanceUse::ExplicitCall
+                | InstanceUse::MethodValue
+                | InstanceUse::Derive
+                | InstanceUse::Super
+        );
+        checks_self
+            && self.class_context.as_ref().is_some_and(|ctx| {
+                ctx.class == class && ctx.type_id == Some(tid)
+            })
+    }
+
     pub(super) fn find_try_into_instance(
         &mut self,
         ty: TyId,

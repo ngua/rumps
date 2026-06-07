@@ -260,9 +260,9 @@ impl Diagnostic for Error {
             Self::Type(e) => {
                 Some(Box::new(iter::once(span_to_label(e.span(), "here"))))
             }
-            Self::FormattedType(e) => {
-                Some(Box::new(iter::once(span_to_label(e.span, "error"))))
-            }
+            Self::FormattedType(e) => Some(Box::new(iter::once(
+                span_to_label(e.span, e.label.as_deref().unwrap_or("error")),
+            ))),
             Self::Multiple { errors } => {
                 // Collect labels with individual error messages
                 let labels: Vec<_> = errors
@@ -270,7 +270,10 @@ impl Diagnostic for Error {
                     .filter_map(|e| {
                         e.span().map(|s| {
                             let msg = match e.as_ref() {
-                                Self::FormattedType(fe) => fe.message.clone(),
+                                Self::FormattedType(fe) => fe
+                                    .label
+                                    .clone()
+                                    .unwrap_or_else(|| fe.message.clone()),
                                 _ => "error".to_owned(),
                             };
                             span_to_label(s, &msg)

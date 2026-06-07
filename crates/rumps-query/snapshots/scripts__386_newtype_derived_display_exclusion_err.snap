@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; A hidden direct instance blocks representation-derived `Display` evidence.\n\nfun main() {\n  let x: Labels.Label = \"name\"\n  write Display:display(x)\n}\n\nmodule Labels {\n  +newtype Label = +String\n\n  class Display for Labels.Label {\n    fun display(x: Labels.Label) -> String {\n      let s: String = x\n      \"Label({s})\"\n    }\n  }\n}\n"
+---
+ERROR: no `Display` instance for `Labels.Label` in scope

@@ -1,0 +1,17 @@
+; A hidden direct instance blocks representation-derived `Display` evidence.
+
+fun main() {
+  let x: Labels.Label = "name"
+  write Display:display(x)
+}
+
+module Labels {
+  +newtype Label = +String
+
+  class Display for Labels.Label {
+    fun display(x: Labels.Label) -> String {
+      let s: String = x
+      "Label({s})"
+    }
+  }
+}

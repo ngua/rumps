@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Method values cannot use their own class method.\n\nfun main() { }\n\nvariant Thing = Thing(String)\n\nclass Display for Thing {\n  fun display(x: Thing) -> String {\n    let f = Display:display\n    f(x)\n  }\n}\n"
+---
+ERROR: cannot use a class method while defining that class for the same type

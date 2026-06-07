@@ -41,7 +41,9 @@ use super::convert::is_in_module;
 use super::decl::TypeDeclRegistry;
 use super::env::{MethodRefOrigin, TypeEnv};
 use super::error::{TyPrinter, TypeError};
-use super::instance::{Instance, InstanceRegistry};
+use super::instance::{
+    Instance, InstanceLookup, InstanceRegistry, InstanceUse,
+};
 use super::ty::{Rename, Scheme, Ty, TyArena, TyId, TyVar, TypeClass};
 use super::uf::UnionFind;
 use super::unify::{NewtypeEdge, NewtypeEdgeStatus, SolveCtx};
@@ -58,6 +60,13 @@ use crate::error::Result;
 use crate::intern::{self, QualifiedName, StringId, StringInterner};
 use crate::value::{self, TypeId, TypeRegistry};
 use crate::{ClassId, Error, Span};
+
+enum InstancesLookup {
+    Found(SmallVec<[Instance; 2]>),
+    Missing,
+    BlockedSelf,
+    NotImported,
+}
 
 impl UnionFind {
     /// Resolve all `TyId` values in a map through this union-find.
@@ -839,19 +848,21 @@ pub(crate) struct InferCtx<'a> {
     /// During inference, class method calls on types that are still type
     /// variables are recorded here. After `resolve_all_types`, we resolve the
     /// types and attach `ExprAux::InstanceCall` for any user instances found.
-    deferred_inst_calls: Vec<(ExprId, TyId, ClassId)>,
+    deferred_inst_calls: Vec<(ExprId, TyId, ClassId, Span, InstanceUse)>,
     /// Deferred parameterized user class method calls.
     ///
     /// `(ExprId, ClassId, method, receiver_ty, class_arg_ty)`. After constraint
     /// solving, the class_arg_ty resolves to a concrete type; we look up the
     /// matching instance and attach its function name to expression metadata.
-    deferred_param_calls: Vec<(ExprId, ClassId, StringId, TyId, TyId)>,
+    deferred_param_calls:
+        Vec<(ExprId, ClassId, StringId, TyId, TyId, Span, InstanceUse)>,
     /// Deferred user HKT class method calls.
     ///
     /// When multiple tuple instances exist for the same HKT class (e.g.,
     /// `MyMap for (T,)` and `MyMap for (T,U,)`), each call site gets the
     /// correct arity-specific function in expression metadata.
-    deferred_hkt_user_calls: Vec<(ExprId, ClassId, StringId, TyId)>,
+    deferred_hkt_user_calls:
+        Vec<(ExprId, ClassId, StringId, TyId, Span, InstanceUse)>,
     /// Type variables created for integer literals, for defaulting to `Int`.
     ///
     /// Integer literals are polymorphic (no constraint) so they can unify with
@@ -1168,6 +1179,124 @@ impl<'a> InferCtx<'a> {
         Rename(vars.into_iter().collect())
     }
 
+    pub(super) fn instance_for(
+        &mut self,
+        use_: InstanceUse,
+        class: ClassId,
+        tid: TypeId,
+        span: Span,
+    ) -> InstanceLookup {
+        if self.blocks_self_instance(use_, class, tid) {
+            self.error(TypeError::SelfInstanceUse {
+                class,
+                type_id: tid,
+                span,
+            });
+            InstanceLookup::BlockedSelf
+        } else {
+            match self.instance_registry.lookup(class, tid).cloned() {
+                Some(inst) => match inst.module {
+                    None => InstanceLookup::Found(inst),
+                    Some(ref mod_qn) => {
+                        let imported = self.env.is_module_imported(
+                            *mod_qn.segments().first().unwrap_or_else(|| {
+                                invariant!("module has segments")
+                            }),
+                        );
+                        if imported {
+                            InstanceLookup::Found(inst)
+                        } else {
+                            self.error(TypeError::InstanceNotImported {
+                                class,
+                                type_id: tid,
+                                module: mod_qn.display(&self.env.strings),
+                                span,
+                            });
+                            InstanceLookup::NotImported
+                        }
+                    }
+                },
+                None => InstanceLookup::Missing,
+            }
+        }
+    }
+
+    fn instances_for(
+        &mut self,
+        use_: InstanceUse,
+        class: ClassId,
+        tid: TypeId,
+        span: Span,
+    ) -> InstancesLookup {
+        if self.blocks_self_instance(use_, class, tid) {
+            self.error(TypeError::SelfInstanceUse {
+                class,
+                type_id: tid,
+                span,
+            });
+            InstancesLookup::BlockedSelf
+        } else {
+            let insts = self.instance_registry.lookup_all(class, tid);
+            if insts.is_empty() {
+                InstancesLookup::Missing
+            } else {
+                let found: SmallVec<[Instance; 2]> = insts
+                    .iter()
+                    .filter_map(|inst| match inst.module {
+                        None => Some(inst.clone()),
+                        Some(ref mod_qn) => {
+                            let imported = self.env.is_module_imported(
+                                *mod_qn.segments().first().unwrap_or_else(
+                                    || invariant!("module has segments"),
+                                ),
+                            );
+                            if imported {
+                                Some(inst.clone())
+                            } else {
+                                None
+                            }
+                        }
+                    })
+                    .collect();
+                if found.is_empty() {
+                    let mod_qn =
+                        insts.first().and_then(|inst| inst.module.clone());
+                    mod_qn.map_or(InstancesLookup::Missing, |mod_qn| {
+                        self.error(TypeError::InstanceNotImported {
+                            class,
+                            type_id: tid,
+                            module: mod_qn.display(&self.env.strings),
+                            span,
+                        });
+                        InstancesLookup::NotImported
+                    })
+                } else {
+                    InstancesLookup::Found(found)
+                }
+            }
+        }
+    }
+
+    fn blocks_self_instance(
+        &self,
+        use_: InstanceUse,
+        class: ClassId,
+        tid: TypeId,
+    ) -> bool {
+        let checks_self = matches!(
+            use_,
+            InstanceUse::Evidence
+                | InstanceUse::ExplicitCall
+                | InstanceUse::MethodValue
+                | InstanceUse::Derive
+                | InstanceUse::Super
+        );
+        checks_self
+            && self.class_context.as_ref().is_some_and(|ctx| {
+                ctx.class == class && ctx.type_id == Some(tid)
+            })
+    }
+
     /// Create a `SolveCtx` and run constraint solving.
     ///
     /// Takes ownership of constraints, then delegates to
@@ -1421,12 +1550,20 @@ impl<'a> InferCtx<'a> {
         &mut self,
         from: TyId,
         to: TyId,
+        span: Span,
     ) -> Option<(TypeId, Instance)> {
         let (tid, args) = self.type_id_args(from)?;
-        let insts: Vec<Instance> = self
-            .instance_registry
-            .lookup_all(ClassId::TRY_INTO, tid)
-            .to_vec();
+        let insts = match self.instances_for(
+            InstanceUse::Evidence,
+            ClassId::TRY_INTO,
+            tid,
+            span,
+        ) {
+            InstancesLookup::Found(insts) => insts,
+            InstancesLookup::Missing
+            | InstancesLookup::BlockedSelf
+            | InstancesLookup::NotImported => SmallVec::new(),
+        };
         let to = self.uf.resolve(to, &mut self.ty_arena);
         insts
             .into_iter()
@@ -1442,12 +1579,13 @@ impl<'a> InferCtx<'a> {
 
     pub(crate) fn resolve_read_metadata(&mut self) {
         let reads = mem::take(&mut self.read_checks);
-        reads.into_iter().for_each(|(id, from, to, _, _)| {
+        reads.into_iter().for_each(|(id, from, to, span, _)| {
             let from = self.uf.resolve(from, &mut self.ty_arena);
             let to = self.uf.resolve(to, &mut self.ty_arena);
             if from == to {
                 self.expand_alias_for_read(to);
-            } else if let Some((tid, inst)) = self.read_try_inst(from, to) {
+            } else if let Some((tid, inst)) = self.read_try_inst(from, to, span)
+            {
                 let method = self.env.intern("try-into");
                 self.expand_alias_for_read(to);
                 self.set_instance_call(id, tid);
@@ -1507,37 +1645,44 @@ impl<'a> InferCtx<'a> {
         // Take ownership to avoid borrow issues
         let deferred = mem::take(&mut self.deferred_inst_calls);
 
-        deferred.into_iter().for_each(|(expr_id, ty, kind)| {
-            let resolved = self.uf.resolve(ty, &mut self.ty_arena);
-            let type_id = match self.ty_arena.get(resolved) {
-                Ty::Named(id, _) | Ty::Union(Some(id), _) => Some(*id),
-                Ty::Bool => Some(TypeId::BOOL),
-                Ty::Int => Some(TypeId::INT),
-                Ty::Word => Some(TypeId::WORD),
-                Ty::Float => Some(TypeId::FLOAT),
-                Ty::Char => Some(TypeId::CHAR),
-                Ty::String => Some(TypeId::STRING),
-                Ty::Unit => Some(TypeId::UNIT),
-                Ty::Time => Some(TypeId::TIME),
-                Ty::Range => Some(TypeId::RANGE),
-                Ty::Json => Some(TypeId::JSON),
-                Ty::Ordering => Some(TypeId::ORDERING),
-                Ty::DataStatus => Some(TypeId::DATA_STATUS),
-                Ty::FilePath => Some(TypeId::FILEPATH),
-                Ty::Path => Some(TypeId::PATH),
-                Ty::Regex => Some(TypeId::REGEX),
-                Ty::Local => Some(TypeId::LOCAL),
-                Ty::Global => Some(TypeId::GLOBAL),
-                Ty::Tuple(_) => Some(TypeId::TUPLE),
-                _ => None,
-            };
+        deferred
+            .into_iter()
+            .for_each(|(expr_id, ty, kind, span, use_)| {
+                let resolved = self.uf.resolve(ty, &mut self.ty_arena);
+                let type_id = match self.ty_arena.get(resolved) {
+                    Ty::Named(id, _) | Ty::Union(Some(id), _) => Some(*id),
+                    Ty::Bool => Some(TypeId::BOOL),
+                    Ty::Int => Some(TypeId::INT),
+                    Ty::Word => Some(TypeId::WORD),
+                    Ty::Float => Some(TypeId::FLOAT),
+                    Ty::Char => Some(TypeId::CHAR),
+                    Ty::String => Some(TypeId::STRING),
+                    Ty::Unit => Some(TypeId::UNIT),
+                    Ty::Time => Some(TypeId::TIME),
+                    Ty::Range => Some(TypeId::RANGE),
+                    Ty::Json => Some(TypeId::JSON),
+                    Ty::Ordering => Some(TypeId::ORDERING),
+                    Ty::DataStatus => Some(TypeId::DATA_STATUS),
+                    Ty::FilePath => Some(TypeId::FILEPATH),
+                    Ty::Path => Some(TypeId::PATH),
+                    Ty::Regex => Some(TypeId::REGEX),
+                    Ty::Local => Some(TypeId::LOCAL),
+                    Ty::Global => Some(TypeId::GLOBAL),
+                    Ty::Tuple(_) => Some(TypeId::TUPLE),
+                    _ => None,
+                };
 
-            if let Some(tid) = type_id {
-                if self.instance_registry.lookup(kind, tid).is_some() {
-                    self.set_instance_call(expr_id, tid);
+                if let Some(tid) = type_id {
+                    match self.instance_for(use_, kind, tid, span) {
+                        InstanceLookup::Found(_) => {
+                            self.set_instance_call(expr_id, tid);
+                        }
+                        InstanceLookup::Missing
+                        | InstanceLookup::BlockedSelf
+                        | InstanceLookup::NotImported => {}
+                    }
                 }
-            }
-        });
+            });
     }
 
     /// Resolve deferred parameterized user class method calls.
@@ -1548,9 +1693,8 @@ impl<'a> InferCtx<'a> {
     /// same parameterized class exist for one type.
     pub(crate) fn resolve_deferred_param_calls(&mut self) {
         let deferred = mem::take(&mut self.deferred_param_calls);
-        deferred
-            .into_iter()
-            .for_each(|(eid, cid, method, recv, ca)| {
+        deferred.into_iter().for_each(
+            |(eid, cid, method, recv, ca, span, use_)| {
                 let recv_r = self.uf.resolve(recv, &mut self.ty_arena);
                 let ca_r = self.uf.resolve(ca, &mut self.ty_arena);
                 let tid = match self.ty_arena.get(recv_r) {
@@ -1558,22 +1702,32 @@ impl<'a> InferCtx<'a> {
                     _ => None,
                 };
                 if let Some(tid) = tid {
-                    let insts = self.instance_registry.lookup_all(cid, tid);
-                    // Only need disambiguation when multiple instances exist
-                    if insts.len() > 1 {
-                        insts
-                            .iter()
-                            .find(|i| {
-                                i.class_args.first().copied() == Some(ca_r)
-                            })
-                            .and_then(|i| i.methods.get(&method).copied())
-                            .into_iter()
-                            .for_each(|fn_id| {
-                                self.interp.set_instance_fun(eid, fn_id);
-                            });
+                    match self.instances_for(use_, cid, tid, span) {
+                        InstancesLookup::Found(insts) => {
+                            if insts.len() > 1 {
+                                insts
+                                    .iter()
+                                    .find(|i| {
+                                        i.class_args.first().copied()
+                                            == Some(ca_r)
+                                    })
+                                    .and_then(|i| {
+                                        i.methods.get(&method).copied()
+                                    })
+                                    .into_iter()
+                                    .for_each(|fn_id| {
+                                        self.interp
+                                            .set_instance_fun(eid, fn_id);
+                                    });
+                            }
+                        }
+                        InstancesLookup::Missing
+                        | InstancesLookup::BlockedSelf
+                        | InstancesLookup::NotImported => {}
                     }
                 }
-            });
+            },
+        );
     }
 
     /// Resolve deferred user HKT class calls.
@@ -1582,22 +1736,33 @@ impl<'a> InferCtx<'a> {
     /// call site must be pre-resolved to the arity-specific function.
     pub(crate) fn resolve_deferred_hkt_user_calls(&mut self) {
         let deferred = mem::take(&mut self.deferred_hkt_user_calls);
-        deferred.into_iter().for_each(|(eid, cid, method, ty)| {
-            let resolved = self.uf.resolve(ty, &mut self.ty_arena);
-            if let Ty::Tuple(ts) = self.ty_arena.get(resolved).clone() {
-                let insts =
-                    self.instance_registry.lookup_all(cid, TypeId::TUPLE);
-                if insts.len() > 1 {
-                    self.instance_registry
-                        .lookup_tuple(cid, ts.len())
-                        .and_then(|i| i.methods.get(&method).copied())
-                        .into_iter()
-                        .for_each(|fn_id| {
-                            self.interp.set_instance_fun(eid, fn_id);
-                        });
+        deferred
+            .into_iter()
+            .for_each(|(eid, cid, method, ty, span, use_)| {
+                let resolved = self.uf.resolve(ty, &mut self.ty_arena);
+                if let Ty::Tuple(ts) = self.ty_arena.get(resolved).clone() {
+                    match self.instances_for(use_, cid, TypeId::TUPLE, span) {
+                        InstancesLookup::Found(insts) => {
+                            if insts.len() > 1 {
+                                insts
+                                    .iter()
+                                    .find(|i| i.type_params.len() == ts.len())
+                                    .and_then(|i| {
+                                        i.methods.get(&method).copied()
+                                    })
+                                    .into_iter()
+                                    .for_each(|fn_id| {
+                                        self.interp
+                                            .set_instance_fun(eid, fn_id);
+                                    });
+                            }
+                        }
+                        InstancesLookup::Missing
+                        | InstancesLookup::BlockedSelf
+                        | InstancesLookup::NotImported => {}
+                    }
                 }
-            }
-        });
+            });
     }
 
     /// Check for illegal union narrowing in `let` annotations.

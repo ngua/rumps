@@ -476,23 +476,28 @@ impl SolveCtx<'_> {
             }
             Ty::Var(_) | Ty::Error | Ty::Unknown => {}
             Ty::Named(id, type_args) => {
-                match self
-                    .instance_registry
-                    .lookup(ClassId::INDEXABLE, id)
-                    .cloned()
-                {
-                    Some(inst) => {
+                match self.instance_for(
+                    InstanceUse::Evidence,
+                    ClassId::INDEXABLE,
+                    id,
+                    span,
+                ) {
+                    InstanceLookup::Found(inst) => {
                         let param_subst =
                             self.build_instance_subst(&inst, &type_args, span);
                         // `class_args[0]` is the element type
-                        if let Some(&inst_elem) = inst.class_args.first() {
-                            let resolved =
-                                self.ty_arena.apply(inst_elem, &param_subst);
-                            if let Err(e) =
-                                self.unify_types(elem, resolved, span)
-                            {
-                                self.errors.push(e);
-                            }
+                        let inst_elem =
+                            inst.class_args.first().copied().unwrap_or_else(
+                                || {
+                                    invariant!(
+                                        "`Indexable` instance has a class arg"
+                                    )
+                                },
+                            );
+                        let resolved =
+                            self.ty_arena.apply(inst_elem, &param_subst);
+                        if let Err(e) = self.unify_types(elem, resolved, span) {
+                            self.errors.push(e);
                         }
                         self.check_instance_constraints(
                             &inst,
@@ -501,13 +506,21 @@ impl SolveCtx<'_> {
                             Some(&param_subst),
                         );
                     }
-                    None => {
+                    InstanceLookup::Missing => {
                         self.errors.push(TypeError::UnsatisfiedClass(
                             class.clone(),
                             ty,
                             span,
                         ));
                     }
+                    InstanceLookup::NotImported => {
+                        self.errors.push(TypeError::UnsatisfiedClass(
+                            class.clone(),
+                            ty,
+                            span,
+                        ));
+                    }
+                    InstanceLookup::BlockedSelf => {}
                 }
             }
             _ => {

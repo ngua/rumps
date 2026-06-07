@@ -26,6 +26,30 @@ fun main() {
   write im[2]
   write im?[3]
 
+  let as-im = ({ 1 => "one" } : AsIntMap)
+  write as-im[1]
+  write as-im?[2]
+
+  let bs = ({ "a" => 10, "b" => 20 } : Box[String, Int])
+  write Indexable:index(bs, "a")
+  write Indexable:get(bs, "b")
+  write bs["b"]
+  write bs?["missing"]
+
+  let bi = ({ 1 => "one", 2 => "two" } : Box[Int, String])
+  write Indexable:index(bi, 1)
+  write Indexable:get(bi, 2)
+  write bi[2]
+  write bi?[3]
+
+  let tm = ({ 1 => "payload" } : TaggedMap)
+  write tm[1]
+  write tm?[2]
+
+  let raw: Map[Int, String] = tm
+  write raw[1]
+  write raw?[2]
+
   ; Builtin `Map` uses `Indexable:Index = K` and `Indexable[V]`.
   let m: Map[String, Int] = { "a" => 1 }
   let map-index: Int = Indexable:index(m, "a")
@@ -77,10 +101,56 @@ class Indexable[String] for IntMap {
 
   ; Uses qualified `Indexable:Index` instead of shorthand `:Index`
   fun index(im: IntMap, i: Indexable:Index) -> String {
-    im[i]
+    let m: Map[Int, String] = im
+    m[i]
   }
 
   fun get(im: IntMap, i: Indexable:Index) -> Option[String] {
-    im?[i]
+    let m: Map[Int, String] = im
+    m?[i]
+  }
+}
+
+newtype AsIntMap = Map[Int, String]
+
+class Indexable[String] for AsIntMap {
+  newtype Index = Int
+
+  fun index(im: AsIntMap, i: Indexable:Index) -> String {
+    (im as Map[Int, String])[i]
+  }
+
+  fun get(im: AsIntMap, i: Indexable:Index) -> Option[String] {
+    (im as Map[Int, String])?[i]
+  }
+}
+
+newtype Box[K, V] = Map[K, V]
+
+class Indexable[V] for Box[K, V] {
+  newtype Index = K
+
+  fun index(b: Box[K, V], i: :Index) -> V {
+    let m: Map[K, V] = b
+    m[i]
+  }
+
+  fun get(b: Box[K, V], i: Indexable:Index) -> Option[V] {
+    let m: Map[K, V] = b
+    m?[i]
+  }
+}
+
+newtype TaggedMap = Map[Int, String]
+
+class Indexable[String] for TaggedMap {
+  newtype Index = Int
+
+  fun index(m: TaggedMap, i: Indexable:Index) -> String {
+    "direct {i}"
+  }
+
+  fun get(m: TaggedMap, i: Indexable:Index) -> Option[String] {
+    Option.Some("safe {i}")
   }
 }

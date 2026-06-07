@@ -1,0 +1,15 @@
+; Explicit `Additive:add` calls cannot use their own class method.
+
+fun main() { }
+
+variant AddOnly = AddOnly(Int)
+
+class Additive for AddOnly {
+  fun zero() -> AddOnly {
+    AddOnly.AddOnly(0)
+  }
+
+  fun add(a: AddOnly, b: AddOnly) -> AddOnly {
+    Additive:add(a, b)
+  }
+}

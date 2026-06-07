@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Explicit representation annotation permits representation operators in the instance body.\n\nnewtype Count = Int\n\nclass Additive for Count {\n  fun zero() -> Count {\n    0\n  }\n\n  fun add(a: Count, b: Count) -> Count {\n    let x: Int = a\n    let y: Int = b\n    x + y\n  }\n}\n\nfun main() {\n  let a: Count = 10\n  let b: Count = 3\n  write a + b\n}\n"
+---
+13

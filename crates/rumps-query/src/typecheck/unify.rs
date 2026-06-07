@@ -26,7 +26,9 @@ use super::decl::TypeDeclRegistry;
 use super::env::TypeEnv;
 use super::error::TypeError;
 use super::infer::{ClassContext, Constraint};
-use super::instance::{Instance, InstanceRegistry};
+use super::instance::{
+    Instance, InstanceLookup, InstanceRegistry, InstanceUse,
+};
 use super::ty::{Rename, Ty, TyArena, TyId, TyVar, TypeClass};
 use super::uf::UnionFind;
 use crate::ast::{Ast, AstTypeExpr, AstTypeExprId};
@@ -38,6 +40,11 @@ use crate::{ClassId, Span};
 ///
 /// With union-find, successful unification mutates the UF in-place.
 type UnifyResult = Result<(), TypeError>;
+
+pub(super) enum InstancesLookup {
+    Found(SmallVec<[Instance; 2]>),
+    BlockedSelf,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct NewtypeEdge {

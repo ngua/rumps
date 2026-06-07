@@ -1,0 +1,21 @@
+; Explicit representation annotation permits representation operators in the instance body.
+
+newtype Count = Int
+
+class Additive for Count {
+  fun zero() -> Count {
+    0
+  }
+
+  fun add(a: Count, b: Count) -> Count {
+    let x: Int = a
+    let y: Int = b
+    x + y
+  }
+}
+
+fun main() {
+  let a: Count = 10
+  let b: Count = 3
+  write a + b
+}

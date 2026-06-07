@@ -1,5 +1,12 @@
 use super::*;
 
+#[derive(Clone, Copy)]
+struct DeriveReq {
+    class: ClassId,
+    alias: TypeId,
+    span: Span,
+}
+
 impl SolveCtx<'_> {
     pub(super) fn alias_parts(
         &self,
@@ -105,10 +112,12 @@ impl SolveCtx<'_> {
     }
     pub(super) fn expand_alias_fully_for_class(
         &mut self,
+        class: ClassId,
         ty: TyId,
         span: Span,
     ) -> Option<TyId> {
         self.expand_alias_fully_for_class_inner(
+            class,
             ty,
             span,
             false,
@@ -117,6 +126,7 @@ impl SolveCtx<'_> {
     }
     fn expand_alias_fully_for_class_inner(
         &mut self,
+        class: ClassId,
         current: TyId,
         span: Span,
         expanded: bool,
@@ -127,20 +137,24 @@ impl SolveCtx<'_> {
                 self.report_recursive_newtype_edge(current, span);
                 None
             }
-            Some(_) => match self.expand_alias_once_for_class(current, span) {
-                Some(next) if next == current => {
-                    self.report_recursive_newtype_edge(current, span);
-                    None
+            Some(_) => {
+                match self.expand_alias_once_for_class(class, current, span) {
+                    Some(next) if next == current => {
+                        self.report_recursive_newtype_edge(current, span);
+                        None
+                    }
+                    Some(next) => self.expand_alias_fully_for_class_inner(
+                        class, next, span, true, seen,
+                    ),
+                    None => None,
                 }
-                Some(next) => self
-                    .expand_alias_fully_for_class_inner(next, span, true, seen),
-                None => None,
-            },
+            }
             None => expanded.then_some(current),
         }
     }
     fn expand_alias_once_for_class(
         &mut self,
+        class: ClassId,
         ty: TyId,
         span: Span,
     ) -> Option<TyId> {
@@ -156,12 +170,32 @@ impl SolveCtx<'_> {
                     None
                 } else {
                     let repr = self.alias_repr(type_id, &args);
-                    self.newtype_edge(ty, repr, span)
-                        .filter(|edge| edge.alias == type_id)
-                        .map(|edge| edge.repr)
+                    if self.can_derive_newtype(DeriveReq {
+                        class,
+                        alias: type_id,
+                        span,
+                    }) {
+                        self.newtype_edge(ty, repr, span)
+                            .filter(|edge| edge.alias == type_id)
+                            .map(|edge| edge.repr)
+                    } else {
+                        None
+                    }
                 }
             }
             _ => None,
         }
+    }
+    fn can_derive_newtype(&mut self, req: DeriveReq) -> bool {
+        let DeriveReq {
+            class,
+            alias,
+            span: _,
+        } = req;
+        let has_inst = self.instance_registry.lookup(class, alias).is_some();
+        let checks_self = self.class_context.as_ref().is_some_and(|ctx| {
+            ctx.class == class && ctx.type_id == Some(alias)
+        });
+        !has_inst && !checks_self
     }
 }

@@ -49,9 +49,13 @@ impl SolveCtx<'_> {
                 // User type: look up instance in registry
                 Ty::Named(type_id, ref type_args) => {
                     let type_args: SmallVec<[TyId; 4]> = type_args.clone();
-                    match self.instance_registry.lookup(class, type_id).cloned()
-                    {
-                        Some(inst) => {
+                    match self.instance_for(
+                        InstanceUse::Evidence,
+                        class,
+                        type_id,
+                        span,
+                    ) {
+                        InstanceLookup::Found(inst) => {
                             let param_rename = self
                                 .build_instance_subst(&inst, &type_args, span);
                             // Find the associated type definition
@@ -69,14 +73,18 @@ impl SolveCtx<'_> {
                                 }),
                             }
                         }
-                        None => Err(TypeError::UnsatisfiedClass(
-                            TypeClass::placeholder(
-                                class,
-                                self.env.class_def(class).shape,
-                            ),
-                            base,
-                            span,
-                        )),
+                        InstanceLookup::BlockedSelf => Ok(TyArena::ERROR),
+                        InstanceLookup::Missing
+                        | InstanceLookup::NotImported => {
+                            Err(TypeError::UnsatisfiedClass(
+                                TypeClass::placeholder(
+                                    class,
+                                    self.env.class_def(class).shape,
+                                ),
+                                base,
+                                span,
+                            ))
+                        }
                     }
                 }
 
@@ -94,12 +102,13 @@ impl SolveCtx<'_> {
                 _ if class.idx() >= ClassId::BUILTIN_COUNT => {
                     match self.ty_to_type_id_and_args(base) {
                         Some((tid, type_args)) => {
-                            match self
-                                .instance_registry
-                                .lookup(class, tid)
-                                .cloned()
-                            {
-                                Some(inst) => {
+                            match self.instance_for(
+                                InstanceUse::Evidence,
+                                class,
+                                tid,
+                                span,
+                            ) {
+                                InstanceLookup::Found(inst) => {
                                     let param_rename = self
                                         .build_instance_subst(
                                             &inst, &type_args, span,
@@ -120,14 +129,20 @@ impl SolveCtx<'_> {
                                         }
                                     }
                                 }
-                                None => Err(TypeError::UnsatisfiedClass(
-                                    TypeClass::placeholder(
-                                        class,
-                                        self.env.class_def(class).shape,
-                                    ),
-                                    base,
-                                    span,
-                                )),
+                                InstanceLookup::BlockedSelf => {
+                                    Ok(TyArena::ERROR)
+                                }
+                                InstanceLookup::Missing
+                                | InstanceLookup::NotImported => {
+                                    Err(TypeError::UnsatisfiedClass(
+                                        TypeClass::placeholder(
+                                            class,
+                                            self.env.class_def(class).shape,
+                                        ),
+                                        base,
+                                        span,
+                                    ))
+                                }
                             }
                         }
                         None => Err(TypeError::UnsatisfiedClass(

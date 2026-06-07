@@ -13,6 +13,23 @@ use super::TypeError;
 use crate::intern::{QualifiedName, StringId};
 use crate::{ClassId, Span, TypeId};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InstanceUse {
+    Evidence,
+    ExplicitCall,
+    MethodValue,
+    Derive,
+    Super,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum InstanceLookup {
+    Found(Instance),
+    Missing,
+    BlockedSelf,
+    NotImported,
+}
+
 /// An associated type definition within a class instance.
 ///
 /// Example: `newtype Index = Int` inside `class Indexable[T] FOR MyVec[T] { ... }`

@@ -5,13 +5,13 @@ use smallvec::{smallvec, SmallVec};
 
 use super::super::{ClassInstanceInput, InferCtx};
 use crate::ast::{
-    AstClassAssocTypeDecl, AstClassMethodSig, AstTypeExpr, AstTypeExprId,
-    BindingPattern, Stmt, StmtId, TypeParam, Visibility,
+    AssocTypeDef, AstClassAssocTypeDecl, AstClassMethodSig, AstTypeExpr,
+    AstTypeExprId, BindingPattern, Stmt, StmtId, TypeParam, Visibility,
 };
 use crate::intern::{QualifiedName, StringId};
 use crate::interpreter::instance::RuntimeInstance;
 use crate::typecheck::error::TypeError;
-use crate::typecheck::instance::Instance;
+use crate::typecheck::instance::{self, Instance};
 use crate::typecheck::ty::{
     ClassDef, ClassShape, MethodSpec, Scheme, Ty, TyArena, TyId, TyVar,
     TypeClass,
@@ -169,7 +169,7 @@ impl InferCtx<'_> {
                     type_params,
                     for_type,
                     constraints,
-                    assoc_types: _,
+                    assoc_types,
                     methods,
                 }) => {
                     self.hoist_class_instance(ClassInstanceInput {
@@ -179,7 +179,7 @@ impl InferCtx<'_> {
                         for_type,
                         constraints: &constraints,
                         methods: &methods,
-                        assoc_types: (),
+                        assoc_types: &assoc_types,
                         module: module.cloned(),
                         span,
                     });
@@ -846,7 +846,10 @@ impl InferCtx<'_> {
     ///
     /// The `module` field is `Some(path_id)` when the CLASS is inside a
     /// module, `None` for top-level instances.
-    fn hoist_class_instance(&mut self, input: ClassInstanceInput<'_>) {
+    fn hoist_class_instance(
+        &mut self,
+        input: ClassInstanceInput<'_, &SmallVec<[AssocTypeDef; 2]>>,
+    ) {
         let ClassInstanceInput {
             class_name,
             class_args,
@@ -854,7 +857,7 @@ impl InferCtx<'_> {
             for_type,
             constraints,
             methods,
-            assoc_types: _,
+            assoc_types,
             module,
             span,
         } = input;
@@ -1064,6 +1067,44 @@ impl InferCtx<'_> {
                         type_param_subst.values().copied().collect()
                     };
 
+                    let assoc_type_map: HashMap<_, _> = assoc_types
+                        .iter()
+                        .map(|def| {
+                            let ty = self
+                                .convert()
+                                .ast_type_to_ty(def.target, &type_param_subst);
+                            (def.name, ty)
+                        })
+                        .collect();
+                    let inst_assoc_types: SmallVec<
+                        [instance::AssocTypeDef; 1],
+                    > = assoc_types
+                        .iter()
+                        .map(|def| {
+                            let ty = assoc_type_map
+                                .get(&def.name)
+                                .copied()
+                                .unwrap_or(TyArena::UNKNOWN);
+                            let constraints = def
+                                .constraint
+                                .as_ref()
+                                .map(|c| {
+                                    self.convert().ast_class_to_ty_class(
+                                        c,
+                                        &type_param_subst,
+                                    )
+                                })
+                                .into_iter()
+                                .collect();
+                            instance::AssocTypeDef {
+                                name: def.name,
+                                ty,
+                                constraints,
+                                span: def.span,
+                            }
+                        })
+                        .collect();
+
                     // Register instance, ignore duplicate errors; caught in Pass `2`.
                     let inst = Instance {
                         class,
@@ -1071,7 +1112,7 @@ impl InferCtx<'_> {
                         type_params: type_all_params,
                         constraints: scheme_constraints,
                         methods: method_map,
-                        assoc_types: SmallVec::new(),
+                        assoc_types: inst_assoc_types,
                         module,
                         span,
                     };

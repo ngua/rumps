@@ -21,7 +21,7 @@ use crate::env::TxnReq;
 use crate::intern::{QualifiedName, StringId};
 use crate::typecheck::env::MethodRefOrigin;
 use crate::typecheck::error::TypeError;
-use crate::typecheck::instance::Instance;
+use crate::typecheck::instance::{InstanceLookup, InstanceUse};
 use crate::typecheck::ty::{
     ClassShape, MethodSpec, Scheme, TrackKind, Ty, TyArena, TyId, TyVar,
     TypeClass,
@@ -494,7 +494,13 @@ impl InferCtx<'_> {
                                             >= ClassId::BUILTIN_COUNT
                                         {
                                             self.deferred_param_calls.push((
-                                                id, k, method, recv, arg_ty,
+                                                id,
+                                                k,
+                                                method,
+                                                recv,
+                                                arg_ty,
+                                                span,
+                                                InstanceUse::MethodValue,
                                             ));
                                         }
                                     }
@@ -755,42 +761,31 @@ impl InferCtx<'_> {
         self.constrain(Constraint::Class { ty, class, span });
     }
 
-    /// Check if a class instance is available in the current scope.
-    ///
-    /// An instance is available if:
-    /// - It is top-level (no module), or
-    /// - Its owning module has been imported
-    ///
-    /// Returns the cloned instance if available, `None` otherwise. If the
-    /// instance exists but its module is not imported, emits an error.
-    fn check_instance_available(
+    fn record_inst_dispatch(
         &mut self,
-        class: ClassId,
-        type_id: TypeId,
+        id: ExprId,
+        ty: TyId,
+        kind: ClassId,
         span: Span,
-    ) -> Option<Instance> {
-        let inst = self.instance_registry.lookup(class, type_id)?.clone();
-        match inst.module {
-            None => Some(inst),
-            Some(ref mod_qn) => {
-                // Check if the module's root segment has been imported
-                let imported = self.env.is_module_imported(
-                    *mod_qn
-                        .segments()
-                        .first()
-                        .unwrap_or_else(|| invariant!("module has segments")),
-                );
-                if imported {
-                    Some(inst)
-                } else {
-                    self.error(TypeError::InstanceNotImported {
-                        class,
-                        type_id,
-                        module: mod_qn.display(&self.env.strings),
-                        span,
-                    });
-                    None
+        use_: InstanceUse,
+    ) -> bool {
+        match self.nominal_type_id(ty) {
+            Some(tid) => match self.instance_for(use_, kind, tid, span) {
+                InstanceLookup::Found(_) => {
+                    self.set_instance_call(id, tid);
+                    true
                 }
+                InstanceLookup::Missing => {
+                    self.deferred_inst_calls.push((id, ty, kind, span, use_));
+                    true
+                }
+                InstanceLookup::BlockedSelf | InstanceLookup::NotImported => {
+                    false
+                }
+            },
+            None => {
+                self.deferred_inst_calls.push((id, ty, kind, span, use_));
+                true
             }
         }
     }
@@ -901,26 +896,18 @@ impl InferCtx<'_> {
                     // returns `F[B]`) or not (`Filterable:filter` returns
                     // `Array[T]`, `Iterable:length` returns `Int`).
                     {
+                        let use_ = if is_partial {
+                            InstanceUse::MethodValue
+                        } else {
+                            InstanceUse::ExplicitCall
+                        };
                         let lookup_ty = hkt_container_ty
                             .or_else(|| arg_tys.first().copied());
-                        if let Some(ty) = lookup_ty {
-                            let type_id = self.nominal_type_id(ty);
-                            match type_id {
-                                Some(tid)
-                                    if self
-                                        .check_instance_available(
-                                            kind, tid, span,
-                                        )
-                                        .is_some() =>
-                                {
-                                    self.set_instance_call(id, tid);
-                                }
-                                _ => {
-                                    self.deferred_inst_calls
-                                        .push((id, ty, kind));
-                                }
-                            }
-                        }
+                        let keep_dispatch = if let Some(ty) = lookup_ty {
+                            self.record_inst_dispatch(id, ty, kind, span, use_)
+                        } else {
+                            true
+                        };
 
                         // For parameterized user classes, record info for
                         // deferred resolution of the specific instance fn.
@@ -929,10 +916,11 @@ impl InferCtx<'_> {
                             ClassShape::Concrete { params } if params > 0
                         ) && kind.idx()
                             >= ClassId::BUILTIN_COUNT;
-                        if is_param_user {
+                        if is_param_user && keep_dispatch {
                             if let Some(ty) = arg_tys.first().copied() {
-                                self.deferred_param_calls
-                                    .push((id, kind, method, ty, ret));
+                                self.deferred_param_calls.push((
+                                    id, kind, method, ty, ret, span, use_,
+                                ));
                             }
                         }
 
@@ -943,10 +931,10 @@ impl InferCtx<'_> {
                             ClassShape::Hkt { .. }
                         ) && kind.idx()
                             >= ClassId::BUILTIN_COUNT;
-                        if is_hkt_user {
+                        if is_hkt_user && keep_dispatch {
                             if let Some(ty) = lookup_ty {
                                 self.deferred_hkt_user_calls
-                                    .push((id, kind, method, ty));
+                                    .push((id, kind, method, ty, span, use_));
                             }
                         }
                     }
@@ -1267,54 +1255,26 @@ impl InferCtx<'_> {
         let class_tag = op.class_dispatch().map(|(tag, _)| tag);
 
         if let Some(kind) = class_tag {
-            let type_id = self.nominal_type_id(lhs_ty);
-
-            // Suppress if we're inside the class instance for this exact
-            // (class, type) combination to prevent infinite recursion.
-            let inside_same = self
-                .class_context
-                .as_ref()
-                .is_some_and(|ctx| ctx.class == kind && ctx.type_id == type_id);
-
-            if !inside_same {
-                match type_id {
-                    Some(tid)
-                        if self
-                            .check_instance_available(kind, tid, span)
-                            .is_some() =>
-                    {
-                        self.set_instance_call(id, tid);
-                    }
-                    _ => {
-                        self.deferred_inst_calls.push((id, lhs_ty, kind));
-                    }
-                }
-            }
+            self.record_inst_dispatch(
+                id,
+                lhs_ty,
+                kind,
+                span,
+                InstanceUse::Evidence,
+            );
         }
 
         // Track Fallible instance for `??` (coalesce) dispatch on user types.
         // Coalesce is not in `class_dispatch()` so needs separate handling.
         if matches!(op, BinOp::Coalesce) {
             let kind = ClassId::FALLIBLE;
-            let type_id = self.nominal_type_id(lhs_ty);
-            let inside_same = self
-                .class_context
-                .as_ref()
-                .is_some_and(|ctx| ctx.class == kind && ctx.type_id == type_id);
-            if !inside_same {
-                match type_id {
-                    Some(tid)
-                        if self
-                            .check_instance_available(kind, tid, span)
-                            .is_some() =>
-                    {
-                        self.set_instance_call(id, tid);
-                    }
-                    _ => {
-                        self.deferred_inst_calls.push((id, lhs_ty, kind));
-                    }
-                }
-            }
+            self.record_inst_dispatch(
+                id,
+                lhs_ty,
+                kind,
+                span,
+                InstanceUse::Evidence,
+            );
         }
 
         ret
@@ -1342,25 +1302,13 @@ impl InferCtx<'_> {
             // Track Wrappable instance for `?` dispatch on user types.
             // Check the result type (e.g. `Box[T]`) for a Wrappable instance.
             let kind = ClassId::WRAPPABLE;
-            let type_id = self.nominal_type_id(result);
-            let inside_same = self
-                .class_context
-                .as_ref()
-                .is_some_and(|ctx| ctx.class == kind && ctx.type_id == type_id);
-            if !inside_same {
-                match type_id {
-                    Some(tid)
-                        if self
-                            .check_instance_available(kind, tid, span)
-                            .is_some() =>
-                    {
-                        self.set_instance_call(id, tid);
-                    }
-                    _ => {
-                        self.deferred_inst_calls.push((id, result, kind));
-                    }
-                }
-            }
+            self.record_inst_dispatch(
+                id,
+                result,
+                kind,
+                span,
+                InstanceUse::Evidence,
+            );
         }
 
         result
@@ -1820,49 +1768,7 @@ impl InferCtx<'_> {
 
             Ty::Named(id, type_args) => {
                 let (id, type_args) = (*id, type_args.clone());
-                // Check for user-defined Indexable instance
-                match self.check_instance_available(
-                    ClassId::INDEXABLE,
-                    id,
-                    span,
-                ) {
-                    Some(inst) => {
-                        let param_subst =
-                            self.build_instance_subst(&inst, &type_args, span);
-
-                        // Resolve index type from associated type
-                        let inst_idx_ty = inst
-                            .get_assoc_type(self.env.intern("Index"))
-                            .map(|a| self.ty_arena.apply(a.ty, &param_subst))
-                            .unwrap_or(TyArena::UNKNOWN);
-                        self.unify(idx_ty, inst_idx_ty, span);
-
-                        // Resolve element type from class args
-                        inst.class_args
-                            .first()
-                            .map(|&t| self.ty_arena.apply(t, &param_subst))
-                            .unwrap_or(TyArena::UNKNOWN)
-                    }
-                    None => {
-                        // Only emit UnsatisfiedClass if instance truly doesn't exist
-                        // (if it exists but isn't imported, error was already emitted)
-                        if self
-                            .instance_registry
-                            .lookup(ClassId::INDEXABLE, id)
-                            .is_none()
-                        {
-                            self.error(TypeError::UnsatisfiedClass(
-                                TypeClass::param(
-                                    ClassId::INDEXABLE,
-                                    TyArena::ERROR,
-                                ),
-                                base_ty,
-                                span,
-                            ));
-                        }
-                        TyArena::ERROR
-                    }
-                }
+                self.named_index_elem(base_ty, idx_ty, id, &type_args, span)
             }
 
             _ => {
@@ -1933,50 +1839,12 @@ impl InferCtx<'_> {
 
             Ty::Named(id, type_args) => {
                 let (id, type_args) = (*id, type_args.clone());
-                // Check for user-defined Indexable instance
-                match self.check_instance_available(
-                    ClassId::INDEXABLE,
-                    id,
-                    span,
-                ) {
-                    Some(inst) => {
-                        let param_subst =
-                            self.build_instance_subst(&inst, &type_args, span);
-
-                        // Resolve index type from associated type
-                        let inst_idx_ty = inst
-                            .get_assoc_type(self.env.intern("Index"))
-                            .map(|a| self.ty_arena.apply(a.ty, &param_subst))
-                            .unwrap_or(TyArena::UNKNOWN);
-                        self.unify(idx_ty, inst_idx_ty, span);
-
-                        // Resolve element type from class args, wrapped in Option
-                        let elem = inst
-                            .class_args
-                            .first()
-                            .map(|&t| self.ty_arena.apply(t, &param_subst))
-                            .unwrap_or(TyArena::UNKNOWN);
-                        self.ty_arena.option(elem)
-                    }
-                    None => {
-                        // Only emit UnsatisfiedClass if instance truly doesn't exist
-                        // (if it exists but isn't imported, error was already emitted)
-                        if self
-                            .instance_registry
-                            .lookup(ClassId::INDEXABLE, id)
-                            .is_none()
-                        {
-                            self.error(TypeError::UnsatisfiedClass(
-                                TypeClass::param(
-                                    ClassId::INDEXABLE,
-                                    TyArena::ERROR,
-                                ),
-                                base_ty,
-                                span,
-                            ));
-                        }
-                        TyArena::ERROR
-                    }
+                let elem = self
+                    .named_index_elem(base_ty, idx_ty, id, &type_args, span);
+                if elem == TyArena::ERROR {
+                    TyArena::ERROR
+                } else {
+                    self.ty_arena.option(elem)
                 }
             }
 
@@ -1988,6 +1856,60 @@ impl InferCtx<'_> {
                 ));
                 TyArena::ERROR
             }
+        }
+    }
+
+    fn named_index_elem(
+        &mut self,
+        base_ty: TyId,
+        idx_ty: TyId,
+        id: TypeId,
+        type_args: &[TyId],
+        span: Span,
+    ) -> TyId {
+        match self.instance_for(
+            InstanceUse::Evidence,
+            ClassId::INDEXABLE,
+            id,
+            span,
+        ) {
+            InstanceLookup::Found(inst) => {
+                let subst = self.build_instance_subst(&inst, type_args, span);
+                let idx_name = self.env.intern("Index");
+                match inst.get_assoc_type(idx_name) {
+                    Some(a) => {
+                        let inst_idx = self.ty_arena.apply(a.ty, &subst);
+                        self.unify(idx_ty, inst_idx, span);
+                        let elem =
+                            inst.class_args.first().copied().unwrap_or_else(
+                                || {
+                                    invariant!(
+                                        "`Indexable` instance has a class arg"
+                                    )
+                                },
+                            );
+                        self.ty_arena.apply(elem, &subst)
+                    }
+                    None => {
+                        self.error(TypeError::MissingAssocType {
+                            class: ClassId::INDEXABLE,
+                            assoc: idx_name,
+                            span,
+                        });
+                        TyArena::ERROR
+                    }
+                }
+            }
+            InstanceLookup::Missing => {
+                self.error(TypeError::UnsatisfiedClass(
+                    TypeClass::param(ClassId::INDEXABLE, TyArena::ERROR),
+                    base_ty,
+                    span,
+                ));
+                TyArena::ERROR
+            }
+            InstanceLookup::BlockedSelf => TyArena::ERROR,
+            InstanceLookup::NotImported => TyArena::ERROR,
         }
     }
 
@@ -2485,42 +2407,34 @@ impl InferCtx<'_> {
         args: &SmallVec<[TyId; 4]>,
         span: Span,
     ) {
-        if origin.class.idx() >= ClassId::BUILTIN_COUNT {
-            let lookup_ty = if self.method_ref_is_hkt_user(origin.class) {
-                self.method_ref_hkt_current_arg(
-                    origin.class,
-                    constraints,
-                    params,
-                    origin.applied,
-                    args,
-                )
-                .or_else(|| {
-                    self.method_ref_hkt_container(origin.class, constraints)
-                })
-            } else {
-                args.first().copied()
-            };
-            if let Some(ty) = lookup_ty {
-                let type_id = self.nominal_type_id(ty);
-                match type_id {
-                    Some(tid)
-                        if self
-                            .check_instance_available(origin.class, tid, span)
-                            .is_some() =>
-                    {
-                        self.set_instance_call(call_id, tid);
-                    }
-                    _ => {
-                        self.deferred_inst_calls.push((
-                            call_id,
-                            ty,
-                            origin.class,
-                        ));
-                    }
-                }
-            };
+        let lookup_ty = if self.method_ref_is_hkt_user(origin.class) {
+            self.method_ref_hkt_current_arg(
+                origin.class,
+                constraints,
+                params,
+                origin.applied,
+                args,
+            )
+            .or_else(|| {
+                self.method_ref_hkt_container(origin.class, constraints)
+            })
+        } else {
+            args.first().copied()
+        };
+        let keep_dispatch = if let Some(ty) = lookup_ty {
+            self.record_inst_dispatch(
+                call_id,
+                ty,
+                origin.class,
+                span,
+                InstanceUse::MethodValue,
+            )
+        } else {
+            true
+        };
 
-            if self.method_ref_is_param_user(origin.class) {
+        if origin.class.idx() >= ClassId::BUILTIN_COUNT {
+            if self.method_ref_is_param_user(origin.class) && keep_dispatch {
                 args.first()
                     .copied()
                     .filter(|_| origin.applied == 0)
@@ -2538,17 +2452,21 @@ impl InferCtx<'_> {
                             origin.method,
                             recv,
                             class_arg,
+                            span,
+                            InstanceUse::MethodValue,
                         ));
                     });
             }
 
-            if self.method_ref_is_hkt_user(origin.class) {
+            if self.method_ref_is_hkt_user(origin.class) && keep_dispatch {
                 lookup_ty.into_iter().for_each(|ty| {
                     self.deferred_hkt_user_calls.push((
                         call_id,
                         origin.class,
                         origin.method,
                         ty,
+                        span,
+                        InstanceUse::MethodValue,
                     ));
                 });
             }
@@ -3394,25 +3312,13 @@ impl InferCtx<'_> {
         // fall back to deferred for unresolved type variables.
         if matches!(op, PostfixOp::Unwrap) {
             let kind = ClassId::FALLIBLE;
-            let type_id = self.nominal_type_id(inner_ty);
-            let inside_same = self
-                .class_context
-                .as_ref()
-                .is_some_and(|ctx| ctx.class == kind && ctx.type_id == type_id);
-            if !inside_same {
-                match type_id {
-                    Some(tid)
-                        if self
-                            .check_instance_available(kind, tid, span)
-                            .is_some() =>
-                    {
-                        self.set_instance_call(id, tid);
-                    }
-                    _ => {
-                        self.deferred_inst_calls.push((id, inner_ty, kind));
-                    }
-                }
-            }
+            self.record_inst_dispatch(
+                id,
+                inner_ty,
+                kind,
+                span,
+                InstanceUse::Evidence,
+            );
         }
 
         ret

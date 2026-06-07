@@ -1,0 +1,11 @@
+; A direct newtype instance blocks falling back to representation-derived `Display`.
+
+fun main() { }
+
+newtype Label = String
+
+class Display for Label {
+  fun display(x: Label) -> String {
+    Display:display(x)
+  }
+}

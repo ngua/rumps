@@ -11,7 +11,7 @@ use thiserror::Error;
 
 use super::ty::{ClassRegistry, Ty, TyArena, TyId, TyVar, TypeClass};
 use crate::intern::StringInterner;
-use crate::value::{TypeRegistry, ValueArena};
+use crate::value::{TypeDef, TypeRegistry, ValueArena};
 use crate::{ClassId, Span, StringId, TypeId};
 
 /// Context for pretty-printing types in error messages.
@@ -183,6 +183,12 @@ impl<'a> TyPrinter<'a> {
             .type_name(id, self.val_arena)
             .map(str::to_owned)
             .unwrap_or_else(|| "<unknown type>".to_owned())
+    }
+
+    fn is_newtype(&self, id: TypeId) -> bool {
+        self.registry
+            .get_def(id)
+            .is_some_and(|def| matches!(def, TypeDef::Alias { .. }))
     }
 }
 
@@ -556,6 +562,16 @@ pub(crate) enum TypeError {
         span: Span,
     },
 
+    /// Attempt to use the class method currently being defined.
+    #[error(
+        "cannot use a class method while defining that class for the same type"
+    )]
+    SelfInstanceUse {
+        class: ClassId,
+        type_id: TypeId,
+        span: Span,
+    },
+
     /// Unknown associated type for a class.
     ///
     /// The instance defines an associated type that doesn't exist in the class.
@@ -737,6 +753,7 @@ impl TypeError {
             | Self::MissingInstanceMethod { span, .. }
             | Self::MethodSignatureMismatch { span, .. }
             | Self::MissingAssocType { span, .. }
+            | Self::SelfInstanceUse { span, .. }
             | Self::UnknownAssocTypeForClass { span, .. }
             | Self::UnknownAssocType { span, .. }
             | Self::AssocTypeConstraint { span, .. }
@@ -1137,6 +1154,17 @@ impl TypeError {
                     Some(format!("add `newtype {name} = <type>` to the instance")),
                 )
             }
+            Self::SelfInstanceUse { type_id, .. } => (
+                "cannot use a class method while defining that class for the same type"
+                    .to_owned(),
+                Some(if p.is_newtype(*type_id) {
+                    "coerce the newtype representation explicitly before using representation operations"
+                        .to_owned()
+                } else {
+                    "move the recursive behavior into a regular function and call that function directly"
+                        .to_owned()
+                }),
+            ),
             Self::UnknownAssocTypeForClass { class, assoc, .. } => (
                 format!(
                     "class `{}` has no associated type `{assoc}`",
@@ -1253,8 +1281,18 @@ impl TypeError {
             ),
         };
 
+        let label = match self {
+            Self::SelfInstanceUse { class, type_id, .. } => Some(format!(
+                "this would use `{}` for `{}` while defining it",
+                p.class_name(*class),
+                p.type_name(*type_id)
+            )),
+            _ => None,
+        };
+
         FormattedTypeError {
             message: msg,
+            label,
             help,
             span: self.span(),
         }
@@ -1269,6 +1307,8 @@ impl TypeError {
 pub(crate) struct FormattedTypeError {
     /// The formatted error message.
     pub(crate) message: String,
+    /// Optional diagnostic label for the source span.
+    pub(crate) label: Option<String>,
     /// Optional help/suggestion text.
     pub(crate) help: Option<String>,
     /// Source span where the error occurred.
