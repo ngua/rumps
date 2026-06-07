@@ -15,8 +15,9 @@ impl SolveCtx<'_> {
     ///
     /// # User Types
     ///
-    /// For user-defined types, looks up the instance in the registry and
-    /// retrieves the associated type definition.
+    /// For user instances, associated type definitions are interpreted in the
+    /// instance type parameter scope. For `class C for Box[K, V] { newtype A = K }`,
+    /// projecting `C:A` from `Box[String, Int]` resolves to `String`.
     ///
     pub(super) fn resolve_assoc_type(
         &mut self,

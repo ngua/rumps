@@ -1,0 +1,35 @@
+newtype Box[K, V] = Map[K, V]
+
+class Indexable[V] for Box[K, V] {
+  newtype Index = K
+
+  fun index(b: Box[K, V], i: :Index) -> V {
+    b[i]
+  }
+
+  fun get(b: Box[K, V], i: Indexable:Index) -> Option[V] {
+    b?[i]
+  }
+}
+
+fun main() {
+  let bs = ({ "a" => 10, "b" => 20 } : Box[String, Int])
+  let direct-s: Int = Indexable:index(bs, "a")
+  let get-s: Option[Int] = Indexable:get(bs, "b")
+  let sub-s: Int = bs["b"]
+  let safe-s: Option[Int] = bs?["missing"]
+  write direct-s
+  write get-s
+  write sub-s
+  write safe-s
+
+  let bi = ({ 1 => "one", 2 => "two" } : Box[Int, String])
+  let direct-i: String = Indexable:index(bi, 1)
+  let get-i: Option[String] = Indexable:get(bi, 2)
+  let sub-i: String = bi[2]
+  let safe-i: Option[String] = bi?[3]
+  write direct-i
+  write get-i
+  write sub-i
+  write safe-i
+}

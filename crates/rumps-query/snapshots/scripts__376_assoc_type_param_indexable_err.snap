@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "newtype Box[K, V] = Map[K, V]\n\nclass Indexable[V] for Box[K, V] {\n  newtype Index = K\n\n  fun index(b: Box[K, V], i: :Index) -> V {\n    b[i]\n  }\n\n  fun get(b: Box[K, V], i: Indexable:Index) -> Option[V] {\n    b?[i]\n  }\n}\n\nfun main() {\n  let b = ({ \"a\" => 10 } : Box[String, Int])\n  write Indexable:index(b, 1)\n}\n"
+---
+ERROR: type `String` does not satisfy `Numeric` class

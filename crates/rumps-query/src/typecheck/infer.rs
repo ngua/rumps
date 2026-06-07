@@ -280,6 +280,7 @@ pub(super) struct InstanceMethodInput<'a> {
     pub(super) class: ClassId,
     pub(super) for_ty: TyId,
     pub(super) class_arg_tys: &'a SmallVec<[TyId; 2]>,
+    pub(super) assoc_types: &'a HashMap<StringId, TyId>,
     pub(super) type_param_subst: &'a IndexMap<StringId, TyId>,
     pub(super) method: &'a InstanceMethodDef,
     pub(super) inst_span: Span,

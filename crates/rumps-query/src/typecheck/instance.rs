@@ -55,9 +55,10 @@ pub(crate) struct Instance {
     /// Populated in Phase 5 (Resolution) when `class` statements are lowered.
     /// The generated function name follows the pattern `__inst_{Class}_{Type}_{method}`.
     pub(crate) methods: HashMap<StringId, StringId>,
-    /// Associated type definitions for this instance (e.g., `newtype Index = Int`).
+    /// Associated type definitions for this instance.
     ///
-    /// Currently empty; will be populated when associated types are parsed (Phase 2).
+    /// The RHS may reference instance type parameters. Projection resolution
+    /// substitutes those parameters with the saturated use site type args.
     pub(crate) assoc_types: SmallVec<[AssocTypeDef; 1]>,
     /// Owning module path, or `None` for top-level instances.
     pub(crate) module: Option<QualifiedName>,
