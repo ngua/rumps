@@ -70,8 +70,10 @@ module Prio {
   ; Reversed ordering: higher number = lower priority
   class Ord for Prio.Priority {
     fun compare(a: Prio.Priority, b: Prio.Priority) -> Ordering {
-      if a > b { Ordering.Lt } else {
-        if a == b { Ordering.Eq } else { Ordering.Gt }
+      let x: Int = a
+      let y: Int = b
+      if x > y { Ordering.Lt } else {
+        if x == y { Ordering.Eq } else { Ordering.Gt }
       }
     }
   }
@@ -82,29 +84,58 @@ module Nums {
 
   class Additive for Nums.MyInt {
     fun zero() -> Nums.MyInt { 0 }
-    fun add(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a + b }
+    fun add(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt {
+      let x: Int = a
+      let y: Int = b
+      x + y
+    }
   }
 
   class Subtractive for Nums.MyInt {
-    fun sub(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a - b }
+    fun sub(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt {
+      let x: Int = a
+      let y: Int = b
+      x - y
+    }
   }
 
   class Multiplicative for Nums.MyInt {
     fun one() -> Nums.MyInt { 1 }
-    fun mul(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a * b }
+    fun mul(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt {
+      let x: Int = a
+      let y: Int = b
+      x * y
+    }
   }
 
   class Divisible for Nums.MyInt {
-    fun div(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a / b }
+    fun div(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt {
+      let x: Int = a
+      let y: Int = b
+      x / y
+    }
   }
 
   class FloorDivisible for Nums.MyInt {
-    fun floor-div(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a // b }
-    fun mod(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a % b }
+    fun floor-div(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt {
+      let x: Int = a
+      let y: Int = b
+      x // y
+    }
+
+    fun mod(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt {
+      let x: Int = a
+      let y: Int = b
+      x % y
+    }
   }
 
   class Powerable for Nums.MyInt {
-    fun pow(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt { a ** b }
+    fun pow(a: Nums.MyInt, b: Nums.MyInt) -> Nums.MyInt {
+      let x: Int = a
+      let y: Int = b
+      x ** y
+    }
   }
 
   class Numeric for Nums.MyInt { }

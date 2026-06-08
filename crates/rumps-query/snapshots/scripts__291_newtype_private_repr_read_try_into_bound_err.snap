@@ -4,3 +4,4 @@ description: "class NeedRead T {\n  fun need-read(x: T) -> String\n}\n\nmodule R
 ---
 ERROR: private representation `TryInto` instance must be defined in the defining module
 type `Int` does not satisfy `NeedRead` class
+no `TryInto` instance for `Array` in scope

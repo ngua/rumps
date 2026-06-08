@@ -102,29 +102,58 @@ newtype MyInt = Int
 
 class Additive for MyInt {
   fun zero() -> MyInt { 0 }
-  fun add(a: MyInt, b: MyInt) -> MyInt { a + b }
+  fun add(a: MyInt, b: MyInt) -> MyInt {
+    let x: Int = a
+    let y: Int = b
+    x + y
+  }
 }
 
 class Subtractive for MyInt {
-  fun sub(a: MyInt, b: MyInt) -> MyInt { a - b }
+  fun sub(a: MyInt, b: MyInt) -> MyInt {
+    let x: Int = a
+    let y: Int = b
+    x - y
+  }
 }
 
 class Multiplicative for MyInt {
   fun one() -> MyInt { 1 }
-  fun mul(a: MyInt, b: MyInt) -> MyInt { a * b }
+  fun mul(a: MyInt, b: MyInt) -> MyInt {
+    let x: Int = a
+    let y: Int = b
+    x * y
+  }
 }
 
 class Divisible for MyInt {
-  fun div(a: MyInt, b: MyInt) -> MyInt { a / b }
+  fun div(a: MyInt, b: MyInt) -> MyInt {
+    let x: Int = a
+    let y: Int = b
+    x / y
+  }
 }
 
 class FloorDivisible for MyInt {
-  fun floor-div(a: MyInt, b: MyInt) -> MyInt { a // b }
-  fun mod(a: MyInt, b: MyInt) -> MyInt { a % b }
+  fun floor-div(a: MyInt, b: MyInt) -> MyInt {
+    let x: Int = a
+    let y: Int = b
+    x // y
+  }
+
+  fun mod(a: MyInt, b: MyInt) -> MyInt {
+    let x: Int = a
+    let y: Int = b
+    x % y
+  }
 }
 
 class Powerable for MyInt {
-  fun pow(a: MyInt, b: MyInt) -> MyInt { a ** b }
+  fun pow(a: MyInt, b: MyInt) -> MyInt {
+    let x: Int = a
+    let y: Int = b
+    x ** y
+  }
 }
 
 class Numeric for MyInt { }
@@ -134,8 +163,10 @@ newtype Priority = Int
 class Ord for Priority {
   fun compare(a: Priority, b: Priority) -> Ordering {
     ; Reversed: higher number = lower priority
-    if a > b { Ordering.Lt } else {
-      if a == b { Ordering.Eq } else { Ordering.Gt }
+    let x: Int = a
+    let y: Int = b
+    if x > y { Ordering.Lt } else {
+      if x == y { Ordering.Eq } else { Ordering.Gt }
     }
   }
 }

@@ -4,8 +4,10 @@ newtype Priority = Int
 
 class Ord for Priority {
   fun compare(a: Priority, b: Priority) -> Ordering {
-    if a > b { Ordering.Lt } else {
-      if a == b { Ordering.Eq } else { Ordering.Gt }
+    let x: Int = a
+    let y: Int = b
+    if x > y { Ordering.Lt } else {
+      if x == y { Ordering.Eq } else { Ordering.Gt }
     }
   }
 }
