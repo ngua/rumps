@@ -1,6 +1,8 @@
 ; Map module primitives
-; Tests Map.empty, Map.length, Map.keys, Map.values, Map.entries,
-; Map.has, Map.lookup, Map.insert, Map.remove, Map.merge, Map.from-entries
+; Tests `Map.empty`, `Map.length`, `Map.keys`, `Map.values`, `Map.entries`,
+; `Map.has`, `Map.lookup`, `Map.insert`, `Map.remove`, `Map.merge`,
+; `Map.from-entries`, `Map.map`, `Map.map-with-key`, `Map.map-entries`,
+; `Map.foreach`, `Map.foreach-with-key`
 ;
 ; Note: `{}` is ambiguous and parsed as an empty object. Use Map.empty() for empty maps.
 
@@ -8,8 +10,10 @@ newtype Down = Int
 
 class Ord for Down {
   fun compare(a: Down, b: Down) -> Ordering {
-    if a > b { Ordering.Lt } else {
-      if a == b { Ordering.Eq } else { Ordering.Gt }
+    let ai: Int = a
+    let bi: Int = b
+    if ai > bi { Ordering.Lt } else {
+      if ai == bi { Ordering.Eq } else { Ordering.Gt }
     }
   }
 }
@@ -151,6 +155,62 @@ fun main() {
   write Map.lookup(from-arr, 1)  ; Some("x")
   write Map.lookup(from-arr, 2)  ; Some("y")
   write Map.lookup(from-arr, 3)  ; Some("z")
+
+  ; ============ `Map` HoFs ============
+
+  let hof-src = Map.from-entries([(3, 30), (1, 10), (2, 20)])
+
+  let map-vals = Map.map(x => x + 1, hof-src)
+  write Map.entries(map-vals)
+
+  let map-with-keys = Map.map-with-key((k, v) => k * 100 + v, hof-src)
+  write Map.entries(map-with-keys)
+
+  write "Map.foreach:"
+  let fe = Map.foreach(v => { write "v:{v}" }, hof-src)
+  write fe
+
+  write "Map.foreach-with-key:"
+  let fe-key = Map.foreach-with-key((k, v) => { write "{k}:{v}" }, hof-src)
+  write fe-key
+
+  let entry-src = Map.from-entries([(3, 300), (1, 100), (2, 200)])
+  let str-entry-map = Map.map-entries((k, v) => {
+    let s = if k == 1 { "c" } else {
+      if k == 2 { "a" } else { "b" }
+    }
+    (s, v // 10)
+  }, entry-src)
+  write Map.entries(str-entry-map)
+
+  let dup-entry-map = Map.map-entries((k, v) => {
+    let s = if k == 2 { "even" } else { "odd" }
+    (s, "{v}!")
+  }, m)
+  write Map.entries(dup-entry-map)
+  write Map.lookup(dup-entry-map, "odd")
+
+  let down-entry-map = Map.map-entries((k, v) => {
+    let d: Down = k
+    (d, v + 1)
+  }, hof-src)
+  write Map.entries(down-entry-map)
+
+  let empty-int: Map[Int, Int] = Map.empty()
+  write Map.entries(Map.map(x => x + 1, empty-int))
+  write Map.entries(Map.map-with-key((k, v) => k + v, empty-int))
+  write Map.entries(Map.map-entries((k, v) => ("empty-{k}", v + 1), empty-int))
+  write Map.foreach(v => { write "empty-value:{v}" }, empty-int)
+  write Map.foreach-with-key((k, v) => { write "empty-entry:{k}:{v}" }, empty-int)
+
+  let down-hof-src: Array[(Down, String)] = [(1, "one"), (3, "three"), (2, "two")]
+  let down-hof = Map.from-entries(down-hof-src)
+
+  let down-map-vals = Map.map(v => String.upper(v), down-hof)
+  write Map.entries(down-map-vals)
+
+  let down-map-with-keys = Map.map-with-key((k, v) => "{k}:{v}", down-hof)
+  write Map.entries(down-map-with-keys)
 
   ; ============ Chaining operations ============
 

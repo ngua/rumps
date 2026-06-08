@@ -26,23 +26,25 @@
 //! ```
 
 pub(crate) mod array;
+mod map;
 mod prelude;
 mod registry;
 mod result;
 mod state;
 
+use std::cmp::Ordering;
 use std::sync::Arc;
 
 pub(crate) use registry::Registry;
 use smallvec::smallvec;
 pub(crate) use state::{
-    ChainWrapper, Compare, Continuation, IterKind, ResultMode, SortCmp,
-    SortFrame, State, Step,
+    ChainWrapper, Compare, Continuation, IterKind, MapInsertFrame, ResultMode,
+    SortCmp, SortFrame, State, Step,
 };
 
 use super::class::ClassCtx;
 use crate::typecheck::{RuntimeTyId, Ty};
-use crate::value::{Payload, ValueId};
+use crate::value::{Map, Payload, TypeId, ValueId};
 use crate::Result;
 
 /// Higher-order function method signature.
@@ -298,6 +300,78 @@ impl ClassCtx<'_> {
             } => {
                 Ok(Step::Done(Payload::Tuple(Arc::new(smallvec![fst, result]))))
             }
+            State::MapModuleMap {
+                source,
+                entries,
+                idx,
+                mut acc,
+                with_key,
+            } => {
+                let _ = source;
+                acc.push(result);
+                let next_idx = idx + 1;
+                match entries.get(next_idx).copied() {
+                    Some(e) => Ok(Step::Invoke(Continuation {
+                        callee: cont.callee,
+                        args: map::Fns::args(e, with_key),
+                        state: State::MapModuleMap {
+                            source,
+                            entries,
+                            idx: next_idx,
+                            acc,
+                            with_key,
+                        },
+                    })),
+                    None => Ok(Step::Done(Payload::Map(Arc::new(
+                        map::Fns::rebuild(entries.as_slice(), acc.as_slice()),
+                    )))),
+                }
+            }
+            State::MapModuleForeach {
+                source,
+                entries,
+                idx,
+                with_key,
+            } => {
+                let _ = source;
+                let next_idx = idx + 1;
+                match entries.get(next_idx).copied() {
+                    Some(e) => Ok(Step::Invoke(Continuation {
+                        callee: cont.callee,
+                        args: map::Fns::args(e, with_key),
+                        state: State::MapModuleForeach {
+                            source,
+                            entries,
+                            idx: next_idx,
+                            with_key,
+                        },
+                    })),
+                    None => Ok(Step::Done(Payload::Unit)),
+                }
+            }
+            State::MapModuleEntriesCollect {
+                entries,
+                idx,
+                mut acc,
+            } => {
+                acc.push(map::Fns::entry(self, result));
+                let next_idx = idx + 1;
+                match entries.get(next_idx).copied() {
+                    Some((k, v)) => Ok(Step::Invoke(Continuation {
+                        callee: cont.callee,
+                        args: smallvec![k, v],
+                        state: State::MapModuleEntriesCollect {
+                            entries,
+                            idx: next_idx,
+                            acc,
+                        },
+                    })),
+                    None => map::Fns::insert_all(Map::new(), acc, 0),
+                }
+            }
+            State::MapModuleEntriesInsert { .. } => {
+                invariant!("Map.map-entries insert state resumes compare")
+            }
         }
     }
 
@@ -310,7 +384,50 @@ impl ClassCtx<'_> {
             State::ArraySortBy { source, cmp, stack } => {
                 self.resume_sort_by(cmp, source, stack, Some(result))
             }
+            State::MapModuleEntriesInsert {
+                map,
+                entries,
+                idx,
+                node,
+                path,
+            } => map::Fns::resume_insert(
+                self.ordering(result)?,
+                map,
+                entries,
+                idx,
+                node,
+                path,
+            ),
             _ => invariant!("compare continuation state"),
+        }
+    }
+
+    fn ordering(&self, id: ValueId) -> Result<Ordering> {
+        let ty = self.arena.meta(id).and_then(|meta| {
+            self.runtime_types
+                .to_type_id(meta.repr)
+                .or_else(|| self.runtime_types.to_type_id(meta.ty))
+        });
+        match self.arena.payload(id) {
+            Some(Payload::Variant { tag: 0, .. })
+                if ty.is_some_and(|ty| ty == TypeId::ORDERING) =>
+            {
+                Ok(Ordering::Less)
+            }
+            Some(Payload::Variant { tag: 1, .. })
+                if ty.is_some_and(|ty| ty == TypeId::ORDERING) =>
+            {
+                Ok(Ordering::Equal)
+            }
+            Some(Payload::Variant { tag: 2, .. })
+                if ty.is_some_and(|ty| ty == TypeId::ORDERING) =>
+            {
+                Ok(Ordering::Greater)
+            }
+            Some(Payload::Int(n)) if *n < 0 => Ok(Ordering::Less),
+            Some(Payload::Int(0)) => Ok(Ordering::Equal),
+            Some(Payload::Int(_)) => Ok(Ordering::Greater),
+            _ => typechecked!("Ord:compare", "Ordering | Int"),
         }
     }
 }

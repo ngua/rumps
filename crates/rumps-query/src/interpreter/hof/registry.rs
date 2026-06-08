@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::{array, prelude, result, MethodFn, ResultMode};
+use super::{array, map, prelude, result, MethodFn, ResultMode};
 use crate::intern::{StringId, StringInterner};
 
 /// Registry for module-level HoFs (e.g., `Array.sort-by`).
@@ -42,6 +42,7 @@ impl Registry {
 
     fn register_all(&mut self, interner: &mut StringInterner) {
         array::Fns::register(self, interner);
+        map::Fns::register(self, interner);
         result::Fns::register(self, interner);
         prelude::Fns::register(self, interner);
     }

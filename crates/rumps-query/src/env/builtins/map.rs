@@ -47,6 +47,44 @@ impl Environment {
                         ),
                     },
                     PrimDef {
+                        name: "map",
+                        f: Map::placeholder,
+                        ty: scheme!(
+                            a,
+                            forall K: Ord, V, W. ((V) -> W, Map[K, V]) -> Map[K, W]
+                        ),
+                    },
+                    PrimDef {
+                        name: "map-with-key",
+                        f: Map::placeholder,
+                        ty: scheme!(
+                            a,
+                            forall K: Ord, V, W. ((K, V) -> W, Map[K, V]) -> Map[K, W]
+                        ),
+                    },
+                    PrimDef {
+                        name: "foreach",
+                        f: Map::placeholder,
+                        ty: scheme!(a, forall K: Ord, V, W. ((V) -> W, Map[K, V]) -> Unit),
+                    },
+                    PrimDef {
+                        name: "foreach-with-key",
+                        f: Map::placeholder,
+                        ty: scheme!(
+                            a,
+                            forall K: Ord, V, W. ((K, V) -> W, Map[K, V]) -> Unit
+                        ),
+                    },
+                    PrimDef {
+                        name: "map-entries",
+                        f: Map::placeholder,
+                        ty: scheme!(
+                            a,
+                            forall K: Ord, L: Ord, V, W. ((K, V) -> (L, W), Map[K, V])
+                                -> Map[L, W]
+                        ),
+                    },
+                    PrimDef {
                         name: "has",
                         f: Map::placeholder,
                         ty: scheme!(

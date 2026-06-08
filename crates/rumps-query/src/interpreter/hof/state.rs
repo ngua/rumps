@@ -1,7 +1,9 @@
+use std::sync::Arc;
+
 use smallvec::SmallVec;
 
 use crate::typecheck::RuntimeTyId;
-use crate::value::{Payload, TypeId, ValueId};
+use crate::value::{Map, MapNode, Payload, TypeId, ValueId};
 
 /// Result from a higher-order method that may need closure invocation.
 pub(crate) enum Step {
@@ -115,6 +117,46 @@ pub(crate) enum State {
     BimapResult {
         /// Which variant: `0` = Ok, `1` = Err.
         tag: u8,
+    },
+    /// `Map.map` and `Map.map-with-key`.
+    MapModuleMap {
+        source: ValueId,
+        entries: SmallVec<[(ValueId, ValueId); 8]>,
+        idx: usize,
+        acc: SmallVec<[ValueId; 4]>,
+        with_key: bool,
+    },
+    /// `Map.foreach` and `Map.foreach-with-key`.
+    MapModuleForeach {
+        source: ValueId,
+        entries: SmallVec<[(ValueId, ValueId); 8]>,
+        idx: usize,
+        with_key: bool,
+    },
+    MapModuleEntriesCollect {
+        entries: SmallVec<[(ValueId, ValueId); 8]>,
+        idx: usize,
+        acc: SmallVec<[(ValueId, ValueId); 8]>,
+    },
+    MapModuleEntriesInsert {
+        map: Map,
+        entries: SmallVec<[(ValueId, ValueId); 8]>,
+        idx: usize,
+        node: Arc<MapNode>,
+        path: Vec<MapInsertFrame>,
+    },
+}
+
+pub(crate) enum MapInsertFrame {
+    Left {
+        key: ValueId,
+        val: ValueId,
+        right: Option<Arc<MapNode>>,
+    },
+    Right {
+        key: ValueId,
+        val: ValueId,
+        left: Option<Arc<MapNode>>,
     },
 }
 
