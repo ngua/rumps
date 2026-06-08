@@ -15,8 +15,8 @@
 //! Iterable operations include simple class methods such as
 //! `Iterable:length` and `Iterable:reverse`, plus higher-kinded class methods
 //! such as `Mappable:map`, `Filterable:filter`, and `Foldable:reduce`.
-//! `Range.collect` materializes a `Range` into an `Array`. `foreach` and
-//! `contains` are standalone `Prelude` functions.
+//! `Range.collect` materializes a `Range` into an `Array`. `foreach` is a
+//! standalone `Prelude` function.
 //!
 //! When adding a new RUMPS module, create a new type implementing [`Prim`]
 //! and add its functions as associated functions.

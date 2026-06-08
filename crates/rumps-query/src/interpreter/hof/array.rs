@@ -4,7 +4,7 @@ use std::{iter, ops};
 use smallvec::{smallvec, SmallVec};
 
 use super::{
-    Compare, Continuation, Registry, ResultMode, SortCmp, SortFrame, State,
+    Compare, Continuation, Eq, Registry, ResultMode, SortCmp, SortFrame, State,
     Step,
 };
 use crate::intern::StringInterner;
@@ -19,10 +19,12 @@ impl Fns {
     pub(super) fn register(reg: &mut Registry, i: &mut StringInterner) {
         let array = i.intern("Array");
         let sort = i.intern("sort");
+        let contains = i.intern("contains");
         let zip_with = i.intern("zip-with");
         let sort_by = i.intern("sort-by");
         let k = ResultMode::Keep;
         reg.register(array, sort, Self::sort, k);
+        reg.register(array, contains, Self::contains, k);
         reg.register(array, zip_with, Self::zip_with, k);
         reg.register(array, sort_by, Self::sort_by, k);
     }
@@ -47,6 +49,26 @@ impl Fns {
                 None,
             ),
             _ => typechecked!("Array.sort", "Array"),
+        }
+    }
+
+    /// `Array.contains(arr, needle)`; scans with `Eq:eq`.
+    fn contains(ctx: &mut ClassCtx<'_>, args: &[ValueId]) -> Result<Step> {
+        let arr = *args
+            .first()
+            .unwrap_or_else(|| typechecked!("Array.contains", "2 args"));
+        let needle = *args
+            .get(1)
+            .unwrap_or_else(|| typechecked!("Array.contains", "2 args"));
+
+        match ctx.arena.payload(arr) {
+            Some(Payload::Array(elems)) if elems.is_empty() => {
+                Ok(Step::Done(Payload::Bool(false)))
+            }
+            Some(Payload::Array(_)) => {
+                ctx.resume_contains(arr, needle, 0, None)
+            }
+            _ => typechecked!("Array.contains", "Array"),
         }
     }
 
@@ -131,6 +153,185 @@ impl Fns {
 }
 
 impl ClassCtx<'_> {
+    pub(super) fn resume_contains(
+        &mut self,
+        source: ValueId,
+        needle: ValueId,
+        idx: usize,
+        eq_result: Option<ValueId>,
+    ) -> Result<Step> {
+        enum Flow {
+            Done(bool),
+            Eq { elem: ValueId, idx: usize },
+        }
+
+        let elems = match self.arena.payload(source) {
+            Some(Payload::Array(elems)) => elems.clone(),
+            _ => invariant!("Array.contains source must be Array"),
+        };
+        let start = match eq_result {
+            Some(result) if self.bool_result(result, "Array.contains") => None,
+            Some(_) => Some(idx + 1),
+            None => Some(idx),
+        };
+
+        let flow =
+            start.map_or(ops::ControlFlow::Break(Flow::Done(true)), |i| {
+                elems
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .skip(i)
+                    .try_fold((), |(), (idx, elem)| {
+                        match self.hot_eq(elem, needle) {
+                            Some(true) => {
+                                ops::ControlFlow::Break(Flow::Done(true))
+                            }
+                            Some(false) => ops::ControlFlow::Continue(()),
+                            None => {
+                                ops::ControlFlow::Break(Flow::Eq { elem, idx })
+                            }
+                        }
+                    })
+                    .map_break(|flow| flow)
+                    .map_continue(|()| Flow::Done(false))
+            });
+
+        match flow {
+            ops::ControlFlow::Break(Flow::Done(found))
+            | ops::ControlFlow::Continue(Flow::Done(found)) => {
+                Ok(Step::Done(Payload::Bool(found)))
+            }
+            ops::ControlFlow::Break(Flow::Eq { elem, idx })
+            | ops::ControlFlow::Continue(Flow::Eq { elem, idx }) => {
+                Ok(Step::Eq(Eq {
+                    args: smallvec![elem, needle],
+                    state: State::ArrayContains {
+                        source,
+                        needle,
+                        idx,
+                    },
+                }))
+            }
+        }
+    }
+
+    fn hot_eq(&self, l: ValueId, r: ValueId) -> Option<bool> {
+        let lv = self.arena.payload(l)?;
+        let rv = self.arena.payload(r)?;
+        match (lv, rv) {
+            (Payload::Unit, Payload::Unit)
+                if self.hot_ty(l, TypeId::UNIT)
+                    && self.hot_ty(r, TypeId::UNIT) =>
+            {
+                Some(true)
+            }
+            (Payload::Bool(a), Payload::Bool(b))
+                if self.hot_ty(l, TypeId::BOOL)
+                    && self.hot_ty(r, TypeId::BOOL) =>
+            {
+                Some(a == b)
+            }
+            (Payload::Int(a), Payload::Int(b))
+                if self.hot_ty(l, TypeId::INT)
+                    && self.hot_ty(r, TypeId::INT) =>
+            {
+                Some(a == b)
+            }
+            (Payload::Word(a), Payload::Word(b))
+                if self.hot_ty(l, TypeId::WORD)
+                    && self.hot_ty(r, TypeId::WORD) =>
+            {
+                Some(a == b)
+            }
+            (Payload::Float(a), Payload::Float(b))
+                if self.hot_ty(l, TypeId::FLOAT)
+                    && self.hot_ty(r, TypeId::FLOAT) =>
+            {
+                Some(a == b)
+            }
+            (Payload::Char(a), Payload::Char(b))
+                if self.hot_ty(l, TypeId::CHAR)
+                    && self.hot_ty(r, TypeId::CHAR) =>
+            {
+                Some(a == b)
+            }
+            (Payload::String(a), Payload::String(b))
+                if self.hot_ty(l, TypeId::STRING)
+                    && self.hot_ty(r, TypeId::STRING) =>
+            {
+                Some(a == b)
+            }
+            (Payload::Time(a), Payload::Time(b))
+                if self.hot_ty(l, TypeId::TIME)
+                    && self.hot_ty(r, TypeId::TIME) =>
+            {
+                Some(a == b)
+            }
+            (Payload::FilePath(a), Payload::FilePath(b))
+                if self.hot_ty(l, TypeId::FILEPATH)
+                    && self.hot_ty(r, TypeId::FILEPATH) =>
+            {
+                Some(a == b)
+            }
+            (Payload::Json(a), Payload::Json(b))
+                if self.hot_ty(l, TypeId::JSON)
+                    && self.hot_ty(r, TypeId::JSON) =>
+            {
+                Some(a == b)
+            }
+            (
+                Payload::Variant { tag: a, vals: av },
+                Payload::Variant { tag: b, vals: bv },
+            ) if self.hot_ty(l, TypeId::ORDERING)
+                && self.hot_ty(r, TypeId::ORDERING) =>
+            {
+                Some(a == b && av.is_empty() && bv.is_empty())
+            }
+            (
+                Payload::Ref(a_global, a_name, a_subs),
+                Payload::Ref(b_global, b_name, b_subs),
+            ) if self.hot_ref_ty(l, r) => {
+                let same_ref = a_global == b_global
+                    && a_name == b_name
+                    && a_subs.len() == b_subs.len();
+                if same_ref {
+                    a_subs
+                        .iter()
+                        .zip(b_subs.iter())
+                        .map(|(a, b)| self.hot_eq(*a, *b))
+                        .try_fold(true, |acc, eq| match (acc, eq) {
+                            (false, _) => Some(false),
+                            (_, Some(true)) => Some(true),
+                            (_, Some(false)) => Some(false),
+                            (_, None) => None,
+                        })
+                } else {
+                    Some(false)
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn hot_ty(&self, id: ValueId, ty: TypeId) -> bool {
+        self.actual_ty(id) == Some(ty)
+    }
+
+    fn hot_ref_ty(&self, l: ValueId, r: ValueId) -> bool {
+        matches!(
+            (self.actual_ty(l), self.actual_ty(r)),
+            (Some(TypeId::LOCAL), Some(TypeId::LOCAL))
+                | (Some(TypeId::GLOBAL), Some(TypeId::GLOBAL))
+        )
+    }
+
+    fn actual_ty(&self, id: ValueId) -> Option<TypeId> {
+        self.arena
+            .meta(id)
+            .and_then(|meta| self.runtime_types.to_type_id(meta.ty))
+    }
+
     /// Resume or advance sort-by algorithm.
     ///
     /// This implements a stack-based merge sort. The algorithm advances until

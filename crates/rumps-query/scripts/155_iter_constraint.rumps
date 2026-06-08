@@ -11,13 +11,13 @@ fun main() {
   write "Range (1..10) length: {Iterable:length(1 .. 10)}"
   write "Range (10..1) length: {Iterable:length(10 .. 1)}"
 
-  ; contains on Array
-  write "Array contains 3: {contains(arr, 3)}"
-  write "Array contains 99: {contains(arr, 99)}"
+  ; `Array.contains` on `Array`
+  write "Array contains 3: {Array.contains(arr, 3)}"
+  write "Array contains 99: {Array.contains(arr, 99)}"
 
-  ; `contains` on collected `Range`
-  write "Range contains 5: {contains(Range.collect(1 ..= 10), 5)}"
-  write "Range contains 11: {contains(Range.collect(1 ..= 10), 11)}"
+  ; `Array.contains` on collected `Range`
+  write "Range contains 5: {Array.contains(Range.collect(1 ..= 10), 5)}"
+  write "Range contains 11: {Array.contains(Range.collect(1 ..= 10), 11)}"
 
   ; Mappable:map on Array (Range is not Mappable; collect first)
   write "Doubled array: {Mappable:map(x => x * 2, arr)}"

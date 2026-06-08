@@ -41,6 +41,14 @@ impl Environment {
                         ),
                     },
                     PrimDef {
+                        name: "contains",
+                        f: Array::placeholder,
+                        ty: scheme!(
+                            a,
+                            forall T: Eq. (Array[T], T) -> Bool
+                        ),
+                    },
+                    PrimDef {
                         name: "slice",
                         f: Array::slice,
                         ty: scheme!(

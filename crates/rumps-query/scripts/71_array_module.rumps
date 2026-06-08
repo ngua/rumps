@@ -29,6 +29,16 @@ fun cmp-abs(aa: Int, ab: Int) -> Ordering {
 
 newtype SortPerson = { name: String, age: Int }
 
+newtype Parity = Int
+
+class Eq for Parity {
+  fun eq(a: Parity, b: Parity) -> Bool {
+    let ai: Int = a
+    let bi: Int = b
+    ai % 2 == bi % 2
+  }
+}
+
 fun cmp-by-age(pa: SortPerson, pb: SortPerson) -> Ordering {
   cmp-int(pa.age, pb.age)
 }
@@ -213,6 +223,20 @@ fun main() {
   ]
   let by-age = Array.sort-by(cmp-by-age, people)
   write Mappable:map(p => p.name, by-age)
+
+  ; === Array.contains ===
+
+  write Array.contains([1, 2, 3], 2)
+  write Array.contains([1, 2, 3], 9)
+  write Array.contains([], 1)
+  write Array.contains(["hello", "world"], "hello")
+
+  ; Uses the user `Eq` instance, not representation equality
+  let p2: Parity = 2
+  let p4: Parity = 4
+  let p5: Parity = 5
+  write Array.contains([p2], p4)
+  write Array.contains([p2], p5)
 
   ; === Chained operations ===
 

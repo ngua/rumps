@@ -23,14 +23,6 @@ impl Environment {
                         ),
                     },
                     PrimDef {
-                        name: "contains",
-                        f: Prelude::contains,
-                        ty: scheme!(
-                            a,
-                            forall T. (Array[T], T) -> Bool
-                        ),
-                    },
-                    PrimDef {
                         name: "identity",
                         f: Prelude::identity,
                         ty: scheme!(a, forall T. (T) -> T),

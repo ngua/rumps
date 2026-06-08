@@ -13,12 +13,20 @@ pub(crate) enum Step {
     DoneValue(ValueId),
     /// Method needs to compare two values with `Ord:compare` and continue.
     Compare(Compare),
+    /// Method needs to compare two values with `Eq:eq` and continue.
+    Eq(Eq),
     /// Method needs to invoke a callable and continue.
     Invoke(Continuation),
 }
 
 /// Internal `Ord:compare` request for HoFs.
 pub(crate) struct Compare {
+    pub(crate) args: SmallVec<[ValueId; 2]>,
+    pub(crate) state: State,
+}
+
+/// Internal `Eq:eq` request for HoFs.
+pub(crate) struct Eq {
     pub(crate) args: SmallVec<[ValueId; 2]>,
     pub(crate) state: State,
 }
@@ -98,6 +106,12 @@ pub(crate) enum State {
         source: ValueId,
         cmp: SortCmp,
         stack: Vec<SortFrame>,
+    },
+    /// `Array.contains` scan using `Eq:eq`.
+    ArrayContains {
+        source: ValueId,
+        needle: ValueId,
+        idx: usize,
     },
     /// `Result.map-err`; wraps mapped error back into `Result.Err`.
     ResultMapErr {

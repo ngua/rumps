@@ -38,8 +38,8 @@ use std::sync::Arc;
 pub(crate) use registry::Registry;
 use smallvec::smallvec;
 pub(crate) use state::{
-    ChainWrapper, Compare, Continuation, IterKind, MapInsertFrame, ResultMode,
-    SortCmp, SortFrame, State, Step,
+    ChainWrapper, Compare, Continuation, Eq, IterKind, MapInsertFrame,
+    ResultMode, SortCmp, SortFrame, State, Step,
 };
 
 use super::class::ClassCtx;
@@ -261,6 +261,9 @@ impl ClassCtx<'_> {
             State::ArraySortBy { source, cmp, stack } => {
                 self.resume_sort_by(cmp, source, stack, Some(result))
             }
+            State::ArrayContains { .. } => {
+                invariant!("Array.contains state resumes `Eq:eq`")
+            }
             State::ResultMapErr { ok_ty } => {
                 let err_ty =
                     self.arena.meta(result).map(|m| m.ty).unwrap_or_else(
@@ -399,6 +402,29 @@ impl ClassCtx<'_> {
                 path,
             ),
             _ => invariant!("compare continuation state"),
+        }
+    }
+
+    pub(crate) fn resume_eq(
+        &mut self,
+        state: State,
+        result: ValueId,
+    ) -> Result<Step> {
+        match state {
+            State::ArrayContains {
+                source,
+                needle,
+                idx,
+            } => self.resume_contains(source, needle, idx, Some(result)),
+            _ => invariant!("equality continuation state"),
+        }
+    }
+
+    pub(crate) fn bool_result(&self, id: ValueId, label: &str) -> bool {
+        match self.arena.payload(id) {
+            Some(Payload::Bool(b)) => *b,
+            Some(_) => typechecked!(label, "Bool"),
+            None => invariant!("Bool result in arena"),
         }
     }
 

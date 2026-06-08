@@ -23,15 +23,15 @@ fun main() {
   write Calc.mul3(2)(3, 4)
   ; Expected: 24
 
-  ; Prelude `contains` is `(container, element) -> Bool`
+  ; `Array.contains` is `(container, element) -> Bool`
   ; Partially apply the container, then test membership
-  let in-arr = contains([1, 2, 3])
+  let in-arr = Array.contains([1, 2, 3])
   write in-arr(2)
   ; Expected: true
   write in-arr(99)
   ; Expected: false
 
-  ; Prelude function via pipe + partial app
+  ; Module function via pipe + partial app
   write 2 |> in-arr
   ; Expected: true
 }

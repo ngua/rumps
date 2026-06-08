@@ -1,6 +1,6 @@
 ; Array module primitives
 ; Tests Iterable:length, Array.push, Array.pop, Array.head, Array.tail,
-; `Iterable:reverse`, `Array.sort`, `Array.slice`, `contains`, `Array.concat`
+; `Iterable:reverse`, `Array.sort`, `Array.slice`, `Array.contains`, `Array.concat`
 
 fun main() {
   ; ============ Iterable:length ============
@@ -141,23 +141,23 @@ fun main() {
   let slice-neg = Array.slice([1, 2, 3], -5, 2)
   write slice-neg  ; [1, 2]
 
-  ; ============ contains ============
+  ; ============ Array.contains ============
 
   let contains-arr = [1, 2, 3, 4, 5]
-  write contains(contains-arr, 3)  ; true
-  write contains(contains-arr, 10)  ; false
+  write Array.contains(contains-arr, 3)  ; true
+  write Array.contains(contains-arr, 10)  ; false
 
   ; Contains in empty array
-  write contains([], 1)  ; false
+  write Array.contains([], 1)  ; false
 
   ; Contains with strings
   let str-arr = ["hello", "world"]
-  write contains(str-arr, "hello")  ; true
-  write contains(str-arr, "foo")  ; false
+  write Array.contains(str-arr, "hello")  ; true
+  write Array.contains(str-arr, "foo")  ; false
 
   ; Contains with booleans
   let bool-arr = [true, false]
-  write contains(bool-arr, true)  ; true
+  write Array.contains(bool-arr, true)  ; true
 
   ; ============ Array.concat ============
 

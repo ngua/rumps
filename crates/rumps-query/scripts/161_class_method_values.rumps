@@ -51,7 +51,7 @@ fun main() {
 
   ; Prelude functions and class methods with pipes
   write "Piped reverse: {nums |> Iterable:reverse}"
-  let piped-contains = nums |> (a => contains(a, 3))
+  let piped-contains = nums |> (a => Array.contains(a, 3))
   write "Piped contains: {piped-contains}"
 
   ; Concatable methods with pipes
