@@ -2,4 +2,9 @@
 source: crates/rumps-query/tests/scripts.rs
 description: "module ClassEdgePub {\n  +newtype A = +Array[Int]\n}\n\nmodule ClassEdgePriv {\n  +newtype A = Array[Int]\n\n  +fun wrap(xs: Array[Int]) -> ClassEdgePriv.A {\n    Into[ClassEdgePriv.A]:into(xs)\n  }\n\n  +fun unwrap(xs: ClassEdgePriv.A) -> Array[Int] {\n    Into[Array[Int]]:into(xs)\n  }\n\n  class TryInto[ClassEdgePriv.A] for Array[Int] {\n    fun try-into(xs: Array[Int]) -> Result[ClassEdgePriv.A, String] {\n      Result.Ok(ClassEdgePriv.wrap(xs))\n    }\n  }\n\n  +fun read-a(xs: Array[Int]) -> Result[ClassEdgePriv.A, String] {\n    TryInto[ClassEdgePriv.A]:try-into(xs)\n  }\n\n  +fun direct-read-len(xs: Array[Int]) -> Int {\n    let direct = TryInto[ClassEdgePriv.A]:try-into(xs)!\n    let unwrapped = Into[Array[Int]]:into(direct)\n    Iterable:length(unwrapped)\n  }\n\n  +fun pipe-read-len(xs: Array[Int]) -> Int {\n    let piped = xs |> TryInto[ClassEdgePriv.A]:try-into\n    let direct = piped!\n    let unwrapped = direct |> Into[Array[Int]]:into\n    Iterable:length(unwrapped)\n  }\n\n  +fun first-class-read-len(xs: Array[Int]) -> Int {\n    let f = TryInto[ClassEdgePriv.A]:try-into\n    let direct = f(xs)!\n    let g = Into[Array[Int]]:into\n    let unwrapped = g(direct)\n    Iterable:length(unwrapped)\n  }\n}\n\nfun main() {\n  let pub-a = Into[ClassEdgePub.A]:into([1, 2, 3])\n  let pub-xs = Into[Array[Int]]:into(pub-a)\n  write Iterable:length(pub-xs)\n\n  let priv-a = ClassEdgePriv.wrap([4, 5])\n  let priv-xs = ClassEdgePriv.unwrap(priv-a)\n  write Iterable:length(priv-xs)\n\n  let read-a = ClassEdgePriv.read-a([6, 7, 8, 9])!\n  let read-xs = ClassEdgePriv.unwrap(read-a)\n  write Iterable:length(read-xs)\n\n  write ClassEdgePriv.direct-read-len([10, 11])\n\n  write ClassEdgePriv.pipe-read-len([12])\n\n  write ClassEdgePriv.first-class-read-len([13, 14, 15])\n}\n"
 ---
-ERROR: no `TryInto` instance for `Array` in scope
+3
+2
+4
+2
+1
+3

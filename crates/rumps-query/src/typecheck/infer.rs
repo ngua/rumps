@@ -1198,12 +1198,7 @@ impl<'a> InferCtx<'a> {
                 Some(inst) => match inst.module {
                     None => InstanceLookup::Found(inst),
                     Some(ref mod_qn) => {
-                        let imported = self.env.is_module_imported(
-                            *mod_qn.segments().first().unwrap_or_else(|| {
-                                invariant!("module has segments")
-                            }),
-                        );
-                        if imported {
+                        if self.inst_mod_in_scope(mod_qn) {
                             InstanceLookup::Found(inst)
                         } else {
                             self.error(TypeError::InstanceNotImported {
@@ -1245,12 +1240,7 @@ impl<'a> InferCtx<'a> {
                     .filter_map(|inst| match inst.module {
                         None => Some(inst.clone()),
                         Some(ref mod_qn) => {
-                            let imported = self.env.is_module_imported(
-                                *mod_qn.segments().first().unwrap_or_else(
-                                    || invariant!("module has segments"),
-                                ),
-                            );
-                            if imported {
+                            if self.inst_mod_in_scope(mod_qn) {
                                 Some(inst.clone())
                             } else {
                                 None
@@ -1275,6 +1265,15 @@ impl<'a> InferCtx<'a> {
                 }
             }
         }
+    }
+
+    fn inst_mod_in_scope(&self, qn: &QualifiedName) -> bool {
+        self.current_module.as_ref() == Some(qn)
+            || self.env.is_module_imported(
+                *qn.segments()
+                    .first()
+                    .unwrap_or_else(|| invariant!("module has segments")),
+            )
     }
 
     fn blocks_self_instance(
