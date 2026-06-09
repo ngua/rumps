@@ -77,12 +77,6 @@ pub(crate) enum State {
         idx: usize,
         acc: ValueId,
     },
-    /// `Foldable:fold` over range.
-    ReduceRange {
-        current: i64,
-        end: i64,
-        acc: ValueId,
-    },
     /// `Chainable:chain`; single invocation, wraps result.
     Chain {
         wrapper: ChainWrapper,

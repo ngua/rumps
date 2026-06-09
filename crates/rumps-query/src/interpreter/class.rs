@@ -2340,8 +2340,6 @@ pub(crate) struct Mappable;
 
 impl Mappable {
     /// Start `Mappable:map`; returns first invocation or done for empty.
-    ///
-    /// Handles iterables (Array, Range) and single-value containers (Option, Result).
     pub(crate) fn map(
         ctx: &mut ClassCtx<'_>,
         args: &[ValueId],
@@ -2527,29 +2525,15 @@ impl Foldable {
         enum Kind {
             EmptyArray,
             Array(ValueId),
-            EmptyRange,
-            Range(i64, i64),
             Other,
         }
         let kind = match ctx.arena.payload(src) {
             Some(Payload::Array(elems)) if elems.is_empty() => Kind::EmptyArray,
             Some(Payload::Array(elems)) => Kind::Array(elems[0]),
-            Some(Payload::Range {
-                start,
-                end,
-                inclusive,
-            }) => {
-                let actual = if *inclusive { *end + 1 } else { *end };
-                if *start >= actual {
-                    Kind::EmptyRange
-                } else {
-                    Kind::Range(*start, actual)
-                }
-            }
             _ => Kind::Other,
         };
         match kind {
-            Kind::EmptyArray | Kind::EmptyRange => {
+            Kind::EmptyArray => {
                 Ok(hof::Step::DoneValue(init))
             }
             Kind::Array(first) => Ok(hof::Step::Invoke(hof::Continuation {
@@ -2561,23 +2545,7 @@ impl Foldable {
                     acc: init,
                 },
             })),
-            Kind::Range(start, end) => {
-                let int_id = ctx.arena.add_typed(
-                    Payload::Int(start),
-                    ctx.runtime_types.meta_int(),
-                    ctx.span,
-                );
-                Ok(hof::Step::Invoke(hof::Continuation {
-                    callee: fn_id,
-                    args: smallvec![init, int_id],
-                    state: hof::State::ReduceRange {
-                        current: start + 1,
-                        end,
-                        acc: init,
-                    },
-                }))
-            }
-            Kind::Other => typechecked!("Foldable:fold", "Array or Range"),
+            Kind::Other => typechecked!("Foldable:fold", "Array"),
         }
     }
 }

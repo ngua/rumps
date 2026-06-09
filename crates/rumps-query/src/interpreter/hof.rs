@@ -177,28 +177,6 @@ impl ClassCtx<'_> {
                     _ => invariant!("ReduceArray source must be Array"),
                 }
             }
-            State::ReduceRange { current, end, acc } => {
-                let _ = acc;
-                // `current` is the next value to process.
-                if current >= end {
-                    Ok(Step::DoneValue(result))
-                } else {
-                    let int_id = self.arena.add_typed(
-                        Payload::Int(current),
-                        self.runtime_types.meta_int(),
-                        self.span,
-                    );
-                    Ok(Step::Invoke(Continuation {
-                        callee: cont.callee,
-                        args: smallvec![result, int_id],
-                        state: State::ReduceRange {
-                            current: current + 1,
-                            end,
-                            acc: result,
-                        },
-                    }))
-                }
-            }
             State::Chain { wrapper } => match wrapper {
                 ChainWrapper::OptionSome | ChainWrapper::ResultOk => {
                     Ok(Step::DoneValue(result))
