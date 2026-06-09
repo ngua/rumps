@@ -61,6 +61,7 @@ use crate::intern::{self, QualifiedName, StringId, StringInterner};
 use crate::value::{self, TypeId, TypeRegistry};
 use crate::{ClassId, Error, Span};
 
+#[allow(clippy::large_enum_variant)]
 enum InstancesLookup {
     Found(SmallVec<[Instance; 2]>),
     Missing,

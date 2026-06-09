@@ -88,6 +88,78 @@ pub(crate) enum State {
         idx: usize,
         acc: SmallVec<[ValueId; 4]>,
     },
+    /// `Array.any`.
+    ArrayAny {
+        source: ValueId,
+        idx: usize,
+    },
+    /// `Array.all`.
+    ArrayAll {
+        source: ValueId,
+        idx: usize,
+    },
+    /// `Array.find`.
+    ArrayFind {
+        source: ValueId,
+        idx: usize,
+        pending: ValueId,
+    },
+    /// `Array.find-index`.
+    ArrayFindIndex {
+        source: ValueId,
+        idx: usize,
+    },
+    /// `Array.find-indices`.
+    ArrayFindIndices {
+        source: ValueId,
+        idx: usize,
+        acc: SmallVec<[ValueId; 4]>,
+    },
+    /// `Array.take-while`.
+    ArrayTakeWhile {
+        source: ValueId,
+        idx: usize,
+    },
+    /// `Array.drop-while`.
+    ArrayDropWhile {
+        source: ValueId,
+        idx: usize,
+    },
+    /// `Array.span`.
+    ArraySpan {
+        source: ValueId,
+        idx: usize,
+    },
+    /// `Array.break`.
+    ArrayBreak {
+        source: ValueId,
+        idx: usize,
+    },
+    /// `Array.partition`.
+    ArrayPartition {
+        source: ValueId,
+        idx: usize,
+        yes: SmallVec<[ValueId; 4]>,
+        no: SmallVec<[ValueId; 4]>,
+        pending: ValueId,
+    },
+    /// `Array.concat-map`.
+    ArrayConcatMap {
+        source: ValueId,
+        idx: usize,
+        acc: SmallVec<[ValueId; 4]>,
+    },
+    /// `Array.map-option`.
+    ArrayMapOption {
+        source: ValueId,
+        idx: usize,
+        acc: SmallVec<[ValueId; 4]>,
+    },
+    /// `Array.adjust-at`.
+    ArrayAdjustAt {
+        source: ValueId,
+        idx: usize,
+    },
     /// `Prelude.foreach` over an array; discards each invocation result.
     PreludeForeachArray {
         source: ValueId,
@@ -101,8 +173,21 @@ pub(crate) enum State {
         cmp: SortCmp,
         stack: Vec<SortFrame>,
     },
+    /// `Array.minimum` or `Array.maximum` scan using `Ord:compare`.
+    ArrayExtrema {
+        source: ValueId,
+        idx: usize,
+        best: ValueId,
+        kind: ExtremaKind,
+    },
     /// `Array.contains` scan using `Eq:eq`.
     ArrayContains {
+        source: ValueId,
+        needle: ValueId,
+        idx: usize,
+    },
+    /// `Array.elem-index` scan using `Eq:eq`.
+    ArrayElemIndex {
         source: ValueId,
         needle: ValueId,
         idx: usize,
@@ -206,6 +291,12 @@ pub(crate) enum SortFrame {
 pub(crate) enum SortCmp {
     Ord,
     Fn(ValueId),
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum ExtremaKind {
+    Min,
+    Max,
 }
 
 /// Whether to keep or discard a module HoF's result after the trampoline

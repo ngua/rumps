@@ -22,6 +22,7 @@ pub(crate) enum InstanceUse {
     Super,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 pub(crate) enum InstanceLookup {
     Found(Instance),

@@ -31,11 +31,23 @@ newtype SortPerson = { name: String, age: Int }
 
 newtype Parity = Int
 
+newtype Rank = Int
+
 class Eq for Parity {
   fun eq(a: Parity, b: Parity) -> Bool {
     let ai: Int = a
     let bi: Int = b
     ai % 2 == bi % 2
+  }
+}
+
+class Ord for Rank {
+  fun compare(a: Rank, b: Rank) -> Ordering {
+    let ai: Int = a
+    let bi: Int = b
+    if ai > bi { Ordering.Lt } else {
+      if ai == bi { Ordering.Eq } else { Ordering.Gt }
+    }
   }
 }
 
@@ -237,6 +249,218 @@ fun main() {
   let p5: Parity = 5
   write Array.contains([p2], p4)
   write Array.contains([p2], p5)
+
+  let empty-ints: Array[Int] = []
+
+  ; === Array Phase `2` additions ===
+
+  write Array.minimum(empty-ints)
+  write Array.minimum([3, 1, 4, 1, 5])
+  write Array.maximum(empty-ints)
+  write Array.maximum([3, 1, 4, 1, 5])
+
+  let r1: Rank = 1
+  let r3: Rank = 3
+  let min-rank-id: Rank = Array.minimum([r1, r3]) ?? r1
+  let max-rank-id: Rank = Array.maximum([r1, r3]) ?? r1
+  let min-rank: Int = min-rank-id
+  let max-rank: Int = max-rank-id
+  write min-rank
+  write max-rank
+
+  write Array.elem-index([10, 20, 10], 10)
+  write Array.elem-index([10, 20, 10], 99)
+  write Array.elem-index(empty-ints, 10)
+  write Array.elem-index([p5, p2], p4)
+
+  ; === Array Phase `1` additions ===
+
+  write Array.last(empty-ints)
+  write Array.last([10, 20, 30])
+
+  write Array.init(empty-ints)
+  write Array.init([42])
+  write Array.init([1, 2, 3])
+
+  write Array.uncons(empty-ints)
+  write Array.uncons([1, 2, 3])
+
+  write Array.unsnoc(empty-ints)
+  write Array.unsnoc([1, 2, 3])
+
+  write Array.take(-2, [1, 2, 3])
+  write Array.take(2, [1, 2, 3])
+  write Array.take(99, [1, 2, 3])
+
+  write Array.drop(-2, [1, 2, 3])
+  write Array.drop(2, [1, 2, 3])
+  write Array.drop(99, [1, 2, 3])
+
+  write Array.split-at(-2, [1, 2, 3])
+  write Array.split-at(2, [1, 2, 3])
+  write Array.split-at(99, [1, 2, 3])
+
+  write Array.indexed(["a", "b", "c"])
+  write Array.indexed(empty-ints)
+
+  write Array.singleton("one")
+  write Array.cons(0, [1, 2, 3])
+
+  ; === Array Phase `4` additions ===
+
+  write Array.set-at([1, 2, 3], 1, 99)
+  write Array.set-at([1, 2, 3], -1, 99)
+  write Array.set-at([1, 2, 3], 9, 99)
+
+  write Array.remove-at([1, 2, 3], 1)
+  write Array.remove-at([1, 2, 3], -1)
+  write Array.remove-at([1, 2, 3], 9)
+
+  write Array.insert-at([1, 2, 3], -1, 99)
+  write Array.insert-at([1, 2, 3], 1, 99)
+  write Array.insert-at([1, 2, 3], 9, 99)
+
+  write Array.adjust-at(x => x * 10, [1, 2, 3], 1)
+  write Array.adjust-at(x => x * 10, [1, 2, 3], -1)
+  write Array.adjust-at(x => x * 10, [1, 2, 3], 9)
+  write Array.adjust-at(x => {
+    write "adjust-at-called"
+    x * 10
+  }, empty-ints, 0)
+
+  ; === Array Phase `5` additions ===
+
+  write Array.flatten([[1, 2], [], [3, 4]])
+  let flat-empty: Array[Int] = Array.flatten([])
+  write flat-empty
+  write Array.flatten([[true], [false, true]])
+
+  let chunk-zero: Word = 0
+  let chunk-two: Word = 2
+  let chunk-big: Word = 99
+  write Array.chunks-of(chunk-zero, [1, 2, 3])
+  write Array.chunks-of(chunk-two, [1, 2, 3, 4, 5])
+  write Array.chunks-of(chunk-big, [1, 2, 3])
+  write Array.chunks-of(chunk-two, empty-ints)
+
+  let window-zero: Word = 0
+  let window-two: Word = 2
+  let window-three: Word = 3
+  let window-big: Word = 99
+  write Array.windows(window-zero, [1, 2, 3])
+  write Array.windows(window-two, [1, 2, 3, 4])
+  write Array.windows(window-three, [1, 2])
+  write Array.windows(window-big, [1, 2, 3])
+  write Array.windows(window-two, empty-ints)
+
+  write Array.replicate(-2, "x")
+  write Array.replicate(0, "x")
+  write Array.replicate(3, "x")
+  write Array.replicate(2, [1, 2])
+
+  ; === Array Phase `3` additions ===
+
+  write Array.any(x => x > 3, [1, 2, 4])
+  write Array.any(x => x > 3, [1, 2, 3])
+  write Array.any(x => x > 0, empty-ints)
+
+  write "array-any-short"
+  write Array.any(x => {
+    write x
+    x == 2
+  }, [1, 2, 3])
+
+  write Array.all(x => x > 0, [1, 2, 3])
+  write Array.all(x => x > 0, [1, 0, 2])
+  write Array.all(x => x > 0, empty-ints)
+
+  write "array-all-short"
+  write Array.all(x => {
+    write x
+    x < 2
+  }, [1, 2, 3])
+
+  write Array.find(x => x % 2 == 0, [1, 3, 4, 6])
+  write Array.find(x => x % 2 == 0, [1, 3, 5])
+  write Array.find(x => x % 2 == 0, empty-ints)
+
+  write "array-find-short"
+  write Array.find(x => {
+    write x
+    x == 2
+  }, [1, 2, 3])
+
+  write Array.find-index(x => x % 2 == 0, [1, 3, 4, 6])
+  write Array.find-index(x => x % 2 == 0, [1, 3, 5])
+  write Array.find-index(x => x % 2 == 0, empty-ints)
+
+  write "array-find-index-short"
+  write Array.find-index(x => {
+    write x
+    x == 2
+  }, [1, 2, 3])
+
+  write Array.find-indices(x => x % 2 == 0, [1, 2, 3, 4, 6])
+  write Array.find-indices(x => x % 2 == 0, [1, 3, 5])
+  write Array.find-indices(x => x % 2 == 0, empty-ints)
+
+  write Array.take-while(x => x < 4, [1, 2, 4, 3])
+  write Array.take-while(x => x < 4, [1, 2, 3])
+  write Array.take-while(x => x < 4, empty-ints)
+
+  write "array-take-while-short"
+  write Array.take-while(x => {
+    write x
+    x < 2
+  }, [1, 2, 3])
+
+  write Array.drop-while(x => x < 4, [1, 2, 4, 3])
+  write Array.drop-while(x => x < 4, [1, 2, 3])
+  write Array.drop-while(x => x < 4, empty-ints)
+
+  write "array-drop-while-short"
+  write Array.drop-while(x => {
+    write x
+    x < 2
+  }, [1, 2, 3])
+
+  write Array.span(x => x < 4, [1, 2, 4, 3])
+  write Array.span(x => x < 4, [1, 2, 3])
+  write Array.span(x => x < 4, empty-ints)
+
+  write "array-span-short"
+  write Array.span(x => {
+    write x
+    x < 2
+  }, [1, 2, 3])
+
+  write Array.break(x => x >= 4, [1, 2, 4, 3])
+  write Array.break(x => x >= 4, [1, 2, 3])
+  write Array.break(x => x >= 4, empty-ints)
+
+  write "array-break-short"
+  write Array.break(x => {
+    write x
+    x >= 2
+  }, [1, 2, 3])
+
+  write Array.partition(x => x % 2 == 0, [1, 2, 3, 4])
+  write Array.partition(x => x % 2 == 0, empty-ints)
+
+  write Array.concat-map(x => [x, x * 10], [1, 2, 3])
+  let empty-concat: Array[Int] = Array.concat-map(x => [x], empty-ints)
+  write empty-concat
+
+  write Array.map-option(
+    x => if x % 2 == 0 { Option.Some(x * 10) } else { Option.None },
+    [1, 2, 3, 4]
+  )
+  write Array.map-option(x => Option.None: Option[Int], [1, 2, 3])
+  let empty-options: Array[Int] = Array.map-option(
+    x => Option.Some(x),
+    empty-ints
+  )
+  write empty-options
 
   ; === Chained operations ===
 

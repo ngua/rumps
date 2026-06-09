@@ -41,6 +41,7 @@ use crate::{ClassId, Span};
 /// With union-find, successful unification mutates the UF in-place.
 type UnifyResult = Result<(), TypeError>;
 
+#[allow(clippy::large_enum_variant)]
 pub(super) enum InstancesLookup {
     Found(SmallVec<[Instance; 2]>),
     BlockedSelf,

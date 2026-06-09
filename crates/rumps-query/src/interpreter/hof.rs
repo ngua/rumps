@@ -38,8 +38,8 @@ use std::sync::Arc;
 pub(crate) use registry::Registry;
 use smallvec::smallvec;
 pub(crate) use state::{
-    ChainWrapper, Compare, Continuation, Eq, IterKind, MapInsertFrame,
-    ResultMode, SortCmp, SortFrame, State, Step,
+    ChainWrapper, Compare, Continuation, Eq, ExtremaKind, IterKind,
+    MapInsertFrame, ResultMode, SortCmp, SortFrame, State, Step,
 };
 
 use super::class::ClassCtx;
@@ -216,6 +216,56 @@ impl ClassCtx<'_> {
                     }))
                 }
             }
+            State::ArrayAny { source, idx } => {
+                self.resume_array_any(cont.callee, source, idx, result)
+            }
+            State::ArrayAll { source, idx } => {
+                self.resume_array_all(cont.callee, source, idx, result)
+            }
+            State::ArrayFind {
+                source,
+                idx,
+                pending,
+            } => self.resume_array_find(
+                cont.callee,
+                source,
+                idx,
+                pending,
+                result,
+            ),
+            State::ArrayFindIndex { source, idx } => {
+                self.resume_array_find_index(cont.callee, source, idx, result)
+            }
+            State::ArrayFindIndices { source, idx, acc } => self
+                .resume_array_find_indices(
+                    cont.callee,
+                    source,
+                    idx,
+                    acc,
+                    result,
+                ),
+            State::ArrayTakeWhile { source, idx } => {
+                self.resume_array_take_while(cont.callee, source, idx, result)
+            }
+            State::ArrayDropWhile { source, idx } => {
+                self.resume_array_drop_while(cont.callee, source, idx, result)
+            }
+            State::ArraySpan { source, idx } => {
+                self.resume_array_span(cont.callee, source, idx, result)
+            }
+            State::ArrayBreak { source, idx } => {
+                self.resume_array_break(cont.callee, source, idx, result)
+            }
+            state @ State::ArrayPartition { .. } => {
+                self.resume_array_partition(cont.callee, state, result)
+            }
+            State::ArrayConcatMap { source, idx, acc } => self
+                .resume_array_concat_map(cont.callee, source, idx, acc, result),
+            State::ArrayMapOption { source, idx, acc } => self
+                .resume_array_map_option(cont.callee, source, idx, acc, result),
+            State::ArrayAdjustAt { source, idx } => {
+                self.resume_array_adjust_at(source, idx, result)
+            }
             State::PreludeForeachArray { source, idx } => {
                 let next_idx = idx + 1;
                 match self.arena.payload(source) {
@@ -239,8 +289,14 @@ impl ClassCtx<'_> {
             State::ArraySortBy { source, cmp, stack } => {
                 self.resume_sort_by(cmp, source, stack, Some(result))
             }
+            State::ArrayExtrema { .. } => {
+                invariant!("Array extrema state resumes `Ord:compare`")
+            }
             State::ArrayContains { .. } => {
                 invariant!("Array.contains state resumes `Eq:eq`")
+            }
+            State::ArrayElemIndex { .. } => {
+                invariant!("Array.elem-index state resumes `Eq:eq`")
             }
             State::ResultMapErr { ok_ty } => {
                 let err_ty =
@@ -384,6 +440,12 @@ impl ClassCtx<'_> {
             State::ArraySortBy { source, cmp, stack } => {
                 self.resume_sort_by(cmp, source, stack, Some(result))
             }
+            State::ArrayExtrema {
+                source,
+                idx,
+                best,
+                kind,
+            } => self.resume_extrema(source, idx, best, kind, Some(result)),
             State::MapModuleEntriesInsert {
                 map,
                 entries,
@@ -413,6 +475,11 @@ impl ClassCtx<'_> {
                 needle,
                 idx,
             } => self.resume_contains(source, needle, idx, Some(result)),
+            State::ArrayElemIndex {
+                source,
+                needle,
+                idx,
+            } => self.resume_elem_index(source, needle, idx, Some(result)),
             _ => invariant!("equality continuation state"),
         }
     }

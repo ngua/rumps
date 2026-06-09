@@ -68,6 +68,29 @@ impl ClassCtx<'_> {
         self.arena.add_typed(v, meta, self.span)
     }
 
+    pub(crate) fn option_some(&mut self, v: ValueId) -> ValueId {
+        let elem = self
+            .arena
+            .meta(v)
+            .map(|m| m.ty)
+            .unwrap_or_else(|| RuntimeTyId::from(TyArena::UNIT));
+        let ty = self.runtime_types.option(elem);
+        self.arena.add_typed(
+            Payload::some(v),
+            self.runtime_types.meta(ty),
+            self.span,
+        )
+    }
+
+    pub(crate) fn option_none(&mut self) -> ValueId {
+        let ty = self.runtime_types.option(RuntimeTyId::from(TyArena::UNIT));
+        self.arena.add_typed(
+            Payload::none(),
+            self.runtime_types.meta(ty),
+            self.span,
+        )
+    }
+
     fn value_base_type(&self, id: ValueId) -> Option<TypeId> {
         self.arena.meta(id).and_then(|meta| {
             self.runtime_types
