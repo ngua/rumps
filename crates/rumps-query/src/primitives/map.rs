@@ -32,9 +32,10 @@ impl Map {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
             let entries = ctx
                 .arena
-                .get_map(args[0])
+                .get_map(a)
                 .unwrap_or_else(|| typechecked!("Map.length", "Map"));
 
             Ok(ctx.arena.add_typed(
@@ -54,9 +55,10 @@ impl Map {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
             let entries = ctx
                 .arena
-                .get_map(args[0])
+                .get_map(a)
                 .unwrap_or_else(|| typechecked!("Map.keys", "Map"));
 
             Ok(ctx.add(Payload::Array(Arc::new(entries.keys()))))
@@ -72,9 +74,10 @@ impl Map {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
             let entries = ctx
                 .arena
-                .get_map(args[0])
+                .get_map(a)
                 .unwrap_or_else(|| typechecked!("Map.values", "Map"));
 
             Ok(ctx.add(Payload::Array(Arc::new(entries.values()))))
@@ -90,9 +93,10 @@ impl Map {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
             let entries = ctx
                 .arena
-                .get_map(args[0])
+                .get_map(a)
                 .unwrap_or_else(|| typechecked!("Map.entries", "Map"));
 
             let entry_pairs = entries.entries();

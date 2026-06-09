@@ -17,12 +17,14 @@ impl Opt {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let opt = ctx.arena.value(args[0]).cloned().ok_or_else(|| {
+            let a = args[0];
+            let b = args[1];
+            let val = ctx.arena.value(a).cloned().ok_or_else(|| {
                 ctx.runtime_error("Option.unwrap-or: invalid value")
             })?;
-            let opt_ty = ctx.runtime_types.meta_type_id(&opt);
+            let ty = ctx.runtime_types.meta_type_id(&val);
 
-            match (opt_ty, opt.payload) {
+            match (ty, val.payload) {
                 (Some(TypeId::OPTION), Payload::Variant { tag: 1, vals }) => {
                     // Option.Some(v) - return the inner value
                     vals.first().copied().ok_or_else(|| {
@@ -33,7 +35,7 @@ impl Opt {
                 }
                 (Some(TypeId::OPTION), Payload::Variant { tag: 0, .. }) => {
                     // Option.None - return the default
-                    Ok(args[1])
+                    Ok(b)
                 }
                 _ => typechecked!("Option.unwrap-or", "Option"),
             }
@@ -49,13 +51,14 @@ impl Opt {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let opt =
-                ctx.arena.value(args[0]).cloned().unwrap_or_else(|| {
+            let a = args[0];
+            let val =
+                ctx.arena.value(a).cloned().unwrap_or_else(|| {
                     typechecked!("Option.flatten", "valid arg")
                 });
-            let opt_ty = ctx.runtime_types.meta_type_id(&opt);
+            let ty = ctx.runtime_types.meta_type_id(&val);
 
-            match (opt_ty, opt.payload) {
+            match (ty, val.payload) {
                 (Some(TypeId::OPTION), Payload::Variant { tag: 1, vals }) => {
                     // Option.Some(inner) - return the inner Option
                     Ok(*vals.first().unwrap_or_else(|| {
@@ -78,13 +81,15 @@ impl Opt {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let opt =
-                ctx.arena.value(args[1]).cloned().unwrap_or_else(|| {
+            let a = args[0];
+            let b = args[1];
+            let val =
+                ctx.arena.value(b).cloned().unwrap_or_else(|| {
                     typechecked!("Option.note", "valid arg")
                 });
-            let opt_ty = ctx.runtime_types.meta_type_id(&opt);
+            let ty = ctx.runtime_types.meta_type_id(&val);
 
-            match (opt_ty, opt.payload) {
+            match (ty, val.payload) {
                 (Some(TypeId::OPTION), Payload::Variant { tag: 1, vals }) => {
                     // Option.Some(v) -> Result.Ok(v)
                     let inner = *vals.first().unwrap_or_else(|| {
@@ -94,7 +99,7 @@ impl Opt {
                 }
                 (Some(TypeId::OPTION), Payload::Variant { tag: 0, .. }) => {
                     // Option.None -> Result.Err(e)
-                    Ok(ctx.result_err(args[0]))
+                    Ok(ctx.result_err(a))
                 }
                 _ => typechecked!("Option.note", "Option"),
             }

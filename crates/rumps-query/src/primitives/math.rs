@@ -21,9 +21,10 @@ impl Math {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
             let v = ctx
                 .arena
-                .payload(args[0])
+                .payload(a)
                 .ok_or_else(|| ctx.runtime_error("Math.abs: invalid value"))?;
 
             let result = match v {
@@ -45,10 +46,9 @@ impl Math {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let result = match (
-                ctx.arena.payload(args[0]),
-                ctx.arena.payload(args[1]),
-            ) {
+            let a = args[0];
+            let b = args[1];
+            let result = match (ctx.arena.payload(a), ctx.arena.payload(b)) {
                 (Some(Payload::Int(x)), Some(Payload::Int(y))) => {
                     Payload::Int((*x).min(*y))
                 }
@@ -73,10 +73,9 @@ impl Math {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let result = match (
-                ctx.arena.payload(args[0]),
-                ctx.arena.payload(args[1]),
-            ) {
+            let a = args[0];
+            let b = args[1];
+            let result = match (ctx.arena.payload(a), ctx.arena.payload(b)) {
                 (Some(Payload::Int(x)), Some(Payload::Int(y))) => {
                     Payload::Int((*x).max(*y))
                 }
@@ -101,9 +100,9 @@ impl Math {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let n = Self::to_float(ctx, args[0]);
+            let a = Self::to_float(ctx, args[0]);
             Ok(ctx.arena.add_typed(
-                Payload::Int(n.floor() as i64),
+                Payload::Int(a.floor() as i64),
                 ctx.runtime_types.meta_int(),
                 ctx.span,
             ))
@@ -118,9 +117,9 @@ impl Math {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let n = Self::to_float(ctx, args[0]);
+            let a = Self::to_float(ctx, args[0]);
             Ok(ctx.arena.add_typed(
-                Payload::Int(n.ceil() as i64),
+                Payload::Int(a.ceil() as i64),
                 ctx.runtime_types.meta_int(),
                 ctx.span,
             ))
@@ -135,9 +134,9 @@ impl Math {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let n = Self::to_float(ctx, args[0]);
+            let a = Self::to_float(ctx, args[0]);
             Ok(ctx.arena.add_typed(
-                Payload::Int(n.round() as i64),
+                Payload::Int(a.round() as i64),
                 ctx.runtime_types.meta_int(),
                 ctx.span,
             ))
@@ -152,9 +151,9 @@ impl Math {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let n = Self::to_float(ctx, args[0]);
+            let a = Self::to_float(ctx, args[0]);
             Ok(ctx.arena.add_typed(
-                Payload::Float(OrderedFloat(n.sqrt())),
+                Payload::Float(OrderedFloat(a.sqrt())),
                 ctx.runtime_types.meta_float(),
                 ctx.span,
             ))
@@ -169,9 +168,9 @@ impl Math {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let n = Self::to_float(ctx, args[0]);
+            let a = Self::to_float(ctx, args[0]);
             Ok(ctx.arena.add_typed(
-                Payload::Float(OrderedFloat(n.ln())),
+                Payload::Float(OrderedFloat(a.ln())),
                 ctx.runtime_types.meta_float(),
                 ctx.span,
             ))

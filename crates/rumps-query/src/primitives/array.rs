@@ -20,12 +20,14 @@ impl Array {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
+            let b = args[1];
             let mut e = ctx
                 .arena
-                .take_array(args[0])
+                .take_array(a)
                 .unwrap_or_else(|| typechecked!("Array.push", "Array"));
 
-            e.push(args[1]);
+            e.push(b);
             Ok(ctx.add(Payload::Array(Arc::new(e))))
         })
     }
@@ -39,9 +41,10 @@ impl Array {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
             let mut e = ctx
                 .arena
-                .take_array(args[0])
+                .take_array(a)
                 .unwrap_or_else(|| typechecked!("Array.pop", "Array"));
 
             e.pop();
@@ -58,9 +61,10 @@ impl Array {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
             let elems = ctx
                 .arena
-                .get_array(args[0])
+                .get_array(a)
                 .unwrap_or_else(|| typechecked!("Array.head", "Array"));
 
             Ok(match elems.first() {
@@ -79,9 +83,10 @@ impl Array {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
             let elems = ctx
                 .arena
-                .get_array(args[0])
+                .get_array(a)
                 .unwrap_or_else(|| typechecked!("Array.tail", "Array"));
 
             let tail: SmallVec<[ValueId; 4]> =
@@ -99,14 +104,17 @@ impl Array {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
+            let b = args[1];
+            let c = args[2];
             let elems = ctx
                 .arena
-                .get_array(args[0])
+                .get_array(a)
                 .unwrap_or_else(|| typechecked!("Array.slice", "Array"));
 
             let start = ctx
                 .arena
-                .payload(args[1])
+                .payload(b)
                 .and_then(|v| match v {
                     Payload::Int(n) => Some(*n),
                     _ => None,
@@ -117,7 +125,7 @@ impl Array {
 
             let end = ctx
                 .arena
-                .payload(args[2])
+                .payload(c)
                 .and_then(|v| match v {
                     Payload::Int(n) => Some(*n),
                     _ => None,
@@ -146,14 +154,16 @@ impl Array {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
+            let b = args[1];
             let mut combined = ctx
                 .arena
-                .take_array(args[0])
+                .take_array(a)
                 .unwrap_or_else(|| typechecked!("Array.concat", "Array"));
 
             let elems_b = ctx
                 .arena
-                .get_array(args[1])
+                .get_array(b)
                 .unwrap_or_else(|| typechecked!("Array.concat", "Array"));
 
             // Type checker guarantees both arrays have matching element types
@@ -170,14 +180,16 @@ impl Array {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
+            let b = args[1];
             let elems_a = ctx
                 .arena
-                .get_array(args[0])
+                .get_array(a)
                 .unwrap_or_else(|| typechecked!("Array.zip", "Array"));
 
             let elems_b = ctx
                 .arena
-                .get_array(args[1])
+                .get_array(b)
                 .unwrap_or_else(|| typechecked!("Array.zip", "Array"));
 
             let zipped: SmallVec<[(ValueId, ValueId); 4]> = elems_a
@@ -206,9 +218,10 @@ impl Array {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
             let pairs = ctx
                 .arena
-                .get_array(args[0])
+                .get_array(a)
                 .unwrap_or_else(|| typechecked!("Array.unzip", "Array"));
 
             // Map pairs to (a, b) and unzip
@@ -247,14 +260,15 @@ impl Array {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let sep = args[0];
+            let a = args[0];
+            let b = args[1];
             let elems = ctx
                 .arena
-                .get_array(args[1])
+                .get_array(b)
                 .unwrap_or_else(|| typechecked!("Array.intersperse", "Array"));
 
             let result: SmallVec<[ValueId; 4]> =
-                Itertools::intersperse(elems.iter().copied(), sep).collect();
+                Itertools::intersperse(elems.iter().copied(), a).collect();
 
             Ok(ctx.add(Payload::Array(Arc::new(result))))
         })

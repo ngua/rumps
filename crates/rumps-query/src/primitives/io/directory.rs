@@ -72,7 +72,8 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let path_str = Self::get_path_str(ctx, args[0]);
+            let a = args[0];
+            let path_str = Self::get_path_str(ctx, a);
             let mut entries =
                 tokio::fs::read_dir(&path_str).await.map_err(|e| {
                     ctx.runtime_error(format!("Io.Directory.list-dir: {e}"))
@@ -110,7 +111,8 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let obj = ctx.arena.payload(args[0]).cloned().ok_or_else(|| {
+            let a = args[0];
+            let obj = ctx.arena.payload(a).cloned().ok_or_else(|| {
                 ctx.runtime_error("Io.Directory.move-path: invalid object")
             })?;
 
@@ -159,7 +161,8 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let obj = ctx.arena.payload(args[0]).cloned().ok_or_else(|| {
+            let a = args[0];
+            let obj = ctx.arena.payload(a).cloned().ok_or_else(|| {
                 ctx.runtime_error("Io.Directory.copy-path: invalid object")
             })?;
 
@@ -208,7 +211,8 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let path_str = Self::get_path_str(ctx, args[0]);
+            let a = args[0];
+            let path_str = Self::get_path_str(ctx, a);
 
             // Try removing as file first, then as directory
             let result = tokio::fs::remove_file(&path_str).await;
@@ -240,7 +244,8 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let path_str = Self::get_path_str(ctx, args[0]);
+            let a = args[0];
+            let path_str = Self::get_path_str(ctx, a);
 
             // Try removing as file first
             let result = tokio::fs::remove_file(&path_str).await;
@@ -276,7 +281,8 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let path_str = Self::get_path_str(ctx, args[0]);
+            let a = args[0];
+            let path_str = Self::get_path_str(ctx, a);
             let exists =
                 tokio::fs::try_exists(&path_str).await.unwrap_or(false);
             Ok(ctx.arena.add_typed(
@@ -295,7 +301,8 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let path_str = Self::get_path_str(ctx, args[0]);
+            let a = args[0];
+            let path_str = Self::get_path_str(ctx, a);
             let is_file = tokio::fs::metadata(&path_str)
                 .await
                 .map(|m| m.is_file())
@@ -316,7 +323,8 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let path_str = Self::get_path_str(ctx, args[0]);
+            let a = args[0];
+            let path_str = Self::get_path_str(ctx, a);
             let is_dir = tokio::fs::metadata(&path_str)
                 .await
                 .map(|m| m.is_dir())
@@ -337,7 +345,8 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let path_str = Self::get_path_str(ctx, args[0]);
+            let a = args[0];
+            let path_str = Self::get_path_str(ctx, a);
             let contents =
                 tokio::fs::read_to_string(&path_str).await.map_err(|e| {
                     ctx.runtime_error(format!("Io.Directory.read-file: {e}"))
@@ -359,7 +368,8 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let obj = ctx.arena.payload(args[0]).cloned().ok_or_else(|| {
+            let a = args[0];
+            let obj = ctx.arena.payload(a).cloned().ok_or_else(|| {
                 ctx.runtime_error("Io.Directory.write-file: invalid object")
             })?;
 
@@ -416,7 +426,8 @@ impl Directory {
         Box::pin(async move {
             use tokio::io::AsyncWriteExt;
 
-            let obj = ctx.arena.payload(args[0]).cloned().ok_or_else(|| {
+            let a = args[0];
+            let obj = ctx.arena.payload(a).cloned().ok_or_else(|| {
                 ctx.runtime_error("Io.Directory.append-file: invalid object")
             })?;
 
@@ -480,7 +491,8 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let path_str = Self::get_path_str(ctx, args[0]);
+            let a = args[0];
+            let path_str = Self::get_path_str(ctx, a);
             tokio::fs::create_dir(&path_str).await.map_err(|e| {
                 ctx.runtime_error(format!("Io.Directory.create-dir: {e}"))
             })?;
@@ -500,7 +512,8 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let path_str = Self::get_path_str(ctx, args[0]);
+            let a = args[0];
+            let path_str = Self::get_path_str(ctx, a);
             tokio::fs::create_dir_all(&path_str).await.map_err(|e| {
                 ctx.runtime_error(format!("Io.Directory.create-dir-all: {e}"))
             })?;
@@ -541,7 +554,8 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let path_str = Self::get_path_str(ctx, args[0]);
+            let a = args[0];
+            let path_str = Self::get_path_str(ctx, a);
             env::set_current_dir(&path_str).map_err(|e| {
                 ctx.runtime_error(format!("Io.Directory.set-pwd: {e}"))
             })?;
@@ -561,10 +575,10 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let name_sid =
-                ctx.arena.get_string_id(args[0]).unwrap_or_else(|| {
-                    typechecked!("Io.Directory.get-env", "String")
-                });
+            let a = args[0];
+            let name_sid = ctx.arena.get_string_id(a).unwrap_or_else(|| {
+                typechecked!("Io.Directory.get-env", "String")
+            });
             let name = Self::valid_str(ctx.arena, name_sid);
 
             match env::var(name) {
@@ -590,7 +604,8 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let obj = ctx.arena.payload(args[0]).cloned().ok_or_else(|| {
+            let a = args[0];
+            let obj = ctx.arena.payload(a).cloned().ok_or_else(|| {
                 ctx.runtime_error("Io.Directory.set-env: invalid object")
             })?;
 
@@ -649,7 +664,8 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let path_str = Self::get_path_str(ctx, args[0]);
+            let a = args[0];
+            let path_str = Self::get_path_str(ctx, a);
             let canonical =
                 tokio::fs::canonicalize(&path_str).await.map_err(|e| {
                     ctx.runtime_error(format!("Io.Directory.canonicalize: {e}"))
@@ -671,7 +687,8 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let path_str = Self::get_path_str(ctx, args[0]);
+            let a = args[0];
+            let path_str = Self::get_path_str(ctx, a);
             let path = Path::new(&path_str);
 
             match path.parent() {
@@ -697,7 +714,8 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let path_str = Self::get_path_str(ctx, args[0]);
+            let a = args[0];
+            let path_str = Self::get_path_str(ctx, a);
             let path = Path::new(&path_str);
             let name_opt =
                 path.file_name().map(|n| n.to_string_lossy().to_string());
@@ -725,7 +743,8 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let path_str = Self::get_path_str(ctx, args[0]);
+            let a = args[0];
+            let path_str = Self::get_path_str(ctx, a);
             let path = Path::new(&path_str);
             let ext_opt =
                 path.extension().map(|e| e.to_string_lossy().to_string());
@@ -753,12 +772,13 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let base_str = Self::get_path_str(ctx, args[0]);
+            let a = args[0];
+            let b = args[1];
+            let base_str = Self::get_path_str(ctx, a);
 
-            let parts =
-                ctx.arena.payload(args[1]).cloned().ok_or_else(|| {
-                    ctx.runtime_error("Io.Directory.join: invalid array")
-                })?;
+            let parts = ctx.arena.payload(b).cloned().ok_or_else(|| {
+                ctx.runtime_error("Io.Directory.join: invalid array")
+            })?;
 
             // Collect all parts as owned strings first
             let part_strs: Vec<String> = match parts {
@@ -818,10 +838,12 @@ impl Directory {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let path_str = Self::get_path_str(ctx, args[0]);
+            let a = args[0];
+            let b = args[1];
+            let path_str = Self::get_path_str(ctx, a);
             let ext = ctx
                 .arena
-                .get_string_id(args[1])
+                .get_string_id(b)
                 .and_then(|sid| ctx.arena.get_str(sid))
                 .map(String::from)
                 .ok_or_else(|| {

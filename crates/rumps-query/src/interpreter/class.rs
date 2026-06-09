@@ -2344,12 +2344,8 @@ impl Mappable {
         ctx: &mut ClassCtx<'_>,
         args: &[ValueId],
     ) -> Result<hof::Step> {
-        let fn_id = *args
-            .first()
-            .unwrap_or_else(|| typechecked!("Mappable:map", "2 args"));
-        let src = *args
-            .get(1)
-            .unwrap_or_else(|| typechecked!("Mappable:map", "2 args"));
+        let f = args[0];
+        let a = args[1];
 
         // Extract data to avoid borrow conflicts
         enum Kind {
@@ -2362,8 +2358,8 @@ impl Mappable {
             ResultErr(Payload),
             Other,
         }
-        let src_ty = ctx.value_base_type(src);
-        let kind = match ctx.arena.payload(src) {
+        let ty = ctx.value_base_type(a);
+        let kind = match ctx.arena.payload(a) {
             Some(Payload::Array(elems)) if elems.is_empty() => Kind::EmptyArray,
             Some(Payload::Array(elems)) => Kind::Array(
                 *elems
@@ -2383,14 +2379,14 @@ impl Mappable {
             Some(Payload::Variant {
                 tag: 1,
                 vals: payloads,
-            }) if src_ty == Some(TypeId::OPTION) => Kind::OptionSome(
+            }) if ty == Some(TypeId::OPTION) => Kind::OptionSome(
                 *payloads
                     .first()
                     .unwrap_or_else(|| invariant!("Some has payload")),
             ),
             // Option.None -> return None
             Some(Payload::Variant { tag: 0, .. })
-                if src_ty == Some(TypeId::OPTION) =>
+                if ty == Some(TypeId::OPTION) =>
             {
                 Kind::OptionNone
             }
@@ -2398,7 +2394,7 @@ impl Mappable {
             Some(Payload::Variant {
                 tag: 0,
                 vals: payloads,
-            }) if src_ty == Some(TypeId::RESULT) => {
+            }) if ty == Some(TypeId::RESULT) => {
                 let inner = *payloads
                     .first()
                     .unwrap_or_else(|| invariant!("Ok has payload"));
@@ -2406,7 +2402,7 @@ impl Mappable {
             }
             // Result.Err(e) -> return unchanged
             Some(v @ Payload::Variant { tag: 1, .. })
-                if src_ty == Some(TypeId::RESULT) =>
+                if ty == Some(TypeId::RESULT) =>
             {
                 Kind::ResultErr(v.clone())
             }
@@ -2418,26 +2414,23 @@ impl Mappable {
                 Ok(hof::Step::Done(Payload::Array(Arc::new(SmallVec::new()))))
             }
             Kind::Array(first) => Ok(hof::Step::Invoke(hof::Continuation {
-                callee: fn_id,
+                callee: f,
                 args: smallvec![first],
                 state: hof::State::MapIter {
-                    kind: hof::IterKind::Array {
-                        source: src,
-                        idx: 0,
-                    },
+                    kind: hof::IterKind::Array { source: a, idx: 0 },
                     acc: SmallVec::new(),
                 },
             })),
             Kind::Tuple(first, second) => {
                 Ok(hof::Step::Invoke(hof::Continuation {
-                    callee: fn_id,
+                    callee: f,
                     args: smallvec![second],
                     state: hof::State::MapTuple { first },
                 }))
             }
             Kind::OptionSome(inner) => {
                 Ok(hof::Step::Invoke(hof::Continuation {
-                    callee: fn_id,
+                    callee: f,
                     args: smallvec![inner],
                     state: hof::State::MapContainer {
                         ctor_ty: TypeId::OPTION,
@@ -2448,7 +2441,7 @@ impl Mappable {
             Kind::OptionNone => Ok(hof::Step::Done(Payload::none())),
             Kind::ResultOk(inner) => {
                 Ok(hof::Step::Invoke(hof::Continuation {
-                    callee: fn_id,
+                    callee: f,
                     args: smallvec![inner],
                     state: hof::State::MapContainer {
                         ctor_ty: TypeId::RESULT,
@@ -2471,14 +2464,10 @@ impl Filterable {
         ctx: &mut ClassCtx<'_>,
         args: &[ValueId],
     ) -> Result<hof::Step> {
-        let pred_id = *args
-            .first()
-            .unwrap_or_else(|| typechecked!("Filterable:filter", "2 args"));
-        let src = *args
-            .get(1)
-            .unwrap_or_else(|| typechecked!("Filterable:filter", "2 args"));
+        let f = args[0];
+        let a = args[1];
 
-        match ctx.arena.payload(src) {
+        match ctx.arena.payload(a) {
             Some(Payload::Array(elems)) if elems.is_empty() => {
                 Ok(hof::Step::Done(Payload::Array(Arc::new(SmallVec::new()))))
             }
@@ -2487,10 +2476,10 @@ impl Filterable {
                     .first()
                     .unwrap_or_else(|| invariant!("Array has first elem"));
                 Ok(hof::Step::Invoke(hof::Continuation {
-                    callee: pred_id,
+                    callee: f,
                     args: smallvec![first],
                     state: hof::State::FilterArray {
-                        source: src,
+                        source: a,
                         idx: 0,
                         acc: SmallVec::new(),
                         pending: first,
@@ -2511,15 +2500,9 @@ impl Foldable {
         ctx: &mut ClassCtx<'_>,
         args: &[ValueId],
     ) -> Result<hof::Step> {
-        let fn_id = *args
-            .first()
-            .unwrap_or_else(|| typechecked!("Foldable:fold", "3 args"));
-        let init = *args
-            .get(1)
-            .unwrap_or_else(|| typechecked!("Foldable:fold", "3 args"));
-        let src = *args
-            .get(2)
-            .unwrap_or_else(|| typechecked!("Foldable:fold", "3 args"));
+        let f = args[0];
+        let a = args[1];
+        let b = args[2];
 
         // Extract data before second match to satisfy borrow checker.
         enum Kind {
@@ -2527,22 +2510,20 @@ impl Foldable {
             Array(ValueId),
             Other,
         }
-        let kind = match ctx.arena.payload(src) {
+        let kind = match ctx.arena.payload(b) {
             Some(Payload::Array(elems)) if elems.is_empty() => Kind::EmptyArray,
             Some(Payload::Array(elems)) => Kind::Array(elems[0]),
             _ => Kind::Other,
         };
         match kind {
-            Kind::EmptyArray => {
-                Ok(hof::Step::DoneValue(init))
-            }
+            Kind::EmptyArray => Ok(hof::Step::DoneValue(a)),
             Kind::Array(first) => Ok(hof::Step::Invoke(hof::Continuation {
-                callee: fn_id,
-                args: smallvec![init, first],
+                callee: f,
+                args: smallvec![a, first],
                 state: hof::State::ReduceArray {
-                    source: src,
+                    source: b,
                     idx: 0,
-                    acc: init,
+                    acc: a,
                 },
             })),
             Kind::Other => typechecked!("Foldable:fold", "Array"),
@@ -2598,18 +2579,14 @@ impl Chainable {
         ctx: &mut ClassCtx<'_>,
         args: &[ValueId],
     ) -> Result<hof::Step> {
-        let src = *args
-            .first()
-            .unwrap_or_else(|| typechecked!("Chainable:chain", "2 args"));
-        let fn_id = *args
-            .get(1)
-            .unwrap_or_else(|| typechecked!("Chainable:chain", "2 args"));
+        let a = args[0];
+        let f = args[1];
 
-        let src_ty = ctx.value_base_type(src);
-        match ctx.arena.payload(src) {
+        let ty = ctx.value_base_type(a);
+        match ctx.arena.payload(a) {
             // Option.None -> None
             Some(Payload::Variant { tag: 0, .. })
-                if src_ty == Some(TypeId::OPTION) =>
+                if ty == Some(TypeId::OPTION) =>
             {
                 Ok(hof::Step::Done(Payload::none()))
             }
@@ -2617,13 +2594,13 @@ impl Chainable {
             Some(Payload::Variant {
                 tag: 1,
                 vals: payloads,
-            }) if src_ty == Some(TypeId::OPTION) => {
+            }) if ty == Some(TypeId::OPTION) => {
                 let inner = payloads
                     .first()
                     .copied()
                     .unwrap_or_else(|| invariant!("Some has payload"));
                 Ok(hof::Step::Invoke(hof::Continuation {
-                    callee: fn_id,
+                    callee: f,
                     args: smallvec![inner],
                     state: hof::State::Chain {
                         wrapper: hof::ChainWrapper::OptionSome,
@@ -2634,13 +2611,13 @@ impl Chainable {
             Some(Payload::Variant {
                 tag: 0,
                 vals: payloads,
-            }) if src_ty == Some(TypeId::RESULT) => {
+            }) if ty == Some(TypeId::RESULT) => {
                 let inner = payloads
                     .first()
                     .copied()
                     .unwrap_or_else(|| invariant!("Ok has payload"));
                 Ok(hof::Step::Invoke(hof::Continuation {
-                    callee: fn_id,
+                    callee: f,
                     args: smallvec![inner],
                     state: hof::State::Chain {
                         wrapper: hof::ChainWrapper::ResultOk,
@@ -2651,7 +2628,7 @@ impl Chainable {
             Some(Payload::Variant {
                 tag: 1,
                 vals: payloads,
-            }) if src_ty == Some(TypeId::RESULT) => {
+            }) if ty == Some(TypeId::RESULT) => {
                 let err = payloads
                     .first()
                     .copied()
@@ -2674,15 +2651,9 @@ impl Bimappable {
         ctx: &mut ClassCtx<'_>,
         args: &[ValueId],
     ) -> Result<hof::Step> {
-        let f = *args
-            .first()
-            .unwrap_or_else(|| typechecked!("Bimappable:bimap", "3 args"));
-        let g = *args
-            .get(1)
-            .unwrap_or_else(|| typechecked!("Bimappable:bimap", "3 args"));
-        let src = *args
-            .get(2)
-            .unwrap_or_else(|| typechecked!("Bimappable:bimap", "3 args"));
+        let f = args[0];
+        let g = args[1];
+        let a = args[2];
 
         enum Kind {
             ResultOk(ValueId),
@@ -2691,12 +2662,12 @@ impl Bimappable {
             Other,
         }
 
-        let src_ty = ctx.value_base_type(src);
-        let kind = match ctx.arena.payload(src) {
+        let ty = ctx.value_base_type(a);
+        let kind = match ctx.arena.payload(a) {
             Some(Payload::Variant {
                 tag: 0,
                 vals: payloads,
-            }) if src_ty == Some(TypeId::RESULT) => Kind::ResultOk(
+            }) if ty == Some(TypeId::RESULT) => Kind::ResultOk(
                 *payloads
                     .first()
                     .unwrap_or_else(|| invariant!("Ok has payload")),
@@ -2704,7 +2675,7 @@ impl Bimappable {
             Some(Payload::Variant {
                 tag: 1,
                 vals: payloads,
-            }) if src_ty == Some(TypeId::RESULT) => Kind::ResultErr(
+            }) if ty == Some(TypeId::RESULT) => Kind::ResultErr(
                 *payloads
                     .first()
                     .unwrap_or_else(|| invariant!("Err has payload")),

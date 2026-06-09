@@ -64,15 +64,11 @@ impl Fns {
     }
 
     fn map_entries(ctx: &mut ClassCtx<'_>, args: &[ValueId]) -> Result<Step> {
-        let f = *args
-            .first()
-            .unwrap_or_else(|| typechecked!("Map.map-entries", "2 args"));
-        let m = *args
-            .get(1)
-            .unwrap_or_else(|| typechecked!("Map.map-entries", "2 args"));
+        let f = args[0];
+        let a = args[1];
         let es = ctx
             .arena
-            .get_map(m)
+            .get_map(a)
             .map(Map::entries)
             .unwrap_or_else(|| typechecked!("Map.map-entries", "Map"));
 
@@ -96,13 +92,11 @@ impl Fns {
         with_key: bool,
         label: &'static str,
     ) -> Result<Step> {
-        let f = *args
-            .first()
-            .unwrap_or_else(|| typechecked!(label, "2 args"));
-        let m = *args.get(1).unwrap_or_else(|| typechecked!(label, "2 args"));
+        let f = args[0];
+        let a = args[1];
         let es = ctx
             .arena
-            .get_map(m)
+            .get_map(a)
             .map(Map::entries)
             .unwrap_or_else(|| typechecked!(label, "Map"));
 
@@ -111,7 +105,7 @@ impl Fns {
                 callee: f,
                 args: Self::args(e, with_key),
                 state: State::MapModuleMap {
-                    source: m,
+                    source: a,
                     entries: es,
                     idx: 0,
                     acc: SmallVec::new(),
@@ -128,13 +122,11 @@ impl Fns {
         with_key: bool,
         label: &'static str,
     ) -> Result<Step> {
-        let f = *args
-            .first()
-            .unwrap_or_else(|| typechecked!(label, "2 args"));
-        let m = *args.get(1).unwrap_or_else(|| typechecked!(label, "2 args"));
+        let f = args[0];
+        let a = args[1];
         let es = ctx
             .arena
-            .get_map(m)
+            .get_map(a)
             .map(Map::entries)
             .unwrap_or_else(|| typechecked!(label, "Map"));
 
@@ -143,7 +135,7 @@ impl Fns {
                 callee: f,
                 args: Self::args(e, with_key),
                 state: State::MapModuleForeach {
-                    source: m,
+                    source: a,
                     entries: es,
                     idx: 0,
                     with_key,
@@ -159,29 +151,26 @@ impl Fns {
         with_key: bool,
         label: &'static str,
     ) -> Result<Step> {
-        let f = *args
-            .first()
-            .unwrap_or_else(|| typechecked!(label, "3 args"));
-        let init =
-            *args.get(1).unwrap_or_else(|| typechecked!(label, "3 args"));
-        let m = *args.get(2).unwrap_or_else(|| typechecked!(label, "3 args"));
+        let f = args[0];
+        let a = args[1];
+        let b = args[2];
         let es = ctx
             .arena
-            .get_map(m)
+            .get_map(b)
             .map(Map::entries)
             .unwrap_or_else(|| typechecked!(label, "Map"));
 
         match es.first().copied() {
             Some(e) => Ok(Step::Invoke(Continuation {
                 callee: f,
-                args: Self::fold_args(init, e, with_key),
+                args: Self::fold_args(a, e, with_key),
                 state: State::MapModuleFold {
                     entries: es,
                     idx: 0,
                     with_key,
                 },
             })),
-            None => Ok(Step::DoneValue(init)),
+            None => Ok(Step::DoneValue(a)),
         }
     }
 

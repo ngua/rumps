@@ -31,17 +31,15 @@ impl Fns {
 
     /// `Array.sort(arr)`; sorts array using `Ord:compare`.
     fn sort(ctx: &mut ClassCtx<'_>, args: &[ValueId]) -> Result<Step> {
-        let arr = *args
-            .first()
-            .unwrap_or_else(|| typechecked!("Array.sort", "1 arg"));
+        let a = args[0];
 
-        match ctx.arena.payload(arr) {
+        match ctx.arena.payload(a) {
             Some(Payload::Array(elems)) if elems.len() <= 1 => {
                 Ok(Step::Done(Payload::Array(elems.clone())))
             }
             Some(Payload::Array(elems)) => ctx.resume_sort_by(
                 SortCmp::Ord,
-                arr,
+                a,
                 vec![SortFrame::Sort {
                     lo: 0,
                     hi: elems.len(),
@@ -54,47 +52,33 @@ impl Fns {
 
     /// `Array.contains(arr, needle)`; scans with `Eq:eq`.
     fn contains(ctx: &mut ClassCtx<'_>, args: &[ValueId]) -> Result<Step> {
-        let arr = *args
-            .first()
-            .unwrap_or_else(|| typechecked!("Array.contains", "2 args"));
-        let needle = *args
-            .get(1)
-            .unwrap_or_else(|| typechecked!("Array.contains", "2 args"));
+        let a = args[0];
+        let b = args[1];
 
-        match ctx.arena.payload(arr) {
+        match ctx.arena.payload(a) {
             Some(Payload::Array(elems)) if elems.is_empty() => {
                 Ok(Step::Done(Payload::Bool(false)))
             }
-            Some(Payload::Array(_)) => {
-                ctx.resume_contains(arr, needle, 0, None)
-            }
+            Some(Payload::Array(_)) => ctx.resume_contains(a, b, 0, None),
             _ => typechecked!("Array.contains", "Array"),
         }
     }
 
-    /// `Array.zip-with(fn, arr_a, arr_b)`; zips two arrays applying fn to pairs.
+    /// `Array.zip-with(f, a, b)`; zips two arrays applying `f` to pairs.
     fn zip_with(ctx: &mut ClassCtx<'_>, args: &[ValueId]) -> Result<Step> {
-        let fn_id = *args
-            .first()
-            .unwrap_or_else(|| typechecked!("Array.zip-with", "3 args"));
-        let arr_a = *args
-            .get(1)
-            .unwrap_or_else(|| typechecked!("Array.zip-with", "3 args"));
-        let arr_b = *args
-            .get(2)
-            .unwrap_or_else(|| typechecked!("Array.zip-with", "3 args"));
+        let f = args[0];
+        let a = args[1];
+        let b = args[2];
 
         enum Kind {
             Empty,
             NonEmpty(ValueId, ValueId), // first_a, first_b
             Other,
         }
-        let kind = match (ctx.arena.payload(arr_a), ctx.arena.payload(arr_b)) {
+        let kind = match (ctx.arena.payload(a), ctx.arena.payload(b)) {
             (Some(Payload::Array(a)), Some(Payload::Array(b))) => {
                 match (a.first(), b.first()) {
-                    (Some(&first_a), Some(&first_b)) => {
-                        Kind::NonEmpty(first_a, first_b)
-                    }
+                    (Some(&x), Some(&y)) => Kind::NonEmpty(x, y),
                     _ => Kind::Empty,
                 }
             }
@@ -105,34 +89,28 @@ impl Fns {
             Kind::Empty => {
                 Ok(Step::Done(Payload::Array(Arc::new(SmallVec::new()))))
             }
-            Kind::NonEmpty(first_a, first_b) => {
-                Ok(Step::Invoke(Continuation {
-                    callee: fn_id,
-                    args: smallvec![first_a, first_b],
-                    state: State::ArrayZipWith {
-                        arr_a,
-                        arr_b,
-                        idx: 0,
-                        acc: SmallVec::new(),
-                    },
-                }))
-            }
+            Kind::NonEmpty(x, y) => Ok(Step::Invoke(Continuation {
+                callee: f,
+                args: smallvec![x, y],
+                state: State::ArrayZipWith {
+                    arr_a: a,
+                    arr_b: b,
+                    idx: 0,
+                    acc: SmallVec::new(),
+                },
+            })),
             Kind::Other => typechecked!("Array.zip-with", "Arrays"),
         }
     }
 
-    /// `Array.sort-by(cmp_fn, arr)`; sorts array using comparison function.
+    /// `Array.sort-by(f, a)`; sorts array using comparison function.
     ///
     /// Uses stack-based merge sort to avoid recursion.
     fn sort_by(ctx: &mut ClassCtx<'_>, args: &[ValueId]) -> Result<Step> {
-        let cmp_fn = *args
-            .first()
-            .unwrap_or_else(|| typechecked!("Array.sort-by", "2 args"));
-        let arr = *args
-            .get(1)
-            .unwrap_or_else(|| typechecked!("Array.sort-by", "2 args"));
+        let f = args[0];
+        let a = args[1];
 
-        match ctx.arena.payload(arr) {
+        match ctx.arena.payload(a) {
             Some(Payload::Array(elems)) if elems.len() <= 1 => {
                 // Already sorted
                 Ok(Step::Done(Payload::Array(elems.clone())))
@@ -141,8 +119,8 @@ impl Fns {
                 let len = elems.len();
                 // Kick off merge sort via resume_sort_by with no comparison result
                 ctx.resume_sort_by(
-                    SortCmp::Fn(cmp_fn),
-                    arr,
+                    SortCmp::Fn(f),
+                    a,
                     vec![SortFrame::Sort { lo: 0, hi: len }],
                     None,
                 )

@@ -56,16 +56,17 @@ impl Time {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let fmt_sid =
-                ctx.arena.get_string_id(args[0]).unwrap_or_else(|| {
-                    typechecked!("Time.parse", "String (format)")
-                });
+            let a = args[0];
+            let b = args[1];
+            let fmt_sid = ctx.arena.get_string_id(a).unwrap_or_else(|| {
+                typechecked!("Time.parse", "String (format)")
+            });
             let fmt = ctx
                 .arena
                 .get_str(fmt_sid)
                 .ok_or_else(|| ctx.runtime_error("invalid format string"))?;
 
-            let s_sid = ctx.arena.get_string_id(args[1]).unwrap_or_else(|| {
+            let s_sid = ctx.arena.get_string_id(b).unwrap_or_else(|| {
                 typechecked!("Time.parse", "String (input)")
             });
             let s = ctx
@@ -105,16 +106,17 @@ impl Time {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let fmt_sid =
-                ctx.arena.get_string_id(args[0]).unwrap_or_else(|| {
-                    typechecked!("Time.format", "String (format)")
-                });
+            let a = args[0];
+            let b = args[1];
+            let fmt_sid = ctx.arena.get_string_id(a).unwrap_or_else(|| {
+                typechecked!("Time.format", "String (format)")
+            });
             let fmt = ctx
                 .arena
                 .get_str(fmt_sid)
                 .ok_or_else(|| ctx.runtime_error("invalid format string"))?;
 
-            let t = Self::get_time(ctx, args[1], "Time");
+            let t = Self::get_time(ctx, b, "Time");
 
             let formatted = t.format(fmt).to_string();
             let sid = ctx.arena.intern(&formatted);
@@ -134,8 +136,10 @@ impl Time {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let t = Self::get_time(ctx, args[0], "Time");
-            let secs = Self::get_float(ctx, args[1]);
+            let a = args[0];
+            let b = args[1];
+            let t = Self::get_time(ctx, a, "Time");
+            let secs = Self::get_float(ctx, b);
 
             let duration =
                 chrono::Duration::milliseconds((secs * 1000.0) as i64);
@@ -175,7 +179,8 @@ impl Time {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let t = Self::get_time(ctx, args[0], "Time");
+            let a = args[0];
+            let t = Self::get_time(ctx, a, "Time");
             Ok(ctx.arena.add_typed(
                 Payload::Int(t.year() as i64),
                 ctx.runtime_types.meta_int(),
@@ -190,7 +195,8 @@ impl Time {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let t = Self::get_time(ctx, args[0], "Time");
+            let a = args[0];
+            let t = Self::get_time(ctx, a, "Time");
             Ok(ctx.arena.add_typed(
                 Payload::Int(t.month() as i64),
                 ctx.runtime_types.meta_int(),
@@ -205,7 +211,8 @@ impl Time {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let t = Self::get_time(ctx, args[0], "Time");
+            let a = args[0];
+            let t = Self::get_time(ctx, a, "Time");
             Ok(ctx.arena.add_typed(
                 Payload::Int(t.day() as i64),
                 ctx.runtime_types.meta_int(),
@@ -220,7 +227,8 @@ impl Time {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let t = Self::get_time(ctx, args[0], "Time");
+            let a = args[0];
+            let t = Self::get_time(ctx, a, "Time");
             Ok(ctx.arena.add_typed(
                 Payload::Int(t.hour() as i64),
                 ctx.runtime_types.meta_int(),
@@ -235,7 +243,8 @@ impl Time {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let t = Self::get_time(ctx, args[0], "Time");
+            let a = args[0];
+            let t = Self::get_time(ctx, a, "Time");
             Ok(ctx.arena.add_typed(
                 Payload::Int(t.minute() as i64),
                 ctx.runtime_types.meta_int(),
@@ -250,7 +259,8 @@ impl Time {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let t = Self::get_time(ctx, args[0], "Time");
+            let a = args[0];
+            let t = Self::get_time(ctx, a, "Time");
             Ok(ctx.arena.add_typed(
                 Payload::Int(t.second() as i64),
                 ctx.runtime_types.meta_int(),
@@ -267,9 +277,10 @@ impl Time {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
             let us = ctx
                 .arena
-                .payload(args[0])
+                .payload(a)
                 .and_then(|v| match v {
                     Payload::Int(n) => Some(*n),
                     _ => None,

@@ -39,10 +39,10 @@ impl Random {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let min = Self::to_float(ctx, args[0]);
-            let max = Self::to_float(ctx, args[1]);
+            let a = Self::to_float(ctx, args[0]);
+            let b = Self::to_float(ctx, args[1]);
 
-            let n: f64 = rand::thread_rng().gen_range(min..max);
+            let n: f64 = rand::thread_rng().gen_range(a..b);
             Ok(ctx.arena.add_typed(
                 Payload::Float(OrderedFloat(n)),
                 ctx.runtime_types.meta_float(),
@@ -59,10 +59,10 @@ impl Random {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let min = Self::to_int(ctx, args[0]);
-            let max = Self::to_int(ctx, args[1]);
+            let a = Self::to_int(ctx, args[0]);
+            let b = Self::to_int(ctx, args[1]);
 
-            let n: i64 = rand::thread_rng().gen_range(min..=max);
+            let n: i64 = rand::thread_rng().gen_range(a..=b);
             Ok(ctx.arena.add_typed(
                 Payload::Int(n),
                 ctx.runtime_types.meta_int(),
@@ -96,9 +96,10 @@ impl Random {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
             let elems = ctx
                 .arena
-                .get_array(args[0])
+                .get_array(a)
                 .unwrap_or_else(|| typechecked!("Random.choice", "Array"));
 
             let result = elems
@@ -119,9 +120,10 @@ impl Random {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
             let mut e = ctx
                 .arena
-                .take_array(args[0])
+                .take_array(a)
                 .unwrap_or_else(|| typechecked!("Random.shuffle", "Array"));
 
             e.shuffle(&mut rand::thread_rng());
@@ -138,12 +140,14 @@ impl Random {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
+            let b = args[1];
             let elems = ctx
                 .arena
-                .get_array(args[0])
+                .get_array(a)
                 .unwrap_or_else(|| typechecked!("Random.sample", "Array"));
 
-            let n = Self::to_int(ctx, args[1]) as usize;
+            let n = Self::to_int(ctx, b) as usize;
 
             if n > elems.len() {
                 let msg_str = format!(

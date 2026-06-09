@@ -52,9 +52,10 @@ impl Io {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
             let sid = ctx
                 .arena
-                .get_string_id(args[0])
+                .get_string_id(a)
                 .unwrap_or_else(|| typechecked!("Io.print", "String"));
             let s = Self::valid_str(ctx.arena, sid).to_owned();
 
@@ -75,9 +76,10 @@ impl Io {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
             let sid = ctx
                 .arena
-                .get_string_id(args[0])
+                .get_string_id(a)
                 .unwrap_or_else(|| typechecked!("Io.println", "String"));
             let s = Self::valid_str(ctx.arena, sid).to_owned();
 
@@ -98,9 +100,10 @@ impl Io {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
             let sid = ctx
                 .arena
-                .get_string_id(args[0])
+                .get_string_id(a)
                 .unwrap_or_else(|| typechecked!("Io.eprint", "String"));
             let s = Self::valid_str(ctx.arena, sid).to_owned();
 
@@ -121,9 +124,10 @@ impl Io {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
             let sid = ctx
                 .arena
-                .get_string_id(args[0])
+                .get_string_id(a)
                 .unwrap_or_else(|| typechecked!("Io.eprintln", "String"));
             let s = Self::valid_str(ctx.arena, sid).to_owned();
 

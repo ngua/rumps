@@ -17,12 +17,14 @@ impl Res {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let res = ctx.arena.value(args[0]).cloned().ok_or_else(|| {
+            let a = args[0];
+            let b = args[1];
+            let val = ctx.arena.value(a).cloned().ok_or_else(|| {
                 ctx.runtime_error("Result.unwrap-or: invalid value")
             })?;
-            let res_ty = ctx.runtime_types.meta_type_id(&res);
+            let ty = ctx.runtime_types.meta_type_id(&val);
 
-            match (res_ty, res.payload) {
+            match (ty, val.payload) {
                 (Some(TypeId::RESULT), Payload::Variant { tag: 0, vals }) => {
                     // Result.Ok(v) - return the inner value
                     vals.first().copied().ok_or_else(|| {
@@ -31,7 +33,7 @@ impl Res {
                 }
                 (Some(TypeId::RESULT), Payload::Variant { tag: 1, .. }) => {
                     // Result.Err - return the default
-                    Ok(args[1])
+                    Ok(b)
                 }
                 _ => typechecked!("Result.unwrap-or", "Result"),
             }
@@ -47,13 +49,14 @@ impl Res {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let res =
-                ctx.arena.value(args[0]).cloned().unwrap_or_else(|| {
+            let a = args[0];
+            let val =
+                ctx.arena.value(a).cloned().unwrap_or_else(|| {
                     typechecked!("Result.flatten", "valid arg")
                 });
-            let res_ty = ctx.runtime_types.meta_type_id(&res);
+            let ty = ctx.runtime_types.meta_type_id(&val);
 
-            match (res_ty, res.payload) {
+            match (ty, val.payload) {
                 (Some(TypeId::RESULT), Payload::Variant { tag: 0, vals }) => {
                     // Result.Ok(inner) - return the inner Result
                     Ok(*vals.first().unwrap_or_else(|| {
@@ -61,7 +64,7 @@ impl Res {
                     }))
                 }
                 (Some(TypeId::RESULT), Payload::Variant { tag: 1, .. }) => {
-                    Ok(args[0])
+                    Ok(a)
                 }
                 _ => typechecked!("Result.flatten", "Result"),
             }
@@ -76,13 +79,14 @@ impl Res {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let res =
-                ctx.arena.value(args[0]).cloned().unwrap_or_else(|| {
+            let a = args[0];
+            let val =
+                ctx.arena.value(a).cloned().unwrap_or_else(|| {
                     typechecked!("Result.hush", "valid arg")
                 });
-            let res_ty = ctx.runtime_types.meta_type_id(&res);
+            let ty = ctx.runtime_types.meta_type_id(&val);
 
-            match (res_ty, res.payload) {
+            match (ty, val.payload) {
                 (Some(TypeId::RESULT), Payload::Variant { tag: 0, vals }) => {
                     // Result.Ok(v) -> Option.Some(v)
                     let inner = *vals.first().unwrap_or_else(|| {

@@ -83,9 +83,10 @@ impl Range {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let range = args
-                .first()
-                .and_then(|id| ctx.arena.payload(*id))
+            let a = args[0];
+            let range = ctx
+                .arena
+                .payload(a)
                 .unwrap_or_else(|| typechecked!("Range.collect", "Range"));
 
             let (start, end, inclusive) = match range {

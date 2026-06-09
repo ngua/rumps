@@ -19,9 +19,9 @@ impl Trig {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let n = Math::to_float(ctx, args[0]);
+            let a = Math::to_float(ctx, args[0]);
             Ok(ctx.arena.add_typed(
-                Payload::Float(OrderedFloat(n.sin())),
+                Payload::Float(OrderedFloat(a.sin())),
                 ctx.runtime_types.meta_float(),
                 ctx.span,
             ))
@@ -36,9 +36,9 @@ impl Trig {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let n = Math::to_float(ctx, args[0]);
+            let a = Math::to_float(ctx, args[0]);
             Ok(ctx.arena.add_typed(
-                Payload::Float(OrderedFloat(n.cos())),
+                Payload::Float(OrderedFloat(a.cos())),
                 ctx.runtime_types.meta_float(),
                 ctx.span,
             ))
@@ -53,9 +53,9 @@ impl Trig {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let n = Math::to_float(ctx, args[0]);
+            let a = Math::to_float(ctx, args[0]);
             Ok(ctx.arena.add_typed(
-                Payload::Float(OrderedFloat(n.tan())),
+                Payload::Float(OrderedFloat(a.tan())),
                 ctx.runtime_types.meta_float(),
                 ctx.span,
             ))
@@ -70,9 +70,9 @@ impl Trig {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let n = Math::to_float(ctx, args[0]);
+            let a = Math::to_float(ctx, args[0]);
             Ok(ctx.arena.add_typed(
-                Payload::Float(OrderedFloat(n.asin())),
+                Payload::Float(OrderedFloat(a.asin())),
                 ctx.runtime_types.meta_float(),
                 ctx.span,
             ))
@@ -87,9 +87,9 @@ impl Trig {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let n = Math::to_float(ctx, args[0]);
+            let a = Math::to_float(ctx, args[0]);
             Ok(ctx.arena.add_typed(
-                Payload::Float(OrderedFloat(n.acos())),
+                Payload::Float(OrderedFloat(a.acos())),
                 ctx.runtime_types.meta_float(),
                 ctx.span,
             ))
@@ -104,9 +104,9 @@ impl Trig {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let n = Math::to_float(ctx, args[0]);
+            let a = Math::to_float(ctx, args[0]);
             Ok(ctx.arena.add_typed(
-                Payload::Float(OrderedFloat(n.atan())),
+                Payload::Float(OrderedFloat(a.atan())),
                 ctx.runtime_types.meta_float(),
                 ctx.span,
             ))
@@ -122,10 +122,10 @@ impl Trig {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
-            let y = Math::to_float(ctx, args[0]);
-            let x = Math::to_float(ctx, args[1]);
+            let a = Math::to_float(ctx, args[0]);
+            let b = Math::to_float(ctx, args[1]);
             Ok(ctx.arena.add_typed(
-                Payload::Float(OrderedFloat(y.atan2(x))),
+                Payload::Float(OrderedFloat(a.atan2(b))),
                 ctx.runtime_types.meta_float(),
                 ctx.span,
             ))

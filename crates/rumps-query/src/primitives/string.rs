@@ -22,9 +22,10 @@ impl Str {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
             let sid = ctx
                 .arena
-                .get_string_id(args[0])
+                .get_string_id(a)
                 .unwrap_or_else(|| typechecked!("String.length", "String"));
 
             let s = Self::valid_str(ctx.arena, sid);
@@ -46,9 +47,10 @@ impl Str {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
             let sid = ctx
                 .arena
-                .get_string_id(args[0])
+                .get_string_id(a)
                 .unwrap_or_else(|| typechecked!("String.upper", "String"));
 
             let s = Self::valid_str(ctx.arena, sid);
@@ -71,9 +73,10 @@ impl Str {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
             let sid = ctx
                 .arena
-                .get_string_id(args[0])
+                .get_string_id(a)
                 .unwrap_or_else(|| typechecked!("String.lower", "String"));
 
             let s = Self::valid_str(ctx.arena, sid);
@@ -96,9 +99,10 @@ impl Str {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
             let sid = ctx
                 .arena
-                .get_string_id(args[0])
+                .get_string_id(a)
                 .unwrap_or_else(|| typechecked!("String.trim", "String"));
 
             // Copy to owned String to release borrow before interning
@@ -121,12 +125,14 @@ impl Str {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
+            let b = args[1];
             let s_sid = ctx
                 .arena
-                .get_string_id(args[0])
+                .get_string_id(a)
                 .unwrap_or_else(|| typechecked!("String.split", "String"));
 
-            let d_sid = ctx.arena.get_string_id(args[1]).unwrap_or_else(|| {
+            let d_sid = ctx.arena.get_string_id(b).unwrap_or_else(|| {
                 typechecked!("String.split", "delimiter must be String")
             });
 
@@ -159,12 +165,14 @@ impl Str {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
+            let b = args[1];
             let elems = ctx
                 .arena
-                .take_array(args[0])
+                .take_array(a)
                 .unwrap_or_else(|| typechecked!("String.join", "Array"));
 
-            let d_sid = ctx.arena.get_string_id(args[1]).unwrap_or_else(|| {
+            let d_sid = ctx.arena.get_string_id(b).unwrap_or_else(|| {
                 typechecked!("String.join", "delimiter must be String")
             });
 
@@ -205,14 +213,17 @@ impl Str {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
+            let b = args[1];
+            let c = args[2];
             let sid = ctx
                 .arena
-                .get_string_id(args[0])
+                .get_string_id(a)
                 .unwrap_or_else(|| typechecked!("String.slice", "String"));
 
             let start = ctx
                 .arena
-                .payload(args[1])
+                .payload(b)
                 .and_then(|v| match v {
                     Payload::Int(n) => Some(*n),
                     _ => None,
@@ -223,7 +234,7 @@ impl Str {
 
             let end = ctx
                 .arena
-                .payload(args[2])
+                .payload(c)
                 .and_then(|v| match v {
                     Payload::Int(n) => Some(*n),
                     _ => None,
@@ -260,15 +271,16 @@ impl Str {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
+            let b = args[1];
             let s_sid = ctx
                 .arena
-                .get_string_id(args[0])
+                .get_string_id(a)
                 .unwrap_or_else(|| typechecked!("String.contains", "String"));
 
-            let sub_sid =
-                ctx.arena.get_string_id(args[1]).unwrap_or_else(|| {
-                    typechecked!("String.contains", "substring must be String")
-                });
+            let sub_sid = ctx.arena.get_string_id(b).unwrap_or_else(|| {
+                typechecked!("String.contains", "substring must be String")
+            });
 
             let s = Self::valid_str(ctx.arena, s_sid);
             let sub = Self::valid_str(ctx.arena, sub_sid);
@@ -289,20 +301,21 @@ impl Str {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
+            let b = args[1];
+            let c = args[2];
             let s_sid = ctx
                 .arena
-                .get_string_id(args[0])
+                .get_string_id(a)
                 .unwrap_or_else(|| typechecked!("String.replace", "String"));
 
-            let old_sid =
-                ctx.arena.get_string_id(args[1]).unwrap_or_else(|| {
-                    typechecked!("String.replace", "pattern must be String")
-                });
+            let old_sid = ctx.arena.get_string_id(b).unwrap_or_else(|| {
+                typechecked!("String.replace", "pattern must be String")
+            });
 
-            let new_sid =
-                ctx.arena.get_string_id(args[2]).unwrap_or_else(|| {
-                    typechecked!("String.replace", "replacement must be String")
-                });
+            let new_sid = ctx.arena.get_string_id(c).unwrap_or_else(|| {
+                typechecked!("String.replace", "replacement must be String")
+            });
 
             let s = Self::valid_str(ctx.arena, s_sid);
             let old = Self::valid_str(ctx.arena, old_sid);
@@ -332,9 +345,10 @@ impl Str {
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
         Box::pin(async move {
+            let a = args[0];
             let sid = ctx
                 .arena
-                .get_string_id(args[0])
+                .get_string_id(a)
                 .unwrap_or_else(|| typechecked!("String.escape", "String"));
 
             let s = Self::valid_str(ctx.arena, sid);

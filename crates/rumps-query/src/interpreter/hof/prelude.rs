@@ -16,7 +16,7 @@ impl Fns {
         reg.register(prelude, foreach, Self::foreach, ResultMode::Discard);
     }
 
-    /// `Prelude.foreach(fn, src)` - invokes `fn` for effects and returns `Unit`.
+    /// `Prelude.foreach(fn, src)`; invokes `fn` for effects and returns `Unit`.
     fn foreach(ctx: &mut ClassCtx<'_>, args: &[ValueId]) -> Result<Step> {
         enum Kind {
             Empty,
@@ -25,25 +25,21 @@ impl Fns {
             Other,
         }
 
-        let fn_id = *args
-            .first()
-            .unwrap_or_else(|| typechecked!("Prelude.foreach", "2 args"));
-        let src = *args
-            .get(1)
-            .unwrap_or_else(|| typechecked!("Prelude.foreach", "2 args"));
+        let f = args[0];
+        let a = args[1];
 
-        let src_ty = ctx.arena.meta(src).and_then(|m| {
+        let ty = ctx.arena.meta(a).and_then(|m| {
             ctx.runtime_types
                 .to_type_id(m.repr)
                 .or_else(|| ctx.runtime_types.to_type_id(m.ty))
         });
-        let kind = match ctx.arena.payload(src) {
+        let kind = match ctx.arena.payload(a) {
             Some(Payload::Array(elems)) => match elems.first() {
                 Some(first) => Kind::Array(*first),
                 None => Kind::Empty,
             },
             Some(Payload::Variant { tag: 1, vals })
-                if src_ty.is_some_and(|ty| ty == TypeId::OPTION) =>
+                if ty.is_some_and(|t| t == TypeId::OPTION) =>
             {
                 Kind::Once(
                     *vals
@@ -52,12 +48,12 @@ impl Fns {
                 )
             }
             Some(Payload::Variant { tag: 0, .. })
-                if src_ty.is_some_and(|ty| ty == TypeId::OPTION) =>
+                if ty.is_some_and(|t| t == TypeId::OPTION) =>
             {
                 Kind::Empty
             }
             Some(Payload::Variant { tag: 0, vals })
-                if src_ty.is_some_and(|ty| ty == TypeId::RESULT) =>
+                if ty.is_some_and(|t| t == TypeId::RESULT) =>
             {
                 Kind::Once(
                     *vals
@@ -66,7 +62,7 @@ impl Fns {
                 )
             }
             Some(Payload::Variant { tag: 1, .. })
-                if src_ty.is_some_and(|ty| ty == TypeId::RESULT) =>
+                if ty.is_some_and(|t| t == TypeId::RESULT) =>
             {
                 Kind::Empty
             }
@@ -76,15 +72,12 @@ impl Fns {
         match kind {
             Kind::Empty => Ok(Step::Done(Payload::Unit)),
             Kind::Array(first) => Ok(Step::Invoke(Continuation {
-                callee: fn_id,
+                callee: f,
                 args: smallvec![first],
-                state: State::PreludeForeachArray {
-                    source: src,
-                    idx: 0,
-                },
+                state: State::PreludeForeachArray { source: a, idx: 0 },
             })),
             Kind::Once(inner) => Ok(Step::Invoke(Continuation {
-                callee: fn_id,
+                callee: f,
                 args: smallvec![inner],
                 state: State::PreludeForeachOnce,
             })),

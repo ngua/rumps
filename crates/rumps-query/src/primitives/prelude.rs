@@ -14,6 +14,9 @@ impl Prelude {
         _ctx: &'a mut PrimCtx<'a>,
         args: SmallVec<[ValueId; 4]>,
     ) -> PrimResult<'a> {
-        Box::pin(async move { Ok(args[0]) })
+        Box::pin(async move {
+            let a = args[0];
+            Ok(a)
+        })
     }
 }
