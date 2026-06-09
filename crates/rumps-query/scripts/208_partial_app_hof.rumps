@@ -14,9 +14,9 @@ fun main() {
   write Filterable:filter(gt(2), [1, 2, 3, 4, 5])
   ; Expected: [3, 4, 5]
 
-  ; Binary named function passed directly to `reduce`; no partial app
+  ; Binary named function passed directly to `fold`; no partial app
   ; needed, but this verifies first-class use still works
-  write Foldable:reduce(add, 0, [1, 2, 3, 4, 5])
+  write Foldable:fold(add, 0, [1, 2, 3, 4, 5])
   ; Expected: 15
 
   ; Stored partial passed through pipe into a HoF
@@ -24,8 +24,8 @@ fun main() {
   write [1, 2, 3] |> Mappable:map(add10)
   ; Expected: [11, 12, 13]
 
-  ; Partial passed to `reduce`; `add` is already binary, so no partial,
+  ; Partial passed to `fold`; `add` is already binary, so no partial,
   ; but `add3` partial works as binary reducer
-  write Foldable:reduce(add, 100, [1, 2, 3])
+  write Foldable:fold(add, 100, [1, 2, 3])
   ; Expected: 106
 }

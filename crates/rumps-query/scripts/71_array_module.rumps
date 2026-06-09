@@ -1,5 +1,5 @@
 ; Array module functions
-; Tests Mappable:map, Filterable:filter, Foldable:reduce, foreach
+; Tests Mappable:map, Filterable:filter, Foldable:fold, foreach
 
 fun square(n: Int) -> Int { n * n }
 
@@ -48,7 +48,7 @@ fun iter-len(i: Array[Int]) -> Int {
 }
 
 fun iter-sum(i: Array[Int]) -> Int {
-  Foldable:reduce((acc, x) => acc + x, 0, i)
+  Foldable:fold((acc, x) => acc + x, 0, i)
 }
 
 fun main() {
@@ -86,25 +86,25 @@ fun main() {
   let none-kept = Filterable:filter(x => false, [1, 2, 3])
   write none-kept  ; []
 
-  ; Foldable:reduce with sum
-  let sum = Foldable:reduce((acc, x) => acc + x, 0, nums)
+  ; Foldable:fold with sum
+  let sum = Foldable:fold((acc, x) => acc + x, 0, nums)
   write sum  ; 15
 
-  ; Foldable:reduce on empty array returns initial value
-  let empty-sum = Foldable:reduce((acc, x) => acc + x, 100, empty)
+  ; Foldable:fold on empty array returns initial value
+  let empty-sum = Foldable:fold((acc, x) => acc + x, 100, empty)
   write empty-sum  ; 100
 
-  ; Foldable:reduce with string concatenation
+  ; Foldable:fold with string concatenation
   let words = ["hello", " ", "world"]
-  let combined = Foldable:reduce((acc, s) => "{acc}{s}", "", words)
+  let combined = Foldable:fold((acc, s) => "{acc}{s}", "", words)
   write combined  ; "hello world"
 
-  ; Foldable:reduce with named function
-  let total = Foldable:reduce(add, 0, [1, 2, 3, 4])
+  ; Foldable:fold with named function
+  let total = Foldable:fold(add, 0, [1, 2, 3, 4])
   write total  ; 10
 
   ; Combining Array functions
-  let result = Foldable:reduce(
+  let result = Foldable:fold(
     (acc, x) => acc + x,
     0,
     Mappable:map(x => x * x, Filterable:filter(x => x % 2 == 1, [1, 2, 3, 4, 5]))

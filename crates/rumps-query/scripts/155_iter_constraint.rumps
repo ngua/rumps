@@ -27,9 +27,9 @@ fun main() {
   write "Evens from array: {Filterable:filter(x => x % 2 == 0, arr)}"
   write "Evens from range: {Filterable:filter(x => x % 2 == 0, Range.collect(1 ..= 10))}"
 
-  ; `Foldable:reduce` on `Array` and collected `Range`
-  write "Sum of array: {Foldable:reduce((a, x) => a + x, 0, arr)}"
-  write "Sum of range: {Foldable:reduce((a, x) => a + x, 0, Range.collect(1 ..= 10))}"
+  ; `Foldable:fold` on `Array` and collected `Range`
+  write "Sum of array: {Foldable:fold((a, x) => a + x, 0, arr)}"
+  write "Sum of range: {Foldable:fold((a, x) => a + x, 0, Range.collect(1 ..= 10))}"
 
   write "Generic sum (array): {sum-iter(arr)}"
   write "Generic sum (range): {sum-iter(Range.collect(1 ..= 10))}"
@@ -74,7 +74,7 @@ fun main() {
 
 ; Generic functions with array and `Iterable` constraints
 fun sum-iter(i: Array[Int]) -> Int {
-  Foldable:reduce((a, x) => a + x, 0, i)
+  Foldable:fold((a, x) => a + x, 0, i)
 }
 
 fun count-iter[T: Iterable](i: T) -> Int {

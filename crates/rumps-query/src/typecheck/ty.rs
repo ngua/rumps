@@ -335,7 +335,7 @@ impl ClassRegistry {
                 assoc_types: smallvec![],
                 supers: smallvec![],
                 methods: vec![(
-                    s("reduce"),
+                    s("fold"),
                     MethodSpec::Standard(scheme!(
                         arena,
                         forall T, U, F: Foldable. ((U, T) -> U, U, F[T]) -> U

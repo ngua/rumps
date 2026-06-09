@@ -26,7 +26,7 @@
 //! - `Indexable`: `index`, `get`
 //! - `Mappable`: `map`
 //! - `Filterable`: `filter`
-//! - `Foldable`: `reduce`
+//! - `Foldable`: `fold`
 //! - `Iterable`: `length`, `reverse`
 //! - `Bimappable`: `bimap`
 //!
@@ -405,8 +405,8 @@ impl ClassMethods {
         );
         self.register(
             ClassId::FOLDABLE,
-            i.intern("reduce"),
-            MethodFn::Hof(Foldable::reduce),
+            i.intern("fold"),
+            MethodFn::Hof(Foldable::fold),
         );
         self.register(
             ClassId::ITERABLE,
@@ -2504,24 +2504,24 @@ impl Filterable {
     }
 }
 
-/// `Foldable` class: `reduce` method.
+/// `Foldable` class: `fold` method.
 pub(crate) struct Foldable;
 
 impl Foldable {
-    /// Start `Foldable:reduce`; returns first invocation.
-    pub(crate) fn reduce(
+    /// Start `Foldable:fold`; returns first invocation.
+    pub(crate) fn fold(
         ctx: &mut ClassCtx<'_>,
         args: &[ValueId],
     ) -> Result<hof::Step> {
         let fn_id = *args
             .first()
-            .unwrap_or_else(|| typechecked!("Foldable:reduce", "3 args"));
+            .unwrap_or_else(|| typechecked!("Foldable:fold", "3 args"));
         let init = *args
             .get(1)
-            .unwrap_or_else(|| typechecked!("Foldable:reduce", "3 args"));
+            .unwrap_or_else(|| typechecked!("Foldable:fold", "3 args"));
         let src = *args
             .get(2)
-            .unwrap_or_else(|| typechecked!("Foldable:reduce", "3 args"));
+            .unwrap_or_else(|| typechecked!("Foldable:fold", "3 args"));
 
         // Extract data before second match to satisfy borrow checker.
         enum Kind {
@@ -2577,7 +2577,7 @@ impl Foldable {
                     },
                 }))
             }
-            Kind::Other => typechecked!("Foldable:reduce", "Array or Range"),
+            Kind::Other => typechecked!("Foldable:fold", "Array or Range"),
         }
     }
 }

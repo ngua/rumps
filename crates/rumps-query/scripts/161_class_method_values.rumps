@@ -14,8 +14,8 @@ fun main() {
   ; Pass method references to higher-order functions
   let nums = [1, 2, 3, 4, 5]
 
-  ; Use `Additive:add` in reduce
-  let sum = Foldable:reduce(add-fn, 0, nums)
+  ; Use `Additive:add` in `fold`
+  let sum = Foldable:fold(add-fn, 0, nums)
   write "Sum via add-fn: {sum}"
 
   ; Pipe with class methods (multi-arg wrapped in closures)
@@ -41,10 +41,10 @@ fun main() {
   ; Pipe into HoF class methods
   let piped-map = nums |> (a => Mappable:map(x => x * 2, a))
   let piped-filter = nums |> (a => Filterable:filter(x => x > 2, a))
-  let piped-reduce = nums |> (a => Foldable:reduce((acc, x) => acc + x, 0, a))
+  let piped-fold = nums |> (a => Foldable:fold((acc, x) => acc + x, 0, a))
   write "Piped map: {piped-map}"
   write "Piped filter: {piped-filter}"
-  write "Piped reduce: {piped-reduce}"
+  write "Piped fold: {piped-fold}"
 
   ; Iterable:length with pipe (unary; no wrapper needed)
   write "Piped length: {nums |> Iterable:length}"
@@ -76,7 +76,7 @@ fun main() {
   let result = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     |> (a => Filterable:filter(x => x % 2 == 0, a))
     |> (a => Mappable:map(x => x * x, a))
-    |> (a => Foldable:reduce((acc, x) => acc + x, 0, a))
+    |> (a => Foldable:fold((acc, x) => acc + x, 0, a))
   write "Complex pipeline (sum of squares of evens): {result}"
 
   ; Method reference stored and used later
@@ -95,13 +95,13 @@ fun main() {
   ; Store method reference and use in higher-order context
   let arr-concat-fn = Concatable:concat
   let arrs = [[1], [2, 3], [4, 5, 6]]
-  let flattened = Foldable:reduce(arr-concat-fn, [], arrs)
+  let flattened = Foldable:fold(arr-concat-fn, [], arrs)
   write "Flattened arrays: {flattened}"
 
   ; Same with strings
   let str-concat-fn = Concatable:concat
   let words = ["hello", " ", "world"]
-  let joined = Foldable:reduce(str-concat-fn, "", words)
+  let joined = Foldable:fold(str-concat-fn, "", words)
   write "Joined words: {joined}"
 
   ; BitLike operations

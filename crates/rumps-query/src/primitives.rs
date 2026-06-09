@@ -14,7 +14,7 @@
 //!
 //! Iterable operations include simple class methods such as
 //! `Iterable:length` and `Iterable:reverse`, plus higher-kinded class methods
-//! such as `Mappable:map`, `Filterable:filter`, and `Foldable:reduce`.
+//! such as `Mappable:map`, `Filterable:filter`, and `Foldable:fold`.
 //! `Range.collect` materializes a `Range` into an `Array`. `foreach` is a
 //! standalone `Prelude` function.
 //!

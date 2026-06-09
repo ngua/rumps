@@ -28,8 +28,8 @@ fun main() {
   let evens = :filter(x => x % 2 == 0, nums)
   write "filter: {evens}"
 
-  let sum = :reduce((acc, x) => acc + x, 0, nums)
-  write "reduce: {sum}"
+  let sum = :fold((acc, x) => acc + x, 0, nums)
+  write "fold: {sum}"
 
   ; Pipe with naked syntax
   write "length: {nums |> :length}"
@@ -37,7 +37,7 @@ fun main() {
 
   ; Method ref passed to HOF
   let arrs = [[1, 2], [3], [4, 5, 6]]
-  let flat = :reduce(:concat, [], arrs)
+  let flat = :fold(:concat, [], arrs)
   write "flatten: {flat}"
 
   ; Stored ref used later

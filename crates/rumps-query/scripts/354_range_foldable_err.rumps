@@ -1,6 +1,6 @@
 ; HKT `Foldable` rejects raw `Range`
 
 fun main() {
-  let x = Foldable:reduce((a, x) => a + x, 0, 1 .. 10)
+  let x = Foldable:fold((a, x) => a + x, 0, 1 .. 10)
   write x
 }

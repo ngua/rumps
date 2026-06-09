@@ -71,13 +71,13 @@ pub(crate) enum State {
         /// Last element tested (to add to `acc` if predicate was true).
         pending: ValueId,
     },
-    /// `Foldable:reduce` over array.
+    /// `Foldable:fold` over array.
     ReduceArray {
         source: ValueId,
         idx: usize,
         acc: ValueId,
     },
-    /// `Foldable:reduce` over range.
+    /// `Foldable:fold` over range.
     ReduceRange {
         current: i64,
         end: i64,

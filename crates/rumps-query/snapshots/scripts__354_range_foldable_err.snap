@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; HKT `Foldable` rejects raw `Range`\n\nfun main() {\n  let x = Foldable:reduce((a, x) => a + x, 0, 1 .. 10)\n  write x\n}\n"
+description: "; HKT `Foldable` rejects raw `Range`\n\nfun main() {\n  let x = Foldable:fold((a, x) => a + x, 0, 1 .. 10)\n  write x\n}\n"
 ---
 ERROR: type mismatch: expected `Range`, got `T[U]`

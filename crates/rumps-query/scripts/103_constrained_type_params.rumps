@@ -107,5 +107,5 @@ fun identity-storable[V: Into[Storable]](v: V) -> V {
 
 ; Foldable: type must support element-wise reduction
 fun sum-all[T: Numeric + Additive, F: Foldable](coll: F[T]) -> T {
-  Foldable:reduce((acc, x) => acc + x, 0, coll)
+  Foldable:fold((acc, x) => acc + x, 0, coll)
 }
