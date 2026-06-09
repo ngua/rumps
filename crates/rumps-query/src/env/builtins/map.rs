@@ -76,6 +76,22 @@ impl Environment {
                         ),
                     },
                     PrimDef {
+                        name: "fold",
+                        f: Map::placeholder,
+                        ty: scheme!(
+                            a,
+                            forall K: Ord, V, A. ((A, V) -> A, A, Map[K, V]) -> A
+                        ),
+                    },
+                    PrimDef {
+                        name: "fold-with-key",
+                        f: Map::placeholder,
+                        ty: scheme!(
+                            a,
+                            forall K: Ord, V, A. ((A, K, V) -> A, A, Map[K, V]) -> A
+                        ),
+                    },
+                    PrimDef {
                         name: "map-entries",
                         f: Map::placeholder,
                         ty: scheme!(

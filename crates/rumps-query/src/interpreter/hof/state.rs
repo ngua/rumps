@@ -147,6 +147,12 @@ pub(crate) enum State {
         idx: usize,
         with_key: bool,
     },
+    /// `Map.fold` and `Map.fold-with-key`.
+    MapModuleFold {
+        entries: SmallVec<[(ValueId, ValueId); 8]>,
+        idx: usize,
+        with_key: bool,
+    },
     MapModuleEntriesCollect {
         entries: SmallVec<[(ValueId, ValueId); 8]>,
         idx: usize,

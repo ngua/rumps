@@ -1,8 +1,8 @@
 ; Map module primitives
 ; Tests `Map.empty`, `Map.length`, `Map.keys`, `Map.values`, `Map.entries`,
 ; `Map.has`, `Map.lookup`, `Map.insert`, `Map.remove`, `Map.merge`,
-; `Map.from-entries`, `Map.map`, `Map.map-with-key`, `Map.map-entries`,
-; `Map.foreach`, `Map.foreach-with-key`
+; `Map.from-entries`, `Map.map`, `Map.map-with-key`, `Map.fold`,
+; `Map.fold-with-key`, `Map.map-entries`, `Map.foreach`, `Map.foreach-with-key`
 ;
 ; Note: `{}` is ambiguous and parsed as an empty object. Use Map.empty() for empty maps.
 
@@ -166,6 +166,18 @@ fun main() {
   let map-with-keys = Map.map-with-key((k, v) => k * 100 + v, hof-src)
   write Map.entries(map-with-keys)
 
+  let fold-sum = Map.fold((acc, v) => acc + v, 0, hof-src)
+  write fold-sum
+
+  let fold-labels = Map.fold((acc, v) => "{acc}:{v}", "vals", hof-src)
+  write fold-labels
+
+  let fold-keyed = Map.fold-with-key((acc, k, v) => acc + k * v, 0, hof-src)
+  write fold-keyed
+
+  let fold-key-labels = Map.fold-with-key((acc, k, v) => "{acc}|{k}={v}", "entries", hof-src)
+  write fold-key-labels
+
   write "Map.foreach:"
   let fe = Map.foreach(v => { write "v:{v}" }, hof-src)
   write fe
@@ -199,6 +211,16 @@ fun main() {
   let empty-int: Map[Int, Int] = Map.empty()
   write Map.entries(Map.map(x => x + 1, empty-int))
   write Map.entries(Map.map-with-key((k, v) => k + v, empty-int))
+  write Map.fold((acc, v) => acc + v, 99, empty-int)
+  write Map.fold-with-key((acc, k, v) => acc + k + v, 77, empty-int)
+  write Map.fold((acc, v) => {
+    write "bad-empty-fold"
+    acc + v
+  }, 99, empty-int)
+  write Map.fold-with-key((acc, k, v) => {
+    write "bad-empty-fold-key"
+    acc + k + v
+  }, 77, empty-int)
   write Map.entries(Map.map-entries((k, v) => ("empty-{k}", v + 1), empty-int))
   write Map.foreach(v => { write "empty-value:{v}" }, empty-int)
   write Map.foreach-with-key((k, v) => { write "empty-entry:{k}:{v}" }, empty-int)
@@ -211,6 +233,9 @@ fun main() {
 
   let down-map-with-keys = Map.map-with-key((k, v) => "{k}:{v}", down-hof)
   write Map.entries(down-map-with-keys)
+
+  let down-fold = Map.fold-with-key((acc, k, v) => "{acc}|{k}:{v}", "down", down-hof)
+  write down-fold
 
   ; ============ Chaining operations ============
 

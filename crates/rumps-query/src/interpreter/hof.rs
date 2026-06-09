@@ -352,6 +352,25 @@ impl ClassCtx<'_> {
                     None => Ok(Step::Done(Payload::Unit)),
                 }
             }
+            State::MapModuleFold {
+                entries,
+                idx,
+                with_key,
+            } => {
+                let next_idx = idx + 1;
+                match entries.get(next_idx).copied() {
+                    Some(e) => Ok(Step::Invoke(Continuation {
+                        callee: cont.callee,
+                        args: map::Fns::fold_args(result, e, with_key),
+                        state: State::MapModuleFold {
+                            entries,
+                            idx: next_idx,
+                            with_key,
+                        },
+                    })),
+                    None => Ok(Step::DoneValue(result)),
+                }
+            }
             State::MapModuleEntriesCollect {
                 entries,
                 idx,

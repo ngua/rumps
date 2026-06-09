@@ -21,6 +21,8 @@ impl Fns {
         let map_with_key = i.intern("map-with-key");
         let foreach = i.intern("foreach");
         let foreach_with_key = i.intern("foreach-with-key");
+        let fold = i.intern("fold");
+        let fold_with_key = i.intern("fold-with-key");
         let map_entries = i.intern("map-entries");
         let k = ResultMode::Keep;
         let d = ResultMode::Discard;
@@ -29,6 +31,8 @@ impl Fns {
         reg.register(map, map_with_key, Self::map_with_key, k);
         reg.register(map, foreach, Self::foreach, d);
         reg.register(map, foreach_with_key, Self::foreach_with_key, d);
+        reg.register(map, fold, Self::fold, k);
+        reg.register(map, fold_with_key, Self::fold_with_key, k);
         reg.register(map, map_entries, Self::map_entries, k);
     }
 
@@ -49,6 +53,14 @@ impl Fns {
         args: &[ValueId],
     ) -> Result<Step> {
         Self::start_foreach(ctx, args, true, "Map.foreach-with-key")
+    }
+
+    fn fold(ctx: &mut ClassCtx<'_>, args: &[ValueId]) -> Result<Step> {
+        Self::start_fold(ctx, args, false, "Map.fold")
+    }
+
+    fn fold_with_key(ctx: &mut ClassCtx<'_>, args: &[ValueId]) -> Result<Step> {
+        Self::start_fold(ctx, args, true, "Map.fold-with-key")
     }
 
     fn map_entries(ctx: &mut ClassCtx<'_>, args: &[ValueId]) -> Result<Step> {
@@ -141,6 +153,38 @@ impl Fns {
         }
     }
 
+    fn start_fold(
+        ctx: &mut ClassCtx<'_>,
+        args: &[ValueId],
+        with_key: bool,
+        label: &'static str,
+    ) -> Result<Step> {
+        let f = *args
+            .first()
+            .unwrap_or_else(|| typechecked!(label, "3 args"));
+        let init =
+            *args.get(1).unwrap_or_else(|| typechecked!(label, "3 args"));
+        let m = *args.get(2).unwrap_or_else(|| typechecked!(label, "3 args"));
+        let es = ctx
+            .arena
+            .get_map(m)
+            .map(Map::entries)
+            .unwrap_or_else(|| typechecked!(label, "Map"));
+
+        match es.first().copied() {
+            Some(e) => Ok(Step::Invoke(Continuation {
+                callee: f,
+                args: Self::fold_args(init, e, with_key),
+                state: State::MapModuleFold {
+                    entries: es,
+                    idx: 0,
+                    with_key,
+                },
+            })),
+            None => Ok(Step::DoneValue(init)),
+        }
+    }
+
     pub(super) fn args(
         (k, v): (ValueId, ValueId),
         with_key: bool,
@@ -149,6 +193,18 @@ impl Fns {
             smallvec![k, v]
         } else {
             smallvec![v]
+        }
+    }
+
+    pub(super) fn fold_args(
+        acc: ValueId,
+        (k, v): (ValueId, ValueId),
+        with_key: bool,
+    ) -> SmallVec<[ValueId; 2]> {
+        if with_key {
+            smallvec![acc, k, v]
+        } else {
+            smallvec![acc, v]
         }
     }
 
