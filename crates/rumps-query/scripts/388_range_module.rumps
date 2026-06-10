@@ -1,0 +1,38 @@
+fun main() {
+  write Range.contains(1, 1 .. 5)
+  write Range.contains(4, 1 .. 5)
+  write Range.contains(5, 1 .. 5)
+  write Range.contains(5, 1 ..= 5)
+
+  write Range.contains(5, 5 .. 1)
+  write Range.contains(2, 5 .. 1)
+  write Range.contains(1, 5 .. 1)
+  write Range.contains(1, 5 ..= 1)
+
+  write Range.contains(5, 5 .. 5)
+  write Range.contains(5, 5 ..= 5)
+
+  write Range.collect(Range.extend(2, 3 .. 7))
+  write Range.collect(Range.extend(2, 3 ..= 7))
+  write Range.collect(Range.extend(2, 7 .. 3))
+  write Range.collect(Range.extend(2, 7 ..= 3))
+  write Range.collect(Range.extend(2, 5 .. 5))
+  write Range.collect(Range.extend(2, 5 ..= 5))
+
+  write Range.is-empty(5 .. 5)
+  write Range.is-empty(5 ..= 5)
+  write Range.is-empty(1 .. 5)
+  write Range.is-empty(5 .. 1)
+
+  write Range.first(1 .. 5)
+  write Range.first(5 .. 1)
+  write Range.first(5 .. 5)
+  write Range.first(5 ..= 5)
+
+  write Range.last(1 .. 5)
+  write Range.last(1 ..= 5)
+  write Range.last(5 .. 1)
+  write Range.last(5 ..= 1)
+  write Range.last(5 .. 5)
+  write Range.last(5 ..= 5)
+}
