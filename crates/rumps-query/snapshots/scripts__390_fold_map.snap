@@ -1,0 +1,15 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "variant Box[T] = Full(T) | Empty\nnewtype Bag[T] = Array[T]\nunion Flex = Array[Int] | Bag[Int]\nnewtype Join = String\n\nclass Foldable for Box {\n  fun fold(f, init, x) {\n    match x {\n      Box.Full(v) => { f(init, v) }\n      Box.Empty => { init }\n    }\n  }\n\n  fun fold-map[T, U: Default + Concatable](f: (T) -> U, x: Box[T]) -> U {\n    match x {\n      Box.Full(v) => { f(v) }\n      Box.Empty => {\n        let d = (Default:default()) : U\n        d\n      }\n    }\n  }\n}\n\nclass Default for Join {\n  fun default() -> Join {\n    \"\"\n  }\n}\n\nclass Concatable for Join {\n  fun concat(a: Join, b: Join) -> Join {\n    let sa: String = a\n    let sb: String = b\n    if sa == \"\" { b } else {\n      if sb == \"\" { a } else { \"{sa},{sb}\" as Join }\n    }\n  }\n}\n\nfun main() {\n  write Foldable:fold-map(x => \"{x}\", [1, 2, 3])\n\n  let empty: Array[Int] = []\n  let empty-str: String = Foldable:fold-map(x => \"{x}\", empty)\n  write empty-str\n\n  write Foldable:fold-map(x => [x, x * 10], [1, 2, 3])\n  write [1, 2, 3] |> Foldable:fold-map(x => [x])\n  write :fold-map(x => \"{x}\", [4, 5])\n\n  write Foldable:fold-map(x => \"{x}\", Box.Full(42))\n  let box-empty: Box[Int] = Box.Empty\n  let box-empty-str: String = Foldable:fold-map(x => \"{x}\", box-empty)\n  write box-empty-str\n\n  let b: Bag[Int] = [1, 2, 3]\n  write Foldable:fold-map(x => \"{x}\", b)\n\n  let fa: Flex = [4, 5]\n  write Foldable:fold-map(x => \"{x}\", fa)\n\n  let fb: Flex = b\n  write Foldable:fold-map(x => \"{x}\", fb)\n\n  let joined: Join = Foldable:fold-map(x => \"{x}\" as Join, [1, 2, 3])\n  write joined as String\n}\n"
+---
+"123"
+""
+[ 1, 10, 2, 20, 3, 30 ]
+[ 1, 2, 3 ]
+"45"
+"42"
+""
+"123"
+"45"
+"123"
+"1,2,3"

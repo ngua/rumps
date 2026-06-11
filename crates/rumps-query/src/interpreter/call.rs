@@ -672,6 +672,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             }
         } else if let Some(name) = self.hkt_method(&dispatch) {
             self.invoke_user_instance_fn(name, dispatch).await
+        } else if let Some(name) = self.output_ty_method(&dispatch) {
+            self.invoke_user_instance_fn(name, dispatch).await
         } else if let Some(tid) = dispatch
             .args
             .first()
@@ -690,6 +692,36 @@ impl<I: IoContext> Interpreter<'_, I> {
         } else {
             self.dispatch_via_repr_or_builtin(dispatch).await
         }
+    }
+
+    fn output_ty_method(
+        &mut self,
+        dispatch: &ClassDispatch,
+    ) -> Option<StringId> {
+        self.dispatch_output_ty(dispatch)
+            .and_then(|ty| self.checked.types.to_type_id(ty))
+            .and_then(|tid| {
+                self.user_instances.lookup_method(
+                    dispatch.class,
+                    tid,
+                    dispatch.method,
+                )
+            })
+    }
+
+    fn dispatch_output_ty(
+        &mut self,
+        dispatch: &ClassDispatch,
+    ) -> Option<RuntimeTyId> {
+        dispatch
+            .output_ty
+            .or_else(|| {
+                dispatch
+                    .output_expr_id
+                    .or(dispatch.dispatch_expr_id)
+                    .map(|id| self.checked.expr(id).ty)
+            })
+            .map(|ty| self.runtime_ty(ty))
     }
 
     fn hkt_method(&self, dispatch: &ClassDispatch) -> Option<StringId> {
@@ -883,22 +915,15 @@ impl<I: IoContext> Interpreter<'_, I> {
             self.run_hof_trampoline(output, f, &dispatch.args, dispatch.span)
                 .await
         } else {
-            self.dispatch_builtin_class_method(
-                dispatch.dispatch_expr_id,
-                dispatch.output_expr_id,
-                dispatch.class,
-                dispatch.method,
-                &dispatch.args,
-                dispatch.span,
-            )
-            .map(|payload| {
-                let output = self.refine_variant_output(
-                    output,
-                    &payload,
-                    &dispatch.args,
-                );
-                self.value_for_output(output, payload)
-            })
+            self.dispatch_builtin_class_method(&dispatch)
+                .map(|payload| {
+                    let output = self.refine_variant_output(
+                        output,
+                        &payload,
+                        &dispatch.args,
+                    );
+                    self.value_for_output(output, payload)
+                })
         }
     }
 
@@ -1332,13 +1357,12 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// directly; async HOFs use the trampoline pattern.
     fn dispatch_builtin_class_method(
         &mut self,
-        expr_id: Option<ExprId>,
-        output_id: Option<ExprId>,
-        class: ClassId,
-        method: StringId,
-        args: &[ValueId],
-        span: Span,
+        dispatch: &ClassDispatch,
     ) -> Result<Payload> {
+        let class = dispatch.class;
+        let method = dispatch.method;
+        let args = dispatch.args.as_slice();
+        let span = dispatch.span;
         let val = |i: usize| {
             self.arena
                 .payload(args[i])
@@ -1455,10 +1479,19 @@ impl<I: IoContext> Interpreter<'_, I> {
                     .dispatch_unary(class, method, &mut ctx, &v)
             }
             Some(MethodFn::Nullary(_)) => {
-                let id = output_id.or(expr_id).unwrap_or_else(|| {
-                    typechecked!("nullary class method", "expression id")
+                let ty_id = dispatch.output_ty.unwrap_or_else(|| {
+                    let id = dispatch
+                        .output_expr_id
+                        .or(dispatch.dispatch_expr_id)
+                        .unwrap_or_else(|| {
+                            typechecked!(
+                                "nullary class method",
+                                "expression id"
+                            )
+                        });
+                    self.checked.expr(id).ty
                 });
-                let ty_id = self.checked.expr(id).ty;
+                let ty_id = self.runtime_ty(ty_id);
                 let ty = self.checked.types.get(ty_id).clone();
                 let mut ctx = ClassCtx {
                     arena: &mut self.arena,
@@ -1475,10 +1508,14 @@ impl<I: IoContext> Interpreter<'_, I> {
                     self.arena.value(args[0]).cloned().unwrap_or_else(|| {
                         invariant!("class method arg in arena")
                     });
-                let id = output_id.or(expr_id).unwrap_or_else(|| {
-                    typechecked!("convert class method", "expression id")
-                });
-                let edge = output_id
+                let id = dispatch
+                    .output_expr_id
+                    .or(dispatch.dispatch_expr_id)
+                    .unwrap_or_else(|| {
+                        typechecked!("convert class method", "expression id")
+                    });
+                let edge = dispatch
+                    .output_expr_id
                     .and_then(|edge_id| {
                         self.approved_newtype_edge_meta(edge_id)
                     })
@@ -1617,6 +1654,30 @@ impl<I: IoContext> Interpreter<'_, I> {
                         span,
                     };
                     flow = ControlFlow::Continue(ctx.resume_eq(eq.state, id)?);
+                }
+                hof::Step::ClassCall(call) => {
+                    let value = self
+                        .dispatch_class_method_value(ClassDispatch {
+                            dispatch_expr_id: None,
+                            output_expr_id: None,
+                            output_ty: call.output_ty,
+                            class: call.class,
+                            method: call.method,
+                            args: call.args.iter().copied().collect(),
+                            span,
+                        })
+                        .await?;
+                    let id = self.add_value(value, span);
+                    let mut ctx = ClassCtx {
+                        arena: &mut self.arena,
+                        runtime_types: &mut self.checked.types,
+                        registry: &self.registry,
+                        regex_cache: &self.checked.regex_cache,
+                        span,
+                    };
+                    flow = ControlFlow::Continue(
+                        ctx.resume_class_call(call.state, id)?,
+                    );
                 }
                 hof::Step::Invoke(cont) => {
                     let call_result = self

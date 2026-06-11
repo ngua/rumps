@@ -2,8 +2,10 @@ use std::sync::Arc;
 
 use smallvec::SmallVec;
 
+use crate::intern::StringId;
 use crate::typecheck::RuntimeTyId;
 use crate::value::{Map, MapNode, Payload, TypeId, ValueId};
+use crate::ClassId;
 
 /// Result from a higher-order method that may need closure invocation.
 pub(crate) enum Step {
@@ -15,6 +17,8 @@ pub(crate) enum Step {
     Compare(Compare),
     /// Method needs to compare two values with `Eq:eq` and continue.
     Eq(Eq),
+    /// Method needs to dispatch a class method and continue.
+    ClassCall(ClassCall),
     /// Method needs to invoke a callable and continue.
     Invoke(Continuation),
 }
@@ -28,6 +32,15 @@ pub(crate) struct Compare {
 /// Internal `Eq:eq` request for HoFs.
 pub(crate) struct Eq {
     pub(crate) args: SmallVec<[ValueId; 2]>,
+    pub(crate) state: State,
+}
+
+/// Internal class method request for HoFs.
+pub(crate) struct ClassCall {
+    pub(crate) class: ClassId,
+    pub(crate) method: StringId,
+    pub(crate) args: SmallVec<[ValueId; 4]>,
+    pub(crate) output_ty: Option<RuntimeTyId>,
     pub(crate) state: State,
 }
 
@@ -76,6 +89,24 @@ pub(crate) enum State {
         source: ValueId,
         idx: usize,
         acc: ValueId,
+    },
+    /// `Foldable:fold-map` awaiting `Default:default`.
+    FoldMapArrayDefault {
+        source: ValueId,
+        f: ValueId,
+    },
+    /// `Foldable:fold-map` awaiting mapper result.
+    FoldMapArrayMap {
+        source: ValueId,
+        f: ValueId,
+        idx: usize,
+        acc: ValueId,
+    },
+    /// `Foldable:fold-map` awaiting `Concatable:concat`.
+    FoldMapArrayConcat {
+        source: ValueId,
+        f: ValueId,
+        idx: usize,
     },
     /// `Chainable:chain`; single invocation, wraps result.
     Chain {

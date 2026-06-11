@@ -334,13 +334,22 @@ impl ClassRegistry {
                 shape: ClassShape::Hkt { kind: 1, params: 0 },
                 assoc_types: smallvec![],
                 supers: smallvec![],
-                methods: vec![(
-                    s("fold"),
-                    MethodSpec::Standard(scheme!(
-                        arena,
-                        forall T, U, F: Foldable. ((U, T) -> U, U, F[T]) -> U
-                    )),
-                )],
+                methods: vec![
+                    (
+                        s("fold"),
+                        MethodSpec::Standard(scheme!(
+                            arena,
+                            forall T, U, F: Foldable. ((U, T) -> U, U, F[T]) -> U
+                        )),
+                    ),
+                    (
+                        s("fold-map"),
+                        MethodSpec::Standard(scheme!(
+                            arena,
+                            forall T, U: Default + Concatable, F: Foldable. ((T) -> U, F[T]) -> U
+                        )),
+                    ),
+                ],
             },
             // 13: Filterable
             ClassDef {

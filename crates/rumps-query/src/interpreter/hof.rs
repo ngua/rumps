@@ -10,6 +10,7 @@
 //! - `Done(Payload)`: the method completed synchronously
 //! - `DoneValue(ValueId)`: the method completed by forwarding an existing value
 //! - `Compare(Compare)`: the method needs `Ord:compare` and resume
+//! - `ClassCall(ClassCall)`: the method needs class dispatch and resume
 //! - `Invoke(Continuation)`: the method needs to call a closure and resume
 //!
 //! The trampoline loop in `call.rs` handles the async closure invocation:
@@ -38,20 +39,24 @@ use std::sync::Arc;
 pub(crate) use registry::Registry;
 use smallvec::smallvec;
 pub(crate) use state::{
-    ChainWrapper, Compare, Continuation, Eq, ExtremaKind, IterKind,
+    ChainWrapper, ClassCall, Compare, Continuation, Eq, ExtremaKind, IterKind,
     MapInsertFrame, ResultMode, SortCmp, SortFrame, State, Step,
 };
 
 use super::class::ClassCtx;
 use crate::typecheck::{RuntimeTyId, Ty};
 use crate::value::{Map, Payload, TypeId, ValueId};
-use crate::Result;
+use crate::{ClassId, Result};
 
 /// Higher-order function method signature.
 pub(crate) type MethodFn = fn(&mut ClassCtx<'_>, &[ValueId]) -> Result<Step>;
 
 impl ClassCtx<'_> {
-    fn callable_ret_ty(&self, id: ValueId, label: &str) -> RuntimeTyId {
+    pub(crate) fn callable_ret_ty(
+        &self,
+        id: ValueId,
+        label: &str,
+    ) -> RuntimeTyId {
         self.arena
             .ty(id)
             .and_then(|ty| match self.runtime_types.get(ty) {
@@ -176,6 +181,13 @@ impl ClassCtx<'_> {
                     }
                     _ => invariant!("ReduceArray source must be Array"),
                 }
+            }
+            State::FoldMapArrayMap { .. } => {
+                self.resume_class_call(cont.state, result)
+            }
+            State::FoldMapArrayDefault { .. }
+            | State::FoldMapArrayConcat { .. } => {
+                invariant!("Foldable:fold-map state resumes class call")
             }
             State::Chain { wrapper } => match wrapper {
                 ChainWrapper::OptionSome | ChainWrapper::ResultOk => {
@@ -428,6 +440,78 @@ impl ClassCtx<'_> {
             State::MapModuleEntriesInsert { .. } => {
                 invariant!("Map.map-entries insert state resumes compare")
             }
+        }
+    }
+
+    pub(crate) fn resume_class_call(
+        &mut self,
+        state: State,
+        result: ValueId,
+    ) -> Result<Step> {
+        match state {
+            State::FoldMapArrayDefault { source, f } => {
+                match self.arena.payload(source) {
+                    Some(Payload::Array(elems)) => match elems.first().copied()
+                    {
+                        Some(first) => Ok(Step::Invoke(Continuation {
+                            callee: f,
+                            args: smallvec![first],
+                            state: State::FoldMapArrayMap {
+                                source,
+                                f,
+                                idx: 0,
+                                acc: result,
+                            },
+                        })),
+                        None => Ok(Step::DoneValue(result)),
+                    },
+                    _ => invariant!("FoldMapArrayDefault source must be Array"),
+                }
+            }
+            State::FoldMapArrayMap {
+                source,
+                f,
+                idx,
+                acc,
+            } => {
+                let method = self.arena.intern("concat");
+                let ty = self
+                    .arena
+                    .meta(result)
+                    .map(|meta| meta.ty)
+                    .unwrap_or_else(|| {
+                        typechecked!("Foldable:fold-map", "mapper result meta")
+                    });
+                Ok(Step::ClassCall(ClassCall {
+                    class: ClassId::CONCATABLE,
+                    method,
+                    args: smallvec![acc, result],
+                    output_ty: Some(ty),
+                    state: State::FoldMapArrayConcat { source, f, idx },
+                }))
+            }
+            State::FoldMapArrayConcat { source, f, idx } => {
+                let next_idx = idx + 1;
+                match self.arena.payload(source) {
+                    Some(Payload::Array(elems)) => {
+                        match elems.get(next_idx).copied() {
+                            Some(next) => Ok(Step::Invoke(Continuation {
+                                callee: f,
+                                args: smallvec![next],
+                                state: State::FoldMapArrayMap {
+                                    source,
+                                    f,
+                                    idx: next_idx,
+                                    acc: result,
+                                },
+                            })),
+                            None => Ok(Step::DoneValue(result)),
+                        }
+                    }
+                    _ => invariant!("FoldMapArrayConcat source must be Array"),
+                }
+            }
+            _ => invariant!("class call continuation state"),
         }
     }
 

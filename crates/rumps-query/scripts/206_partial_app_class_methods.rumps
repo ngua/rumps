@@ -26,6 +26,10 @@ fun main() {
   write [1, 2, 3, 4] |> Foldable:fold((acc, x) => acc + x, 0)
   ; Expected: 10
 
+  ; Foldable:fold-map is 2-arg; partial app with mapper
+  write [1, 2, 3, 4] |> Foldable:fold-map(x => "{x}")
+  ; Expected: `1234`
+
   ; Store class method partial, apply later
   let only-evens = Filterable:filter(x => x % 2 == 0)
   write only-evens([1, 2, 3, 4, 5, 6])

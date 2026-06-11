@@ -1,5 +1,5 @@
 ; Array module functions
-; Tests Mappable:map, Filterable:filter, Foldable:fold, foreach
+; Tests Mappable:map, Filterable:filter, Foldable:fold, Foldable:fold-map, foreach
 
 fun square(n: Int) -> Int { n * n }
 
@@ -114,6 +114,12 @@ fun main() {
   ; Foldable:fold with named function
   let total = Foldable:fold(add, 0, [1, 2, 3, 4])
   write total  ; 10
+
+  ; `Foldable:fold-map` with `String` and `Array` outputs
+  write Foldable:fold-map(x => "{x}", [1, 2, 3])
+  let empty-fold-map: Array[Int] = Foldable:fold-map(x => [x], empty)
+  write empty-fold-map
+  write Foldable:fold-map(x => [x, x * 10], [1, 2, 3])
 
   ; Combining Array functions
   let result = Foldable:fold(

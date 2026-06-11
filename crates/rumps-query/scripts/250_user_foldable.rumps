@@ -11,21 +11,38 @@ class Foldable for Box {
       Box.Empty => { init }
     }
   }
+
+  fun fold-map[T, U: Default + Concatable](f: (T) -> U, x: Box[T]) -> U {
+    match x {
+      Box.Full(v) => { f(v) }
+      Box.Empty => {
+        let d = (Default:default()) : U
+        d
+      }
+    }
+  }
 }
 
 fun main() {
   ; type with user instance
   write Foldable:fold((acc, x) => acc + x, 0, Box.Full(42))
   write Foldable:fold((acc, x) => acc + x, 100, Box.Empty)
+  write Foldable:fold-map(x => "{x}", Box.Full(42))
+  let box-empty: Box[Int] = Box.Empty
+  let box-empty-str: String = Foldable:fold-map(x => "{x}", box-empty)
+  write box-empty-str
 
   ; newtype auto-derive
   let b: Bag[Int] = [1, 2, 3, 4]
   write Foldable:fold((acc, x) => acc + x, 0, b)
+  write Foldable:fold-map(x => "{x}", b)
 
   ; union auto-derive
   let a: Flex = [10, 20, 30]
   write Foldable:fold((acc, x) => acc + x, 0, a)
+  write Foldable:fold-map(x => "{x}", a)
 
   let c: Flex = b
   write Foldable:fold((acc, x) => acc + x, 0, c)
+  write Foldable:fold-map(x => "{x}", c)
 }

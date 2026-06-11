@@ -1,0 +1,14 @@
+variant Box[T] = Full(T) | Empty
+
+class Foldable for Box {
+  fun fold(f, init, x) {
+    match x {
+      Box.Full(v) => { f(init, v) }
+      Box.Empty => { init }
+    }
+  }
+}
+
+fun main() {
+  write Foldable:fold((acc, x) => acc + x, 0, Box.Full(1))
+}

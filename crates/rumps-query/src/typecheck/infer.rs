@@ -1613,7 +1613,11 @@ impl<'a> InferCtx<'a> {
     fn metadata_has_unresolved(&self, info: &CheckedExprInfo) -> bool {
         info.concrete
             && info.ty.is_some_and(|ty| {
-                matches!(self.ty_arena.get(ty), Ty::Var(_) | Ty::Unknown)
+                matches!(self.ty_arena.get(ty), Ty::Unknown)
+                    || matches!(
+                        self.ty_arena.get(ty),
+                        Ty::Var(v) if !self.poly_param_vars.contains(v)
+                    )
             })
     }
 

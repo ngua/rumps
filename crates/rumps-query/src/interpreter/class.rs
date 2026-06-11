@@ -26,7 +26,7 @@
 //! - `Indexable`: `index`, `get`
 //! - `Mappable`: `map`
 //! - `Filterable`: `filter`
-//! - `Foldable`: `fold`
+//! - `Foldable`: `fold`, `fold-map`
 //! - `Iterable`: `length`, `reverse`
 //! - `Bimappable`: `bimap`
 //!
@@ -430,6 +430,11 @@ impl ClassMethods {
             ClassId::FOLDABLE,
             i.intern("fold"),
             MethodFn::Hof(Foldable::fold),
+        );
+        self.register(
+            ClassId::FOLDABLE,
+            i.intern("fold-map"),
+            MethodFn::Hof(Foldable::fold_map),
         );
         self.register(
             ClassId::ITERABLE,
@@ -2514,7 +2519,7 @@ impl Filterable {
     }
 }
 
-/// `Foldable` class: `fold` method.
+/// `Foldable` class: `fold`, `fold-map` methods.
 pub(crate) struct Foldable;
 
 impl Foldable {
@@ -2550,6 +2555,30 @@ impl Foldable {
                 },
             })),
             Kind::Other => typechecked!("Foldable:fold", "Array"),
+        }
+    }
+
+    /// Start `Foldable:fold-map`; requests the default accumulator first.
+    pub(crate) fn fold_map(
+        ctx: &mut ClassCtx<'_>,
+        args: &[ValueId],
+    ) -> Result<hof::Step> {
+        let f = args[0];
+        let source = args[1];
+        let out = ctx.callable_ret_ty(f, "Foldable:fold-map");
+
+        match ctx.arena.payload(source) {
+            Some(Payload::Array(_)) => {
+                let method = ctx.arena.intern("default");
+                Ok(hof::Step::ClassCall(hof::ClassCall {
+                    class: ClassId::DEFAULT,
+                    method,
+                    args: SmallVec::new(),
+                    output_ty: Some(out),
+                    state: hof::State::FoldMapArrayDefault { source, f },
+                }))
+            }
+            _ => typechecked!("Foldable:fold-map", "Array"),
         }
     }
 }

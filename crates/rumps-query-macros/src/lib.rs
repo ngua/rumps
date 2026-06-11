@@ -43,6 +43,7 @@ use syn::{Ident, LitStr, Result, Token};
 /// `T: Ord` ; `T` must support ordering (`Bool`, `Int`, `Word`, `Float`, `Char`, `String`)
 /// `T: Eq` ; `T` must support equality (`==`, `!=`)
 /// `T: Display` ; `T` can be displayed as RUMPS syntax
+/// `T: Default + Concatable` ; `T` has all listed class constraints
 ///
 /// HKT classes (kind `* -> *`, no type argument in constraint; element at usage):
 /// - `F: Fallible` ; `F` is a fallible type constructor; use `F[T]` in type position
@@ -92,8 +93,8 @@ struct SchemeInput {
     arena: Ident,
     /// Optional callable identifier for interning object field names.
     ctx: Option<Ident>,
-    /// Type variables with optional class bounds: `(var_name, class)`
-    vars: Vec<(Ident, Option<VarClass>)>,
+    /// Type variables with class bounds: `(var_name, classes)`
+    vars: Vec<(Ident, Vec<VarClass>)>,
     ty: TyExpr,
 }
 
@@ -133,52 +134,71 @@ const HKT_CLASSES: &[&str] = &[
 /// Multi-param classes: constraint REQUIRES `[T]` arguments.
 const MULTI_PARAM_CLASSES: &[&str] = &["Into", "TryInto", "Indexable"];
 
-/// Parse a single type variable with optional class bound.
+/// Parse a single class bound.
+fn parse_var_class(input: ParseStream) -> Result<VarClass> {
+    let class_name: Ident = input.parse()?;
+    let cname = class_name.to_string();
+
+    if SIMPLE_CLASSES.contains(&cname.as_str()) {
+        Ok(VarClass::Simple(cname))
+    } else if HKT_CLASSES.contains(&cname.as_str()) {
+        // HKT class: NO type args in constraint
+        Ok(VarClass::Simple(cname))
+    } else if MULTI_PARAM_CLASSES.contains(&cname.as_str()) {
+        // Multi-param class: parse bracketed, comma-separated type args
+        let content;
+        syn::bracketed!(content in input);
+        let args: syn::punctuated::Punctuated<Ident, Token![,]> =
+            syn::punctuated::Punctuated::parse_terminated(&content)?;
+        let args: SmallVec<[String; 2]> =
+            args.into_iter().map(|id| id.to_string()).collect();
+        Ok(VarClass::Parameterized(cname, args))
+    } else {
+        panic!(
+            "unknown class: `{cname}`; use one of {:?}, {:?}, or {:?}",
+            SIMPLE_CLASSES, HKT_CLASSES, MULTI_PARAM_CLASSES
+        )
+    }
+}
+
+/// Parse class bounds after `:`.
+fn parse_var_classes(input: ParseStream) -> Result<Vec<VarClass>> {
+    let class = parse_var_class(input)?;
+    if input.peek(Token![+]) {
+        input.parse::<Token![+]>()?;
+        parse_var_classes(input).map(|tail| {
+            let mut classes = vec![class];
+            classes.extend(tail);
+            classes
+        })
+    } else {
+        Ok(vec![class])
+    }
+}
+
+/// Parse a single type variable with optional class bounds.
 ///
 /// Syntax:
 /// - `T` (no class)
 /// - `T: Numeric` (simple class)
 /// - `F: Fallible` (HKT class; element type at usage via `F[T]`)
 /// - `T: Into[U]` (multi-param class)
-fn parse_type_var(input: ParseStream) -> Result<(Ident, Option<VarClass>)> {
+/// - `T: Default + Concatable` (multiple class bounds)
+fn parse_type_var(input: ParseStream) -> Result<(Ident, Vec<VarClass>)> {
     let name: Ident = input.parse()?;
 
-    // Check for class: `: Class` or `: Class[T]`
-    let class = if input.peek(Token![:]) {
+    // Check for class: `: Class`, `: Class[T]`, or `: Class + Class`
+    let classes = if input.peek(Token![:]) {
         input.parse::<Token![:]>()?;
-        let class_name: Ident = input.parse()?;
-        let cname = class_name.to_string();
-
-        if SIMPLE_CLASSES.contains(&cname.as_str()) {
-            Some(VarClass::Simple(cname))
-        } else if HKT_CLASSES.contains(&cname.as_str()) {
-            // HKT class: NO type args in constraint
-            Some(VarClass::Simple(cname))
-        } else if MULTI_PARAM_CLASSES.contains(&cname.as_str()) {
-            // Multi-param class: parse bracketed, comma-separated type args
-            let content;
-            syn::bracketed!(content in input);
-            let args: syn::punctuated::Punctuated<Ident, Token![,]> =
-                syn::punctuated::Punctuated::parse_terminated(&content)?;
-            let args: SmallVec<[String; 2]> =
-                args.into_iter().map(|id| id.to_string()).collect();
-            Some(VarClass::Parameterized(cname, args))
-        } else {
-            panic!(
-                "unknown class: `{cname}`; use one of {:?}, {:?}, or {:?}",
-                SIMPLE_CLASSES, HKT_CLASSES, MULTI_PARAM_CLASSES
-            )
-        }
+        parse_var_classes(input)?
     } else {
-        None
+        Vec::new()
     };
 
-    Ok((name, class))
+    Ok((name, classes))
 }
 
-fn parse_type_vars(
-    input: ParseStream,
-) -> Result<Vec<(Ident, Option<VarClass>)>> {
+fn parse_type_vars(input: ParseStream) -> Result<Vec<(Ident, Vec<VarClass>)>> {
     if input.peek(Token![.]) {
         Ok(Vec::new())
     } else {
@@ -345,8 +365,8 @@ impl SchemeInput {
                 .vars
                 .iter()
                 .enumerate()
-                .filter_map(|(i, (_, class))| {
-                    class.as_ref().map(|c| {
+                .flat_map(|(i, (_, classes))| {
+                    classes.iter().map(|c| {
                         let var_idx = i as u32;
                         match c {
                             VarClass::Simple(name) => {
@@ -404,7 +424,7 @@ impl SchemeInput {
                                 }
                             }
                         }
-                    })
+                    }).collect::<Vec<_>>()
                 })
                 .collect();
 
