@@ -17,6 +17,7 @@ impl Parser {
         let type_stmt = Self::type_stmt(interner);
         let newtype_stmt = Self::newtype_stmt(interner);
         let union_stmt = Self::union_stmt(interner);
+        let pragma_stmt = Self::pragma_stmt(interner);
 
         recursive(move |stmt| {
             let let_stmt = Self::let_stmt(interner, stmt.clone());
@@ -36,6 +37,7 @@ impl Parser {
                 union_stmt.clone(),
                 class_stmt,
                 module_stmt,
+                pragma_stmt.clone(),
                 expr_stmt,
             ))
         })

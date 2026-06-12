@@ -12,7 +12,7 @@ use smallvec::{smallvec, SmallVec};
 
 use super::{cst, Parser};
 use crate::ast::{
-    self, ArrayElem, AssocTypeDef, Ast, AstTypeExpr, AstTypeExprId,
+    self, pragma, ArrayElem, AssocTypeDef, Ast, AstTypeExpr, AstTypeExprId,
     BindingPattern, DbRef, Expr, ExprId, Import, ImportItem, JsonAccessKey,
     MatchArm, MatchPattern, MatchPatternId, ObjectEntry, OutputFormat,
     OutputTarget, PostfixOp, RefTarget, RestPattern, Stmt, StmtId,
@@ -24,7 +24,22 @@ use crate::typecheck::{
     ClassDef, ClassRegistry, ClassShape, TyArena, TypeClass,
 };
 use crate::value::TypeId;
-use crate::{Error, Lexer, Result, Span};
+use crate::{ClassId, Error, Lexer, Result, Span};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ScopeKind {
+    Root,
+    Module,
+    Block,
+    Transaction,
+    Interpolation,
+}
+
+#[derive(Default)]
+struct Pending {
+    deriving: Option<(cst::pragma::Deriving, Span)>,
+    required_methods: Option<(cst::pragma::RequiredMethods, Span)>,
+}
 
 /// Context for lowering; owns the AST being built, tracks base directory,
 /// files being parsed, and type parameters in scope (for distinguishing
@@ -86,8 +101,23 @@ impl<'a> LowerCtx<'a> {
     pub(crate) fn program(
         stmts: Vec<cst::Stmt>,
         interner: &'a mut StringInterner,
-    ) -> Result<(Ast, Vec<StmtId>)> {
+    ) -> Result<(Ast, Vec<StmtId>, pragma::Program)> {
         Self::program_with_path(stmts, None, interner)
+    }
+
+    pub(crate) fn interpolation_program(
+        stmts: Vec<cst::Stmt>,
+        interner: &'a mut StringInterner,
+    ) -> Result<(Ast, Vec<StmtId>)> {
+        let mut ctx = Self::new(None, interner);
+        let (stmts, _) =
+            ctx.normalize_stmts(stmts, ScopeKind::Interpolation)?;
+        ctx.prescan_class_defs(&stmts)?;
+        let ids = stmts
+            .into_iter()
+            .map(|s| ctx.stmt(s))
+            .collect::<Result<Vec<_>>>()?;
+        Ok((ctx.ast, ids))
     }
 
     /// Lower a CST program with source file context.
@@ -97,15 +127,284 @@ impl<'a> LowerCtx<'a> {
         stmts: Vec<cst::Stmt>,
         src_path: Option<&Path>,
         interner: &'a mut StringInterner,
-    ) -> Result<(Ast, Vec<StmtId>)> {
+    ) -> Result<(Ast, Vec<StmtId>, pragma::Program)> {
         let base_dir = src_path.and_then(|p| p.parent().map(Path::to_path_buf));
         let mut ctx = Self::new(base_dir, interner);
+        let (stmts, pragmas) = ctx.normalize_stmts(stmts, ScopeKind::Root)?;
         ctx.prescan_class_defs(&stmts)?;
         let ids = stmts
             .into_iter()
             .map(|s| ctx.stmt(s))
             .collect::<Result<Vec<_>>>()?;
-        Ok((ctx.ast, ids))
+        Ok((ctx.ast, ids, pragmas))
+    }
+
+    fn normalize_stmts(
+        &mut self,
+        stmts: Vec<cst::Stmt>,
+        scope: ScopeKind,
+    ) -> Result<(Vec<cst::Stmt>, pragma::Program)> {
+        let mut seen_non_options = false;
+        let mut pending = Pending::default();
+        let mut pragmas = pragma::Program::default();
+        let mut seen_opts = HashSet::new();
+        let mut out = Vec::with_capacity(stmts.len());
+
+        stmts.into_iter().try_for_each(|mut stmt| match stmt.kind {
+            cst::StmtKind::Pragma(p) => {
+                match p {
+                    cst::pragma::Kind::Options(opts) => {
+                        if scope != ScopeKind::Root {
+                            Err(Error::static_err(
+                                stmt.span,
+                                "`options` pragmas are only allowed at the root",
+                            ))?
+                        }
+                        if seen_non_options {
+                            Err(Error::static_err(
+                                stmt.span,
+                                "`options` pragmas must appear before imports and declarations",
+                            ))?
+                        }
+                        self.lower_db_options(opts, &mut seen_opts, &mut pragmas)
+                    }
+                    cst::pragma::Kind::Deriving(p) => {
+                        seen_non_options = true;
+                        if pending.deriving.is_some() {
+                            Err(Error::static_err(
+                                stmt.span,
+                                "duplicate `deriving` pragma for declaration",
+                            ))?
+                        }
+                        pending.deriving = Some((p, stmt.span));
+                        Ok(())
+                    }
+                    cst::pragma::Kind::RequiredMethods(p) => {
+                        seen_non_options = true;
+                        if pending.required_methods.is_some() {
+                            Err(Error::static_err(
+                                stmt.span,
+                                "duplicate `required` pragma for declaration",
+                            ))?
+                        }
+                        pending.required_methods = Some((p, stmt.span));
+                        Ok(())
+                    }
+                    cst::pragma::Kind::DefaultDefinition => Err(Error::static_err(
+                        stmt.span,
+                        "`default` pragmas are not supported in this phase",
+                    )),
+                    cst::pragma::Kind::Unknown(name) => Err(Error::parse(
+                        name.span,
+                        format!("unknown pragma family `{}`", self.name(name.name)),
+                        vec![],
+                    )),
+                }
+            }
+            kind => {
+                seen_non_options = true;
+                stmt.kind = kind;
+                self.attach_pragmas(&mut stmt, &mut pending)?;
+                out.push(stmt);
+                Ok(())
+            }
+        })?;
+
+        self.reject_pending(pending)?;
+        Ok((out, pragmas))
+    }
+
+    fn attach_pragmas(
+        &self,
+        stmt: &mut cst::Stmt,
+        pending: &mut Pending,
+    ) -> Result<()> {
+        if let Some((p, span)) = pending.deriving.take() {
+            if matches!(
+                &stmt.kind,
+                cst::StmtKind::Type { .. }
+                    | cst::StmtKind::Newtype { .. }
+                    | cst::StmtKind::Union { .. }
+            ) {
+                stmt.pragmas.deriving = Some(p);
+            } else {
+                Err(Error::static_err(
+                    span,
+                    "`deriving` pragmas attach only to `variant`, `newtype`, or `union`",
+                ))?
+            }
+        }
+
+        if let Some((p, span)) = pending.required_methods.take() {
+            if matches!(&stmt.kind, cst::StmtKind::ClassDef { .. }) {
+                stmt.pragmas.required_methods = Some(p);
+            } else {
+                Err(Error::static_err(
+                    span,
+                    "`required` pragmas attach only to class definitions",
+                ))?
+            }
+        }
+
+        Ok(())
+    }
+
+    fn reject_pending(&self, pending: Pending) -> Result<()> {
+        if let Some((_, span)) = pending.deriving {
+            Err(Error::static_err(span, "unattached `deriving` pragma"))?
+        } else if let Some((_, span)) = pending.required_methods {
+            Err(Error::static_err(span, "unattached `required` pragma"))?
+        } else {
+            Ok(())
+        }
+    }
+
+    fn lower_db_options(
+        &self,
+        opts: cst::pragma::Options,
+        seen: &mut HashSet<StringId>,
+        pragmas: &mut pragma::Program,
+    ) -> Result<()> {
+        opts.0.into_iter().try_for_each(|opt| {
+            if seen.contains(&opt.name.name) {
+                let name = self.name(opt.name.name);
+                Err(Error::static_err(
+                    opt.name.span,
+                    format!("duplicate database option `{name}`"),
+                ))?
+            }
+            seen.insert(opt.name.name);
+            let lowered = self.db_option(opt)?;
+            pragmas.db_options.push(lowered);
+            Ok(())
+        })
+    }
+
+    fn db_option(
+        &self,
+        opt: cst::pragma::DbOption,
+    ) -> Result<pragma::DbOption> {
+        let name = self.name(opt.name.name);
+        match name.as_str() {
+            "cache-size" => self.db_cache_size(opt),
+            "sync-mode" => self.db_sync_mode(opt),
+            "wal-max-file-size" => self.db_wal_max_file_size(opt),
+            "min-degree" | "max-pages" | "max-memory-bytes" => {
+                Err(Error::static_err(
+                    opt.name.span,
+                    format!("database option `{name}` is rebuild-only"),
+                ))
+            }
+            _ => Err(Error::static_err(
+                opt.name.span,
+                format!("unknown database option `{name}`"),
+            )),
+        }
+    }
+
+    fn db_cache_size(
+        &self,
+        opt: cst::pragma::DbOption,
+    ) -> Result<pragma::DbOption> {
+        match opt.value {
+            cst::pragma::Value::Int(v, span) => {
+                let size = usize::try_from(v).map_err(|_| {
+                    Error::static_err(
+                        span,
+                        "`cache-size` must be an integer greater than `0`",
+                    )
+                })?;
+                if size > 0 && size.is_power_of_two() {
+                    Ok(pragma::DbOption::CacheSize {
+                        value: size,
+                        span: opt.span,
+                    })
+                } else {
+                    Err(Error::static_err(
+                        span,
+                        "`cache-size` must be greater than `0` and a power of `2`",
+                    ))
+                }
+            }
+            v => Err(Error::static_err(
+                Self::pragma_value_span(&v),
+                "`cache-size` expects an integer value",
+            )),
+        }
+    }
+
+    fn db_sync_mode(
+        &self,
+        opt: cst::pragma::DbOption,
+    ) -> Result<pragma::DbOption> {
+        match opt.value {
+            cst::pragma::Value::Ident(n) => {
+                let value = match self.name(n.name).as_str() {
+                    "immediate" => Ok(pragma::SyncMode::Immediate),
+                    "on-commit" => Ok(pragma::SyncMode::OnCommit),
+                    "relaxed" => Ok(pragma::SyncMode::Relaxed),
+                    "periodic" => Err(Error::static_err(
+                        n.span,
+                        "`sync-mode = periodic` is not supported by pragma syntax yet",
+                    )),
+                    other => Err(Error::static_err(
+                        n.span,
+                        format!("unsupported `sync-mode` value `{other}`"),
+                    )),
+                }?;
+                Ok(pragma::DbOption::SyncMode {
+                    value,
+                    span: opt.span,
+                })
+            }
+            v => Err(Error::static_err(
+                Self::pragma_value_span(&v),
+                "`sync-mode` expects an identifier value",
+            )),
+        }
+    }
+
+    fn db_wal_max_file_size(
+        &self,
+        opt: cst::pragma::DbOption,
+    ) -> Result<pragma::DbOption> {
+        match opt.value {
+            cst::pragma::Value::Int(v, span) => {
+                let size = u64::try_from(v).map_err(|_| {
+                    Error::static_err(
+                        span,
+                        "`wal-max-file-size` must be an integer greater than `0`",
+                    )
+                })?;
+                if size > 0 {
+                    Ok(pragma::DbOption::WalMaxFileSize {
+                        value: size,
+                        span: opt.span,
+                    })
+                } else {
+                    Err(Error::static_err(
+                        span,
+                        "`wal-max-file-size` must be greater than `0`",
+                    ))
+                }
+            }
+            v => Err(Error::static_err(
+                Self::pragma_value_span(&v),
+                "`wal-max-file-size` expects an integer value",
+            )),
+        }
+    }
+
+    fn pragma_value_span(v: &cst::pragma::Value) -> Span {
+        match v {
+            cst::pragma::Value::Ident(n) => n.span,
+            cst::pragma::Value::Int(_, span)
+            | cst::pragma::Value::String(_, span) => *span,
+        }
+    }
+
+    fn name(&self, id: StringId) -> String {
+        self.interner.get(id).unwrap_or_default().to_owned()
     }
 
     /// Pre-scan CST for `ClassDef` nodes and register stubs in the
@@ -333,6 +632,120 @@ impl<'a> LowerCtx<'a> {
         }
     }
 
+    fn type_pragmas(&self, ps: cst::pragma::Attached) -> Result<pragma::Type> {
+        let deriving = ps
+            .deriving
+            .map(|p| self.deriving_pragma(p))
+            .transpose()?
+            .unwrap_or_default();
+        Ok(pragma::Type { deriving })
+    }
+
+    fn deriving_pragma(
+        &self,
+        p: cst::pragma::Deriving,
+    ) -> Result<pragma::Deriving> {
+        let mut seen = HashSet::new();
+        let ids = p
+            .0
+            .into_iter()
+            .map(|n| {
+                let name = self.name(n.name);
+                if seen.contains(&n.name) {
+                    Err(Error::static_err(
+                        n.span,
+                        format!("duplicate deriving class `{name}`"),
+                    ))?
+                }
+                seen.insert(n.name);
+                let id =
+                    self.registry.lookup_by_name(n.name).ok_or_else(|| {
+                        Error::static_err(
+                            n.span,
+                            format!("unknown deriving class `{name}`"),
+                        )
+                    })?;
+                if id.idx() < ClassId::BUILTIN_COUNT {
+                    Ok(id)
+                } else {
+                    Err(Error::static_err(
+                        n.span,
+                        format!("cannot derive user defined class `{name}`"),
+                    ))
+                }
+            })
+            .collect::<Result<SmallVec<_>>>()?;
+        Ok(pragma::Deriving(ids))
+    }
+
+    fn class_pragmas(
+        &self,
+        methods: &[cst::ClassMethodSig],
+        ps: cst::pragma::Attached,
+    ) -> Result<pragma::Class> {
+        let required_methods = ps
+            .required_methods
+            .map(|p| self.required_methods_pragma(methods, p))
+            .transpose()?
+            .unwrap_or_default();
+        Ok(pragma::Class { required_methods })
+    }
+
+    fn required_methods_pragma(
+        &self,
+        methods: &[cst::ClassMethodSig],
+        p: cst::pragma::RequiredMethods,
+    ) -> Result<pragma::RequiredMethods> {
+        let declared: HashSet<_> = methods.iter().map(|m| m.name).collect();
+        let mut seen = HashSet::new();
+        let ids =
+            p.0.into_iter()
+                .map(|n| {
+                    let name = self.name(n.name);
+                    if seen.contains(&n.name) {
+                        Err(Error::static_err(
+                            n.span,
+                            format!("duplicate required method `{name}`"),
+                        ))?
+                    }
+                    seen.insert(n.name);
+                    if declared.contains(&n.name) {
+                        Ok(n.name)
+                    } else {
+                        Err(Error::static_err(
+                            n.span,
+                            format!("unknown required method `{name}`"),
+                        ))
+                    }
+                })
+                .collect::<Result<SmallVec<_>>>()?;
+        Ok(pragma::RequiredMethods(ids))
+    }
+
+    fn normalize_expr_stmts(
+        &mut self,
+        stmts: Vec<cst::Stmt>,
+        tail: Option<Box<cst::Expr>>,
+        scope: ScopeKind,
+    ) -> Result<(Vec<cst::Stmt>, Option<Box<cst::Expr>>)> {
+        let has_tail = tail.is_some();
+        let mut all = stmts;
+        tail.map(|e| {
+            let span = e.span;
+            all.push(cst::Stmt::new(cst::StmtKind::Expr(*e), span));
+        });
+        let (mut norm, _) = self.normalize_stmts(all, scope)?;
+        let tail = if has_tail {
+            norm.pop().and_then(|s| match s.kind {
+                cst::StmtKind::Expr(e) => Some(Box::new(e)),
+                _ => None,
+            })
+        } else {
+            None
+        };
+        Ok((norm, tail))
+    }
+
     /// Convert a CST type parameter to an AST type parameter.
     fn type_param(&mut self, tp: cst::TypeParam) -> Result<TypeParam> {
         let constraints = tp
@@ -433,6 +846,9 @@ impl<'a> LowerCtx<'a> {
         let old_base = self.base_dir.take();
         self.base_dir = canonical.parent().map(Path::to_path_buf);
 
+        let (cst_stmts, _) =
+            self.normalize_stmts(cst_stmts, ScopeKind::Module)?;
+
         let ids = cst_stmts
             .into_iter()
             .map(|s| self.stmt(s))
@@ -519,7 +935,12 @@ impl<'a> LowerCtx<'a> {
     /// Lower a CST statement to AST.
     fn stmt(&mut self, stmt: cst::Stmt) -> Result<StmtId> {
         let span = stmt.span;
+        let pragmas = stmt.pragmas;
         let s = match stmt.kind {
+            cst::StmtKind::Pragma(_) => Err(Error::static_err(
+                span,
+                "pragma was not normalized before lowering",
+            ))?,
             cst::StmtKind::Let(pat, ty, expr, vis) => {
                 let pat = self.binding_pattern(pat);
                 let ty_id = ty.map(|t| self.type_expr(t)).transpose()?;
@@ -594,6 +1015,7 @@ impl<'a> LowerCtx<'a> {
                 def,
                 vis,
             } => {
+                let pragmas = self.type_pragmas(pragmas)?;
                 self.known_types.insert(name);
                 self.push_type_params(type_params.iter().map(|tp| tp.name));
                 let def_lowered = self.type_def(def)?;
@@ -604,6 +1026,7 @@ impl<'a> LowerCtx<'a> {
                     type_params: tp_lowered,
                     def: def_lowered,
                     vis: Self::vis(vis),
+                    pragmas,
                 }
             }
             cst::StmtKind::Newtype {
@@ -613,6 +1036,7 @@ impl<'a> LowerCtx<'a> {
                 vis,
                 repr_vis,
             } => {
+                let pragmas = self.type_pragmas(pragmas)?;
                 self.known_types.insert(name);
                 self.push_type_params(type_params.iter().map(|tp| tp.name));
                 let target_id = self.type_expr(target)?;
@@ -624,6 +1048,7 @@ impl<'a> LowerCtx<'a> {
                     target: target_id,
                     vis: Self::vis(vis),
                     repr_vis: Self::vis(repr_vis),
+                    pragmas,
                 }
             }
             cst::StmtKind::Union {
@@ -632,6 +1057,7 @@ impl<'a> LowerCtx<'a> {
                 members,
                 vis,
             } => {
+                let pragmas = self.type_pragmas(pragmas)?;
                 self.known_types.insert(name);
                 self.push_type_params(type_params.iter().map(|tp| tp.name));
                 let member_ids = members
@@ -645,14 +1071,18 @@ impl<'a> LowerCtx<'a> {
                     type_params: tp_lowered,
                     members: member_ids,
                     vis: Self::vis(vis),
+                    pragmas,
                 }
             }
             cst::StmtKind::Module { name, source } => {
                 let body_ids = match source {
-                    cst::ModuleSource::Inline(body) => body
-                        .into_iter()
-                        .map(|s| self.stmt(s))
-                        .collect::<Result<Vec<_>>>()?,
+                    cst::ModuleSource::Inline(body) => {
+                        let (body, _) =
+                            self.normalize_stmts(body, ScopeKind::Module)?;
+                        body.into_iter()
+                            .map(|s| self.stmt(s))
+                            .collect::<Result<Vec<_>>>()?
+                    }
                     cst::ModuleSource::File(path) => {
                         self.module_from_file(&path, span)?
                     }
@@ -687,6 +1117,7 @@ impl<'a> LowerCtx<'a> {
                 assoc_types,
                 methods,
             } => {
+                let pragmas = self.class_pragmas(&methods, pragmas)?;
                 self.push_type_params(
                     class_params
                         .iter()
@@ -747,6 +1178,7 @@ impl<'a> LowerCtx<'a> {
                     supers: supers_lowered,
                     assoc_types: assoc_lowered,
                     methods: methods_lowered,
+                    pragmas,
                 }
             }
             cst::StmtKind::ClassInstance {
@@ -961,6 +1393,8 @@ impl<'a> LowerCtx<'a> {
                 Expr::Read(inner_id, ty_id)
             }
             cst::ExprKind::Block(stmts, tail) => {
+                let (stmts, tail) =
+                    self.normalize_expr_stmts(stmts, tail, ScopeKind::Block)?;
                 let stmt_ids = stmts
                     .into_iter()
                     .map(|s| self.stmt(s))
@@ -1121,20 +1555,22 @@ impl<'a> LowerCtx<'a> {
                 }
             }
             cst::ExprKind::Transaction(txn) => {
-                let stmts = txn
-                    .stmts
+                let cst::TransactionExpr {
+                    stmts,
+                    expr,
+                    modifiers,
+                } = *txn;
+                let (stmts, expr) =
+                    self.normalize_expr_stmts(stmts, expr, ScopeKind::Transaction)?;
+                let stmt_ids = stmts
                     .into_iter()
                     .map(|s| self.stmt(s))
                     .collect::<Result<Vec<_>>>()?;
-                let expr = txn
-                    .expr
-                    .map(|e| self.expr(*e))
-                    .transpose()?;
-                let modifiers =
-                    self.txn_modifiers(txn.modifiers)?;
+                let expr = expr.map(|e| self.expr(*e)).transpose()?;
+                let modifiers = self.txn_modifiers(modifiers)?;
                 Expr::Transaction(ast::TransactionExpr {
                     id: None,
-                    stmts,
+                    stmts: stmt_ids,
                     expr,
                     modifiers,
                 })
@@ -1870,6 +2306,7 @@ impl<'a> MergeCtx<'a> {
                 type_params,
                 def,
                 vis,
+                pragmas,
             } => {
                 let new_def = match def {
                     TypeDefAst::Sum(variants) => {
@@ -1895,6 +2332,7 @@ impl<'a> MergeCtx<'a> {
                     type_params,
                     def: new_def,
                     vis,
+                    pragmas,
                 }
             }
             Stmt::Newtype {
@@ -1903,6 +2341,7 @@ impl<'a> MergeCtx<'a> {
                 target: ty,
                 vis,
                 repr_vis,
+                pragmas,
             } => {
                 let new_ty = self.type_expr(ty, span)?;
                 Stmt::Newtype {
@@ -1911,6 +2350,7 @@ impl<'a> MergeCtx<'a> {
                     target: new_ty,
                     vis,
                     repr_vis,
+                    pragmas,
                 }
             }
             Stmt::Union {
@@ -1918,6 +2358,7 @@ impl<'a> MergeCtx<'a> {
                 type_params,
                 members,
                 vis,
+                pragmas,
             } => {
                 let new_members: Result<SmallVec<_>> =
                     members.iter().map(|&m| self.type_expr(m, span)).collect();
@@ -1926,6 +2367,7 @@ impl<'a> MergeCtx<'a> {
                     type_params,
                     members: new_members?,
                     vis,
+                    pragmas,
                 }
             }
             Stmt::Module { name, body } => {
@@ -1944,6 +2386,7 @@ impl<'a> MergeCtx<'a> {
                 supers,
                 assoc_types,
                 methods,
+                pragmas,
             } => {
                 let new_methods: Result<SmallVec<_>> = methods
                     .into_iter()
@@ -1985,6 +2428,7 @@ impl<'a> MergeCtx<'a> {
                     supers: new_supers?,
                     assoc_types,
                     methods: new_methods?,
+                    pragmas,
                 }
             }
             Stmt::ClassInstance {

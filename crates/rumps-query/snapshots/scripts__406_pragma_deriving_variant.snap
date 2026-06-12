@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(deriving: Eq, Ord)\n\nvariant Mood = Happy | Sad\n\n#(deriving: Eq, Ord)\nnewtype UserId = Int\n\n#(deriving: Eq)\nunion NameOrId = String | Int\n\nfun main() {\n  write \"deriving\"\n}\n"
+---
+"deriving"

@@ -127,6 +127,7 @@ impl InferCtx<'_> {
                     supers,
                     assoc_types,
                     methods,
+                    ..
                 }) => {
                     self.hoist_class_def(ClassDefInput {
                         name,

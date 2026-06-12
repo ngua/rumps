@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(options: sync-mode = immediate)\n#(options: sync-mode = relaxed)\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: 45..54: duplicate database option `sync-mode`

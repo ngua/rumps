@@ -142,6 +142,7 @@ pub(crate) enum Token<S = StringId> {
     FatArrow,   // =>
     Pipe,       // |>
     SinglePipe, // | (variant separator)
+    Hash,       // #
 
     // Special
     Newline,
@@ -326,6 +327,7 @@ impl Token<String> {
             FatArrow,
             Pipe,
             SinglePipe,
+            Hash,
             Newline,
             Indent,
             Dedent,
@@ -437,6 +439,7 @@ impl fmt::Display for Token<String> {
             Self::FatArrow => write!(f, "=>"),
             Self::Pipe => write!(f, "|>"),
             Self::SinglePipe => write!(f, "|"),
+            Self::Hash => write!(f, "#"),
             Self::Newline => write!(f, "newline"),
             Self::Indent => write!(f, "indent"),
             Self::Dedent => write!(f, "dedent"),
@@ -583,6 +586,7 @@ impl fmt::Display for Token<StringId> {
             Self::FatArrow => write!(f, "=>"),
             Self::Pipe => write!(f, "|>"),
             Self::SinglePipe => write!(f, "|"),
+            Self::Hash => write!(f, "#"),
             Self::Newline => write!(f, "newline"),
             Self::Indent => write!(f, "indent"),
             Self::Dedent => write!(f, "dedent"),

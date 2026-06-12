@@ -301,6 +301,7 @@ impl InferCtx<'_> {
                     vis,
                     ref type_params,
                     ref def,
+                    ..
                 }) => {
                     let qn = mod_path.child(*name);
                     self.env.register_user_module_type_vis(qn, vis);
@@ -311,6 +312,7 @@ impl InferCtx<'_> {
                     vis,
                     ref type_params,
                     ref members,
+                    ..
                 }) => {
                     let qn = mod_path.child(*name);
                     self.env.register_user_module_type_vis(qn, vis);

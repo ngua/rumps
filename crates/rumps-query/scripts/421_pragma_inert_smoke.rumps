@@ -1,0 +1,12 @@
+#(options: sync-mode = immediate, cache-size = 128, wal-max-file-size = 1048576)
+#(deriving: Eq)
+variant Mood = Happy | Sad
+
+#(required: eq)
+class MyEq C {
+  fun eq(a: C, b: C) -> Bool
+}
+
+fun main() {
+  write "pragma smoke"
+}

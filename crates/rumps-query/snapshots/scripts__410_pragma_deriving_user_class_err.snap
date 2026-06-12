@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "class MyEq C {\n  fun eq(a: C, b: C) -> Bool\n}\n\n#(deriving: MyEq)\nvariant Mood = Happy | Sad\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: 59..63: cannot derive user defined class `MyEq`

@@ -1,0 +1,5 @@
+#(options: sync-mode = periodic)
+
+fun main() {
+  write "bad"
+}

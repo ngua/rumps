@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(options: mystery-size = 128)\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: 11..23: unknown database option `mystery-size`

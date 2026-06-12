@@ -1,0 +1,7 @@
+import Math.{ floor }
+
+#(options: sync-mode = immediate)
+
+fun main() {
+  write floor(1.5)
+}

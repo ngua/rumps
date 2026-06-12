@@ -158,6 +158,7 @@ async fn run_with_io<I: IoContext>(
         io,
         interactive,
         interner,
+        result.pragmas,
     )?;
     let interp = interp.run(&result.stmts, interactive).await?;
     Ok(interp.into_io())

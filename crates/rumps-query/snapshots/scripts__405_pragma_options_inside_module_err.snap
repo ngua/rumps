@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "module M {\n  #(options: sync-mode = immediate)\n  let x = 1\n}\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: 13..46: `options` pragmas are only allowed at the root

@@ -1,0 +1,141 @@
+//! Pragma parsing.
+
+use chumsky::prelude::{choice, filter, just, select};
+use chumsky::Parser as _;
+use smallvec::SmallVec;
+
+use super::{ParseErr, Parser};
+use crate::intern::StringInterner;
+use crate::parser::cst;
+use crate::Token;
+
+impl Parser {
+    pub(super) fn pragma_stmt(
+        interner: &mut StringInterner,
+    ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> + Clone {
+        Self::pragma(interner).map_with_span(|p, span| {
+            cst::Stmt::new(cst::StmtKind::Pragma(p), span)
+        })
+    }
+
+    fn pragma(
+        interner: &mut StringInterner,
+    ) -> impl chumsky::Parser<Token, cst::pragma::Kind, Error = ParseErr> + Clone
+    {
+        let options = interner.intern("options");
+        let deriving = interner.intern("deriving");
+        let required = interner.intern("required");
+        let default = interner.intern("default");
+
+        let name_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
+        let names = Self::pragma_name()
+            .separated_by(name_sep)
+            .at_least(1)
+            .allow_trailing()
+            .map(SmallVec::from_vec);
+
+        let option_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
+        let options_prag = Self::ctx_ident(options)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(just(Token::Colon))
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(
+                Self::db_option()
+                    .separated_by(option_sep)
+                    .at_least(1)
+                    .allow_trailing(),
+            )
+            .map(|opts| cst::pragma::Kind::Options(cst::pragma::Options(opts)));
+
+        let deriving_prag = Self::ctx_ident(deriving)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(just(Token::Colon))
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(names.clone())
+            .map(|names| {
+                cst::pragma::Kind::Deriving(cst::pragma::Deriving(names))
+            });
+
+        let required_prag = Self::ctx_ident(required)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(just(Token::Colon))
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(names)
+            .map(|names| {
+                cst::pragma::Kind::RequiredMethods(
+                    cst::pragma::RequiredMethods(names),
+                )
+            });
+
+        let default_prag =
+            Self::ctx_ident(default).to(cst::pragma::Kind::DefaultDefinition);
+        let unknown_prag =
+            Self::unknown_pragma_name(options, deriving, required, default)
+                .then(filter(|t: &Token| *t != Token::RParen).repeated())
+                .map(|(name, _)| cst::pragma::Kind::Unknown(name));
+
+        just(Token::Hash)
+            .ignore_then(just(Token::LParen))
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(choice((
+                options_prag,
+                deriving_prag,
+                required_prag,
+                default_prag,
+                unknown_prag,
+            )))
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RParen))
+    }
+
+    fn pragma_name(
+    ) -> impl chumsky::Parser<Token, cst::pragma::SpannedName, Error = ParseErr>
+           + Clone {
+        select! { Token::Ident(name) => name }
+            .map_with_span(|name, span| cst::pragma::SpannedName { name, span })
+    }
+
+    fn unknown_pragma_name(
+        options: crate::StringId,
+        deriving: crate::StringId,
+        required: crate::StringId,
+        default: crate::StringId,
+    ) -> impl chumsky::Parser<Token, cst::pragma::SpannedName, Error = ParseErr>
+           + Clone {
+        select! {
+            Token::Ident(name)
+                if name != options
+                    && name != deriving
+                    && name != required
+                    && name != default => name
+        }
+        .map_with_span(|name, span| cst::pragma::SpannedName { name, span })
+    }
+
+    fn pragma_value(
+    ) -> impl chumsky::Parser<Token, cst::pragma::Value, Error = ParseErr> + Clone
+    {
+        choice((
+            Self::pragma_name().map(cst::pragma::Value::Ident),
+            select! { Token::Int(v) => v }
+                .map_with_span(cst::pragma::Value::Int),
+            select! { Token::String(v) => v }
+                .map_with_span(cst::pragma::Value::String),
+        ))
+    }
+
+    fn db_option(
+    ) -> impl chumsky::Parser<Token, cst::pragma::DbOption, Error = ParseErr> + Clone
+    {
+        Self::pragma_name()
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::Assign))
+            .then_ignore(Self::opt_newlines())
+            .then(Self::pragma_value())
+            .map_with_span(|(name, value), span| cst::pragma::DbOption {
+                name,
+                value,
+                span,
+            })
+    }
+}

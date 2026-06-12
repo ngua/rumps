@@ -1,0 +1,13 @@
+#(deriving: Eq, Ord)
+
+variant Mood = Happy | Sad
+
+#(deriving: Eq, Ord)
+newtype UserId = Int
+
+#(deriving: Eq)
+union NameOrId = String | Int
+
+fun main() {
+  write "deriving"
+}

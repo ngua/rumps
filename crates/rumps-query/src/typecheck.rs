@@ -40,7 +40,7 @@ pub(crate) use ty::{
     TypeClass,
 };
 
-use crate::ast::{ExprId, MatchPatternId};
+use crate::ast::{pragma, ExprId, MatchPatternId};
 use crate::intern::StringId;
 
 /// Output from type checking.
@@ -78,6 +78,7 @@ pub(crate) struct TypecheckOutput {
     pub(crate) match_targets: HashMap<MatchPatternId, TyId>,
     /// Maps solved alias `TyId`s to their expanded underlying `TyId`s.
     pub(crate) alias_type_expansions: HashMap<TyId, TyId>,
+    pub(crate) program_pragmas: pragma::Program,
 }
 
 #[derive(Clone)]
@@ -363,6 +364,7 @@ impl TypecheckOutput {
             is_patterns,
             let_targets,
             match_targets,
+            program_pragmas: self.program_pragmas.clone(),
         }
     }
 }
@@ -421,6 +423,7 @@ mod tests {
             let_targets: HashMap::new(),
             match_targets: HashMap::new(),
             alias_type_expansions: HashMap::new(),
+            program_pragmas: pragma::Program::default(),
         };
         let checked = output.to_checked();
 
@@ -470,6 +473,7 @@ mod tests {
             let_targets: HashMap::new(),
             match_targets: HashMap::new(),
             alias_type_expansions: HashMap::new(),
+            program_pragmas: pragma::Program::default(),
         };
         let checked = output.to_checked();
 
@@ -511,6 +515,7 @@ mod tests {
             let_targets: HashMap::new(),
             match_targets: HashMap::new(),
             alias_type_expansions: HashMap::new(),
+            program_pragmas: pragma::Program::default(),
         };
         let checked = output.to_checked();
 
@@ -574,6 +579,7 @@ mod tests {
             let_targets: HashMap::from([(let_id, TyArena::INT)]),
             match_targets: HashMap::from([(pat_id, TyArena::FLOAT)]),
             alias_type_expansions: HashMap::new(),
+            program_pragmas: pragma::Program::default(),
         };
         let checked = output.to_checked();
 

@@ -1,0 +1,6 @@
+#(required: fold)
+variant Mood = Happy | Sad
+
+fun main() {
+  write "bad"
+}

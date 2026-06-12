@@ -70,9 +70,12 @@ mod expr;
 mod lower;
 mod pattern;
 mod postfix;
+#[path = "parser/pragma.rs"]
+mod pragma_parser;
 mod stmt;
 mod types;
 
+use crate::ast::pragma;
 use crate::lexer::Spanned;
 use crate::{Ast, Error, Lexer, Result, Span, StmtId, StringInterner, Token};
 
@@ -84,6 +87,7 @@ type ParseErr = Simple<Token, Span>;
 pub(crate) struct ParseResult {
     pub ast: Ast,
     pub stmts: Vec<StmtId>,
+    pub pragmas: pragma::Program,
 }
 
 /// Parses source code into an AST.
@@ -117,7 +121,14 @@ impl Parser {
         interner: &mut StringInterner,
     ) -> Result<ParseResult> {
         let interned = Spanned::intern_all(tokens, interner);
-        Self::parse_interned(&interned, None, interner)
+        let cst_stmts = Self::parse_cst_interned(&interned, interner)?;
+        let (ast, stmts) =
+            lower::LowerCtx::interpolation_program(cst_stmts, interner)?;
+        Ok(ParseResult {
+            ast,
+            stmts,
+            pragmas: pragma::Program::default(),
+        })
     }
 
     /// Core parse function: takes interned tokens, produces a `ParseResult`.
@@ -126,39 +137,16 @@ impl Parser {
         src_path: Option<&Path>,
         interner: &mut StringInterner,
     ) -> Result<ParseResult> {
-        let parser = Self::program(interner);
-
-        let eof_span = tokens
-            .iter()
-            .find_map(|s| matches!(s.tok, Token::Eof).then_some(s.span))
-            .unwrap_or_default();
-
-        let stream = chumsky::Stream::from_iter(
-            eof_span,
-            tokens
-                .iter()
-                .filter(|s| !matches!(s.tok, Token::Eof))
-                .map(|s| (s.tok.clone(), s.span)),
-        );
-
-        parser
-            .parse(stream)
-            .map_err(|errs| {
-                NonEmpty::collect(
-                    errs.into_iter()
-                        .map(|e| Error::from_parse_rich(e, interner)),
-                )
-                .map(Error::multiple)
-                .unwrap_or_else(|| {
-                    Error::runtime_no_span("unknown parse error")
-                })
+        Self::parse_cst_interned(tokens, interner).and_then(|cst_stmts| {
+            let (ast, stmts, pragmas) = lower::LowerCtx::program_with_path(
+                cst_stmts, src_path, interner,
+            )?;
+            Ok(ParseResult {
+                ast,
+                stmts,
+                pragmas,
             })
-            .and_then(|cst_stmts| {
-                let (ast, stmts) = lower::LowerCtx::program_with_path(
-                    cst_stmts, src_path, interner,
-                )?;
-                Ok(ParseResult { ast, stmts })
-            })
+        })
     }
 
     /// Parse a raw token stream into CST (without lowering to AST).
@@ -170,16 +158,23 @@ impl Parser {
         interner: &mut StringInterner,
     ) -> Result<Vec<cst::Stmt>> {
         let interned = Spanned::intern_all(tokens, interner);
+        Self::parse_cst_interned(&interned, interner)
+    }
+
+    fn parse_cst_interned(
+        tokens: &[Spanned],
+        interner: &mut StringInterner,
+    ) -> Result<Vec<cst::Stmt>> {
         let parser = Self::program(interner);
 
-        let eof_span = interned
+        let eof_span = tokens
             .iter()
             .find_map(|s| matches!(s.tok, Token::Eof).then_some(s.span))
             .unwrap_or_default();
 
         let stream = chumsky::Stream::from_iter(
             eof_span,
-            interned
+            tokens
                 .iter()
                 .filter(|s| !matches!(s.tok, Token::Eof))
                 .map(|s| (s.tok.clone(), s.span)),

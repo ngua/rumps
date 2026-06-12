@@ -909,6 +909,7 @@ impl Lexer<'_> {
             just('|').to(Token::SinglePipe),
             just('&').to(Token::Amp),
             just('?').to(Token::Question),
+            just('#').to(Token::Hash),
         ));
 
         let punct = choice((

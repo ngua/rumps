@@ -119,7 +119,7 @@ use rumps_storage::{Database, Transaction};
 use smallvec::SmallVec;
 
 use crate::ast::{
-    Ast, BinOp, BindingPattern, Expr, ExprId, Import, ImportItem,
+    pragma, Ast, BinOp, BindingPattern, Expr, ExprId, Import, ImportItem,
     JsonAccessKey, JsonAccessKind, Literal, NumericLit, OutputFormat,
     OutputTarget, Stmt, StmtId, TxnId, TypeDefAst, TypeParam, TypePattern,
     UnOp, WriteExpr,
@@ -208,6 +208,9 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
 
     /// Runtime substitutions for generic callable body evaluation.
     runtime_ty_substs: Vec<HashMap<TyVar, RuntimeTyId>>,
+
+    /// Parsed program pragmas; inert in pragma phase `1`.
+    program_pragmas: pragma::Program,
 }
 
 // Public API
@@ -228,6 +231,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         io: I,
         interactive: bool,
         interner: StringInterner,
+        program_pragmas: pragma::Program,
     ) -> Result<Self> {
         let mut arena = ValueArena::with_interner(interner);
 
@@ -283,6 +287,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             &env,
             arena.interner(),
             interactive,
+            program_pragmas.clone(),
         )
         .check(stmts, &registry, &arena)?;
 
@@ -310,6 +315,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             user_instances: instance::RuntimeInstanceRegistry::new(),
             resolved_instances,
             runtime_ty_substs: Vec::new(),
+            program_pragmas,
         })
     }
 
@@ -452,6 +458,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             is_patterns: HashMap::new(),
             let_targets: HashMap::new(),
             match_targets: HashMap::new(),
+            program_pragmas: pragma::Program::default(),
         };
         Self {
             ast,
@@ -468,6 +475,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             user_instances: instance::RuntimeInstanceRegistry::new(),
             resolved_instances: HashMap::new(),
             runtime_ty_substs: Vec::new(),
+            program_pragmas: pragma::Program::default(),
         }
     }
 

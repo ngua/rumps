@@ -1,0 +1,6 @@
+#(deriving: Eq, Eq)
+variant Mood = Happy | Sad
+
+fun main() {
+  write "bad"
+}

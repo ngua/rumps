@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "fun main() {\n  write \"bad\"\n}\n\n#(deriving: Eq)\n"
+---
+ERROR: 30..45: unattached `deriving` pragma

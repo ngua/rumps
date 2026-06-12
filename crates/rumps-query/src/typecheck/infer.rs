@@ -52,7 +52,7 @@ use super::{
     CheckedTypePatternInfo, TypecheckOutput,
 };
 use crate::ast::{
-    self, AssocTypeDef, AstClassConstraints, AstTypeExprId, ExprId,
+    self, pragma, AssocTypeDef, AstClassConstraints, AstTypeExprId, ExprId,
     InstanceMethodDef, MatchPatternId, Stmt, StmtId, TxnId, TypeParam,
 };
 use crate::env::Environment;
@@ -932,6 +932,7 @@ pub(crate) struct InferCtx<'a> {
     defer_missing_import_members: bool,
     /// User-module value imports deferred until module `let`s are finalized.
     deferred_imports: Vec<(ast::Import, Span, Option<QualifiedName>)>,
+    program_pragmas: pragma::Program,
 }
 
 impl<'a> InferCtx<'a> {
@@ -948,6 +949,7 @@ impl<'a> InferCtx<'a> {
         runtime_env: &'a Environment,
         strings: StringInterner,
         interactive: bool,
+        program_pragmas: pragma::Program,
     ) -> Self {
         // Snapshot the runtime environment's arena so that `TyId`s from
         // builtin module schemes remain valid; inference will extend this
@@ -985,6 +987,7 @@ impl<'a> InferCtx<'a> {
             hoist: HoistState::new(),
             defer_missing_import_members: false,
             deferred_imports: Vec::new(),
+            program_pragmas,
         }
     }
 
@@ -2061,6 +2064,7 @@ impl<'a> InferCtx<'a> {
                 let_targets: self.interp.let_targets,
                 match_targets: self.interp.match_targets,
                 alias_type_expansions: self.interp.alias_type_expansions,
+                program_pragmas: self.program_pragmas,
             })
         }
     }

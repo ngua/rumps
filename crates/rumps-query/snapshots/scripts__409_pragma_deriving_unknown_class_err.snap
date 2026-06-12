@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(deriving: NotAClass)\nvariant Mood = Happy | Sad\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: 12..21: unknown deriving class `NotAClass`

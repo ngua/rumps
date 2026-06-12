@@ -1,0 +1,4 @@
+#(deriving: Eq)
+fun main() {
+  write "bad"
+}

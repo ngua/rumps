@@ -1,0 +1,5 @@
+#(options: wal-max-file-size = 0)
+
+fun main() {
+  write "bad"
+}

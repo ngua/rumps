@@ -404,12 +404,68 @@ pub(crate) enum JsonAccessKey {
 pub(crate) struct Stmt {
     pub kind: StmtKind,
     pub span: Span,
+    pub pragmas: pragma::Attached,
 }
 
 impl Stmt {
     /// Create a new CST statement.
     pub(crate) fn new(kind: StmtKind, span: Span) -> Self {
-        Self { kind, span }
+        Self {
+            kind,
+            span,
+            pragmas: pragma::Attached::default(),
+        }
+    }
+}
+
+pub(crate) mod pragma {
+    use smallvec::SmallVec;
+
+    use crate::intern::StringId;
+    use crate::Span;
+
+    #[derive(Clone, Debug)]
+    pub(crate) enum Kind {
+        Options(Options),
+        Deriving(Deriving),
+        RequiredMethods(RequiredMethods),
+        DefaultDefinition,
+        Unknown(SpannedName),
+    }
+
+    #[derive(Clone, Debug)]
+    pub(crate) struct Options(pub(crate) Vec<DbOption>);
+
+    #[derive(Clone, Debug)]
+    pub(crate) struct Deriving(pub(crate) SmallVec<[SpannedName; 4]>);
+
+    #[derive(Clone, Debug)]
+    pub(crate) struct RequiredMethods(pub(crate) SmallVec<[SpannedName; 4]>);
+
+    #[derive(Clone, Copy, Debug)]
+    pub(crate) struct SpannedName {
+        pub(crate) name: StringId,
+        pub(crate) span: Span,
+    }
+
+    #[derive(Clone, Debug)]
+    pub(crate) struct DbOption {
+        pub(crate) name: SpannedName,
+        pub(crate) value: Value,
+        pub(crate) span: Span,
+    }
+
+    #[derive(Clone, Debug)]
+    pub(crate) enum Value {
+        Ident(SpannedName),
+        Int(i64, Span),
+        String(String, Span),
+    }
+
+    #[derive(Clone, Debug, Default)]
+    pub(crate) struct Attached {
+        pub(crate) deriving: Option<Deriving>,
+        pub(crate) required_methods: Option<RequiredMethods>,
     }
 }
 
@@ -507,6 +563,8 @@ pub(crate) struct AssocTypeCst {
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 pub(crate) enum StmtKind {
+    Pragma(pragma::Kind),
+
     /// Lexical binding with destructuring.
     ///
     /// The visibility is only meaningful inside modules (`+let` for public).

@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(options: sync-mode = immediate, cache-size = 128, wal-max-file-size = 1048576)\n#(deriving: Eq)\nvariant Mood = Happy | Sad\n\n#(required: eq)\nclass MyEq C {\n  fun eq(a: C, b: C) -> Bool\n}\n\nfun main() {\n  write \"pragma smoke\"\n}\n"
+---
+"pragma smoke"

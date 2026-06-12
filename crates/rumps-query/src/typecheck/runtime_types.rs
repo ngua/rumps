@@ -11,7 +11,7 @@ use smallvec::SmallVec;
 
 use super::ty::{ClassRegistry, Ty, TyArena, TyId};
 use super::Scheme;
-use crate::ast::{ExprId, MatchPatternId};
+use crate::ast::{pragma, ExprId, MatchPatternId};
 use crate::intern::StringId;
 use crate::value::{Payload, Value, ValueArena, ValueMeta};
 use crate::TypeId;
@@ -822,6 +822,7 @@ pub(crate) struct CheckedProgram {
     pub(crate) is_patterns: HashMap<ExprId, TypePatternInfo>,
     pub(crate) let_targets: HashMap<ExprId, RuntimeTyId>,
     pub(crate) match_targets: HashMap<MatchPatternId, RuntimeTyId>,
+    pub(crate) program_pragmas: pragma::Program,
 }
 
 impl CheckedProgram {

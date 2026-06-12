@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(required: fold)\nvariant Mood = Happy | Sad\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: 0..17: `required` pragmas attach only to class definitions

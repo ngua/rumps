@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(required: eq)\n#(required: eq)\nclass MyEq C {\n  fun eq(a: C, b: C) -> Bool\n}\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: 16..31: duplicate `required` pragma for declaration

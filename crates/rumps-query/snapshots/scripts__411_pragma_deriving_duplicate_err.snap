@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(deriving: Eq, Eq)\nvariant Mood = Happy | Sad\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: 16..18: duplicate deriving class `Eq`

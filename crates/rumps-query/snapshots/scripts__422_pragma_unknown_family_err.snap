@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(bogus: Eq)\nvariant Mood = Happy | Sad\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: parse error at 2..7: unknown pragma family `bogus`

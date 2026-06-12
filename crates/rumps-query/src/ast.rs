@@ -1256,6 +1256,48 @@ pub(crate) struct AssocTypeDef {
     pub(crate) span: Span,
 }
 
+pub(crate) mod pragma {
+    use smallvec::SmallVec;
+
+    use crate::intern::StringId;
+    use crate::{ClassId, Span};
+
+    #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    pub(crate) struct Program {
+        pub(crate) db_options: Vec<DbOption>,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub(crate) enum DbOption {
+        CacheSize { value: usize, span: Span },
+        SyncMode { value: SyncMode, span: Span },
+        WalMaxFileSize { value: u64, span: Span },
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum SyncMode {
+        Immediate,
+        OnCommit,
+        Relaxed,
+    }
+
+    #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    pub(crate) struct Type {
+        pub(crate) deriving: Deriving,
+    }
+
+    #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    pub(crate) struct Deriving(pub(crate) SmallVec<[ClassId; 4]>);
+
+    #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    pub(crate) struct Class {
+        pub(crate) required_methods: RequiredMethods,
+    }
+
+    #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    pub(crate) struct RequiredMethods(pub(crate) SmallVec<[StringId; 4]>);
+}
+
 /// A statement node.
 ///
 /// All recursive references use `ExprId`/`StmtId` indices into the `Ast` arena.
@@ -1315,6 +1357,7 @@ pub(crate) enum Stmt {
         type_params: SmallVec<[TypeParam; 2]>,
         def: TypeDefAst,
         vis: Visibility,
+        pragmas: pragma::Type,
     },
 
     /// Newtype declaration: `newtype Name = Type` or `newtype Name[T] = +Type`.
@@ -1336,6 +1379,7 @@ pub(crate) enum Stmt {
         target: AstTypeExprId,
         vis: Visibility,
         repr_vis: Visibility,
+        pragmas: pragma::Type,
     },
 
     /// Union type declaration: `union Name = Type1 | Type2 | ...`.
@@ -1354,6 +1398,7 @@ pub(crate) enum Stmt {
         type_params: SmallVec<[TypeParam; 2]>,
         members: SmallVec<[AstTypeExprId; 4]>,
         vis: Visibility,
+        pragmas: pragma::Type,
     },
 
     /// User-defined module: `module Name { ... }`.
@@ -1399,6 +1444,7 @@ pub(crate) enum Stmt {
         assoc_types: SmallVec<[AstClassAssocTypeDecl; 2]>,
         /// Method signatures (no bodies).
         methods: SmallVec<[AstClassMethodSig; 4]>,
+        pragmas: pragma::Class,
     },
 
     /// User-defined class instance: `class ClassName for Type { methods }`.
