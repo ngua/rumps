@@ -1,0 +1,22 @@
+; Duplicate defaults before a method declaration report the second default.
+
+#(required: f)
+class Optional C {
+  fun f(x: C) -> Int
+
+  #(default)
+  fun g(x: C) -> Int {
+    10
+  }
+
+  #(default)
+  fun g(x: C) -> Int {
+    20
+  }
+
+  fun g(x: C) -> Int
+}
+
+fun main() {
+  write "bad"
+}

@@ -67,6 +67,7 @@ pub(crate) struct ClassDef {
     pub(crate) shape: ClassShape,
     pub(crate) assoc_types: SmallVec<[StringId; 2]>,
     pub(crate) methods: Vec<(StringId, MethodSpec)>,
+    pub(crate) required_methods: Vec<StringId>,
     pub(crate) supers: SmallVec<[ClassId; 2]>,
 }
 
@@ -88,9 +89,15 @@ impl ClassDef {
             })
     }
 
-    /// All method names (all methods are required).
+    /// All method names.
     pub(crate) fn method_names(&self) -> impl Iterator<Item = StringId> + '_ {
         self.methods.iter().map(|(n, _)| *n)
+    }
+
+    pub(crate) fn required_method_names(
+        &self,
+    ) -> impl Iterator<Item = StringId> + '_ {
+        self.required_methods.iter().copied()
     }
 }
 
@@ -112,12 +119,13 @@ impl ClassRegistry {
         // Shorthand for interning
         let s = &mut *intern;
 
-        let defs = vec![
+        let mut defs = vec![
             // `0`: `Numeric`
             ClassDef {
                 name: s("Numeric"),
                 shape: ClassShape::Concrete { params: 0 },
                 assoc_types: smallvec![],
+                required_methods: vec![],
                 supers: smallvec![
                     ClassId::ADDITIVE,
                     ClassId::SUBTRACTIVE,
@@ -133,6 +141,7 @@ impl ClassRegistry {
                 name: s("Iterable"),
                 shape: ClassShape::Concrete { params: 0 },
                 assoc_types: smallvec![],
+                required_methods: vec![],
                 supers: smallvec![],
                 methods: vec![
                     (
@@ -156,6 +165,7 @@ impl ClassRegistry {
                 name: s("Default"),
                 shape: ClassShape::Concrete { params: 0 },
                 assoc_types: smallvec![],
+                required_methods: vec![],
                 supers: smallvec![],
                 methods: vec![(
                     s("default"),
@@ -170,6 +180,7 @@ impl ClassRegistry {
                 name: s("Concatable"),
                 shape: ClassShape::Concrete { params: 0 },
                 assoc_types: smallvec![],
+                required_methods: vec![],
                 supers: smallvec![],
                 methods: vec![(
                     s("concat"),
@@ -184,6 +195,7 @@ impl ClassRegistry {
                 name: s("BitLike"),
                 shape: ClassShape::Concrete { params: 0 },
                 assoc_types: smallvec![],
+                required_methods: vec![],
                 supers: smallvec![],
                 methods: vec![
                     (
@@ -221,6 +233,7 @@ impl ClassRegistry {
                 name: s("Negatable"),
                 shape: ClassShape::Concrete { params: 0 },
                 assoc_types: smallvec![],
+                required_methods: vec![],
                 supers: smallvec![],
                 methods: vec![(
                     s("neg"),
@@ -235,6 +248,7 @@ impl ClassRegistry {
                 name: s("Fallible"),
                 shape: ClassShape::Hkt { kind: 1, params: 0 },
                 assoc_types: smallvec![],
+                required_methods: vec![],
                 supers: smallvec![ClassId::WRAPPABLE],
                 methods: vec![(
                     s("unwrap"),
@@ -249,6 +263,7 @@ impl ClassRegistry {
                 name: s("Into"),
                 shape: ClassShape::Concrete { params: 1 },
                 assoc_types: smallvec![],
+                required_methods: vec![],
                 supers: smallvec![],
                 methods: vec![(
                     s("into"),
@@ -263,6 +278,7 @@ impl ClassRegistry {
                 name: s("TryInto"),
                 shape: ClassShape::Concrete { params: 1 },
                 assoc_types: smallvec![],
+                required_methods: vec![],
                 supers: smallvec![],
                 methods: vec![(
                     s("try-into"),
@@ -280,6 +296,7 @@ impl ClassRegistry {
                 name: s("Indexable"),
                 shape: ClassShape::Concrete { params: 1 },
                 assoc_types: smallvec![idx_name],
+                required_methods: vec![],
                 supers: smallvec![],
                 methods: vec![
                     (
@@ -305,6 +322,7 @@ impl ClassRegistry {
                 name: s("Ord"),
                 shape: ClassShape::Concrete { params: 0 },
                 assoc_types: smallvec![],
+                required_methods: vec![],
                 supers: smallvec![],
                 methods: vec![(
                     s("compare"),
@@ -319,6 +337,7 @@ impl ClassRegistry {
                 name: s("Mappable"),
                 shape: ClassShape::Hkt { kind: 1, params: 0 },
                 assoc_types: smallvec![],
+                required_methods: vec![],
                 supers: smallvec![],
                 methods: vec![(
                     s("map"),
@@ -333,6 +352,7 @@ impl ClassRegistry {
                 name: s("Foldable"),
                 shape: ClassShape::Hkt { kind: 1, params: 0 },
                 assoc_types: smallvec![],
+                required_methods: vec![],
                 supers: smallvec![],
                 methods: vec![
                     (
@@ -356,6 +376,7 @@ impl ClassRegistry {
                 name: s("Filterable"),
                 shape: ClassShape::Hkt { kind: 1, params: 0 },
                 assoc_types: smallvec![],
+                required_methods: vec![],
                 supers: smallvec![],
                 methods: vec![(
                     s("filter"),
@@ -370,6 +391,7 @@ impl ClassRegistry {
                 name: s("Display"),
                 shape: ClassShape::Concrete { params: 0 },
                 assoc_types: smallvec![],
+                required_methods: vec![],
                 supers: smallvec![],
                 methods: vec![(
                     s("display"),
@@ -384,6 +406,7 @@ impl ClassRegistry {
                 name: s("Eq"),
                 shape: ClassShape::Concrete { params: 0 },
                 assoc_types: smallvec![],
+                required_methods: vec![],
                 supers: smallvec![],
                 methods: vec![(
                     s("eq"),
@@ -398,6 +421,7 @@ impl ClassRegistry {
                 name: s("Wrappable"),
                 shape: ClassShape::Hkt { kind: 1, params: 0 },
                 assoc_types: smallvec![],
+                required_methods: vec![],
                 supers: smallvec![],
                 methods: vec![(
                     s("wrap"),
@@ -415,6 +439,7 @@ impl ClassRegistry {
                 name: s("Chainable"),
                 shape: ClassShape::Hkt { kind: 1, params: 0 },
                 assoc_types: smallvec![],
+                required_methods: vec![],
                 supers: smallvec![ClassId::WRAPPABLE],
                 methods: vec![(
                     s("chain"),
@@ -429,6 +454,7 @@ impl ClassRegistry {
                 name: s("Bimappable"),
                 shape: ClassShape::Hkt { kind: 2, params: 0 },
                 assoc_types: smallvec![],
+                required_methods: vec![],
                 supers: smallvec![],
                 methods: vec![(
                     s("bimap"),
@@ -444,6 +470,7 @@ impl ClassRegistry {
                 name: s("Additive"),
                 shape: ClassShape::Concrete { params: 0 },
                 assoc_types: smallvec![],
+                required_methods: vec![],
                 supers: smallvec![],
                 methods: vec![
                     (
@@ -467,6 +494,7 @@ impl ClassRegistry {
                 name: s("Subtractive"),
                 shape: ClassShape::Concrete { params: 0 },
                 assoc_types: smallvec![],
+                required_methods: vec![],
                 supers: smallvec![ClassId::ADDITIVE],
                 methods: vec![(
                     s("sub"),
@@ -481,6 +509,7 @@ impl ClassRegistry {
                 name: s("Multiplicative"),
                 shape: ClassShape::Concrete { params: 0 },
                 assoc_types: smallvec![],
+                required_methods: vec![],
                 supers: smallvec![],
                 methods: vec![
                     (
@@ -507,6 +536,7 @@ impl ClassRegistry {
                 name: s("Divisible"),
                 shape: ClassShape::Concrete { params: 0 },
                 assoc_types: smallvec![],
+                required_methods: vec![],
                 supers: smallvec![ClassId::MULTIPLICATIVE],
                 methods: vec![(
                     s("div"),
@@ -521,6 +551,7 @@ impl ClassRegistry {
                 name: s("FloorDivisible"),
                 shape: ClassShape::Concrete { params: 0 },
                 assoc_types: smallvec![],
+                required_methods: vec![],
                 supers: smallvec![ClassId::DIVISIBLE],
                 methods: vec![
                     (
@@ -544,6 +575,7 @@ impl ClassRegistry {
                 name: s("Powerable"),
                 shape: ClassShape::Concrete { params: 0 },
                 assoc_types: smallvec![],
+                required_methods: vec![],
                 supers: smallvec![ClassId::MULTIPLICATIVE],
                 methods: vec![(
                     s("pow"),
@@ -554,6 +586,11 @@ impl ClassRegistry {
                 )],
             },
         ];
+
+        defs.iter_mut().for_each(|def| {
+            def.required_methods =
+                def.methods.iter().map(|(n, _)| *n).collect();
+        });
 
         let by_name = defs
             .iter()

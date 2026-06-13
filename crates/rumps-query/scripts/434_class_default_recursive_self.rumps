@@ -1,0 +1,37 @@
+; Recursive default methods are allowed.
+
+variant Cell = Cell(Int)
+
+#(required: done, step)
+class Recur C {
+  fun done(x: C) -> Bool
+  fun step(x: C) -> C
+  fun count(x: C) -> Int
+
+  #(default)
+  fun count(x) {
+    if Recur:done(x) {
+      0
+    } else {
+      1 + Recur:count(Recur:step(x))
+    }
+  }
+}
+
+class Recur for Cell {
+  fun done(x: Cell) -> Bool {
+    match x {
+      Cell.Cell(n) => { n <= 0 }
+    }
+  }
+
+  fun step(x: Cell) -> Cell {
+    match x {
+      Cell.Cell(n) => { Cell.Cell(n - 1) }
+    }
+  }
+}
+
+fun main() {
+  write Recur:count(Cell.Cell(3))
+}

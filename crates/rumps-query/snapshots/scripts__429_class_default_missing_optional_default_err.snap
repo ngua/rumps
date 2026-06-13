@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Optional methods require a default implementation.\n\n#(required: f)\nclass Optional C {\n  fun f(x: C) -> Int\n  fun g(x: C) -> Int\n}\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: 69..131: optional method `g` requires a `#(default)` implementation

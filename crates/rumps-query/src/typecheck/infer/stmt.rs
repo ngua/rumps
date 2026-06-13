@@ -12,14 +12,15 @@ use smallvec::{smallvec, SmallVec};
 use super::constraint_region::{ConstraintKey, ConstraintRegion};
 use super::scheme::SchemePolicy;
 use super::{
-    ClassContext, ClassInstanceInput, Constraint, HoistCtx, HoistState,
-    InferCtx, InstanceMethodInput, NewtypeIntoOverlap,
+    ClassContext, ClassDefaultMethodInput, ClassInstanceInput, Constraint,
+    HoistCtx, HoistState, InferCtx, InstanceMethodInput, MethodBodyInput,
+    NewtypeIntoOverlap,
 };
 use crate::ast::{
     ArrayElem, AssocTypeDef, AstTypeExpr, AstTypeExprId, BindingPattern, DbRef,
-    Expr, ExprId, Import, ImportItem, ObjectEntry, OutputFormat, OutputTarget,
-    RefTarget, Stmt, StmtId, TypeDefAst, TypeParam, UnOp, Visibility,
-    WriteExpr,
+    Expr, ExprId, Import, ImportItem, InstanceMethodDef, ObjectEntry,
+    OutputFormat, OutputTarget, RefTarget, Stmt, StmtId, TypeDefAst, TypeParam,
+    UnOp, Visibility, WriteExpr,
 };
 use crate::intern::{QualifiedName, StringId};
 use crate::interpreter::instance::RuntimeInstance;
@@ -1773,7 +1774,7 @@ impl InferCtx<'_> {
 
         // 8. Check all required methods are present
         let required: Vec<StringId> =
-            self.env.class_def(class).method_names().collect();
+            self.env.class_def(class).required_method_names().collect();
         let required_hint = required
             .iter()
             .map(|&s| self.env.resolve_str(s).to_owned())
@@ -1798,7 +1799,6 @@ impl InferCtx<'_> {
                 assoc_types: &assoc_type_map,
                 type_param_subst: &type_param_subst,
                 method: m,
-                inst_span: span,
             });
         });
 
@@ -1816,7 +1816,7 @@ impl InferCtx<'_> {
                 .iter()
                 .map(|id| self.extract_type_name_from_ast(*id))
                 .collect();
-            let method_map: HashMap<_, _> = methods
+            let mut method_map: HashMap<_, _> = methods
                 .iter()
                 .map(|m| {
                     let mn = self.env.resolve_str(m.name);
@@ -1830,6 +1830,21 @@ impl InferCtx<'_> {
                     (m.name, fn_name_id)
                 })
                 .collect();
+            let all_methods: Vec<_> =
+                self.env.class_def(class).method_names().collect();
+            all_methods.iter().copied().for_each(|method| {
+                if method_map.contains_key(&method)
+                    || required.contains(&method)
+                    || !self.has_default_method_body(class, method)
+                {
+                } else {
+                    let mn = self.env.resolve_str(method).to_owned();
+                    let fn_name =
+                        RuntimeInstance::default_fn_name(&class_name_str, &mn);
+                    let fn_name_id = self.env.intern(&fn_name);
+                    method_map.insert(method, fn_name_id);
+                }
+            });
 
             let type_var_params: SmallVec<[TyId; 2]> =
                 type_param_subst.values().copied().collect();
@@ -1916,10 +1931,6 @@ impl InferCtx<'_> {
         }
     }
 
-    /// Typecheck a single instance method definition.
-    ///
-    /// Validates that the method signature matches the class definition and
-    /// typechecks the method body.
     fn instance_method(&mut self, input: InstanceMethodInput<'_>) {
         let InstanceMethodInput {
             class,
@@ -1928,7 +1939,83 @@ impl InferCtx<'_> {
             assoc_types,
             type_param_subst,
             method,
-            inst_span: _,
+        } = input;
+
+        self.check_method_body(MethodBodyInput {
+            class,
+            for_ty,
+            class_arg_tys,
+            assoc_types,
+            type_param_subst,
+            method,
+        });
+    }
+
+    pub(super) fn class_default_method(
+        &mut self,
+        input: ClassDefaultMethodInput<'_>,
+    ) {
+        let ClassDefaultMethodInput {
+            class,
+            class_params,
+            method,
+        } = input;
+        let shape = self.env.class_registry().shape(class);
+        let self_tv = self.fresh_var();
+        let for_ty = self.ty_arena.alloc(Ty::Var(self_tv));
+        let class_arg_tys: SmallVec<[TyId; 2]> = match shape {
+            ClassShape::Concrete { params }
+            | ClassShape::Hkt { params, .. } => (0..params)
+                .map(|_| {
+                    let tv = self.fresh_var();
+                    self.ty_arena.alloc(Ty::Var(tv))
+                })
+                .collect(),
+        };
+        let assoc_types: HashMap<_, _> = self
+            .env
+            .class_def(class)
+            .assoc_types
+            .iter()
+            .copied()
+            .map(|name| {
+                let ty =
+                    self.ty_arena.alloc(Ty::AssocType(self_tv, class, name));
+                (name, ty)
+            })
+            .collect();
+        let type_param_subst: IndexMap<_, _> = class_params
+            .iter()
+            .map(|tp| {
+                let tv = self.fresh_var();
+                (tp.name, self.ty_arena.alloc(Ty::Var(tv)))
+            })
+            .collect();
+
+        let prev = self.class_context.replace(ClassContext {
+            class,
+            type_id: None,
+            assoc_types: assoc_types.clone(),
+        });
+        self.check_method_body(MethodBodyInput {
+            class,
+            for_ty,
+            class_arg_tys: &class_arg_tys,
+            assoc_types: &assoc_types,
+            type_param_subst: &type_param_subst,
+            method,
+        });
+        self.class_context = prev;
+    }
+
+    fn check_method_body(&mut self, input: MethodBodyInput<'_>) {
+        let MethodBodyInput {
+            class,
+            for_ty,
+            class_arg_tys,
+            assoc_types,
+            type_param_subst,
+            method,
         } = input;
 
         let m_span = method.span;
@@ -2268,21 +2355,21 @@ impl InferCtx<'_> {
         body_map.keys().for_each(|&tv| {
             self.poly_param_vars.insert(tv);
         });
-        let got_cs = if method.type_params.is_empty() {
-            expected_cs.clone()
+        let (got_cs, cs_bad) = if method.type_params.is_empty() {
+            (expected_cs.clone(), false)
         } else {
             let got_cs =
                 self.method_constraints(&method.type_params, type_param_subst);
             let got_cs =
                 self.apply_method_constraint_rename(got_cs, &Rename(impl_map));
-            self.check_method_constraints_match(
+            let cs_bad = self.check_method_constraints_match(
                 class,
                 method.name,
                 &expected_cs,
                 &got_cs,
                 m_span,
             );
-            got_cs
+            (got_cs, cs_bad)
         };
         got_cs.iter().for_each(|&(ty, ref cls)| {
             self.constrain(Constraint::Class {
@@ -2298,14 +2385,17 @@ impl InferCtx<'_> {
 
         // Infer body type
         let body_ty = self.expr(method.body);
-        self.check_method_body_constraints_match(
-            class,
-            method.name,
-            &expected_cs,
-            &body_map,
-            body_constraint_start,
-            m_span,
-        );
+        if cs_bad {
+        } else {
+            self.check_method_body_constraints_match(
+                class,
+                method.name,
+                &expected_cs,
+                &body_map,
+                body_constraint_start,
+                m_span,
+            );
+        }
 
         // Determine expected return type (user annotation or class signature)
         let ret = method.ret.map(|ret_id| {
@@ -2779,12 +2869,14 @@ impl InferCtx<'_> {
         expected: &[(TyId, TypeClass<TyId>)],
         got: &[(TyId, TypeClass<TyId>)],
         span: Span,
-    ) {
+    ) -> bool {
         let want = self.constraint_keys(expected);
         let got = self.constraint_keys(got);
         if want == got {
+            false
         } else {
             self.method_constraints_mismatch(class, method, span);
+            true
         }
     }
 

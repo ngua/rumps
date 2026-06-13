@@ -11,12 +11,13 @@ use std::collections::HashMap;
 
 use async_recursion::async_recursion;
 
-use crate::ast::{InstanceMethodDef, Stmt, StmtId};
+use crate::ast::{AstClassMethod, InstanceMethodDef, Stmt, StmtId};
 use crate::intern::StringId;
 use crate::interpreter::instance::RuntimeInstance;
 use crate::interpreter::Interpreter;
 use crate::io::IoContext;
-use crate::{Result, Span};
+use crate::resolve::ResolvedMethod;
+use crate::{ClassId, Result, Span};
 
 impl<I: IoContext> Interpreter<'_, I> {
     /// Pass 1: Hoist all function and module declarations.
@@ -35,19 +36,34 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Hoist a sequence of statements (recursive helper).
-    #[async_recursion]
     async fn hoist_stmts(&mut self, stmts: &[StmtId]) -> Result<()> {
+        self.hoist_stmts_pre(stmts).await?;
+        self.hoist_stmts_instances(stmts).await
+    }
+
+    #[async_recursion]
+    async fn hoist_stmts_pre(&mut self, stmts: &[StmtId]) -> Result<()> {
         match stmts.split_first() {
             None => Ok(()),
             Some((&head, tail)) => {
-                self.hoist_stmt(head).await?;
-                self.hoist_stmts(tail).await
+                self.hoist_stmt_pre(head).await?;
+                self.hoist_stmts_pre(tail).await
             }
         }
     }
 
-    /// Hoist a single statement's declarations.
-    async fn hoist_stmt(&mut self, id: StmtId) -> Result<()> {
+    #[async_recursion]
+    async fn hoist_stmts_instances(&mut self, stmts: &[StmtId]) -> Result<()> {
+        match stmts.split_first() {
+            None => Ok(()),
+            Some((&head, tail)) => {
+                self.hoist_stmt_instance(head)?;
+                self.hoist_stmts_instances(tail).await
+            }
+        }
+    }
+
+    async fn hoist_stmt_pre(&mut self, id: StmtId) -> Result<()> {
         let span = self.ast.stmt_span(id).unwrap_or_default();
         let stmt = self.ast.get_stmt(id).cloned();
 
@@ -64,11 +80,27 @@ impl<I: IoContext> Interpreter<'_, I> {
                 self.hoist_module(name, &body, span).await
             }
 
+            Some(Stmt::ClassDef { name, methods, .. }) => self
+                .checked
+                .class_registry
+                .lookup_by_name(name)
+                .into_iter()
+                .try_for_each(|class| {
+                    self.hoist_class_defaults(class, &methods)
+                }),
+
+            _ => Ok(()),
+        }
+    }
+
+    fn hoist_stmt_instance(&mut self, id: StmtId) -> Result<()> {
+        let stmt = self.ast.get_stmt(id).cloned();
+
+        match stmt {
             Some(Stmt::ClassInstance { methods, .. }) => {
                 self.hoist_class_instance(id, &methods)
             }
 
-            // Other statements don't introduce hoistable bindings
             _ => Ok(()),
         }
     }
@@ -82,6 +114,35 @@ impl<I: IoContext> Interpreter<'_, I> {
     ) -> Result<()> {
         // Delegate to the existing `user_module` method
         self.user_module(name, body, span).await
+    }
+
+    pub(crate) fn hoist_class_defaults(
+        &mut self,
+        class: ClassId,
+        methods: &[AstClassMethod],
+    ) -> Result<()> {
+        methods.iter().try_for_each(|m| {
+            m.default.as_ref().map_or(Ok(()), |default| {
+                self.hoist_class_default_method(class, default)
+            })
+        })
+    }
+
+    fn hoist_class_default_method(
+        &mut self,
+        class: ClassId,
+        default: &InstanceMethodDef,
+    ) -> Result<()> {
+        let cn_id = self.checked.class_registry.name(class);
+        let cn = self.arena.strings.resolve(cn_id).to_owned();
+        let mn = self.arena.strings.resolve(default.name).to_owned();
+        let fn_name = RuntimeInstance::default_fn_name(&cn, &mn);
+        let fn_id = self.arena.strings.intern(&fn_name);
+        self.fun(
+            fn_id,
+            default.params.iter().map(|(name, _)| *name).collect(),
+            default.body,
+        )
     }
 
     /// Hoist a class instance declaration.
@@ -117,25 +178,40 @@ impl<I: IoContext> Interpreter<'_, I> {
                         let mut runtime_inst = RuntimeInstance::default();
 
                         let result: Result<()> =
-                            mappings.iter().try_for_each(|&(mid, fn_id)| {
-                                let method_def =
-                                    method_map.get(&mid).unwrap_or_else(|| {
-                                        invariant!("resolved method not in AST")
-                                    });
+                            mappings.iter().try_for_each(|m| match m {
+                                ResolvedMethod::Instance {
+                                    method: mid,
+                                    fun: fn_id,
+                                } => {
+                                    let method_def = method_map
+                                        .get(mid)
+                                        .unwrap_or_else(|| {
+                                            invariant!(
+                                                "resolved method not in AST"
+                                            )
+                                        });
 
-                                self.fun(
-                                    fn_id,
-                                    method_def
-                                        .params
-                                        .iter()
-                                        .map(|(name, _)| *name)
-                                        .collect(),
-                                    method_def.body,
-                                )?;
+                                    self.fun(
+                                        *fn_id,
+                                        method_def
+                                            .params
+                                            .iter()
+                                            .map(|(name, _)| *name)
+                                            .collect(),
+                                        method_def.body,
+                                    )?;
 
-                                runtime_inst.methods.insert(mid, fn_id);
+                                    runtime_inst.methods.insert(*mid, *fn_id);
 
-                                Ok(())
+                                    Ok(())
+                                }
+                                ResolvedMethod::Default {
+                                    method: mid,
+                                    fun: fn_id,
+                                } => {
+                                    runtime_inst.methods.insert(*mid, *fn_id);
+                                    Ok(())
+                                }
                             });
 
                         self.user_instances.register_with_tuple_arity(

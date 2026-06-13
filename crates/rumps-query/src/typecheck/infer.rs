@@ -293,7 +293,23 @@ pub(super) struct InstanceMethodInput<'a> {
     pub(super) assoc_types: &'a HashMap<StringId, TyId>,
     pub(super) type_param_subst: &'a IndexMap<StringId, TyId>,
     pub(super) method: &'a InstanceMethodDef,
-    pub(super) inst_span: Span,
+}
+
+/// Input for `class_default_method`.
+pub(super) struct ClassDefaultMethodInput<'a> {
+    pub(super) class: ClassId,
+    pub(super) class_params: &'a [TypeParam],
+    pub(super) method: &'a InstanceMethodDef,
+}
+
+/// Input for shared class method body checking.
+pub(super) struct MethodBodyInput<'a> {
+    pub(super) class: ClassId,
+    pub(super) for_ty: TyId,
+    pub(super) class_arg_tys: &'a SmallVec<[TyId; 2]>,
+    pub(super) assoc_types: &'a HashMap<StringId, TyId>,
+    pub(super) type_param_subst: &'a IndexMap<StringId, TyId>,
+    pub(super) method: &'a InstanceMethodDef,
 }
 
 /// State for hoisting and forward-reference tracking.
@@ -989,6 +1005,38 @@ impl<'a> InferCtx<'a> {
             deferred_imports: Vec::new(),
             program_pragmas,
         }
+    }
+
+    pub(super) fn has_default_method_body(
+        &self,
+        class: ClassId,
+        method: StringId,
+    ) -> bool {
+        self.ast
+            .stmt_ids()
+            .any(|id| self.stmt_has_default_method_body(id, class, method))
+    }
+
+    fn stmt_has_default_method_body(
+        &self,
+        id: StmtId,
+        class: ClassId,
+        method: StringId,
+    ) -> bool {
+        self.ast.get_stmt(id).is_some_and(|stmt| match stmt {
+            Stmt::ClassDef { name, methods, .. }
+                if self.env.class_registry().lookup_by_name(*name)
+                    == Some(class) =>
+            {
+                methods
+                    .iter()
+                    .any(|m| m.sig.name == method && m.default.is_some())
+            }
+            Stmt::Module { body, .. } => body.iter().any(|&child| {
+                self.stmt_has_default_method_body(child, class, method)
+            }),
+            _ => false,
+        })
     }
 
     pub(super) fn push_let_tv_frame(&mut self) {

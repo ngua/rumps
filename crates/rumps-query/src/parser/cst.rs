@@ -523,7 +523,6 @@ pub(crate) struct ClassAssocTypeDecl {
 /// A method signature in a class definition (CST form).
 ///
 /// Represents `fun method[T](params) -> RetType` inside a class definition.
-/// Signature only; no body (bodies belong to instances).
 #[derive(Clone, Debug)]
 pub(crate) struct ClassMethodSig {
     pub(crate) name: StringId,
@@ -531,6 +530,30 @@ pub(crate) struct ClassMethodSig {
     pub(crate) params: SmallVec<[(StringId, Option<TypeExpr>); 4]>,
     pub(crate) ret: Option<TypeExpr>,
     pub(crate) span: Span,
+}
+
+/// A class method signature (CST form).
+#[derive(Clone, Debug)]
+pub(crate) struct ClassMethod {
+    pub(crate) sig: ClassMethodSig,
+    pub(crate) default: Option<InstanceMethodDef>,
+}
+
+impl ClassMethod {
+    pub(crate) fn has_decl(&self) -> bool {
+        !self
+            .default
+            .as_ref()
+            .is_some_and(|d| d.span == self.sig.span)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ClassDefaultPlacementError {
+    BeforeNonMethod { span: Span },
+    DuplicatePragma { span: Span },
+    MethodWithoutDefault { span: Span },
+    Unattached { span: Span },
 }
 
 /// A method definition in a class instance (CST form).
@@ -668,8 +691,10 @@ pub(crate) enum StmtKind {
         supers: SmallVec<[CstClassConstraint; 2]>,
         /// Associated type declarations (e.g., `newtype Element`).
         assoc_types: SmallVec<[ClassAssocTypeDecl; 2]>,
-        /// Method signatures (no bodies).
-        methods: Vec<ClassMethodSig>,
+        /// Method signatures.
+        methods: Vec<ClassMethod>,
+        /// Static placement errors for `#(default)` class body items.
+        default_errors: Vec<ClassDefaultPlacementError>,
     },
 
     /// User-defined class instance: `class ClassName FOR Type { methods }`.

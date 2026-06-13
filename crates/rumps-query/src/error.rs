@@ -4,7 +4,7 @@
 
 use std::{fmt, iter, result};
 
-use chumsky::error::Simple;
+use chumsky::error::{Simple, SimpleReason};
 use itertools::Itertools;
 use miette::{Diagnostic, LabeledSpan};
 use nonempty::NonEmpty;
@@ -192,10 +192,18 @@ impl Error {
         interner: &StringInterner,
     ) -> Self {
         let span = e.span();
-        let msg = e
-            .found()
-            .map(|t| format!("unexpected `{}`", t.display_resolved(interner)))
-            .unwrap_or_else(|| "unexpected end of input".into());
+        let msg = match e.reason() {
+            SimpleReason::Custom(msg) => msg.clone(),
+            SimpleReason::Unclosed { delimiter, .. } => {
+                format!("unclosed `{}`", delimiter.display_resolved(interner))
+            }
+            SimpleReason::Unexpected => e
+                .found()
+                .map(|t| {
+                    format!("unexpected `{}`", t.display_resolved(interner))
+                })
+                .unwrap_or_else(|| "unexpected end of input".into()),
+        };
         let expected = e
             .expected()
             .filter_map(|exp| {

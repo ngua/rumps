@@ -7,7 +7,7 @@ use smallvec::SmallVec;
 use super::{ParseErr, Parser};
 use crate::intern::StringInterner;
 use crate::parser::cst;
-use crate::Token;
+use crate::{Span, Token};
 
 impl Parser {
     pub(super) fn stmt(
@@ -342,7 +342,7 @@ impl Parser {
             + Clone
             + 'static,
     ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
-        let class_def = Self::class_def_stmt(interner);
+        let class_def = Self::class_def_stmt(interner, stmt.clone());
         let class_inst = Self::class_instance_stmt(interner, stmt);
         class_def.or(class_inst)
     }
@@ -353,8 +353,12 @@ impl Parser {
     /// declarations (`newtype`).
     fn class_def_stmt(
         interner: &mut StringInterner,
+        stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
+            + Clone
+            + 'static,
     ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
         let for_ = interner.intern("for");
+        let default = interner.intern("default");
 
         // Self var: any ident EXCEPT `for` (which disambiguates instances)
         let self_var = select! { Token::Ident(s) if s != for_ => s };
@@ -420,16 +424,32 @@ impl Parser {
             .ignore_then(Self::ident())
             .map_with_span(|name, span| cst::ClassAssocTypeDecl { name, span });
 
-        // Definition body item: method sig or associated type decl
+        let default_pragma = just(Token::Hash)
+            .ignore_then(just(Token::LParen))
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(Self::ctx_ident(default))
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RParen))
+            .map_with_span(|_, span| span);
+
+        let method_def = Self::method_def(interner, stmt);
+
+        // Definition body item: associated type, method sig, or default method
+        // body.
         #[derive(Clone)]
         #[allow(clippy::large_enum_variant)]
         enum DefItem {
             AssocType(cst::ClassAssocTypeDecl),
-            Method(cst::ClassMethodSig),
+            MethodSig(cst::ClassMethodSig),
+            DefaultPragma(Span),
+            MethodDef(cst::InstanceMethodDef),
         }
-        let def_item = assoc_decl
-            .map(DefItem::AssocType)
-            .or(method_sig.map(DefItem::Method));
+        let def_item = choice((
+            default_pragma.map(DefItem::DefaultPragma),
+            method_def.map(DefItem::MethodDef),
+            assoc_decl.map(DefItem::AssocType),
+            method_sig.map(DefItem::MethodSig),
+        ));
 
         // Definition body: `{ items }`
         let def_body = just(Token::LBrace)
@@ -439,14 +459,94 @@ impl Parser {
             )
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::RBrace))
-            .map(|items| {
+            .try_map(move |items, _span| {
                 let mut assoc_types = SmallVec::new();
-                let mut methods = Vec::new();
-                items.into_iter().for_each(|item| match item {
-                    DefItem::AssocType(a) => assoc_types.push(a),
-                    DefItem::Method(m) => methods.push(m),
+                let mut methods: Vec<cst::ClassMethod> = Vec::new();
+                let mut defaults = Vec::new();
+                let mut default_errors = Vec::new();
+                let mut pending = None;
+
+                items.into_iter().try_for_each(|item| match item {
+                    DefItem::AssocType(a) => {
+                        pending.take().into_iter().for_each(|span| {
+                            default_errors.push(
+                                cst::ClassDefaultPlacementError::BeforeNonMethod {
+                                    span,
+                                },
+                            );
+                        });
+                        assoc_types.push(a);
+                        Ok(())
+                    }
+                    DefItem::MethodSig(sig) => {
+                        pending.take().into_iter().for_each(|span| {
+                            default_errors.push(
+                                cst::ClassDefaultPlacementError::BeforeNonMethod {
+                                    span,
+                                },
+                            );
+                        });
+                        methods.push(cst::ClassMethod {
+                            sig,
+                            default: None,
+                        });
+                        Ok(())
+                    }
+                    DefItem::DefaultPragma(span) => {
+                        if pending.is_some() {
+                            default_errors.push(
+                                cst::ClassDefaultPlacementError::DuplicatePragma {
+                                    span,
+                                },
+                            );
+                        } else {
+                            pending = Some(span);
+                        }
+                        Ok(())
+                    }
+                    DefItem::MethodDef(m) => {
+                        if pending.take().is_some() {
+                            defaults.push(m);
+                        } else {
+                            default_errors.push(
+                                cst::ClassDefaultPlacementError::MethodWithoutDefault {
+                                    span: m.span,
+                                },
+                            );
+                        }
+                        Ok(())
+                    }
+                })?;
+
+                pending.take().into_iter().for_each(|span| {
+                    default_errors
+                        .push(cst::ClassDefaultPlacementError::Unattached {
+                            span,
+                        });
                 });
-                (assoc_types, methods)
+
+                defaults.into_iter().for_each(|d| {
+                    let method = methods
+                        .iter_mut()
+                        .find(|m| m.sig.name == d.name && m.default.is_none());
+                    if let Some(m) = method {
+                        m.default = Some(d);
+                    } else {
+                        let sig = cst::ClassMethodSig {
+                            name: d.name,
+                            type_params: d.type_params.clone(),
+                            params: d.params.clone(),
+                            ret: d.ret.clone(),
+                            span: d.span,
+                        };
+                        methods.push(cst::ClassMethod {
+                            sig,
+                            default: Some(d),
+                        });
+                    }
+                });
+
+                Ok((assoc_types, methods, default_errors))
             });
 
         just(Token::Class)
@@ -463,7 +563,7 @@ impl Parser {
             .map_with_span(
                 |(
                     (((name, class_params), self_var), supers),
-                    (assoc_types, methods),
+                    (assoc_types, methods, default_errors),
                 ),
                  span| {
                     cst::Stmt::new(
@@ -474,6 +574,7 @@ impl Parser {
                             supers,
                             assoc_types,
                             methods,
+                            default_errors,
                         },
                         span,
                     )
@@ -535,56 +636,7 @@ impl Parser {
             .or_not()
             .map(|cs| cs.unwrap_or_default());
 
-        // Instance method: `fun name[T](params) [-> Type] { body }`
-        let method_param = Self::ident().then(
-            just(Token::Colon)
-                .ignore_then(Self::opt_newlines())
-                .ignore_then(Self::type_expr(interner))
-                .or_not(),
-        );
-        let method_param_sep =
-            just(Token::Comma).then_ignore(Self::opt_newlines());
-        let method_params = just(Token::LParen)
-            .ignore_then(Self::opt_newlines())
-            .ignore_then(
-                method_param.separated_by(method_param_sep).allow_trailing(),
-            )
-            .then_ignore(Self::opt_newlines())
-            .then_ignore(just(Token::RParen));
-        let method_ret = Self::opt_newlines()
-            .ignore_then(just(Token::Arrow))
-            .ignore_then(Self::opt_newlines())
-            .ignore_then(Self::type_expr(interner))
-            .or_not();
-        let method_body = Self::block(stmt.clone());
-
-        let method = just(Token::Fun)
-            .ignore_then(Self::opt_newlines())
-            .ignore_then(Self::ident())
-            .then_ignore(Self::opt_newlines())
-            .then(Self::type_params(interner))
-            .then_ignore(Self::opt_newlines())
-            .then(method_params)
-            .then(method_ret)
-            .then(method_body)
-            .map_with_span(
-                |(
-                    (((name, type_params), params_vec), ret),
-                    (stmts, blk_span),
-                ),
-                 span| {
-                    let params = SmallVec::from_vec(params_vec);
-                    let body = Self::stmts_to_block(stmts, blk_span);
-                    cst::InstanceMethodDef {
-                        name,
-                        type_params,
-                        params,
-                        ret,
-                        body,
-                        span,
-                    }
-                },
-            );
+        let method = Self::method_def(interner, stmt);
 
         // Associated type: `newtype Index = Int` or `newtype Index: Ord = Int`
         let assoc_type_constraint = just(Token::Colon)
@@ -758,5 +810,63 @@ impl Parser {
         Self::expr(interner, stmt).map_with_span(|expr, span| {
             cst::Stmt::new(cst::StmtKind::Expr(expr), span)
         })
+    }
+
+    fn method_def(
+        interner: &mut StringInterner,
+        stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
+            + Clone
+            + 'static,
+    ) -> impl chumsky::Parser<Token, cst::InstanceMethodDef, Error = ParseErr> + Clone
+    {
+        let method_param = Self::ident().then(
+            just(Token::Colon)
+                .ignore_then(Self::opt_newlines())
+                .ignore_then(Self::type_expr(interner))
+                .or_not(),
+        );
+        let method_param_sep =
+            just(Token::Comma).then_ignore(Self::opt_newlines());
+        let method_params = just(Token::LParen)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(
+                method_param.separated_by(method_param_sep).allow_trailing(),
+            )
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RParen));
+        let method_ret = Self::opt_newlines()
+            .ignore_then(just(Token::Arrow))
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(Self::type_expr(interner))
+            .or_not();
+        let method_body = Self::block(stmt);
+
+        just(Token::Fun)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(Self::ident())
+            .then_ignore(Self::opt_newlines())
+            .then(Self::type_params(interner))
+            .then_ignore(Self::opt_newlines())
+            .then(method_params)
+            .then(method_ret)
+            .then(method_body)
+            .map_with_span(
+                |(
+                    (((name, type_params), params_vec), ret),
+                    (stmts, blk_span),
+                ),
+                 span| {
+                    let params = SmallVec::from_vec(params_vec);
+                    let body = Self::stmts_to_block(stmts, blk_span);
+                    cst::InstanceMethodDef {
+                        name,
+                        type_params,
+                        params,
+                        ret,
+                        body,
+                        span,
+                    }
+                },
+            )
     }
 }

@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; No `#(required: ...)` means every method is required.\n\nvariant Cell = Cell(Int)\n\nclass Strict C {\n  fun f(x: C) -> Int\n  fun g(x: C) -> Int\n}\n\nclass Strict for Cell {\n  fun f(x: Cell) -> Int {\n    match x {\n      Cell.Cell(n) => { n }\n    }\n  }\n}\n\nfun main() {\n  write Strict:f(Cell.Cell(3))\n}\n"
+---
+ERROR: missing required method `g` for class `Strict`

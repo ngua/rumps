@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Duplicate `#(default)` pragmas are static errors.\n\n#(required: f)\nclass Optional C {\n  fun f(x: C) -> Int\n  fun g(x: C) -> Int\n\n  #(default)\n  #(default)\n  fun g(x: C) -> Int {\n    10\n  }\n}\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: 145..155: duplicate `default` pragma for class method

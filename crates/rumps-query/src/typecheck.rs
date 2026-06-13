@@ -36,8 +36,8 @@ pub(crate) use runtime_types::{
     RuntimeTypes, TypePatternInfo,
 };
 pub(crate) use ty::{
-    ClassDef, ClassRegistry, ClassShape, Scheme, Ty, TyArena, TyId, TyVar,
-    TypeClass,
+    ClassDef, ClassRegistry, ClassShape, MethodSpec, Scheme, Ty, TyArena, TyId,
+    TyVar, TypeClass,
 };
 
 use crate::ast::{pragma, ExprId, MatchPatternId};

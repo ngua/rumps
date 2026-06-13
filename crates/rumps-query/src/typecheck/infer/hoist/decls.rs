@@ -3,10 +3,11 @@ use std::collections::HashMap;
 use indexmap::IndexMap;
 use smallvec::{smallvec, SmallVec};
 
-use super::super::{ClassInstanceInput, InferCtx};
+use super::super::{ClassDefaultMethodInput, ClassInstanceInput, InferCtx};
 use crate::ast::{
-    AssocTypeDef, AstClassAssocTypeDecl, AstClassMethodSig, AstTypeExpr,
-    AstTypeExprId, BindingPattern, Stmt, StmtId, TypeParam, Visibility,
+    pragma, AssocTypeDef, AstClassAssocTypeDecl, AstClassMethod,
+    AstClassMethodSig, AstTypeExpr, AstTypeExprId, BindingPattern, Stmt,
+    StmtId, TypeParam, Visibility,
 };
 use crate::intern::{QualifiedName, StringId};
 use crate::interpreter::instance::RuntimeInstance;
@@ -26,7 +27,8 @@ struct ClassDefInput<'a> {
     self_var: StringId,
     supers: &'a SmallVec<[TypeClass<AstTypeExprId>; 2]>,
     assoc_types: &'a [AstClassAssocTypeDecl],
-    methods: &'a [AstClassMethodSig],
+    methods: &'a [AstClassMethod],
+    pragmas: &'a pragma::Class,
     span: Span,
 }
 
@@ -127,6 +129,7 @@ impl InferCtx<'_> {
                     supers,
                     assoc_types,
                     methods,
+                    pragmas,
                     ..
                 }) => {
                     self.hoist_class_def(ClassDefInput {
@@ -136,6 +139,7 @@ impl InferCtx<'_> {
                         supers: &supers,
                         assoc_types: &assoc_types,
                         methods: &methods,
+                        pragmas: &pragmas,
                         span,
                     });
                 }
@@ -188,6 +192,55 @@ impl InferCtx<'_> {
                 Some(Stmt::Module { name, body }) => {
                     let path = Self::child_mod_path(module, name);
                     self.hoist_class_instances(&body, Some(&path));
+                }
+                _ => {}
+            }
+        });
+
+        self.current_module = prev;
+    }
+
+    pub(super) fn typecheck_class_default_methods(
+        &mut self,
+        stmts: &[StmtId],
+        module: Option<&QualifiedName>,
+    ) {
+        let prev = match module.cloned() {
+            Some(m) => self.current_module.replace(m),
+            None => self.current_module.take(),
+        };
+
+        stmts.iter().for_each(|&id| {
+            let stmt = self.ast.get_stmt(id).cloned();
+            match stmt {
+                Some(Stmt::ClassDef {
+                    name,
+                    class_params,
+                    methods,
+                    ..
+                }) => {
+                    self.env
+                        .class_registry()
+                        .lookup_by_name(name)
+                        .into_iter()
+                        .for_each(|class| {
+                            methods
+                                .iter()
+                                .filter_map(|m| m.default.as_ref())
+                                .for_each(|method| {
+                                    self.class_default_method(
+                                        ClassDefaultMethodInput {
+                                            class,
+                                            class_params: &class_params,
+                                            method,
+                                        },
+                                    );
+                                });
+                        });
+                }
+                Some(Stmt::Module { name, body }) => {
+                    let path = Self::child_mod_path(module, name);
+                    self.typecheck_class_default_methods(&body, Some(&path));
                 }
                 _ => {}
             }
@@ -455,7 +508,7 @@ impl InferCtx<'_> {
         class_params: &[TypeParam],
         self_var: StringId,
         assoc_types: &[AstClassAssocTypeDecl],
-        methods: &[AstClassMethodSig],
+        methods: &[AstClassMethod],
         span: Span,
     ) {
         let is_param = !class_params.is_empty();
@@ -482,6 +535,7 @@ impl InferCtx<'_> {
             shape,
             assoc_types: assoc_names,
             methods: vec![],
+            required_methods: vec![],
             supers: smallvec![],
         };
 
@@ -502,16 +556,17 @@ impl InferCtx<'_> {
     fn self_var_hkt_kind(
         &mut self,
         sv: StringId,
-        methods: &[AstClassMethodSig],
+        methods: &[AstClassMethod],
         span: Span,
     ) -> u8 {
         let arities: SmallVec<[u8; 4]> = methods
             .iter()
             .flat_map(|m| {
-                m.params
+                m.sig
+                    .params
                     .iter()
                     .filter_map(|(_, ty)| ty.as_ref())
-                    .chain(m.ret.as_ref())
+                    .chain(m.sig.ret.as_ref())
                     .map(|&te| self.ast_type_expr_hkt_arity(sv, te))
             })
             .filter(|&a| a > 0)
@@ -594,9 +649,14 @@ impl InferCtx<'_> {
                 .methods
                 .iter()
                 .filter_map(|m| {
-                    self.build_class_method_spec(&def_ctx, m, input.span)
+                    self.build_class_method_spec(&def_ctx, &m.sig, input.span)
                 })
                 .collect();
+
+            let reqs = Self::class_method_reqs(
+                input.methods.iter().map(|m| m.sig.name),
+                &input.pragmas.required_methods,
+            );
 
             // Resolve superclass constraints
             let empty_subst = IndexMap::new();
@@ -613,7 +673,19 @@ impl InferCtx<'_> {
             // Update the stub `ClassDef` in the registry.
             let def = self.env.class_registry.get_mut(class_id);
             def.methods = method_specs;
+            def.required_methods = reqs;
             def.supers = resolved_supers;
+        }
+    }
+
+    fn class_method_reqs(
+        all: impl Iterator<Item = StringId>,
+        req_pragma: &pragma::RequiredMethods,
+    ) -> Vec<StringId> {
+        if req_pragma.0.is_empty() {
+            all.collect()
+        } else {
+            req_pragma.0.iter().copied().collect()
         }
     }
 
@@ -1038,7 +1110,7 @@ impl InferCtx<'_> {
                         .iter()
                         .map(|id| self.extract_type_name_from_ast(*id))
                         .collect();
-                    let method_map: HashMap<_, _> = methods
+                    let mut method_map: HashMap<_, _> = methods
                         .iter()
                         .map(|m| {
                             let mn = self.env.resolve_str(m.name);
@@ -1052,6 +1124,28 @@ impl InferCtx<'_> {
                             (m.name, fn_name_id)
                         })
                         .collect();
+                    let all_methods: Vec<_> =
+                        self.env.class_def(class).method_names().collect();
+                    let required: Vec<_> = self
+                        .env
+                        .class_def(class)
+                        .required_method_names()
+                        .collect();
+                    all_methods.iter().copied().for_each(|method| {
+                        if method_map.contains_key(&method)
+                            || required.contains(&method)
+                            || !self.has_default_method_body(class, method)
+                        {
+                        } else {
+                            let mn = self.env.resolve_str(method).to_owned();
+                            let fn_name = RuntimeInstance::default_fn_name(
+                                &class_name_str,
+                                &mn,
+                            );
+                            let fn_name_id = self.env.intern(&fn_name);
+                            method_map.insert(method, fn_name_id);
+                        }
+                    });
 
                     // Collect all type params in positional order for `1:1`
                     // zip with `type_args`. For tuple constructors, use

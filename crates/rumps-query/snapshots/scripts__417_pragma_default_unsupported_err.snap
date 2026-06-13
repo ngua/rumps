@@ -2,4 +2,4 @@
 source: crates/rumps-query/tests/scripts.rs
 description: "#(default)\nfun main() {\n  write \"bad\"\n}\n"
 ---
-ERROR: 0..10: `default` pragmas are not supported in this phase
+ERROR: 0..10: `default` pragmas are only allowed inside class definitions before method bodies

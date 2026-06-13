@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Recursive default methods are allowed.\n\nvariant Cell = Cell(Int)\n\n#(required: done, step)\nclass Recur C {\n  fun done(x: C) -> Bool\n  fun step(x: C) -> C\n  fun count(x: C) -> Int\n\n  #(default)\n  fun count(x) {\n    if Recur:done(x) {\n      0\n    } else {\n      1 + Recur:count(Recur:step(x))\n    }\n  }\n}\n\nclass Recur for Cell {\n  fun done(x: Cell) -> Bool {\n    match x {\n      Cell.Cell(n) => { n <= 0 }\n    }\n  }\n\n  fun step(x: Cell) -> Cell {\n    match x {\n      Cell.Cell(n) => { Cell.Cell(n - 1) }\n    }\n  }\n}\n\nfun main() {\n  write Recur:count(Cell.Cell(3))\n}\n"
+---
+3

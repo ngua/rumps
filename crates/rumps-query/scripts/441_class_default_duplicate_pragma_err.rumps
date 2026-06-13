@@ -1,0 +1,17 @@
+; Duplicate `#(default)` pragmas are static errors.
+
+#(required: f)
+class Optional C {
+  fun f(x: C) -> Int
+  fun g(x: C) -> Int
+
+  #(default)
+  #(default)
+  fun g(x: C) -> Int {
+    10
+  }
+}
+
+fun main() {
+  write "bad"
+}

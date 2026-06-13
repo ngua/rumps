@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "variant Box[T] = Full(T) | Empty\n\nclass Foldable for Box {\n  fun fold(f, init, x) {\n    match x {\n      Box.Full(v) => { f(init, v) }\n      Box.Empty => { init }\n    }\n  }\n}\n\nfun main() {\n  write Foldable:fold((acc, x) => acc + x, 0, Box.Full(1))\n}\n"
+description: "variant Box[T] = Full(T) | Empty\n\nclass Foldable for Box {\n  fun fold(f, init, x) {\n    match x {\n      Box.Full(v) => { f(init, v) }\n      Box.Empty => { init }\n    }\n  }\n}\n\nfun main() {\n  write Foldable:fold((acc, x) => acc + x, 0, Box.Full(1))\n  write Foldable:fold-map(x => \"{x}\", Box.Full(1))\n}\n"
 ---
 ERROR: missing required method `fold-map` for class `Foldable`

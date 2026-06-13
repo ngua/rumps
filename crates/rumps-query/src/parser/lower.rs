@@ -192,7 +192,7 @@ impl<'a> LowerCtx<'a> {
                     }
                     cst::pragma::Kind::DefaultDefinition => Err(Error::static_err(
                         stmt.span,
-                        "`default` pragmas are not supported in this phase",
+                        "`default` pragmas are only allowed inside class definitions before method bodies",
                     )),
                     cst::pragma::Kind::Unknown(name) => Err(Error::parse(
                         name.span,
@@ -433,6 +433,7 @@ impl<'a> LowerCtx<'a> {
                     shape,
                     assoc_types: assoc_names,
                     methods: vec![],
+                    required_methods: vec![],
                     supers: SmallVec::new(),
                 };
                 self.registry.register(stub).map_err(|e| {
@@ -458,7 +459,7 @@ impl<'a> LowerCtx<'a> {
     fn detect_class_shape(
         class_params: &[cst::TypeParam],
         sv: StringId,
-        methods: &[cst::ClassMethodSig],
+        methods: &[cst::ClassMethod],
         span: Span,
     ) -> Result<ClassShape> {
         let is_param = !class_params.is_empty();
@@ -486,16 +487,18 @@ impl<'a> LowerCtx<'a> {
     /// Errors if different methods use inconsistent arities.
     fn self_var_hkt_kind(
         sv: StringId,
-        methods: &[cst::ClassMethodSig],
+        methods: &[cst::ClassMethod],
         span: Span,
     ) -> Result<u8> {
         let kind = methods
             .iter()
+            .filter(|m| m.has_decl())
             .flat_map(|m| {
-                m.params
+                m.sig
+                    .params
                     .iter()
                     .filter_map(|(_, ty)| ty.as_ref())
-                    .chain(m.ret.as_ref())
+                    .chain(m.sig.ret.as_ref())
                     .map(|te| Self::type_expr_hkt_arity(sv, te))
             })
             .filter(|&a| a > 0)
@@ -680,7 +683,7 @@ impl<'a> LowerCtx<'a> {
 
     fn class_pragmas(
         &self,
-        methods: &[cst::ClassMethodSig],
+        methods: &[cst::ClassMethod],
         ps: cst::pragma::Attached,
     ) -> Result<pragma::Class> {
         let required_methods = ps
@@ -693,10 +696,14 @@ impl<'a> LowerCtx<'a> {
 
     fn required_methods_pragma(
         &self,
-        methods: &[cst::ClassMethodSig],
+        methods: &[cst::ClassMethod],
         p: cst::pragma::RequiredMethods,
     ) -> Result<pragma::RequiredMethods> {
-        let declared: HashSet<_> = methods.iter().map(|m| m.name).collect();
+        let declared: HashSet<_> = methods
+            .iter()
+            .filter(|m| m.has_decl())
+            .map(|m| m.sig.name)
+            .collect();
         let mut seen = HashSet::new();
         let ids =
             p.0.into_iter()
@@ -720,6 +727,123 @@ impl<'a> LowerCtx<'a> {
                 })
                 .collect::<Result<SmallVec<_>>>()?;
         Ok(pragma::RequiredMethods(ids))
+    }
+
+    fn validate_class_methods(
+        &self,
+        methods: &[cst::ClassMethod],
+        required: &pragma::RequiredMethods,
+        span: Span,
+    ) -> Result<()> {
+        let declared: HashSet<_> = methods
+            .iter()
+            .filter(|m| m.has_decl())
+            .map(|m| m.sig.name)
+            .collect();
+        let mut decls = HashSet::new();
+        methods.iter().try_for_each(|m| {
+            let name = self.name(m.sig.name);
+            if !m.has_decl() || decls.insert(m.sig.name) {
+                Ok(())
+            } else {
+                Err(Error::static_err(
+                    m.sig.span,
+                    format!("duplicate class method `{name}`"),
+                ))
+            }
+        })?;
+
+        let mut default_names = HashSet::new();
+        methods.iter().try_for_each(|m| {
+            if let Some(d) = &m.default {
+                let name = self.name(d.name);
+                if !declared.contains(&d.name) {
+                    Err(Error::static_err(
+                        d.span,
+                        format!(
+                            "default method `{name}` has no matching class method declaration"
+                        ),
+                    ))
+                } else if default_names.insert(d.name) {
+                    Ok(())
+                } else {
+                    Err(Error::static_err(
+                        d.span,
+                        format!("duplicate default method `{name}`"),
+                    ))
+                }
+            } else {
+                Ok(())
+            }
+        })?;
+
+        let reqs: HashSet<_> = required.0.iter().copied().collect();
+        methods.iter().try_for_each(|m| {
+            if let Some(d) = &m.default {
+                let name = self.name(d.name);
+                if required.0.is_empty() || reqs.contains(&d.name) {
+                    Err(Error::static_err(
+                        d.span,
+                        format!(
+                            "`default` method `{name}` is only allowed for optional methods"
+                        ),
+                    ))
+                } else {
+                    Ok(())
+                }
+            } else {
+                Ok(())
+            }
+        })?;
+
+        if required.0.is_empty() {
+            Ok(())
+        } else {
+            methods
+                .iter()
+                .filter(|m| declared.contains(&m.sig.name))
+                .filter(|m| {
+                    !reqs.contains(&m.sig.name)
+                        && !default_names.contains(&m.sig.name)
+                })
+                .try_for_each(|m| {
+                    let name = self.name(m.sig.name);
+                    Err(Error::static_err(
+                        span,
+                        format!(
+                            "optional method `{name}` requires a `#(default)` implementation"
+                        ),
+                    ))
+                })
+        }
+    }
+
+    fn validate_class_default_placement(
+        errors: &[cst::ClassDefaultPlacementError],
+    ) -> Result<()> {
+        errors.iter().try_for_each(|err| match err {
+            cst::ClassDefaultPlacementError::BeforeNonMethod { span } => {
+                Err(Error::static_err(
+                    *span,
+                    "`default` pragmas inside class definitions attach only to method definitions",
+                ))
+            }
+            cst::ClassDefaultPlacementError::DuplicatePragma { span } => {
+                Err(Error::static_err(
+                    *span,
+                    "duplicate `default` pragma for class method",
+                ))
+            }
+            cst::ClassDefaultPlacementError::MethodWithoutDefault { span } => {
+                Err(Error::static_err(
+                    *span,
+                    "method bodies in class definitions require `#(default)`",
+                ))
+            }
+            cst::ClassDefaultPlacementError::Unattached { span } => {
+                Err(Error::static_err(*span, "unattached `default` pragma"))
+            }
+        })
     }
 
     fn normalize_expr_stmts(
@@ -932,6 +1056,41 @@ impl<'a> LowerCtx<'a> {
         }
     }
 
+    fn class_method_sig(
+        &mut self,
+        sig: cst::ClassMethodSig,
+    ) -> Result<ast::AstClassMethodSig> {
+        let cst::ClassMethodSig {
+            name,
+            type_params,
+            params,
+            ret,
+            span,
+        } = sig;
+        self.push_type_params(type_params.iter().map(|tp| tp.name));
+        let res = (|| {
+            let params = params
+                .into_iter()
+                .map(|(n, t)| {
+                    t.map(|te| self.type_expr(te))
+                        .transpose()
+                        .map(|ty_id| (n, ty_id))
+                })
+                .collect::<Result<SmallVec<_>>>()?;
+            let ret = ret.map(|t| self.type_expr(t)).transpose()?;
+            let type_params = self.type_param_list(type_params)?;
+            Ok(ast::AstClassMethodSig {
+                name,
+                type_params,
+                params,
+                ret,
+                span,
+            })
+        })();
+        self.pop_type_params();
+        res
+    }
+
     /// Lower a CST statement to AST.
     fn stmt(&mut self, stmt: cst::Stmt) -> Result<StmtId> {
         let span = stmt.span;
@@ -1116,8 +1275,15 @@ impl<'a> LowerCtx<'a> {
                 supers,
                 assoc_types,
                 methods,
+                default_errors,
             } => {
                 let pragmas = self.class_pragmas(&methods, pragmas)?;
+                Self::validate_class_default_placement(&default_errors)?;
+                self.validate_class_methods(
+                    &methods,
+                    &pragmas.required_methods,
+                    span,
+                )?;
                 self.push_type_params(
                     class_params
                         .iter()
@@ -1125,34 +1291,15 @@ impl<'a> LowerCtx<'a> {
                         .chain(iter::once(self_var)),
                 );
 
-                // Push method-local type params for each method
-                // (they share the same scope as class params for lowering)
                 let methods_lowered = methods
                     .into_iter()
                     .map(|m| {
-                        self.push_type_params(
-                            m.type_params.iter().map(|tp| tp.name),
-                        );
-                        let params = m
-                            .params
-                            .into_iter()
-                            .map(|(n, t)| {
-                                t.map(|te| self.type_expr(te))
-                                    .transpose()
-                                    .map(|ty_id| (n, ty_id))
-                            })
-                            .collect::<Result<SmallVec<_>>>()?;
-                        let ret =
-                            m.ret.map(|t| self.type_expr(t)).transpose()?;
-                        let tp = self.type_param_list(m.type_params)?;
-                        self.pop_type_params();
-                        Ok(ast::AstClassMethodSig {
-                            name: m.name,
-                            type_params: tp,
-                            params,
-                            ret,
-                            span: m.span,
-                        })
+                        let default = m
+                            .default
+                            .map(|d| self.instance_method(d))
+                            .transpose()?;
+                        let sig = self.class_method_sig(m.sig)?;
+                        Ok(ast::AstClassMethod { sig, default })
                     })
                     .collect::<Result<SmallVec<_>>>()?;
 
@@ -2254,6 +2401,32 @@ impl<'a> MergeCtx<'a> {
         }
     }
 
+    fn instance_method(
+        &mut self,
+        m: ast::InstanceMethodDef,
+        span: Span,
+    ) -> Result<ast::InstanceMethodDef> {
+        let new_params: Result<SmallVec<_>> = m
+            .params
+            .into_iter()
+            .map(|(n, ty_opt)| {
+                let new_ty =
+                    ty_opt.map(|t| self.type_expr(t, span)).transpose()?;
+                Ok((n, new_ty))
+            })
+            .collect();
+        let new_ret = m.ret.map(|t| self.type_expr(t, span)).transpose()?;
+        let new_body = self.expr(m.body, span)?;
+        Ok(ast::InstanceMethodDef {
+            name: m.name,
+            type_params: m.type_params,
+            params: new_params?,
+            ret: new_ret,
+            body: new_body,
+            span: m.span,
+        })
+    }
+
     /// Merge a statement from source AST into target AST.
     fn stmt(&mut self, stmt_id: StmtId, span: Span) -> Result<StmtId> {
         let stmt = self
@@ -2391,7 +2564,8 @@ impl<'a> MergeCtx<'a> {
                 let new_methods: Result<SmallVec<_>> = methods
                     .into_iter()
                     .map(|m| {
-                        let new_params: Result<SmallVec<_>> = m
+                        let sig = m.sig;
+                        let new_params: Result<SmallVec<_>> = sig
                             .params
                             .into_iter()
                             .map(|(n, ty_opt)| {
@@ -2401,16 +2575,23 @@ impl<'a> MergeCtx<'a> {
                                 Ok((n, new_ty))
                             })
                             .collect();
-                        let new_ret = m
+                        let new_ret = sig
                             .ret
                             .map(|t| self.type_expr(t, span))
                             .transpose()?;
-                        Ok(ast::AstClassMethodSig {
-                            name: m.name,
-                            type_params: m.type_params,
-                            params: new_params?,
-                            ret: new_ret,
-                            span: m.span,
+                        let new_default = m
+                            .default
+                            .map(|d| self.instance_method(d, span))
+                            .transpose()?;
+                        Ok(ast::AstClassMethod {
+                            sig: ast::AstClassMethodSig {
+                                name: sig.name,
+                                type_params: sig.type_params,
+                                params: new_params?,
+                                ret: new_ret,
+                                span: sig.span,
+                            },
+                            default: new_default,
                         })
                     })
                     .collect();
@@ -2475,31 +2656,7 @@ impl<'a> MergeCtx<'a> {
                     .collect();
                 let new_methods: Result<SmallVec<_>> = methods
                     .into_iter()
-                    .map(|m| {
-                        let new_params: Result<SmallVec<_>> = m
-                            .params
-                            .into_iter()
-                            .map(|(n, ty_opt)| {
-                                let new_ty = ty_opt
-                                    .map(|t| self.type_expr(t, span))
-                                    .transpose()?;
-                                Ok((n, new_ty))
-                            })
-                            .collect();
-                        let new_ret = m
-                            .ret
-                            .map(|t| self.type_expr(t, span))
-                            .transpose()?;
-                        let new_body = self.expr(m.body, span)?;
-                        Ok(ast::InstanceMethodDef {
-                            name: m.name,
-                            type_params: m.type_params,
-                            params: new_params?,
-                            ret: new_ret,
-                            body: new_body,
-                            span: m.span,
-                        })
-                    })
+                    .map(|m| self.instance_method(m, span))
                     .collect();
                 Stmt::ClassInstance {
                     class_name,

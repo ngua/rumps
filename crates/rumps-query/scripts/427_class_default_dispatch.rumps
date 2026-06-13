@@ -1,0 +1,26 @@
+; Omitted optional methods dispatch to the class default.
+
+variant Cell = Cell(Int)
+
+#(required: f)
+class Optional C {
+  fun f(x: C) -> Int
+  fun g(x: C) -> Int
+
+  #(default)
+  fun g(x) {
+    10
+  }
+}
+
+class Optional for Cell {
+  fun f(x: Cell) -> Int {
+    match x {
+      Cell.Cell(n) => { n }
+    }
+  }
+}
+
+fun main() {
+  write Optional:g(Cell.Cell(3))
+}

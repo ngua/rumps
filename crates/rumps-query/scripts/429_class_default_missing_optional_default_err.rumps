@@ -1,0 +1,11 @@
+; Optional methods require a default implementation.
+
+#(required: f)
+class Optional C {
+  fun f(x: C) -> Int
+  fun g(x: C) -> Int
+}
+
+fun main() {
+  write "bad"
+}

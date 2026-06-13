@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Optional method `g` has a default, so instances may omit it.\n\nvariant Cell = Cell(Int)\n\n#(required: f)\nclass Optional C {\n  fun f(x: C) -> Int\n  fun g(x: C) -> Int\n\n  #(default)\n  fun g(x) {\n    10\n  }\n}\n\nclass Optional for Cell {\n  fun f(x: Cell) -> Int {\n    match x {\n      Cell.Cell(n) => { n }\n    }\n  }\n}\n\nfun main() {\n  write Optional:f(Cell.Cell(3))\n}\n"
+---
+3

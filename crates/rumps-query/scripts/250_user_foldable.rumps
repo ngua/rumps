@@ -13,13 +13,11 @@ class Foldable for Box {
   }
 
   fun fold-map[T, U: Default + Concatable](f: (T) -> U, x: Box[T]) -> U {
-    match x {
-      Box.Full(v) => { f(v) }
-      Box.Empty => {
-        let d = (Default:default()) : U
-        d
-      }
-    }
+    Foldable:fold(
+      (acc, v) => Concatable:concat(acc, f(v)),
+      Default:default(),
+      x,
+    )
   }
 }
 

@@ -119,15 +119,18 @@ use rumps_storage::{Database, Transaction};
 use smallvec::SmallVec;
 
 use crate::ast::{
-    pragma, Ast, BinOp, BindingPattern, Expr, ExprId, Import, ImportItem,
-    JsonAccessKey, JsonAccessKind, Literal, NumericLit, OutputFormat,
-    OutputTarget, Stmt, StmtId, TxnId, TypeDefAst, TypeParam, TypePattern,
-    UnOp, WriteExpr,
+    pragma, Ast, AstClassMethod, BinOp, BindingPattern, Expr, ExprId, Import,
+    ImportItem, JsonAccessKey, JsonAccessKind, Literal, NumericLit,
+    OutputFormat, OutputTarget, Stmt, StmtId, TxnId, TypeDefAst, TypeParam,
+    TypePattern, UnOp, WriteExpr,
 };
 use crate::intern::{QualifiedName, StringId, StringInterner};
 use crate::io::IoContext;
 use crate::resolve::{InstanceMap, ResolveCtx};
-use crate::typecheck::{CheckedProgram, ExprAux, RuntimeTyId, TyVar};
+use crate::typecheck::{
+    CheckedProgram, ClassDef, ClassRegistry, ClassShape, ExprAux, MethodSpec,
+    RuntimeTyId, Scheme, TyArena, TyVar,
+};
 use crate::value::{
     CapturedEnv, FunctionDef, Payload, TypeDef, TypeId, TypeRegistry, Value,
     ValueArena, ValueId, ValueMeta, VariantDef,
@@ -250,25 +253,8 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         // Build a class registry for the resolve pass (name -> `ClassId` mapping).
         // Includes user-defined class stubs so the resolver can map class names
         // to `ClassId`s for instance resolution.
-        let mut resolve_class_registry = {
-            let mut tmp_arena = typecheck::TyArena::new();
-            typecheck::ClassRegistry::builtins(
-                &mut |s| arena.strings.intern(s),
-                &mut tmp_arena,
-            )
-        };
-        stmts.iter().for_each(|&id| {
-            if let Some(Stmt::ClassDef { name, .. }) = ast.get_stmt(id).cloned()
-            {
-                let _ = resolve_class_registry.register(typecheck::ClassDef {
-                    name,
-                    shape: typecheck::ClassShape::Concrete { params: 0 },
-                    assoc_types: Default::default(),
-                    methods: vec![],
-                    supers: Default::default(),
-                });
-            }
-        });
+        let resolve_class_registry =
+            Self::resolve_class_registry(ast, stmts, &mut arena);
 
         let resolved_instances = ResolveCtx::new(
             ast,
@@ -740,6 +726,73 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
 
 // Private helpers
 impl<I: IoContext> Interpreter<'_, I> {
+    fn resolve_class_registry(
+        ast: &Ast,
+        stmts: &[StmtId],
+        arena: &mut ValueArena,
+    ) -> ClassRegistry {
+        let mut ty_arena = TyArena::new();
+        let mut reg = ClassRegistry::builtins(
+            &mut |s| arena.strings.intern(s),
+            &mut ty_arena,
+        );
+        Self::register_resolve_classes(ast, stmts, &mut reg);
+        reg
+    }
+
+    fn register_resolve_classes(
+        ast: &Ast,
+        stmts: &[StmtId],
+        reg: &mut ClassRegistry,
+    ) {
+        stmts.iter().for_each(|&id| {
+            ast.get_stmt(id).into_iter().for_each(|stmt| match stmt {
+                Stmt::ClassDef {
+                    name,
+                    methods,
+                    pragmas,
+                    ..
+                } => {
+                    let _ = reg.register(Self::resolve_class_def(
+                        *name, methods, pragmas,
+                    ));
+                }
+                Stmt::Module { body, .. } => {
+                    Self::register_resolve_classes(ast, body, reg);
+                }
+                _ => {}
+            });
+        });
+    }
+
+    fn resolve_class_def(
+        name: StringId,
+        methods: &[AstClassMethod],
+        pragmas: &pragma::Class,
+    ) -> ClassDef {
+        let required_methods = if pragmas.required_methods.0.is_empty() {
+            methods.iter().map(|m| m.sig.name).collect()
+        } else {
+            pragmas.required_methods.0.iter().copied().collect()
+        };
+        ClassDef {
+            name,
+            shape: ClassShape::Concrete { params: 0 },
+            assoc_types: Default::default(),
+            methods: methods
+                .iter()
+                .map(|m| {
+                    (
+                        m.sig.name,
+                        MethodSpec::Standard(Scheme::mono(TyArena::ERROR)),
+                    )
+                })
+                .collect(),
+            required_methods,
+            supers: Default::default(),
+        }
+    }
+
     /// Execute a sequence of statements.
     ///
     /// Uses async recursion over the slice instead of iteration.
@@ -847,6 +900,37 @@ impl<I: IoContext> Interpreter<'_, I> {
         mod_path: &str,
         span: Span,
     ) -> Result<()> {
+        self.populate_module_defaults(ids)?;
+        self.populate_module_instances(ids).await?;
+        self.populate_module_items(ids, module, mod_path, span)
+            .await
+    }
+
+    fn populate_module_defaults(&mut self, ids: &[StmtId]) -> Result<()> {
+        ids.iter().try_for_each(|&id| {
+            let stmt = self.ast.get_stmt(id).cloned();
+            if let Some(Stmt::ClassDef { name, methods, .. }) = stmt {
+                self.checked
+                    .class_registry
+                    .lookup_by_name(name)
+                    .into_iter()
+                    .try_for_each(|class| {
+                        self.hoist_class_defaults(class, &methods)
+                    })
+            } else {
+                Ok(())
+            }
+        })
+    }
+
+    #[async_recursion]
+    async fn populate_module_items(
+        &mut self,
+        ids: &[StmtId],
+        module: &mut env::UserModule,
+        mod_path: &str,
+        span: Span,
+    ) -> Result<()> {
         match ids.split_first() {
             None => Ok(()),
             Some((&id, rest)) => {
@@ -947,15 +1031,31 @@ impl<I: IoContext> Interpreter<'_, I> {
                             self.union_decl(&qname)?;
                         }
 
-                        Stmt::ClassInstance { methods, .. } => {
-                            self.hoist_class_instance(id, &methods)?;
-                        }
+                        Stmt::ClassInstance { .. } | Stmt::ClassDef { .. } => {}
 
                         // Other statements are rejected by the typechecker
                         _ => {}
                     }
                 }
-                self.populate_module(rest, module, mod_path, span).await
+                self.populate_module_items(rest, module, mod_path, span)
+                    .await
+            }
+        }
+    }
+
+    #[async_recursion]
+    async fn populate_module_instances(
+        &mut self,
+        ids: &[StmtId],
+    ) -> Result<()> {
+        match ids.split_first() {
+            None => Ok(()),
+            Some((&id, rest)) => {
+                let stmt = self.ast.get_stmt(id).cloned();
+                if let Some(Stmt::ClassInstance { methods, .. }) = stmt {
+                    self.hoist_class_instance(id, &methods)?;
+                }
+                self.populate_module_instances(rest).await
             }
         }
     }

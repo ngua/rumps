@@ -1,0 +1,16 @@
+; Default method constraints must match the class method signature.
+
+#(required: f)
+class Bad C {
+  fun f(x: C) -> C
+  fun g[T](x: T) -> T
+
+  #(default)
+  fun g[T: Additive](x: T) -> T {
+    x + x
+  }
+}
+
+fun main() {
+  write "bad"
+}

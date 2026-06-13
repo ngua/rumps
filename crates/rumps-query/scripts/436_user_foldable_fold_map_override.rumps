@@ -1,0 +1,21 @@
+; A user supplied `fold-map` can define custom behavior.
+
+variant Twice[T] = Twice(T)
+
+class Foldable for Twice {
+  fun fold(f, init, x) {
+    match x {
+      Twice.Twice(v) => { f(init, v) }
+    }
+  }
+
+  fun fold-map[T, U: Default + Concatable](f: (T) -> U, x: Twice[T]) -> U {
+    match x {
+      Twice.Twice(v) => { Concatable:concat(f(v), f(v)) }
+    }
+  }
+}
+
+fun main() {
+  write Foldable:fold-map(x => "{x}", Twice.Twice(7))
+}

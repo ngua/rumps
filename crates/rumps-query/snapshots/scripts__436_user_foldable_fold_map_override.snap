@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; A user supplied `fold-map` overrides the builtin class default.\n\nvariant Twice[T] = Twice(T)\n\nclass Foldable for Twice {\n  fun fold(f, init, x) {\n    match x {\n      Twice.Twice(v) => { f(init, v) }\n    }\n  }\n\n  fun fold-map[T, U: Default + Concatable](f: (T) -> U, x: Twice[T]) -> U {\n    match x {\n      Twice.Twice(v) => { Concatable:concat(f(v), f(v)) }\n    }\n  }\n}\n\nfun main() {\n  write Foldable:fold-map(x => \"{x}\", Twice.Twice(7))\n}\n"
+---
+"77"

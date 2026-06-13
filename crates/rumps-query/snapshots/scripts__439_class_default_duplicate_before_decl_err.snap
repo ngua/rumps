@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Duplicate defaults before a method declaration report the second default.\n\n#(required: f)\nclass Optional C {\n  fun f(x: C) -> Int\n\n  #(default)\n  fun g(x: C) -> Int {\n    10\n  }\n\n  #(default)\n  fun g(x: C) -> Int {\n    20\n  }\n\n  fun g(x: C) -> Int\n}\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: 196..227: duplicate default method `g`

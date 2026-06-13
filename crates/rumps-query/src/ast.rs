@@ -1218,7 +1218,6 @@ pub(crate) struct AstClassAssocTypeDecl {
 /// A method signature in a class definition.
 ///
 /// Represents `fun method[T](params) -> RetType` inside a class definition.
-/// Signature only; no body (bodies belong to instances).
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct AstClassMethodSig {
     pub(crate) name: StringId,
@@ -1226,6 +1225,13 @@ pub(crate) struct AstClassMethodSig {
     pub(crate) params: SmallVec<[(StringId, Option<AstTypeExprId>); 4]>,
     pub(crate) ret: Option<AstTypeExprId>,
     pub(crate) span: Span,
+}
+
+/// A class method signature with an optional default body.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct AstClassMethod {
+    pub(crate) sig: AstClassMethodSig,
+    pub(crate) default: Option<InstanceMethodDef>,
 }
 
 /// A method definition in a class instance.
@@ -1442,8 +1448,8 @@ pub(crate) enum Stmt {
         supers: SmallVec<[TypeClass<AstTypeExprId>; 2]>,
         /// Associated type declarations (e.g., `newtype Element`).
         assoc_types: SmallVec<[AstClassAssocTypeDecl; 2]>,
-        /// Method signatures (no bodies).
-        methods: SmallVec<[AstClassMethodSig; 4]>,
+        /// Method signatures with optional default bodies.
+        methods: SmallVec<[AstClassMethod; 4]>,
         pragmas: pragma::Class,
     },
 

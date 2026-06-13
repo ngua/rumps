@@ -1,0 +1,15 @@
+; Default bodies must match a class method declaration.
+
+#(required: f)
+class Optional C {
+  fun f(x: C) -> Int
+
+  #(default)
+  fun g(x: C) -> Int {
+    10
+  }
+}
+
+fun main() {
+  write "bad"
+}

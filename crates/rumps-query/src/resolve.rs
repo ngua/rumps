@@ -51,8 +51,14 @@ pub(crate) struct ResolvedInstance {
     pub(crate) type_name: QualifiedName,
     /// Tuple arity for tuple-constructor instances.
     pub(crate) tuple_arity: Option<usize>,
-    /// Method mappings: `(method_name, generated_fn_name)`.
-    pub(crate) methods: Vec<(StringId, StringId)>,
+    /// Method mappings with their source.
+    pub(crate) methods: Vec<ResolvedMethod>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum ResolvedMethod {
+    Instance { method: StringId, fun: StringId },
+    Default { method: StringId, fun: StringId },
 }
 
 /// Map from `StmtId` to resolved instance info.
@@ -390,8 +396,11 @@ impl<'a> ResolveCtx<'a> {
                     .filter_map(|id| Self::extract_type_qn_named(self.ast, *id))
                     .map(|qn| qn.display(&self.arena.strings))
                     .collect();
-                let methods = methods.clone();
-                let mappings: Vec<(StringId, StringId)> = methods
+                let provided: HashSet<StringId> =
+                    methods.iter().map(|m| m.name).collect();
+                let all_methods: Vec<StringId> =
+                    self.class_registry.get(class).method_names().collect();
+                let mut mappings: Vec<ResolvedMethod> = methods
                     .iter()
                     .map(|m| {
                         let mn =
@@ -403,9 +412,35 @@ impl<'a> ResolveCtx<'a> {
                             &ca_names,
                         );
                         let fn_id = self.arena.strings.intern(&fn_name);
-                        (m.name, fn_id)
+                        ResolvedMethod::Instance {
+                            method: m.name,
+                            fun: fn_id,
+                        }
                     })
                     .collect();
+                all_methods.into_iter().for_each(|method| {
+                    let default = {
+                        if provided.contains(&method)
+                            || !self.has_default_method_body(class, method)
+                        {
+                            None
+                        } else {
+                            let mn = self
+                                .arena
+                                .strings
+                                .get(method)
+                                .unwrap_or_default()
+                                .to_owned();
+                            let fn_name = RuntimeInstance::default_fn_name(
+                                &class_name_str,
+                                &mn,
+                            );
+                            let fun = self.arena.strings.intern(&fn_name);
+                            Some(ResolvedMethod::Default { method, fun })
+                        }
+                    };
+                    default.into_iter().for_each(|m| mappings.push(m));
+                });
 
                 Some(ResolvedInstance {
                     class,
@@ -416,6 +451,37 @@ impl<'a> ResolveCtx<'a> {
             }
             _ => None,
         }
+    }
+
+    fn has_default_method_body(
+        &self,
+        class: ClassId,
+        method: StringId,
+    ) -> bool {
+        self.ast
+            .stmt_ids()
+            .any(|id| self.stmt_has_default_method_body(id, class, method))
+    }
+
+    fn stmt_has_default_method_body(
+        &self,
+        id: StmtId,
+        class: ClassId,
+        method: StringId,
+    ) -> bool {
+        self.ast.get_stmt(id).is_some_and(|stmt| match stmt {
+            Stmt::ClassDef { name, methods, .. }
+                if self.class_registry.lookup_by_name(*name) == Some(class) =>
+            {
+                methods
+                    .iter()
+                    .any(|m| m.sig.name == method && m.default.is_some())
+            }
+            Stmt::Module { body, .. } => body.iter().any(|&child| {
+                self.stmt_has_default_method_body(child, class, method)
+            }),
+            _ => false,
+        })
     }
 
     /// Extract the type name from an `AstTypeExpr`, including tuple ctors.

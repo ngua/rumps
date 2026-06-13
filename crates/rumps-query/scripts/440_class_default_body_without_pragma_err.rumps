@@ -1,0 +1,15 @@
+; Method bodies inside class definitions require `#(default)`.
+
+#(required: f)
+class Optional C {
+  fun f(x: C) -> Int
+  fun g(x: C) -> Int
+
+  fun g(x: C) -> Int {
+    10
+  }
+}
+
+fun main() {
+  write "bad"
+}

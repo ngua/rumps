@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Default method constraints must match the class method signature.\n\n#(required: f)\nclass Bad C {\n  fun f(x: C) -> C\n  fun g[T](x: T) -> T\n\n  #(default)\n  fun g[T: Additive](x: T) -> T {\n    x + x\n  }\n}\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: method `g` of class `Bad` has constraints that do not match the class method signature

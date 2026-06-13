@@ -71,6 +71,11 @@ impl RuntimeInstance {
         Self::fn_name(class_name, type_name, method, &refs)
     }
 
+    /// Generate the internal function name for a class default method.
+    pub(crate) fn default_fn_name(class_name: &str, method: &str) -> String {
+        format!("__class_default_{class_name}__{method}")
+    }
+
     /// Look up a method by name, returning the generated function name.
     pub(crate) fn lookup(&self, method: StringId) -> Option<StringId> {
         self.methods.get(&method).copied()

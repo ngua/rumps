@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Method bodies inside class definitions require `#(default)`.\n\n#(required: f)\nclass Optional C {\n  fun f(x: C) -> Int\n  fun g(x: C) -> Int\n\n  fun g(x: C) -> Int {\n    10\n  }\n}\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: 143..174: method bodies in class definitions require `#(default)`

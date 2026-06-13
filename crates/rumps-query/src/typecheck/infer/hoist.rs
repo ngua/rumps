@@ -172,6 +172,7 @@ impl InferCtx<'_> {
         // Phase `3`: Hoist functions and classes before static `let`s.
         stmts.iter().for_each(|&id| self.hoist_non_module(id));
         self.hoist_class_defs(stmts, None);
+        self.typecheck_class_default_methods(stmts, None);
         self.hoist_class_instances(stmts, None);
 
         // Phase `4`: infer static `let`s after declarations are available, but
