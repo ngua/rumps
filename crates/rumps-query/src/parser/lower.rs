@@ -343,10 +343,6 @@ impl<'a> LowerCtx<'a> {
                     "immediate" => Ok(pragma::SyncMode::Immediate),
                     "on-commit" => Ok(pragma::SyncMode::OnCommit),
                     "relaxed" => Ok(pragma::SyncMode::Relaxed),
-                    "periodic" => Err(Error::static_err(
-                        n.span,
-                        "`sync-mode = periodic` is not supported by pragma syntax yet",
-                    )),
                     other => Err(Error::static_err(
                         n.span,
                         format!("unsupported `sync-mode` value `{other}`"),
@@ -356,6 +352,31 @@ impl<'a> LowerCtx<'a> {
                     value,
                     span: opt.span,
                 })
+            }
+            cst::pragma::Value::Periodic { interval_ms, span } => {
+                let (n, n_span) = interval_ms.ok_or_else(|| {
+                    Error::static_err(
+                        span,
+                        "`sync-mode = periodic` requires a millisecond interval",
+                    )
+                })?;
+                let interval_ms = u64::try_from(n).map_err(|_| {
+                    Error::static_err(
+                        n_span,
+                        "`sync-mode = periodic` interval must be greater than `0` milliseconds",
+                    )
+                })?;
+                if interval_ms > 0 {
+                    Ok(pragma::DbOption::SyncMode {
+                        value: pragma::SyncMode::Periodic { interval_ms },
+                        span: opt.span,
+                    })
+                } else {
+                    Err(Error::static_err(
+                        n_span,
+                        "`sync-mode = periodic` interval must be greater than `0` milliseconds",
+                    ))
+                }
             }
             v => Err(Error::static_err(
                 Self::pragma_value_span(&v),
@@ -398,6 +419,7 @@ impl<'a> LowerCtx<'a> {
     fn pragma_value_span(v: &cst::pragma::Value) -> Span {
         match v {
             cst::pragma::Value::Ident(n) => n.span,
+            cst::pragma::Value::Periodic { span, .. } => *span,
             cst::pragma::Value::Int(_, span)
             | cst::pragma::Value::String(_, span) => *span,
         }

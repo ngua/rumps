@@ -458,6 +458,10 @@ pub(crate) mod pragma {
     #[derive(Clone, Debug)]
     pub(crate) enum Value {
         Ident(SpannedName),
+        Periodic {
+            interval_ms: Option<(i64, Span)>,
+            span: Span,
+        },
         Int(i64, Span),
         String(String, Span),
     }

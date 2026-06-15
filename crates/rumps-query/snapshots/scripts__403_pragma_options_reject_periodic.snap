@@ -2,4 +2,4 @@
 source: crates/rumps-query/tests/scripts.rs
 description: "#(options: sync-mode = periodic)\n\nfun main() {\n  write \"bad\"\n}\n"
 ---
-ERROR: 23..31: `sync-mode = periodic` is not supported by pragma syntax yet
+ERROR: 23..31: `sync-mode = periodic` requires a millisecond interval

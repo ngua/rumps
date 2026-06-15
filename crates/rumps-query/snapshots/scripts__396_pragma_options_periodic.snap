@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(options: sync-mode = periodic 120)\n\nfun main() {\n  write \"periodic pragma\"\n}\n"
+---
+"periodic pragma"

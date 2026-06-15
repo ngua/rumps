@@ -1284,6 +1284,7 @@ pub(crate) mod pragma {
     pub(crate) enum SyncMode {
         Immediate,
         OnCommit,
+        Periodic { interval_ms: u64 },
         Relaxed,
     }
 

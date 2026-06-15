@@ -15,7 +15,6 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use miette::{NamedSource, Report};
-use rumps_storage::Database;
 
 /// RUMPS query language interpreter.
 // TODO: Add `--interactive` / `-i` flag once we have REPL support.
@@ -57,16 +56,12 @@ async fn run(args: Args) -> miette::Result<()> {
         miette::miette!("failed to read script {:?}: {e}", script_path)
     })?;
 
-    let db = match &args.db {
-        Some(path) => Database::open(path).await,
-        None => Database::in_memory(),
-    }
-    .map_err(|e| miette::miette!("failed to open database: {e}"))?;
-
-    rumps_query::run(&src, &script_path, db).await.map_err(|e| {
-        let name = script_path.display().to_string();
-        Report::new(e).with_source_code(NamedSource::new(name, src.clone()))
-    })
+    rumps_query::run_opening_db(&src, &script_path, args.db.as_deref())
+        .await
+        .map_err(|e| {
+            let name = script_path.display().to_string();
+            Report::new(e).with_source_code(NamedSource::new(name, src.clone()))
+        })
 }
 
 fn install_miette() {
