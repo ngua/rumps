@@ -49,7 +49,7 @@ use crate::intern::{StringId, StringInterner};
 use crate::primitives::Range;
 use crate::typecheck::{RuntimeTyId, RuntimeTypes, Ty, TyArena};
 use crate::value::{
-    Map as RumpsMap, Payload, TypeId, TypeRegistry, Value, ValueArena, ValueId,
+    Map, Payload, TypeId, TypeRegistry, Value, ValueArena, ValueId,
 };
 use crate::{ClassId, Error, Result, Span};
 
@@ -819,7 +819,7 @@ impl DefaultClass {
             Ty::Bool => Payload::Bool(false),
             Ty::String => Payload::String(ctx.arena.intern("")),
             Ty::Array(_) => Payload::Array(Arc::new(SmallVec::new())),
-            Ty::Map(_, _) => Payload::Map(Arc::new(RumpsMap::new())),
+            Ty::Map(_, _) => Payload::Map(Arc::new(Map::new())),
             Ty::Option(_) => Payload::none(),
             Ty::Ordering => Payload::eq_ord(),
             Ty::FilePath => Payload::FilePath(ctx.arena.intern("")),
