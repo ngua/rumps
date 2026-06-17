@@ -70,20 +70,32 @@ fun main() {
   write none-val.inner ?? 0
 }
 
+#(transparent)
 newtype MyInt = Int
+#(transparent)
 newtype MyStr = String
+#(transparent)
 newtype MyBool = Bool
 
+#(transparent)
 newtype List[T] = Array[T]
+#(transparent)
 newtype Maybe[T] = Option[T]
+#(transparent)
 newtype IntMap[V] = Map[Int, V]
 
+#(transparent)
 newtype Person = { name: String, age: Int }
+#(transparent)
 newtype Address = { street: String, city: String }
+#(transparent)
 newtype PatientRecord = { patient: Person, address: Address }
 
+#(transparent)
 newtype Box[T] = { value: T }
+#(transparent)
 newtype Pair[L, R] = { left: L, right: R }
+#(transparent)
 newtype MaybeBox[T] = { inner: Option[T] }
 
 fun greet(p: Person) -> String {

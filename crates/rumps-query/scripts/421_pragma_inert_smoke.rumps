@@ -1,6 +1,6 @@
 #(options: sync-mode = immediate, cache-size = 128, wal-max-file-size = 1048576)
 #(deriving: Eq)
-variant Mood = Happy | Sad
+variant Mood = Happy(Int) | Sad(Int)
 
 #(required: eq)
 class MyEq C {
@@ -8,5 +8,5 @@ class MyEq C {
 }
 
 fun main() {
-  write "pragma smoke"
+  write Mood.Happy(1) == Mood.Happy(1)
 }

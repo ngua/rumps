@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(deriving: Into[String], Into[String])\nnewtype UserId = Int\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: 26..38: duplicate deriving class `Into`

@@ -22,6 +22,7 @@ impl SolveCtx<'_> {
                 | ClassId::POWERABLE
         )
     }
+
     /// Map a primitive `Ty` shape to its `TypeId`, if applicable.
     pub(super) fn primitive_type_id(ty: &Ty) -> Option<TypeId> {
         match ty {
@@ -50,6 +51,7 @@ impl SolveCtx<'_> {
             _ => None,
         }
     }
+
     /// Map a `Ty` to its `(TypeId, type_args)` pair for instance lookup.
     ///
     /// Handles both primitive types (no args) and parameterized builtins
@@ -71,6 +73,7 @@ impl SolveCtx<'_> {
             }
         }
     }
+
     /// Check that a type satisfies a class constraint.
     ///
     /// This is the unified constraint checking method that handles all class
@@ -78,7 +81,7 @@ impl SolveCtx<'_> {
     /// `Into(target)`, `Indexable(elem)`). The union-find is updated in-place
     /// when the constraint involves unification (e.g., `Fallible`, `Indexable`,
     /// `Indexable`).
-    pub(super) fn satisfies_class(
+    pub(in crate::typecheck) fn satisfies_class(
         &mut self,
         class: &TypeClass<TyId>,
         ty: TyId,
@@ -104,6 +107,7 @@ impl SolveCtx<'_> {
             self.satisfies_class_inner(class, ty, span);
         }
     }
+
     /// Inner implementation of class constraint checking.
     fn satisfies_class_inner(
         &mut self,
@@ -173,6 +177,7 @@ impl SolveCtx<'_> {
             _ => {}
         }
     }
+
     /// How the given `shape` satisfies `class_id` as a builtin.
     ///
     /// Returns `None` if the builtin table has no entry; the caller then
@@ -295,6 +300,7 @@ impl SolveCtx<'_> {
             _ => None,
         }
     }
+
     /// Check a "simple" class (`Numeric`, numeric capabilities, `BitLike`,
     /// `Negatable`, `Default`, `Concatable`, `Ord`, `Eq`, `Display`) against `ty`.
     ///
@@ -383,25 +389,31 @@ impl SolveCtx<'_> {
                         InstanceLookup::BlockedSelf => {}
                         InstanceLookup::Missing
                         | InstanceLookup::NotImported => {
-                            let expanded =
-                                if Self::is_numeric_capability(class_id)
-                                    || class_id == ClassId::BIT_LIKE
+                            if self.check_derived_variant_payloads(
+                                id, &args, class_id, span,
+                            ) {
+                            } else {
+                                let expanded = if class_id.idx()
+                                    < ClassId::BUILTIN_COUNT
                                 {
-                                    self.expand_alias_fully_for_class(
-                                        class_id, ty, span,
+                                    self.expand_alias_fully_for_type_class(
+                                        class, ty, span,
                                     )
                                 } else {
                                     None
                                 };
-                            match expanded {
-                                Some(e) => self.satisfies_class(class, e, span),
-                                None => self.errors.push(
-                                    TypeError::UnsatisfiedClass(
-                                        class.clone(),
-                                        ty,
-                                        span,
+                                match expanded {
+                                    Some(e) => {
+                                        self.satisfies_class(class, e, span)
+                                    }
+                                    None => self.errors.push(
+                                        TypeError::UnsatisfiedClass(
+                                            class.clone(),
+                                            ty,
+                                            span,
+                                        ),
                                     ),
-                                ),
+                                }
                             }
                         }
                     }
@@ -448,6 +460,55 @@ impl SolveCtx<'_> {
             },
         }
     }
+
+    fn check_derived_variant_payloads(
+        &mut self,
+        id: TypeId,
+        args: &[TyId],
+        class_id: ClassId,
+        span: Span,
+    ) -> bool {
+        let is_variant = self
+            .registry
+            .get_def(id)
+            .is_some_and(|def| matches!(def, TypeDef::Sum { .. }));
+        if is_variant
+            && self.decls.derives_simple(id, class_id)
+            && matches!(class_id, ClassId::EQ | ClassId::ORD | ClassId::DISPLAY)
+        {
+            let subst = self.type_param_subst(id, args);
+            let payloads: SmallVec<[AstTypeExprId; 8]> =
+                self.decls.variant_payload_exprs(id).collect();
+            payloads.iter().for_each(|&p| {
+                let ty = self.convert_ctx().ast_type_to_ty(p, &subst);
+                self.satisfies_class(&TypeClass::simple(class_id), ty, span);
+            });
+            true
+        } else {
+            false
+        }
+    }
+
+    fn type_param_subst(
+        &self,
+        id: TypeId,
+        args: &[TyId],
+    ) -> IndexMap<StringId, TyId> {
+        self.registry
+            .get_def(id)
+            .map(|def| match def {
+                TypeDef::Sum { type_params, .. }
+                | TypeDef::Alias { type_params, .. }
+                | TypeDef::Union { type_params, .. } => type_params,
+                TypeDef::Builtin(_) => {
+                    typechecked!("type parameters", "user declaration")
+                }
+            })
+            .into_iter()
+            .flat_map(|ps| ps.iter().copied().zip(args.iter().copied()))
+            .collect()
+    }
+
     /// Check an HKT class (`Mappable`, `Filterable`, `Foldable`, `Bimappable`)
     /// against `ty`, optionally unifying element types with `elems`.
     fn check_hkt_class(
@@ -458,9 +519,6 @@ impl SolveCtx<'_> {
         ty: TyId,
         span: Span,
     ) {
-        let ty = self
-            .expand_alias_fully_for_class(class_id, ty, span)
-            .unwrap_or(ty);
         let shape = self.ty_arena.get(ty).clone();
         let builtin_elems: Option<SmallVec<[TyId; 2]>> =
             match (class_id, &shape) {
@@ -518,11 +576,18 @@ impl SolveCtx<'_> {
                         InstanceLookup::BlockedSelf => {}
                         InstanceLookup::Missing
                         | InstanceLookup::NotImported => {
-                            self.errors.push(TypeError::UnsatisfiedClass(
-                                class.clone(),
-                                ty,
-                                span,
-                            ));
+                            match self.expand_alias_fully_for_type_class(
+                                class, ty, span,
+                            ) {
+                                Some(e) => self.satisfies_class(class, e, span),
+                                None => self.errors.push(
+                                    TypeError::UnsatisfiedClass(
+                                        class.clone(),
+                                        ty,
+                                        span,
+                                    ),
+                                ),
+                            }
                         }
                     }
                 }
@@ -576,6 +641,7 @@ impl SolveCtx<'_> {
             },
         }
     }
+
     /// Shared HKT class satisfaction logic for `Fallible`, `Wrappable`, and `Chainable`.
     ///
     /// All three handle the same set of types (`Option`, `Result`, `Tuple`, `Union`,
@@ -589,10 +655,6 @@ impl SolveCtx<'_> {
         ty: TyId,
         span: Span,
     ) {
-        let ty = self
-            .expand_alias_fully_for_class(tag, ty, span)
-            .unwrap_or(ty);
-
         match self.ty_arena.get(ty).clone() {
             Ty::Option(opt_elem) => {
                 self.unify_hkt_known_args(elems, &[opt_elem], span);
@@ -680,11 +742,18 @@ impl SolveCtx<'_> {
                     }
                     InstanceLookup::BlockedSelf => {}
                     InstanceLookup::Missing | InstanceLookup::NotImported => {
-                        self.errors.push(TypeError::UnsatisfiedClass(
-                            class.clone(),
-                            ty,
-                            span,
-                        ));
+                        match self
+                            .expand_alias_fully_for_type_class(class, ty, span)
+                        {
+                            Some(e) => self.satisfies_class(class, e, span),
+                            None => {
+                                self.errors.push(TypeError::UnsatisfiedClass(
+                                    class.clone(),
+                                    ty,
+                                    span,
+                                ))
+                            }
+                        }
                     }
                 }
             }
@@ -697,6 +766,7 @@ impl SolveCtx<'_> {
             }
         }
     }
+
     /// Check a parameterized user class constraint via instance lookup.
     fn check_user_parameterized(
         &mut self,
@@ -798,6 +868,7 @@ impl SolveCtx<'_> {
             },
         }
     }
+
     /// Check a user-defined HKT class constraint via instance lookup.
     ///
     /// Unlike `satisfies_hkt_class`, does NOT default `Ty::Var` to `Option`

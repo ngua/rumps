@@ -1,5 +1,6 @@
 ; Naked payload variant constructors are first-class functions.
 
+#(deriving: Display)
 variant Box[T] = Full(T) | Empty
 
 fun main() {

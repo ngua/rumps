@@ -1,5 +1,6 @@
 ; Error: explicit instance method type params must match by position
 
+#(deriving: Display)
 variant Box[T] = Box(T)
 
 class Swappable F {

@@ -2,6 +2,7 @@
 ; with different class args, using turbofish syntax to select the instance.
 
 variant Wrapper = Wrapper(Int)
+#(deriving: Display)
 variant Label = Label(String)
 
 class MyInto[T] C {

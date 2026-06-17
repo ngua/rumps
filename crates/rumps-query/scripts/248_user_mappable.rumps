@@ -1,7 +1,10 @@
 ; User Mappable for inferred and explicit methods, newtype, and union
 
+#(deriving: Display)
 variant Box[T] = Full(T) | Empty
+#(deriving: Display)
 variant Pack[T] = Full(T) | Empty
+#(deriving: Mappable, Display)
 newtype Bag[T] = Array[T]
 union Flex = Option[Int] | Array[Int]
 
@@ -41,11 +44,11 @@ fun main() {
   write Mappable:map(x => x + 10, Pack.Empty)
   write Mappable:map(x => "{x}!", Pack.Full(99))
 
-  ; newtype auto-derive
+  ; newtype deriving
   let b: Bag[Int] = [1, 2, 3]
   write Mappable:map(x => x * 10, b)
 
-  ; union auto-derive
+  ; union member-intersection
   let o: Flex = Option.Some(5)
   write Mappable:map(x => x * 2, o)
 

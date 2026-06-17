@@ -1,0 +1,6 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(deriving: Into[String], TryInto[Int])\nnewtype Label = String\n\nfun main() {\n  let x: Label = \"42\"\n  write x as String\n  write (x read Int)!\n}\n"
+---
+"42"
+42

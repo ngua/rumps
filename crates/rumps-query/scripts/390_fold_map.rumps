@@ -1,6 +1,8 @@
 variant Box[T] = Full(T) | Empty
+#(deriving: Foldable)
 newtype Bag[T] = Array[T]
 union Flex = Array[Int] | Bag[Int]
+#(deriving: Display)
 newtype Join = String
 
 class Foldable for Box {

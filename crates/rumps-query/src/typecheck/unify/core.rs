@@ -34,6 +34,7 @@ impl SolveCtx<'_> {
     ) -> UnifyResult {
         self.unify_inner(t1, t2, span)
     }
+
     /// Core unification logic.
     fn unify_inner(&mut self, t1: TyId, t2: TyId, span: Span) -> UnifyResult {
         // Equal TyIds are trivially unified
@@ -54,6 +55,7 @@ impl SolveCtx<'_> {
             }
         }
     }
+
     /// Dispatch on cloned `Ty` pair; `t1`/`t2` are the original `TyId`s for
     /// error messages, `ty1`/`ty2` are the cloned shapes for matching.
     fn unify_inner_dispatch(
@@ -350,6 +352,7 @@ impl SolveCtx<'_> {
             }),
         }
     }
+
     /// Unify a type variable with a type.
     ///
     /// Finds the canonical root via UF, probes for existing binding, and
@@ -388,6 +391,7 @@ impl SolveCtx<'_> {
             Ok(())
         }
     }
+
     /// Unify two sequences of types element-wise.
     pub(super) fn unify_sequence(
         &mut self,
@@ -398,6 +402,7 @@ impl SolveCtx<'_> {
         ts1.zip(ts2)
             .try_for_each(|(t1, t2)| self.unify_inner(t1, t2, span))
     }
+
     /// Find a bijective matching between union members via backtracking.
     ///
     /// Tries to match each member of `lhs` to a unique member of `bt.rhs`
@@ -416,6 +421,7 @@ impl SolveCtx<'_> {
             }
         }
     }
+
     /// Helper for `unify_union_bijection`: try matching `first` with each
     /// available member starting at `start`.
     fn try_union_matches(
@@ -467,6 +473,7 @@ impl SolveCtx<'_> {
             None => None,
         }
     }
+
     /// Unify two structural object types.
     ///
     /// Uses extensible record semantics: an object matches if it has at least
@@ -495,6 +502,7 @@ impl SolveCtx<'_> {
             }
         })
     }
+
     /// Unify a named object alias type with a structural object type.
     ///
     /// The alias must have all required fields present in the object.

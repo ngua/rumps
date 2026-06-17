@@ -3,6 +3,7 @@
 import Methods.{ map as imported-map, tag as imported-tag }
 
 variant Wrapper = Wrapper(Int)
+#(deriving: Display)
 variant Label = Label(String)
 newtype Score = Int
 

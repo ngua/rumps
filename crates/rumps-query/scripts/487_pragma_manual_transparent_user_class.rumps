@@ -1,0 +1,18 @@
+; Transparent newtypes do not forward user-defined classes.
+
+#(transparent)
+newtype Count = Int
+
+class Tag T {
+  fun tag(x: T) -> String
+}
+
+class Tag for Count {
+  fun tag(x: Count) -> String {
+    "count"
+  }
+}
+
+fun main() {
+  write "ok"
+}

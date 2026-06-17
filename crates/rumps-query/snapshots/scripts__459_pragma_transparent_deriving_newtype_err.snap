@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(transparent)\n#(deriving: Eq)\nnewtype UserId = Int\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: `newtype` declarations cannot use both `transparent` and `deriving` pragmas

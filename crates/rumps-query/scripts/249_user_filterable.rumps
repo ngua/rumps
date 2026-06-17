@@ -1,6 +1,8 @@
 ; User Filterable for type, newtype, and union
 
+#(deriving: Display)
 variant Box[T] = Full(T) | Empty
+#(deriving: Filterable, Display)
 newtype Bag[T] = Array[T]
 union Lists = Array[Int] | Array[String]
 
@@ -21,11 +23,11 @@ fun main() {
   write Filterable:filter(x => x > 10, Box.Full(5))
   write Filterable:filter(x => x > 10, Box.Empty)
 
-  ; newtype auto-derive
+  ; newtype deriving
   let b: Bag[Int] = [1, 2, 3, 4, 5]
   write Filterable:filter(x => x > 3, b)
 
-  ; union auto-derive
+  ; union member-intersection
   let a: Lists = [1, 2, 3, 4, 5]
   write Filterable:filter(x => x > 3, a)
 

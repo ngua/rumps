@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(deriving: Display)\nnewtype Bad = Int -> Int\n\nfun main() {\n  let f: Bad = x => x + 1\n  write Display:display(f)\n}\n"
+---
+ERROR: type `(Int) -> Int` does not satisfy `Display` class

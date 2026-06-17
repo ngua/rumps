@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Error: deriving before `union` is still an unsupported target.\n\n#(deriving: Eq)\nunion Atom = Int | String\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: `deriving` pragmas are not supported on `union` declarations

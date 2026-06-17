@@ -1,0 +1,6 @@
+#(deriving: Display)
+variant Token = Token
+
+fun main() {
+  write Token.Token
+}

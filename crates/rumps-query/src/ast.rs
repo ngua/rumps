@@ -1265,6 +1265,7 @@ pub(crate) struct AssocTypeDef {
 pub(crate) mod pragma {
     use smallvec::SmallVec;
 
+    use super::AstTypeExprId;
     use crate::intern::StringId;
     use crate::{ClassId, Span};
 
@@ -1291,10 +1292,20 @@ pub(crate) mod pragma {
     #[derive(Clone, Debug, Default, PartialEq, Eq)]
     pub(crate) struct Type {
         pub(crate) deriving: Deriving,
+        pub(crate) transparent: Option<Span>,
     }
 
     #[derive(Clone, Debug, Default, PartialEq, Eq)]
-    pub(crate) struct Deriving(pub(crate) SmallVec<[ClassId; 4]>);
+    pub(crate) struct Deriving(
+        pub(crate) SmallVec<[DerivedClass<AstTypeExprId>; 4]>,
+    );
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub(crate) struct DerivedClass<T> {
+        pub(crate) class: ClassId,
+        pub(crate) args: SmallVec<[T; 2]>,
+        pub(crate) span: Span,
+    }
 
     #[derive(Clone, Debug, Default, PartialEq, Eq)]
     pub(crate) struct Class {

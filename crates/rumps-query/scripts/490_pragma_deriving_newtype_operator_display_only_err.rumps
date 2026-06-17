@@ -1,0 +1,9 @@
+#(deriving: Display)
+newtype I = Int
+
+let x: I = 10
+
+fun main() {
+  write x
+  write x + x
+}

@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(deriving: Mappable)\nvariant Box[T] = Box(T)\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: `variant` declarations can only derive `Eq`, `Ord`, or `Display`, not `Mappable`

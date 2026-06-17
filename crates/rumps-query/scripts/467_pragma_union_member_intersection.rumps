@@ -1,0 +1,10 @@
+union Texty = Int | String
+
+fun main() {
+  let a: Texty = 1
+  let b: Texty = 2
+  write a == b
+  write Display:display(a)
+  write a as String
+  write (a read Int)!
+}

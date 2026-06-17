@@ -1,5 +1,6 @@
 ; Error: explicit instance method constraints must match the class method signature
 
+#(deriving: Display)
 variant Box[T] = Full(T) | Empty
 
 class Mappable for Box {

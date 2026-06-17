@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Transparent newtypes do not forward user-defined classes.\n\n#(transparent)\nnewtype Count = Int\n\nclass Tag T {\n  fun tag(x: T) -> String\n}\n\nclass Tag for Count {\n  fun tag(x: Count) -> String {\n    \"count\"\n  }\n}\n\nfun main() {\n  write \"ok\"\n}\n"
+---
+"ok"

@@ -3,6 +3,7 @@
 ; Defines `MyFunctor` where the self var `F` is applied as `F[T]`,
 ; making it kind `* -> *`.
 
+#(deriving: Display)
 variant Box[T] = Box(T)
 
 class MyFunctor F {

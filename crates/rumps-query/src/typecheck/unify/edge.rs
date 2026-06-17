@@ -61,6 +61,7 @@ impl SolveCtx<'_> {
         }
         edge
     }
+
     pub(in crate::typecheck) fn newtype_edge_any(
         &mut self,
         from: TyId,
@@ -70,6 +71,7 @@ impl SolveCtx<'_> {
         self.newtype_edge_with_mode(from, to, span, NewtypeEdgeMode::Any)
             .0
     }
+
     pub(in crate::typecheck) fn newtype_edge_status(
         &mut self,
         from: TyId,
@@ -107,6 +109,7 @@ impl SolveCtx<'_> {
             }
         }
     }
+
     pub(super) fn newtype_edge_blocked(
         &mut self,
         from: TyId,
@@ -121,6 +124,7 @@ impl SolveCtx<'_> {
         self.errors.truncate(err_len);
         blocked
     }
+
     fn newtype_edge_with_mode(
         &mut self,
         from: TyId,
@@ -143,6 +147,7 @@ impl SolveCtx<'_> {
             .or_else(|| self.newtype_edge_candidate(to, from, &mut st));
         (edge, st.cycle)
     }
+
     fn newtype_edge_candidate(
         &mut self,
         alias_ty: TyId,
@@ -161,6 +166,7 @@ impl SolveCtx<'_> {
             None
         }
     }
+
     fn newtype_edge_inner(
         &mut self,
         alias_ty: TyId,
@@ -203,6 +209,7 @@ impl SolveCtx<'_> {
             None => None,
         }
     }
+
     fn newtype_repr_matches(
         &mut self,
         alias: NewtypeAlias<'_>,
@@ -228,6 +235,7 @@ impl SolveCtx<'_> {
             _ => self.newtype_structural_match(alias.repr, other, st),
         }
     }
+
     fn newtype_object_repr_matches(
         &mut self,
         req: ObjRepr<'_>,
@@ -268,6 +276,7 @@ impl SolveCtx<'_> {
             }),
         }
     }
+
     fn newtype_structural_match(
         &mut self,
         t1: TyId,
@@ -421,6 +430,7 @@ impl SolveCtx<'_> {
             }
         }
     }
+
     fn newtype_structural_sequence(
         &mut self,
         ts1: impl Iterator<Item = TyId>,
@@ -430,6 +440,7 @@ impl SolveCtx<'_> {
         ts1.zip(ts2)
             .try_for_each(|(t1, t2)| self.newtype_structural_match(t1, t2, st))
     }
+
     fn newtype_structural_objects(
         &mut self,
         fields1: &IndexMap<StringId, TyId>,
@@ -442,6 +453,7 @@ impl SolveCtx<'_> {
             })
         })
     }
+
     fn newtype_structural_union(
         &mut self,
         lhs: &[TyId],
@@ -455,6 +467,7 @@ impl SolveCtx<'_> {
             }
         }
     }
+
     fn newtype_structural_union_matches(
         &mut self,
         first: TyId,

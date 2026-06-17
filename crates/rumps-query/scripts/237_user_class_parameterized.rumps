@@ -3,7 +3,9 @@
 ; Defines `MyInto[T]` with a `convert` method and implements it
 ; for distinct user types.
 
+#(deriving: Display)
 variant Celsius = Celsius(Float)
+#(deriving: Display)
 variant Fahrenheit = Fahrenheit(Float)
 
 class MyInto[T] C {

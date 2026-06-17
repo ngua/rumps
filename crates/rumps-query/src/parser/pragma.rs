@@ -24,13 +24,19 @@ impl Parser {
     {
         let options = interner.intern("options");
         let deriving = interner.intern("deriving");
+        let transparent = interner.intern("transparent");
         let required = interner.intern("required");
         let default = interner.intern("default");
         let periodic = interner.intern("periodic");
 
         let name_sep = just(Token::Comma).then_ignore(Self::opt_newlines());
         let names = Self::pragma_name()
-            .separated_by(name_sep)
+            .separated_by(name_sep.clone())
+            .at_least(1)
+            .allow_trailing()
+            .map(SmallVec::from_vec);
+        let deriving_entries = Self::derived_class(interner)
+            .separated_by(name_sep.clone())
             .at_least(1)
             .allow_trailing()
             .map(SmallVec::from_vec);
@@ -52,10 +58,11 @@ impl Parser {
             .ignore_then(Self::opt_newlines())
             .ignore_then(just(Token::Colon))
             .ignore_then(Self::opt_newlines())
-            .ignore_then(names.clone())
-            .map(|names| {
-                cst::pragma::Kind::Deriving(cst::pragma::Deriving(names))
-            });
+            .ignore_then(deriving_entries)
+            .map(|ds| cst::pragma::Kind::Deriving(cst::pragma::Deriving(ds)));
+
+        let transparent_prag = Self::ctx_ident(transparent)
+            .map_with_span(|_, span| cst::pragma::Kind::Transparent(span));
 
         let required_prag = Self::ctx_ident(required)
             .ignore_then(Self::opt_newlines())
@@ -70,10 +77,15 @@ impl Parser {
 
         let default_prag =
             Self::ctx_ident(default).to(cst::pragma::Kind::DefaultDefinition);
-        let unknown_prag =
-            Self::unknown_pragma_name(options, deriving, required, default)
-                .then(filter(|t: &Token| *t != Token::RParen).repeated())
-                .map(|(name, _)| cst::pragma::Kind::Unknown(name));
+        let unknown_prag = Self::unknown_pragma_name(
+            options,
+            deriving,
+            transparent,
+            required,
+            default,
+        )
+        .then(filter(|t: &Token| *t != Token::RParen).repeated())
+        .map(|(name, _)| cst::pragma::Kind::Unknown(name));
 
         just(Token::Hash)
             .ignore_then(just(Token::LParen))
@@ -81,12 +93,40 @@ impl Parser {
             .ignore_then(choice((
                 options_prag,
                 deriving_prag,
+                transparent_prag,
                 required_prag,
                 default_prag,
                 unknown_prag,
             )))
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::RParen))
+    }
+
+    fn derived_class(
+        interner: &mut StringInterner,
+    ) -> impl chumsky::Parser<Token, cst::pragma::DerivedClass, Error = ParseErr>
+           + Clone {
+        let args = just(Token::LBracket)
+            .ignore_then(Self::opt_newlines())
+            .ignore_then(
+                Self::type_expr(interner)
+                    .separated_by(
+                        just(Token::Comma).then_ignore(Self::opt_newlines()),
+                    )
+                    .allow_trailing(),
+            )
+            .then_ignore(Self::opt_newlines())
+            .then_ignore(just(Token::RBracket))
+            .or_not()
+            .map(|args| args.unwrap_or_default());
+
+        select! { Token::Ident(tag) => tag }
+            .then(args)
+            .map_with_span(|(tag, args), span| cst::pragma::DerivedClass {
+                tag,
+                args: SmallVec::from_vec(args),
+                span,
+            })
     }
 
     fn pragma_name(
@@ -99,6 +139,7 @@ impl Parser {
     fn unknown_pragma_name(
         options: StringId,
         deriving: StringId,
+        transparent: StringId,
         required: StringId,
         default: StringId,
     ) -> impl chumsky::Parser<Token, cst::pragma::SpannedName, Error = ParseErr>
@@ -107,6 +148,7 @@ impl Parser {
             Token::Ident(name)
                 if name != options
                     && name != deriving
+                    && name != transparent
                     && name != required
                     && name != default => name
         }

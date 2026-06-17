@@ -1,7 +1,7 @@
 ; Raw `Range` must not infer as fake `Range[Int]`
 
 fun bad[F](x: F[Int]) {
-  write x
+  write "bad"
 }
 
 fun main() {

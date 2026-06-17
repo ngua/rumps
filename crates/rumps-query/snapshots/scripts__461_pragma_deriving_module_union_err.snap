@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "module Types {\n  #(deriving: Eq)\n  union NameOrId = String | Int\n}\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: `deriving` pragmas are not supported on `union` declarations

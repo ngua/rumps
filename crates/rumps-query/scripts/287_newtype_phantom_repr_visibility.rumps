@@ -1,8 +1,11 @@
 ; Phantom representation visibility
 
+#(deriving: Display)
 newtype Tagged[Tag] = Int
 newtype Partial[A, B] = Array[A]
+#(deriving: Display)
 newtype Wrapper[T] = Int
+#(deriving: Display)
 newtype DoubleWrap[A, B] = Wrapper[A]
 
 module PhantomPriv {

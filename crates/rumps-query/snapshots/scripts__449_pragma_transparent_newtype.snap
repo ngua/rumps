@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(transparent)\nnewtype UserId = Int\n\nfun main() {\n  write \"transparent newtype\"\n}\n"
+---
+"transparent newtype"

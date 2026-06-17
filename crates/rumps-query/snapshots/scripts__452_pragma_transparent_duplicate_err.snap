@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(transparent)\n#(transparent)\nnewtype UserId = Int\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: 15..29: duplicate `transparent` pragma for declaration

@@ -18,6 +18,9 @@ impl SolveCtx<'_> {
         );
 
         if unresolved || ty == to {
+        } else if let (Ty::Named(id, args), Ty::String) = (&ty_shape, &to_shape)
+        {
+            self.check_named_into(*id, args, ty, to, span);
         } else {
             match self.newtype_edge_status(ty, to, span) {
                 NewtypeEdgeStatus::Allowed => {}
@@ -37,17 +40,35 @@ impl SolveCtx<'_> {
                             span,
                         });
                     }
-                    (Ty::Union(_, members), Ty::String) => {
-                        let ms: SmallVec<[TyId; 4]> = members.clone();
-                        ms.iter().for_each(|m| {
-                            self.satisfies_class(
-                                &TypeClass::param(ClassId::INTO, to),
-                                *m,
-                                span,
-                            )
-                        });
+                    (Ty::Union(prov, members), Ty::String) => {
+                        self.check_union_into(*prov, members, to, span);
                     }
-                    (_, Ty::String) => {}
+                    (
+                        Ty::Bool
+                        | Ty::Int
+                        | Ty::Word
+                        | Ty::Float
+                        | Ty::Char
+                        | Ty::String
+                        | Ty::Unit
+                        | Ty::Time
+                        | Ty::Range
+                        | Ty::Json
+                        | Ty::Ordering
+                        | Ty::DataStatus
+                        | Ty::FilePath
+                        | Ty::Path
+                        | Ty::Regex
+                        | Ty::Local
+                        | Ty::Global
+                        | Ty::Array(_)
+                        | Ty::Option(_)
+                        | Ty::Result(_, _)
+                        | Ty::Map(_, _)
+                        | Ty::Tuple(_)
+                        | Ty::Object(_),
+                        Ty::String,
+                    ) => {}
 
                     // Functions, regex, refs cannot be Json-serialized
                     (Ty::Fn(_, _), Ty::Json)
@@ -117,27 +138,31 @@ impl SolveCtx<'_> {
                             )
                         });
                     }
-                    (Ty::Union(_, members), Ty::Json) => {
-                        let ms: SmallVec<[TyId; 4]> = members.clone();
-                        ms.iter().for_each(|m| {
-                            self.satisfies_class(
-                                &TypeClass::param(ClassId::INTO, TyArena::JSON),
-                                *m,
-                                span,
-                            )
-                        });
+                    (Ty::Union(prov, members), Ty::Json) => {
+                        self.check_union_into(
+                            *prov,
+                            members,
+                            TyArena::JSON,
+                            span,
+                        );
                     }
-                    (Ty::Named(_, args), Ty::Json) => {
-                        let as_: SmallVec<[TyId; 4]> = args.clone();
-                        as_.iter().for_each(|a| {
-                            self.satisfies_class(
-                                &TypeClass::param(ClassId::INTO, TyArena::JSON),
-                                *a,
-                                span,
-                            )
-                        });
-                    }
-                    (_, Ty::Json) => {}
+                    (
+                        Ty::Bool
+                        | Ty::Int
+                        | Ty::Word
+                        | Ty::Float
+                        | Ty::Char
+                        | Ty::String
+                        | Ty::Unit
+                        | Ty::Time
+                        | Ty::Range
+                        | Ty::Json
+                        | Ty::Ordering
+                        | Ty::DataStatus
+                        | Ty::FilePath
+                        | Ty::Path,
+                        Ty::Json,
+                    ) => {}
 
                     // Numeric coercions
                     (Ty::Int, Ty::Float) | (Ty::Float, Ty::Int) => {}
@@ -188,47 +213,12 @@ impl SolveCtx<'_> {
 
                     // Union handling
                     (Ty::Union(prov, members), _) => {
-                        let inst =
-                            prov.and_then(|id| self.find_into_instance(id, to));
-                        match inst {
-                            Some(inst) => {
-                                self.check_instance_constraints(
-                                    &inst,
-                                    &[],
-                                    span,
-                                    None,
-                                );
-                            }
-                            None => {
-                                let ms: SmallVec<[TyId; 4]> = members.clone();
-                                ms.iter().for_each(|m| {
-                                    self.satisfies_class(
-                                        &TypeClass::param(ClassId::INTO, to),
-                                        *m,
-                                        span,
-                                    )
-                                });
-                            }
-                        }
+                        self.check_union_into(*prov, members, to, span);
                     }
 
                     // User type with `Into` instance
                     (Ty::Named(id, type_args), _) => {
-                        let (id, type_args) = (*id, type_args.clone());
-                        match self.find_into_instance(id, to) {
-                            Some(inst) => {
-                                self.check_instance_constraints(
-                                    &inst, &type_args, span, None,
-                                );
-                            }
-                            None => {
-                                self.errors.push(TypeError::InvalidCast {
-                                    from: ty,
-                                    to,
-                                    span,
-                                });
-                            }
-                        }
+                        self.check_named_into(*id, type_args, ty, to, span);
                     }
 
                     // Builtin type with user-defined `Into[UserType]` instance.
@@ -260,6 +250,61 @@ impl SolveCtx<'_> {
             }
         }
     }
+
+    fn check_union_into(
+        &mut self,
+        prov: Option<TypeId>,
+        members: &[TyId],
+        to: TyId,
+        span: Span,
+    ) {
+        match prov.and_then(|id| self.find_into_instance(id, to)) {
+            Some(inst) => {
+                self.check_instance_constraints(&inst, &[], span, None);
+            }
+            None => {
+                let class = TypeClass::param(ClassId::INTO, to);
+                members
+                    .iter()
+                    .for_each(|&m| self.satisfies_class(&class, m, span));
+            }
+        }
+    }
+
+    fn check_named_into(
+        &mut self,
+        id: TypeId,
+        args: &[TyId],
+        ty: TyId,
+        to: TyId,
+        span: Span,
+    ) {
+        match self.find_into_instance(id, to) {
+            Some(inst) => {
+                self.check_instance_constraints(&inst, args, span, None);
+            }
+            None => {
+                let class = TypeClass::param(ClassId::INTO, to);
+                match self.expand_alias_fully_for_type_class(&class, ty, span) {
+                    Some(repr) => self.satisfies_class(&class, repr, span),
+                    None if to == TyArena::STRING && id.name().is_some() => {}
+                    None if to == TyArena::STRING => {
+                        self.satisfies_class(
+                            &TypeClass::simple(ClassId::DISPLAY),
+                            ty,
+                            span,
+                        );
+                    }
+                    None => self.errors.push(TypeError::InvalidCast {
+                        from: ty,
+                        to,
+                        span,
+                    }),
+                }
+            }
+        }
+    }
+
     /// `TryInto(target)`: `read` casts.
     pub(super) fn check_try_into(&mut self, ty: TyId, to: TyId, span: Span) {
         let ty = self.uf.resolve(ty, self.ty_arena);
@@ -276,13 +321,21 @@ impl SolveCtx<'_> {
             _ => match self.newtype_edge_status(ty, to, span) {
                 NewtypeEdgeStatus::Allowed | NewtypeEdgeStatus::Blocked => {
                     if !self.check_try_into_instance(ty, to, span) {
-                        self.errors.push(
-                            TypeError::NewtypeReprReadRequiresTryInto {
-                                from: ty,
-                                to,
-                                span,
-                            },
-                        );
+                        let class = TypeClass::param(ClassId::TRY_INTO, to);
+                        match self
+                            .expand_alias_fully_for_type_class(&class, ty, span)
+                        {
+                            Some(repr) => {
+                                self.satisfies_class(&class, repr, span)
+                            }
+                            None => self.errors.push(
+                                TypeError::NewtypeReprReadRequiresTryInto {
+                                    from: ty,
+                                    to,
+                                    span,
+                                },
+                            ),
+                        }
                     }
                 }
                 NewtypeEdgeStatus::Missing => match (&ty_shape, &to_shape) {
@@ -382,20 +435,6 @@ impl SolveCtx<'_> {
                             )
                         });
                     }
-                    (Ty::Named(_, args), Ty::Json) => {
-                        let as_: SmallVec<[TyId; 4]> = args.clone();
-                        as_.iter().for_each(|a| {
-                            self.satisfies_class(
-                                &TypeClass::param(
-                                    ClassId::TRY_INTO,
-                                    TyArena::JSON,
-                                ),
-                                *a,
-                                span,
-                            )
-                        });
-                    }
-
                     // Union handling
                     (Ty::Union(prov, members), _) => {
                         let has_inst = prov
@@ -425,15 +464,32 @@ impl SolveCtx<'_> {
                             self.check_instance_constraints(
                                 &inst, &type_args, span, None,
                             );
+                        } else {
+                            let class = TypeClass::param(ClassId::TRY_INTO, to);
+                            match self.expand_alias_fully_for_type_class(
+                                &class, ty, span,
+                            ) {
+                                Some(repr) => {
+                                    self.satisfies_class(&class, repr, span)
+                                }
+                                None => {
+                                    self.errors.push(TypeError::InvalidRead {
+                                        from: ty,
+                                        to,
+                                        span,
+                                    })
+                                }
+                            }
                         }
                     }
 
-                    // All other combinations are valid for `READ`
+                    // All other builtin combinations are valid for `READ`
                     _ => {}
                 },
             },
         };
     }
+
     /// `Indexable(elem)`: `Array[T]`, `Map[K,V]`, `String`.
     ///
     /// The index type is now accessed via the associated type `.Index`; only
@@ -507,18 +563,36 @@ impl SolveCtx<'_> {
                         );
                     }
                     InstanceLookup::Missing => {
-                        self.errors.push(TypeError::UnsatisfiedClass(
-                            class.clone(),
-                            ty,
-                            span,
-                        ));
+                        match self
+                            .expand_alias_fully_for_type_class(class, ty, span)
+                        {
+                            Some(repr) => {
+                                self.check_indexable(class, repr, elem, span)
+                            }
+                            None => {
+                                self.errors.push(TypeError::UnsatisfiedClass(
+                                    class.clone(),
+                                    ty,
+                                    span,
+                                ))
+                            }
+                        }
                     }
                     InstanceLookup::NotImported => {
-                        self.errors.push(TypeError::UnsatisfiedClass(
-                            class.clone(),
-                            ty,
-                            span,
-                        ));
+                        match self
+                            .expand_alias_fully_for_type_class(class, ty, span)
+                        {
+                            Some(repr) => {
+                                self.check_indexable(class, repr, elem, span)
+                            }
+                            None => {
+                                self.errors.push(TypeError::UnsatisfiedClass(
+                                    class.clone(),
+                                    ty,
+                                    span,
+                                ))
+                            }
+                        }
                     }
                     InstanceLookup::BlockedSelf => {}
                 }
@@ -532,6 +606,7 @@ impl SolveCtx<'_> {
             }
         }
     }
+
     /// Check that a callee type is callable and unify with expected signature.
     pub(super) fn check_callable(
         &mut self,
@@ -600,6 +675,7 @@ impl SolveCtx<'_> {
             }
         }
     }
+
     /// Check that a type has a specific field.
     ///
     /// Looks up the field in the resolved base type and unifies the expected

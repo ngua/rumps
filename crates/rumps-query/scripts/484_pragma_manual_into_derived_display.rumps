@@ -1,0 +1,15 @@
+; Manual `Into[String]` and derived `Display` are different classes.
+
+#(deriving: Display)
+newtype Label = Int
+
+class Into[String] for Label {
+  fun into(x: Label) -> String {
+    "label:{x}"
+  }
+}
+
+fun main() {
+  let x: Label = 7
+  write Into:into(x)
+}

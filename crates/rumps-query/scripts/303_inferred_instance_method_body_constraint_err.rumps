@@ -1,5 +1,6 @@
 ; Error: inferred instance method bodies may not add method constraints
 
+#(deriving: Display)
 variant Box[T] = Box(T)
 
 class Bad F {

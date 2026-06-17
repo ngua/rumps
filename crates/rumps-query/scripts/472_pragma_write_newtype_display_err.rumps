@@ -1,0 +1,6 @@
+newtype Label = String
+
+fun main() {
+  let x: Label = "a"
+  write x
+}

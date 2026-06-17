@@ -1405,6 +1405,22 @@ impl<'a> InferCtx<'a> {
         })
     }
 
+    pub(super) fn satisfies_class_probe(
+        &mut self,
+        class: &TypeClass<TyId>,
+        ty: TyId,
+        module: Option<QualifiedName>,
+        span: Span,
+    ) -> bool {
+        let snap = self.uf.snapshot();
+        let err_len = self.errors.len();
+        self.solve_ctx(module).satisfies_class(class, ty, span);
+        let ok = self.errors.len() == err_len;
+        self.uf.rollback(snap);
+        self.errors.truncate(err_len);
+        ok
+    }
+
     pub(super) fn private_try_into_external(
         &mut self,
         from: TyId,

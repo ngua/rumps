@@ -79,7 +79,9 @@ module Shapes {
 }
 
 module Units {
+  #(transparent)
   +newtype Meters = +Float
+  #(transparent)
   +newtype Feet = +Float
 
   +fun to-feet(m: Meters) -> Feet {
@@ -92,20 +94,27 @@ module Payload {
 }
 
 module Geometry {
+  #(deriving: Display)
   +variant Shape = Rect(Float, Float) | Circle(Float)
 }
 
 module Colors {
+  #(transparent)
   +newtype RGB = +(Int, Int, Int)
+  #(deriving: Display)
   +variant Color = Red | Green | Blue | Custom(RGB)
 }
 
 module Multi {
+  #(transparent)
   +newtype A = +Int
+  #(transparent)
   +newtype B = +String
+  #(transparent)
   +newtype C = +Bool
 }
 
 module Generic {
+  #(deriving: Display)
   +variant Box[T] = Full(T) | Empty
 }

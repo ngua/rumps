@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(deriving: Into[String], TryInto[Int])\nnewtype UserId = Int\n\nfun main() {\n  write \"param deriving newtype\"\n}\n"
+---
+"param deriving newtype"

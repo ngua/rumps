@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Error: transparent `Eq` forwarding conflicts with manual `Eq`.\n\n#(transparent)\nnewtype Count = Int\n\nclass Eq for Count {\n  fun eq(a: Count, b: Count) -> Bool {\n    let x: Int = a\n    let y: Int = b\n    x == y\n  }\n}\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: duplicate `Eq` instance for type `Count`

@@ -38,6 +38,7 @@ pub(super) enum ScopeKind {
 #[derive(Default)]
 struct Pending {
     deriving: Option<(cst::pragma::Deriving, Span)>,
+    transparent: Option<Span>,
     required_methods: Option<(cst::pragma::RequiredMethods, Span)>,
 }
 
@@ -179,6 +180,17 @@ impl<'a> LowerCtx<'a> {
                         pending.deriving = Some((p, stmt.span));
                         Ok(())
                     }
+                    cst::pragma::Kind::Transparent(span) => {
+                        seen_non_options = true;
+                        if pending.transparent.is_some() {
+                            Err(Error::static_err(
+                                stmt.span,
+                                "duplicate `transparent` pragma for declaration",
+                            ))?
+                        }
+                        pending.transparent = Some(span);
+                        Ok(())
+                    }
                     cst::pragma::Kind::RequiredMethods(p) => {
                         seen_non_options = true;
                         if pending.required_methods.is_some() {
@@ -235,6 +247,25 @@ impl<'a> LowerCtx<'a> {
             }
         }
 
+        if let Some(span) = pending.transparent.take() {
+            // Preserve the pragma on all type declarations here. The type
+            // checker rejects targets other than `newtype` later, where it can
+            // report a target-specific type error with the preserved span.
+            if matches!(
+                &stmt.kind,
+                cst::StmtKind::Type { .. }
+                    | cst::StmtKind::Newtype { .. }
+                    | cst::StmtKind::Union { .. }
+            ) {
+                stmt.pragmas.transparent = Some(span);
+            } else {
+                Err(Error::static_err(
+                    span,
+                    "`transparent` pragmas attach only to `variant`, `newtype`, or `union`",
+                ))?
+            }
+        }
+
         if let Some((p, span)) = pending.required_methods.take() {
             if matches!(&stmt.kind, cst::StmtKind::ClassDef { .. }) {
                 stmt.pragmas.required_methods = Some(p);
@@ -252,6 +283,8 @@ impl<'a> LowerCtx<'a> {
     fn reject_pending(&self, pending: Pending) -> Result<()> {
         if let Some((_, span)) = pending.deriving {
             Err(Error::static_err(span, "unattached `deriving` pragma"))?
+        } else if let Some(span) = pending.transparent {
+            Err(Error::static_err(span, "unattached `transparent` pragma"))?
         } else if let Some((_, span)) = pending.required_methods {
             Err(Error::static_err(span, "unattached `required` pragma"))?
         } else {
@@ -657,50 +690,135 @@ impl<'a> LowerCtx<'a> {
         }
     }
 
-    fn type_pragmas(&self, ps: cst::pragma::Attached) -> Result<pragma::Type> {
+    fn type_pragmas(
+        &mut self,
+        ps: cst::pragma::Attached,
+    ) -> Result<pragma::Type> {
         let deriving = ps
             .deriving
             .map(|p| self.deriving_pragma(p))
             .transpose()?
             .unwrap_or_default();
-        Ok(pragma::Type { deriving })
+        Ok(pragma::Type {
+            deriving,
+            transparent: ps.transparent,
+        })
     }
 
     fn deriving_pragma(
-        &self,
+        &mut self,
         p: cst::pragma::Deriving,
     ) -> Result<pragma::Deriving> {
-        let mut seen = HashSet::new();
-        let ids = p
+        let mut seen: Vec<(ClassId, SmallVec<[cst::TypeExpr; 2]>)> = Vec::new();
+        let ds = p
             .0
             .into_iter()
-            .map(|n| {
-                let name = self.name(n.name);
-                if seen.contains(&n.name) {
-                    Err(Error::static_err(
-                        n.span,
-                        format!("duplicate deriving class `{name}`"),
-                    ))?
-                }
-                seen.insert(n.name);
+            .map(|d| {
+                let name = self.name(d.tag);
                 let id =
-                    self.registry.lookup_by_name(n.name).ok_or_else(|| {
+                    self.registry.lookup_by_name(d.tag).ok_or_else(|| {
                         Error::static_err(
-                            n.span,
+                            d.span,
                             format!("unknown deriving class `{name}`"),
                         )
                     })?;
-                if id.idx() < ClassId::BUILTIN_COUNT {
-                    Ok(id)
-                } else {
+                if id.idx() >= ClassId::BUILTIN_COUNT {
                     Err(Error::static_err(
-                        n.span,
+                        d.span,
                         format!("cannot derive user defined class `{name}`"),
-                    ))
+                    ))?
+                } else {
+                    self.validate_deriving_shape(
+                        id,
+                        &name,
+                        d.args.len(),
+                        d.span,
+                    )?;
+                    let cst_args = d.args;
+                    if seen
+                        .iter()
+                        .any(|(class, args)| *class == id && *args == cst_args)
+                    {
+                        Err(Error::static_err(
+                            d.span,
+                            format!("duplicate deriving class `{name}`"),
+                        ))?
+                    }
+                    seen.push((id, cst_args.clone()));
+                    let args = cst_args
+                        .into_iter()
+                        .map(|a| self.type_expr(a))
+                        .collect::<Result<SmallVec<_>>>()?;
+                    Ok(pragma::DerivedClass {
+                        class: id,
+                        args,
+                        span: d.span,
+                    })
                 }
             })
             .collect::<Result<SmallVec<_>>>()?;
-        Ok(pragma::Deriving(ids))
+        Ok(pragma::Deriving(ds))
+    }
+
+    fn validate_deriving_shape(
+        &self,
+        id: ClassId,
+        name: &str,
+        got: usize,
+        span: Span,
+    ) -> Result<()> {
+        match self.registry.shape(id) {
+            ClassShape::Concrete { params: 0 } => {
+                if got == 0 {
+                    Ok(())
+                } else {
+                    Err(Error::static_err(
+                        span,
+                        format!("`{name}` does not accept type arguments"),
+                    ))
+                }
+            }
+            ClassShape::Concrete { params } => {
+                if got == params as usize {
+                    Ok(())
+                } else {
+                    Err(Error::static_err(
+                        span,
+                        format!(
+                            "`{name}` expects {params} type argument(s), \
+                             but received {got}",
+                        ),
+                    ))
+                }
+            }
+            ClassShape::Hkt { params: 0, .. } => {
+                if got == 0 {
+                    Ok(())
+                } else {
+                    Err(Error::static_err(
+                        span,
+                        format!(
+                            "`{name}` is higher-kinded; \
+                             use `C: {name}` and `C[T]` in type position, \
+                             not `C: {name}[T]`"
+                        ),
+                    ))
+                }
+            }
+            ClassShape::Hkt { params, .. } => {
+                if got == params as usize {
+                    Ok(())
+                } else {
+                    Err(Error::static_err(
+                        span,
+                        format!(
+                            "`{name}` expects {params} fixed type argument(s), \
+                             but received {got}",
+                        ),
+                    ))
+                }
+            }
+        }
     }
 
     fn class_pragmas(

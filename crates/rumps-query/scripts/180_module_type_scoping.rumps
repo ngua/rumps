@@ -65,7 +65,9 @@ module Shapes {
 }
 
 module Units {
+  #(transparent)
   +newtype Meters = +Float
+  #(transparent)
   +newtype Feet = +Float
 
   ; Function using unqualified newtypes in signature
@@ -109,6 +111,7 @@ module Container {
 
 module Mixed {
   +variant Status = Pending | Done
+  #(transparent)
   +newtype Id = +Int
   +union Payload = Int | String
 

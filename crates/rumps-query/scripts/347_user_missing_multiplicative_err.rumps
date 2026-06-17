@@ -8,6 +8,7 @@ fun main() {
   write a * b
 }
 
+#(deriving: Display)
 variant AddOnly = AddOnly(Int)
 
 class Additive for AddOnly {

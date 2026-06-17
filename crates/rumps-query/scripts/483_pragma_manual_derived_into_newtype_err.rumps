@@ -1,0 +1,14 @@
+; Error: manual `Into[String]` conflicts with derived `Into[String]`.
+
+#(deriving: Into[String])
+newtype Label = Int
+
+class Into[String] for Label {
+  fun into(x: Label) -> String {
+    "label:{x}"
+  }
+}
+
+fun main() {
+  write "bad"
+}

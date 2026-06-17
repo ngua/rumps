@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(deriving: Display)\nunion NameOrId = String | Int\n\nfun main() {\n  write \"bad\"\n}\n"
+---
+ERROR: `deriving` pragmas are not supported on `union` declarations

@@ -1,12 +1,5 @@
 use super::*;
 
-#[derive(Clone, Copy)]
-struct DeriveReq {
-    class: ClassId,
-    alias: TypeId,
-    span: Span,
-}
-
 impl SolveCtx<'_> {
     pub(super) fn alias_parts(
         &self,
@@ -17,6 +10,7 @@ impl SolveCtx<'_> {
             _ => None,
         }
     }
+
     pub(super) fn alias_repr(&mut self, alias: TypeId, args: &[TyId]) -> TyId {
         match self.registry.get_def(alias) {
             Some(TypeDef::Alias { type_params, .. }) => {
@@ -29,6 +23,7 @@ impl SolveCtx<'_> {
             _ => typechecked!("newtype edge", "alias declaration"),
         }
     }
+
     pub(super) fn report_recursive_newtype_edge(
         &mut self,
         ty: TyId,
@@ -37,6 +32,7 @@ impl SolveCtx<'_> {
         let v = self.uf.fresh();
         self.errors.push(TypeError::InfiniteType(v, ty, span));
     }
+
     /// Expand a `Ty::Named` alias fully to its target type.
     ///
     /// Recursively expands chained aliases (e.g., `A = B`, `B = Int`) until
@@ -50,6 +46,7 @@ impl SolveCtx<'_> {
     ) -> Option<TyId> {
         self.expand_alias_fully_inner(ty, other, span, false)
     }
+
     fn expand_alias_fully_inner(
         &mut self,
         current: TyId,
@@ -64,6 +61,7 @@ impl SolveCtx<'_> {
             None => expanded.then_some(current),
         }
     }
+
     /// Expand a `Ty::Named` alias one level.
     ///
     /// If `ty` is `Ty::Named(id, args)` where `id` refers to a `TypeDef::Alias`,
@@ -110,9 +108,23 @@ impl SolveCtx<'_> {
             _ => None,
         }
     }
+
     pub(super) fn expand_alias_fully_for_class(
         &mut self,
         class: ClassId,
+        ty: TyId,
+        span: Span,
+    ) -> Option<TyId> {
+        self.expand_alias_fully_for_type_class(
+            &TypeClass::simple(class),
+            ty,
+            span,
+        )
+    }
+
+    pub(super) fn expand_alias_fully_for_type_class(
+        &mut self,
+        class: &TypeClass<TyId>,
         ty: TyId,
         span: Span,
     ) -> Option<TyId> {
@@ -124,9 +136,10 @@ impl SolveCtx<'_> {
             &mut HashSet::new(),
         )
     }
+
     fn expand_alias_fully_for_class_inner(
         &mut self,
-        class: ClassId,
+        class: &TypeClass<TyId>,
         current: TyId,
         span: Span,
         expanded: bool,
@@ -152,9 +165,10 @@ impl SolveCtx<'_> {
             None => expanded.then_some(current),
         }
     }
+
     fn expand_alias_once_for_class(
         &mut self,
-        class: ClassId,
+        class: &TypeClass<TyId>,
         ty: TyId,
         span: Span,
     ) -> Option<TyId> {
@@ -170,11 +184,7 @@ impl SolveCtx<'_> {
                     None
                 } else {
                     let repr = self.alias_repr(type_id, &args);
-                    if self.can_derive_newtype(DeriveReq {
-                        class,
-                        alias: type_id,
-                        span,
-                    }) {
+                    if self.can_use_newtype_repr(class, type_id, &args) {
                         self.newtype_edge(ty, repr, span)
                             .filter(|edge| edge.alias == type_id)
                             .map(|edge| edge.repr)
@@ -186,16 +196,70 @@ impl SolveCtx<'_> {
             _ => None,
         }
     }
-    fn can_derive_newtype(&mut self, req: DeriveReq) -> bool {
-        let DeriveReq {
-            class,
-            alias,
-            span: _,
-        } = req;
-        let has_inst = self.instance_registry.lookup(class, alias).is_some();
-        let checks_self = self.class_context.as_ref().is_some_and(|ctx| {
-            ctx.class == class && ctx.type_id == Some(alias)
-        });
-        !has_inst && !checks_self
+
+    pub(super) fn newtype_repr_for_assoc(
+        &mut self,
+        class: ClassId,
+        ty: TyId,
+        span: Span,
+    ) -> Option<TyId> {
+        let query =
+            TypeClass::placeholder(class, self.env.class_def(class).shape);
+        self.expand_alias_fully_for_class_inner(
+            &query,
+            ty,
+            span,
+            false,
+            &mut HashSet::new(),
+        )
+    }
+
+    fn can_use_newtype_repr(
+        &mut self,
+        class: &TypeClass<TyId>,
+        alias: TypeId,
+        args: &[TyId],
+    ) -> bool {
+        let id = class.tag();
+        let has_inst = self.instance_registry.lookup(id, alias).is_some();
+        let checks_self = self
+            .class_context
+            .as_ref()
+            .is_some_and(|ctx| ctx.class == id && ctx.type_id == Some(alias));
+        if has_inst || checks_self || id.idx() >= ClassId::BUILTIN_COUNT {
+            false
+        } else {
+            let decls = self.decls;
+            let reg = self.registry;
+            let derived_tag =
+                self.derived_instance_tag_matches(alias, id, class);
+            derived_tag
+                || decls.derived_instance_matches(
+                    reg,
+                    alias,
+                    class,
+                    args,
+                    |te, sub| self.convert_ctx().ast_type_to_ty(te, sub),
+                )
+                || self.decls.is_transparent(alias)
+        }
+    }
+
+    fn derived_instance_tag_matches(
+        &self,
+        alias: TypeId,
+        id: ClassId,
+        class: &TypeClass<TyId>,
+    ) -> bool {
+        let params = match class {
+            TypeClass::Concrete { params, .. }
+            | TypeClass::Hkt { params, .. } => params,
+        };
+        params.iter().all(|&p| p == TyArena::UNKNOWN)
+            && self
+                .decls
+                .derived_instances(alias)
+                .iter()
+                .any(|d| d.class == id)
     }
 }

@@ -1,0 +1,12 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(transparent)\nnewtype Label = String\n\n#(transparent)\nnewtype Bag = Array[Int]\n\n#(transparent)\nnewtype Maybe[T] = Option[T]\n\nfun main() {\n  let x: Label = \"42\"\n  write x == x\n  write Display:display(x)\n  write x as String\n  write (x read Int)!\n\n  let b: Bag = [1, 2, 3]\n  write Indexable:index(b, 1)\n  write Mappable:map(x => x * 2, b)\n  write Foldable:fold((acc, x) => acc + x, 0, b)\n\n  let m: Maybe[Int] = Option.Some(5)\n  write Chainable:chain(m, x => Option.Some(x * 10))\n}\n"
+---
+true
+""42""
+"42"
+42
+2
+[ 2, 4, 6 ]
+6
+Option.Some(50)

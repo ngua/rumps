@@ -1,0 +1,8 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "union Texty = Int | String\n\nfun main() {\n  let a: Texty = 1\n  let b: Texty = 2\n  write a == b\n  write Display:display(a)\n  write a as String\n  write (a read Int)!\n}\n"
+---
+false
+"1"
+"1"
+1

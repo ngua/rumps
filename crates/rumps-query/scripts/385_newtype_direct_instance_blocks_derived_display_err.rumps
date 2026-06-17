@@ -1,4 +1,4 @@
-; A direct newtype instance blocks falling back to representation-derived `Display`.
+; A direct newtype instance cannot use implicit representation `Display`.
 
 fun main() { }
 

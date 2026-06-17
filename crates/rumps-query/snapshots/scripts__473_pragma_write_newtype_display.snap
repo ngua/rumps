@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(deriving: Display)\nnewtype Label = String\n\nfun main() {\n  let x: Label = \"a\"\n  write x\n}\n"
+---
+"a"

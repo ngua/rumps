@@ -3,6 +3,7 @@
 ; Defines a `Marker` class with an empty body and uses it
 ; as a constraint on a function.
 
+#(deriving: Display)
 variant Point = Point(Int, Int)
 
 class Marker C { }

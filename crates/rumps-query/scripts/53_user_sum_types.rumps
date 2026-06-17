@@ -1,24 +1,30 @@
 ; User-defined sum types (variant declarations)
 
 ; Simple enumeration with no payloads
+#(deriving: Display)
 variant Status = Pending | Active | Completed | Failed
 
 ; Sum type with payloads
+#(deriving: Display)
 variant Event = Click(Int, Int) | KeyPress(String) | Resize(Int, Int)
 
 ; Parameterized type (generic)
+#(deriving: Display)
 variant Either[L, R] = Left(L) | Right(R)
 
 ; Multi-line syntax (use Outcome to avoid conflict with builtin Result)
+#(deriving: Display)
 variant Outcome[T, E] =
   Success(T)
   | Failure(E)
 
 ; Single type parameter
+#(deriving: Display)
 variant Maybe[T] = Just(T) | Nothing
 
 ; Test that keywords can be used as variant names (exercises `ident_or_contextual_kw`)
 ; `Raise`, `Catch`, `Write`, `Read` are keywords but should work as variant names
+#(deriving: Display)
 variant Action = Raise(String) | Catch(String) | Write(String) | Read(String)
 
 fun main() {

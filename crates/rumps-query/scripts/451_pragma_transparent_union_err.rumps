@@ -1,0 +1,6 @@
+#(transparent)
+union NameOrId = String | Int
+
+fun main() {
+  write "bad"
+}

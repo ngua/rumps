@@ -1,0 +1,6 @@
+#(transparent)
+variant Mood = Happy | Sad
+
+fun main() {
+  write "bad"
+}

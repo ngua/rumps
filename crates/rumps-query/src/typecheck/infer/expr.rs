@@ -1255,6 +1255,32 @@ impl InferCtx<'_> {
         let class_tag = op.class_dispatch().map(|(tag, _)| tag);
 
         if let Some(kind) = class_tag {
+            // Operator schemes can unify a `newtype` operand through its
+            // representation before class solving. Re-check alias operands
+            // nominally so `Display`-only `newtype`s cannot satisfy `+`, etc...
+            let lhs_alias = match self.ty_arena.get(lhs_ty) {
+                Ty::Named(id, _) => self.decls.is_alias(*id),
+                _ => false,
+            };
+            let rhs_alias = match self.ty_arena.get(rhs_ty) {
+                Ty::Named(id, _) => self.decls.is_alias(*id),
+                _ => false,
+            };
+            let aliases: SmallVec<[(TyId, bool); 2]> = if lhs_ty == rhs_ty {
+                smallvec![(lhs_ty, lhs_alias)]
+            } else {
+                smallvec![(lhs_ty, lhs_alias), (rhs_ty, rhs_alias)]
+            };
+            aliases
+                .into_iter()
+                .filter_map(|(ty, alias)| alias.then_some(ty))
+                .for_each(|ty| {
+                    self.constrain(Constraint::Class {
+                        ty,
+                        class: TypeClass::simple(kind),
+                        span,
+                    });
+                });
             self.record_inst_dispatch(
                 id,
                 lhs_ty,

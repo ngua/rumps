@@ -17,13 +17,14 @@ use super::{
     NewtypeIntoOverlap,
 };
 use crate::ast::{
-    ArrayElem, AssocTypeDef, AstTypeExpr, AstTypeExprId, BindingPattern, DbRef,
-    Expr, ExprId, Import, ImportItem, InstanceMethodDef, ObjectEntry,
-    OutputFormat, OutputTarget, RefTarget, Stmt, StmtId, TypeDefAst, TypeParam,
-    UnOp, Visibility, WriteExpr,
+    pragma, ArrayElem, AssocTypeDef, AstTypeExpr, AstTypeExprId,
+    BindingPattern, DbRef, Expr, ExprId, Import, ImportItem, InstanceMethodDef,
+    ObjectEntry, OutputFormat, OutputTarget, RefTarget, Stmt, StmtId,
+    TypeDefAst, TypeParam, UnOp, Visibility, WriteExpr,
 };
 use crate::intern::{QualifiedName, StringId};
 use crate::interpreter::instance::RuntimeInstance;
+use crate::typecheck::decl::{TypeDeclKind, TypePragmaPolicy};
 use crate::typecheck::env::MethodRefOrigin;
 use crate::typecheck::error::TypeError;
 use crate::typecheck::instance::{self, Instance};
@@ -103,9 +104,11 @@ impl InferCtx<'_> {
             Some(Stmt::Type {
                 ref type_params,
                 ref def,
+                ref pragmas,
                 ..
             }) => {
                 self.env.mark_non_import();
+                self.validate_type_pragmas(TypeDeclKind::Variant, pragmas);
                 // Type definitions are registered in the registry, but we
                 // still validate that all type expressions in variant
                 // payloads are fully saturated.
@@ -115,9 +118,11 @@ impl InferCtx<'_> {
             Some(Stmt::Union {
                 ref type_params,
                 ref members,
+                ref pragmas,
                 ..
             }) => {
                 self.env.mark_non_import();
+                self.validate_type_pragmas(TypeDeclKind::Union, pragmas);
                 // Union members are registered in the registry, but we
                 // still validate that all member type expressions are
                 // fully saturated.
@@ -132,9 +137,11 @@ impl InferCtx<'_> {
             Some(Stmt::Newtype {
                 ref type_params,
                 target,
+                ref pragmas,
                 ..
             }) => {
                 self.env.mark_non_import();
+                self.validate_type_pragmas(TypeDeclKind::Newtype, pragmas);
                 // Aliases are registered in the registry, but we still
                 // validate that the target type expression is fully
                 // saturated (e.g. `newtype G = Array` is invalid because
@@ -180,6 +187,17 @@ impl InferCtx<'_> {
 
             None => {}
         }
+    }
+
+    fn validate_type_pragmas(&mut self, kind: TypeDeclKind, ps: &pragma::Type) {
+        TypePragmaPolicy::check(kind, ps)
+            .into_iter()
+            .for_each(|err| {
+                self.error(TypeError::Custom {
+                    msg: err.msg,
+                    span: err.span,
+                });
+            });
     }
 
     /// Infer types for a top-level user-defined module.
@@ -302,10 +320,12 @@ impl InferCtx<'_> {
                     vis,
                     ref type_params,
                     ref def,
+                    ref pragmas,
                     ..
                 }) => {
                     let qn = mod_path.child(*name);
                     self.env.register_user_module_type_vis(qn, vis);
+                    self.validate_type_pragmas(TypeDeclKind::Variant, pragmas);
                     self.validate_type_decl_body(type_params, def);
                 }
                 Some(Stmt::Union {
@@ -313,10 +333,12 @@ impl InferCtx<'_> {
                     vis,
                     ref type_params,
                     ref members,
+                    ref pragmas,
                     ..
                 }) => {
                     let qn = mod_path.child(*name);
                     self.env.register_user_module_type_vis(qn, vis);
+                    self.validate_type_pragmas(TypeDeclKind::Union, pragmas);
                     let subst = self.type_param_subst(type_params);
                     members.iter().for_each(|m| {
                         self.convert().ast_type_to_ty(*m, &subst);
@@ -327,10 +349,12 @@ impl InferCtx<'_> {
                     vis,
                     ref type_params,
                     target,
+                    ref pragmas,
                     ..
                 }) => {
                     let qn = mod_path.child(*name);
                     self.env.register_user_module_type_vis(qn, vis);
+                    self.validate_type_pragmas(TypeDeclKind::Newtype, pragmas);
                     let subst = self.type_param_subst(type_params);
                     self.convert().ast_type_to_ty(target, &subst);
                 }
@@ -1666,6 +1690,91 @@ impl InferCtx<'_> {
             self.error(TypeError::PrivateReprTryIntoExternal { span });
         }
 
+        let evidence_conflict = type_id
+            .filter(|tid| !self.is_builtin_type(*tid))
+            .is_some_and(|tid| {
+                let ty_args = self
+                    .type_id_args(for_ty)
+                    .map(|(_, args)| args)
+                    .unwrap_or_default();
+                let class_ty = match self.env.class_registry().shape(class) {
+                    ClassShape::Concrete { .. } => TypeClass::Concrete {
+                        id: class,
+                        params: class_arg_tys.iter().copied().collect(),
+                    },
+                    ClassShape::Hkt { .. } => TypeClass::Hkt {
+                        id: class,
+                        elems: class_arg_tys.iter().copied().collect(),
+                        params: SmallVec::new(),
+                    },
+                };
+                let decl_subst: IndexMap<_, _> = self
+                    .registry
+                    .get_def(tid)
+                    .map(|def| match def {
+                        TypeDef::Alias { type_params, .. }
+                        | TypeDef::Sum { type_params, .. }
+                        | TypeDef::Union { type_params, .. } => type_params,
+                        TypeDef::Builtin(_) => {
+                            typechecked!("type parameters", "user type")
+                        }
+                    })
+                    .into_iter()
+                    .flat_map(|ps| {
+                        ps.iter().copied().zip(ty_args.iter().copied())
+                    })
+                    .collect();
+                let class_params = match &class_ty {
+                    TypeClass::Concrete { params, .. }
+                    | TypeClass::Hkt { params, .. } => params,
+                };
+                let derived = self.decls.derived_instances(tid).to_vec();
+                let derived_conflict = derived.iter().any(|d| {
+                    d.class == class
+                        && d.args.len() == class_params.len()
+                        && d.args.iter().zip(class_params.iter()).all(
+                            |(&arg, &param)| {
+                                self.convert().ast_type_to_ty(arg, &decl_subst)
+                                    == param
+                            },
+                        )
+                });
+                let transparent_conflict = if class.idx()
+                    < ClassId::BUILTIN_COUNT
+                    && self.decls.is_alias(tid)
+                    && self.decls.is_transparent(tid)
+                {
+                    let repr_expr = self.decls.newtype_repr_expr(tid);
+                    let repr =
+                        self.convert().ast_type_to_ty(repr_expr, &decl_subst);
+                    let prev = self.class_context.replace(ClassContext {
+                        class,
+                        type_id,
+                        assoc_types: HashMap::new(),
+                    });
+                    let ok = self.satisfies_class_probe(
+                        &class_ty,
+                        repr,
+                        module.clone(),
+                        span,
+                    );
+                    self.class_context = prev;
+                    ok
+                } else {
+                    false
+                };
+                if derived_conflict || transparent_conflict {
+                    self.error(TypeError::DuplicateInstance {
+                        class,
+                        type_id: tid,
+                        span,
+                    });
+                    true
+                } else {
+                    false
+                }
+            });
+
         // Check for forbidden builtin instance.
         //
         // We allow implementing classes for builtin types IF the class is
@@ -1852,6 +1961,7 @@ impl InferCtx<'_> {
             // Skip registration if already hoisted (avoid duplicate error)
             if !into_repr_overlap
                 && !bad_try
+                && !evidence_conflict
                 && !self.instance_registry.has_with_args(
                     class,
                     tid,

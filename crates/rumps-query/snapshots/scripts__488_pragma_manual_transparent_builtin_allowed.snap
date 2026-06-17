@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Manual builtin instance is allowed when the representation lacks it.\n\n#(transparent)\nnewtype Count = Int\n\nclass Indexable[String] for Count {\n  newtype Index = Int\n\n  fun index(x: Count, i: :Index) -> String {\n    \"{x}:{i}\"\n  }\n\n  fun get(x: Count, i: :Index) -> Option[String] {\n    Option.Some(\"ok\")\n  }\n}\n\nfun main() {\n  write \"ok\"\n}\n"
+---
+"ok"

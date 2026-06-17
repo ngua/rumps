@@ -424,10 +424,12 @@ pub(crate) mod pragma {
     use crate::intern::StringId;
     use crate::Span;
 
+    #[allow(clippy::large_enum_variant)]
     #[derive(Clone, Debug)]
     pub(crate) enum Kind {
         Options(Options),
         Deriving(Deriving),
+        Transparent(Span),
         RequiredMethods(RequiredMethods),
         DefaultDefinition,
         Unknown(SpannedName),
@@ -437,7 +439,14 @@ pub(crate) mod pragma {
     pub(crate) struct Options(pub(crate) Vec<DbOption>);
 
     #[derive(Clone, Debug)]
-    pub(crate) struct Deriving(pub(crate) SmallVec<[SpannedName; 4]>);
+    pub(crate) struct Deriving(pub(crate) SmallVec<[DerivedClass; 4]>);
+
+    #[derive(Clone, Debug)]
+    pub(crate) struct DerivedClass {
+        pub(crate) tag: StringId,
+        pub(crate) args: SmallVec<[super::TypeExpr; 2]>,
+        pub(crate) span: Span,
+    }
 
     #[derive(Clone, Debug)]
     pub(crate) struct RequiredMethods(pub(crate) SmallVec<[SpannedName; 4]>);
@@ -469,6 +478,7 @@ pub(crate) mod pragma {
     #[derive(Clone, Debug, Default)]
     pub(crate) struct Attached {
         pub(crate) deriving: Option<Deriving>,
+        pub(crate) transparent: Option<Span>,
         pub(crate) required_methods: Option<RequiredMethods>,
     }
 }
@@ -765,10 +775,19 @@ pub(crate) struct ImportStmt {
 }
 
 /// A CST type expression with inline span.
-#[derive(Clone, Debug)]
+///
+/// Equality intentionally ignores `span`; callers use it for source-shape
+/// checks such as duplicate pragma arguments.
+#[derive(Clone, Debug, Eq)]
 pub(crate) struct TypeExpr {
     pub kind: TypeExprKind,
     pub span: Span,
+}
+
+impl PartialEq for TypeExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind
+    }
 }
 
 impl TypeExpr {
@@ -779,7 +798,7 @@ impl TypeExpr {
 }
 
 /// The kind of a CST type expression.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TypeExprKind {
     /// Wildcard type: `_`.
     Wildcard,

@@ -1,0 +1,6 @@
+#(deriving: Into[String], TryInto[Int])
+union NameOrId = String | Int
+
+fun main() {
+  write "bad"
+}

@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "variant Token = Token\n\n#(transparent)\nnewtype Label = Token\n\nfun main() {\n  let x: Label = Token.Token\n  write x\n}\n"
+---
+ERROR: type `Token` does not satisfy `Display` class

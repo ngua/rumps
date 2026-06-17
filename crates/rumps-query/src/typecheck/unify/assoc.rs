@@ -76,14 +76,24 @@ impl SolveCtx<'_> {
                         InstanceLookup::BlockedSelf => Ok(TyArena::ERROR),
                         InstanceLookup::Missing
                         | InstanceLookup::NotImported => {
-                            Err(TypeError::UnsatisfiedClass(
-                                TypeClass::placeholder(
-                                    class,
-                                    self.env.class_def(class).shape,
+                            let repr = if class.idx() < ClassId::BUILTIN_COUNT {
+                                self.newtype_repr_for_assoc(class, base, span)
+                            } else {
+                                None
+                            };
+                            match repr {
+                                Some(repr) => self.resolve_assoc_type(
+                                    repr, class, assoc_name, span,
                                 ),
-                                base,
-                                span,
-                            ))
+                                None => Err(TypeError::UnsatisfiedClass(
+                                    TypeClass::placeholder(
+                                        class,
+                                        self.env.class_def(class).shape,
+                                    ),
+                                    base,
+                                    span,
+                                )),
+                            }
                         }
                     }
                 }

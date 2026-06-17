@@ -1,0 +1,8 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(deriving: Indexable[Int], Mappable, Foldable)\nnewtype Bag = Array[Int]\n\n#(deriving: Chainable)\nnewtype Maybe[T] = Option[T]\n\nfun main() {\n  let b: Bag = [1, 2, 3]\n  write Indexable:index(b, 1)\n  write Mappable:map(x => x * 2, b)\n  write Foldable:fold((acc, x) => acc + x, 0, b)\n\n  let m: Maybe[Int] = Option.Some(5)\n  write Chainable:chain(m, x => Option.Some(x * 10))\n}\n"
+---
+2
+[ 2, 4, 6 ]
+6
+Option.Some(50)

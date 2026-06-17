@@ -1,6 +1,8 @@
 ; User Chainable for type, newtype, and union (requires Wrappable)
 
+#(deriving: Display)
 variant Box[T] = Full(T) | Empty
+#(deriving: Chainable, Display)
 newtype Maybe[T] = Option[T]
 union Opt = Option[Int] | Option[String]
 
@@ -39,11 +41,11 @@ fun main() {
   })
   write r
 
-  ; newtype auto-derive
+  ; newtype deriving
   let m: Maybe[Int] = Option.Some(5)
   write Chainable:chain(m, x => Option.Some(x * 10))
 
-  ; union auto-derive
+  ; union member-intersection
   let a: Opt = Option.Some(5)
   write Chainable:chain(a, x => Option.Some(x * 10))
 

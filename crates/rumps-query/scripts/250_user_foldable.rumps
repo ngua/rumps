@@ -1,6 +1,7 @@
 ; User Foldable for type, newtype, and union
 
 variant Box[T] = Full(T) | Empty
+#(deriving: Foldable)
 newtype Bag[T] = Array[T]
 union Flex = Array[Int] | Bag[Int]
 
@@ -30,12 +31,12 @@ fun main() {
   let box-empty-str: String = Foldable:fold-map(x => "{x}", box-empty)
   write box-empty-str
 
-  ; newtype auto-derive
+  ; newtype deriving
   let b: Bag[Int] = [1, 2, 3, 4]
   write Foldable:fold((acc, x) => acc + x, 0, b)
   write Foldable:fold-map(x => "{x}", b)
 
-  ; union auto-derive
+  ; union member-intersection
   let a: Flex = [10, 20, 30]
   write Foldable:fold((acc, x) => acc + x, 0, a)
   write Foldable:fold-map(x => "{x}", a)

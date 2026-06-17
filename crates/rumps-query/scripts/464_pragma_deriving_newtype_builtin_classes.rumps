@@ -1,0 +1,15 @@
+#(deriving: Indexable[Int], Mappable, Foldable, Display)
+newtype Bag = Array[Int]
+
+#(deriving: Chainable, Display)
+newtype Maybe[T] = Option[T]
+
+fun main() {
+  let b: Bag = [1, 2, 3]
+  write Indexable:index(b, 1)
+  write Mappable:map(x => x * 2, b)
+  write Foldable:fold((acc, x) => acc + x, 0, b)
+
+  let m: Maybe[Int] = Option.Some(5)
+  write Chainable:chain(m, x => Option.Some(x * 10))
+}

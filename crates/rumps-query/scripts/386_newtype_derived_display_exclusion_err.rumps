@@ -1,4 +1,4 @@
-; A hidden direct instance blocks representation-derived `Display` evidence.
+; No implicit representation `Display` evidence is available across a module.
 
 fun main() {
   let x: Labels.Label = "name"

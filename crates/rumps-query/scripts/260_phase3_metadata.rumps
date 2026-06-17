@@ -4,6 +4,7 @@ module Phase3Meta {
   +let module-item: Int | String | Bool = 7
 }
 
+#(deriving: Display)
 newtype Phase3Id = Int
 
 fun classify(v: Int | String | Bool) -> String {

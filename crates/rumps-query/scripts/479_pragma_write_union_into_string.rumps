@@ -1,0 +1,8 @@
+union Text = Int | String
+
+fun main() {
+  let n: Text = 42
+  let s: Text = "ok"
+  write n
+  write s
+}

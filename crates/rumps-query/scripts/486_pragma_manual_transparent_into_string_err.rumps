@@ -1,0 +1,14 @@
+; Error: transparent `Into[String]` forwarding conflicts with manual `Into[String]`.
+
+#(transparent)
+newtype Count = Int
+
+class Into[String] for Count {
+  fun into(x: Count) -> String {
+    "count:{x}"
+  }
+}
+
+fun main() {
+  write "bad"
+}

@@ -82,6 +82,7 @@ impl SolveCtx<'_> {
             }),
         }
     }
+
     pub(super) fn find_try_into_instance_for(
         &mut self,
         id: TypeId,
@@ -101,6 +102,7 @@ impl SolveCtx<'_> {
             })
         })
     }
+
     pub(super) fn check_try_into_instance(
         &mut self,
         ty: TyId,
@@ -136,6 +138,7 @@ impl SolveCtx<'_> {
             None => false,
         }
     }
+
     /// Find an instance whose `class_args` match the expected `class_arg`.
     ///
     /// If only one instance exists, returns it directly.
@@ -165,6 +168,7 @@ impl SolveCtx<'_> {
             }
         }
     }
+
     /// Find an `Into[T]` instance for a type whose `class_args` target matches `to`.
     pub(super) fn find_into_instance(
         &self,
@@ -177,6 +181,7 @@ impl SolveCtx<'_> {
             .find(|i| i.class_args.first().copied() == Some(to))
             .cloned()
     }
+
     /// Build a `Rename` from an instance's `type_params` and the actual
     /// `type_args` at a use site. For `Ty::Var` entries, adds the mapping
     /// to the rename. For concrete entries, unifies with the corresponding
@@ -209,6 +214,7 @@ impl SolveCtx<'_> {
         });
         Rename(vars.into_iter().collect())
     }
+
     /// Like `build_instance_subst` but only builds the var-to-type mapping
     /// without performing unification on concrete entries. Used when
     /// probing for a matching instance among several candidates.
@@ -228,6 +234,7 @@ impl SolveCtx<'_> {
             .collect();
         Rename(vars.into_iter().collect())
     }
+
     /// Check that a user instance's WHERE constraints are satisfied.
     /// Accepts an optional pre-built `Rename` to avoid redundant
     /// `build_instance_subst` calls at sites that already have one.

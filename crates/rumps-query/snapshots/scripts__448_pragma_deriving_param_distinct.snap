@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(deriving: Into[String], Into[Json])\nnewtype UserId = Int\n\nfun main() {\n  write \"distinct deriving args\"\n}\n"
+---
+"distinct deriving args"

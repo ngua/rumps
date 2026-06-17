@@ -44,7 +44,7 @@ fun main() {
   write s1 >= s2
   write s1 == s2
 
-  ; === Auto-derive inside class body ===
+  ; === Explicit representation operations inside class body ===
   ; Operators inside capability instances for `MyInt` should use the
   ; underlying `Int` arithmetic, not recurse infinitely.
 

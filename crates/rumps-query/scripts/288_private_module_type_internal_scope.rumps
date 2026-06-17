@@ -4,6 +4,7 @@ fun main() {
 
 module Own {
   variant Status = Pending | Done
+  #(deriving: Multiplicative)
   newtype UserId = Int
   union Payload = Int | String
 

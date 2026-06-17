@@ -332,6 +332,7 @@ impl SolveCtx<'_> {
             }
         }
     }
+
     /// Bind `tv` to a constructor shape and unify `Apply` args with
     /// the element types pairwise.
     fn unify_apply_inner(
@@ -345,6 +346,7 @@ impl SolveCtx<'_> {
         self.unify_var(tv, ctor, span)?;
         self.unify_hkt_args(args, elems, span)
     }
+
     fn hkt_arity(exp: usize, got: usize, span: Span) -> TypeError {
         TypeError::ArityMismatch {
             expected: exp,
@@ -352,6 +354,7 @@ impl SolveCtx<'_> {
             span,
         }
     }
+
     fn unify_hkt_args(
         &mut self,
         exp: &[TyId],
@@ -364,6 +367,7 @@ impl SolveCtx<'_> {
             Err(Self::hkt_arity(exp.len(), got.len(), span))
         }
     }
+
     pub(super) fn unify_hkt_known_args(
         &mut self,
         exp: &[TyId],
@@ -379,6 +383,7 @@ impl SolveCtx<'_> {
             self.errors.push(e);
         }
     }
+
     pub(super) fn unify_hkt_inst_args(
         &mut self,
         exp: &[TyId],
