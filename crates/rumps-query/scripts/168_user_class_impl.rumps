@@ -90,6 +90,7 @@ class Into[UserId] for Int {
   }
 }
 
+#(deriving: Into[String])
 newtype Age = Int
 
 class Display for Age {

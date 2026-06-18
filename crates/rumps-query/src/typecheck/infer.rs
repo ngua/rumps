@@ -41,9 +41,7 @@ use super::convert::is_in_module;
 use super::decl::TypeDeclRegistry;
 use super::env::{MethodRefOrigin, TypeEnv};
 use super::error::{TyPrinter, TypeError};
-use super::instance::{
-    Instance, InstanceLookup, InstanceRegistry, InstanceUse,
-};
+use super::instance::{Instance, InstanceRegistry, InstanceUse};
 use super::ty::{Rename, Scheme, Ty, TyArena, TyId, TyVar, TypeClass};
 use super::uf::UnionFind;
 use super::unify::{NewtypeEdge, NewtypeEdgeStatus, SolveCtx};
@@ -60,14 +58,6 @@ use crate::error::Result;
 use crate::intern::{self, QualifiedName, StringId, StringInterner};
 use crate::value::{self, TypeId, TypeRegistry};
 use crate::{ClassId, Error, Span};
-
-#[allow(clippy::large_enum_variant)]
-enum InstancesLookup {
-    Found(SmallVec<[Instance; 2]>),
-    Missing,
-    BlockedSelf,
-    NotImported,
-}
 
 impl UnionFind {
     /// Resolve all `TyId` values in a map through this union-find.
@@ -486,7 +476,7 @@ impl HoistState {
                     // by the original Pass 1 instantiation.
                     constraints.into_iter().skip(pass1_n).for_each(
                         |(ty, class)| {
-                            cx.constraints.push((
+                            cx.constraints.push(PendingConstraint::new(
                                 Constraint::Class { ty, class, span },
                                 module.clone(),
                             ));
@@ -495,7 +485,7 @@ impl HoistState {
                     if !var_map.is_empty() {
                         self.replay_var_maps.push(var_map);
                     }
-                    cx.constraints.push((
+                    cx.constraints.push(PendingConstraint::new(
                         Constraint::Unify(forward_ty, ty_inst, span),
                         module,
                     ));
@@ -508,7 +498,7 @@ impl HoistState {
                 // constraints, check, then rollback.
                 let has_new_class = cx.constraints[constraint_start..]
                     .iter()
-                    .any(|(c, _)| matches!(c, Constraint::Class { .. }));
+                    .any(|pc| matches!(pc.c, Constraint::Class { .. }));
 
                 if has_new_class && !self.finalized_funs.is_empty() {
                     self.enrich_finalized_schemes(cx, constraint_start);
@@ -592,8 +582,8 @@ impl HoistState {
             FunKey,
             SmallVec<[(TyVar, TypeClass<TyId>, Span); 2]>,
         > = HashMap::new();
-        cs[constraint_start..end].iter().for_each(|(c, _)| {
-            if let Constraint::Class { ty, class, span } = c {
+        cs[constraint_start..end].iter().for_each(|pc| {
+            if let Constraint::Class { ty, class, span } = &pc.c {
                 if let Ty::Var(cv) = cx.ty_arena.get(*ty) {
                     let root = cx.uf.find(*cv);
                     if let Some(entries) = root_to_orig.get(&root) {
@@ -692,7 +682,7 @@ pub(super) struct HoistCtx<'a> {
     pub(super) env: &'a mut TypeEnv,
     pub(super) uf: &'a mut UnionFind,
     pub(super) ty_arena: &'a mut TyArena,
-    pub(super) constraints: &'a mut Vec<(Constraint, Option<QualifiedName>)>,
+    pub(super) constraints: &'a mut Vec<PendingConstraint>,
     pub(super) errors: &'a mut Vec<TypeError>,
     pub(super) current_module: &'a Option<QualifiedName>,
 }
@@ -742,6 +732,18 @@ pub(crate) enum Constraint {
         span: Span,
     },
 
+    /// Associated type projection constrained by a full class query.
+    ///
+    /// Used when the associated type resolution must use the same evidence as
+    /// a parameterized class constraint, e.g. `Indexable[E]:Index`.
+    AssocProjection {
+        base: TyId,
+        class: TypeClass<TyId>,
+        assoc: intern::StringId,
+        ty: TyId,
+        span: Span,
+    },
+
     /// Type must satisfy a type class.
     ///
     /// This is the unified representation for all class membership constraints.
@@ -760,6 +762,31 @@ pub(crate) enum Constraint {
     },
 }
 
+#[derive(Clone)]
+pub(crate) struct PendingConstraint {
+    pub(crate) c: Constraint,
+    pub(crate) module: Option<QualifiedName>,
+    pub(crate) ctx: Option<ClassContext>,
+}
+
+impl PendingConstraint {
+    pub(crate) fn new(c: Constraint, module: Option<QualifiedName>) -> Self {
+        Self {
+            c,
+            module,
+            ctx: None,
+        }
+    }
+
+    pub(crate) fn with_context(
+        c: Constraint,
+        module: Option<QualifiedName>,
+        ctx: Option<ClassContext>,
+    ) -> Self {
+        Self { c, module, ctx }
+    }
+}
+
 impl Constraint {
     /// Get the source span associated with this constraint.
     pub(crate) fn span(&self) -> Span {
@@ -767,6 +794,7 @@ impl Constraint {
             Self::Unify(_, _, span)
             | Self::Callable { span, .. }
             | Self::HasField { span, .. }
+            | Self::AssocProjection { span, .. }
             | Self::Class { span, .. } => *span,
         }
     }
@@ -790,6 +818,13 @@ impl Constraint {
             Self::HasField { base, field_ty, .. } => {
                 vars.extend(uf.free_vars(*base, arena));
                 vars.extend(uf.free_vars(*field_ty, arena));
+            }
+            Self::AssocProjection {
+                base, class, ty, ..
+            } => {
+                vars.extend(uf.free_vars(*base, arena));
+                vars.extend(class.free_vars(arena, uf));
+                vars.extend(uf.free_vars(*ty, arena));
             }
             Self::Class { ty, class, .. } => {
                 vars.extend(uf.free_vars(*ty, arena));
@@ -851,7 +886,7 @@ pub(crate) struct InferCtx<'a> {
     /// Type arena; owns all interned types.
     pub(super) ty_arena: TyArena,
     /// Collected constraints to be solved.
-    constraints: Vec<(Constraint, Option<QualifiedName>)>,
+    constraints: Vec<PendingConstraint>,
     /// Union-find for type variable allocation and (future) constraint solving.
     pub(super) uf: UnionFind,
     /// Inferred types for each expression.
@@ -1116,7 +1151,19 @@ impl<'a> InferCtx<'a> {
 
     /// Add a constraint to the collection.
     pub(crate) fn constrain(&mut self, c: Constraint) {
-        self.constraints.push((c, self.current_module.clone()));
+        self.push_constraint(c, None);
+    }
+
+    pub(crate) fn constrain_in_class_context(&mut self, c: Constraint) {
+        self.push_constraint(c, self.class_context.clone());
+    }
+
+    fn push_constraint(&mut self, c: Constraint, ctx: Option<ClassContext>) {
+        self.constraints.push(PendingConstraint::with_context(
+            c,
+            self.current_module.clone(),
+            ctx,
+        ));
     }
 
     /// Add a unification constraint between two types.
@@ -1173,7 +1220,7 @@ impl<'a> InferCtx<'a> {
 
     /// Get the collected constraints.
     pub(crate) fn constraints(&self) -> Vec<&Constraint> {
-        self.constraints.iter().map(|(c, _)| c).collect()
+        self.constraints.iter().map(|pc| &pc.c).collect()
     }
 
     /// Get the inferred type for an expression, if recorded.
@@ -1231,94 +1278,6 @@ impl<'a> InferCtx<'a> {
         Rename(vars.into_iter().collect())
     }
 
-    pub(super) fn instance_for(
-        &mut self,
-        use_: InstanceUse,
-        class: ClassId,
-        tid: TypeId,
-        span: Span,
-    ) -> InstanceLookup {
-        if self.blocks_self_instance(use_, class, tid) {
-            self.error(TypeError::SelfInstanceUse {
-                class,
-                type_id: tid,
-                span,
-            });
-            InstanceLookup::BlockedSelf
-        } else {
-            match self.instance_registry.lookup(class, tid).cloned() {
-                Some(inst) => match inst.module {
-                    None => InstanceLookup::Found(inst),
-                    Some(ref mod_qn) => {
-                        if self.inst_mod_in_scope(mod_qn) {
-                            InstanceLookup::Found(inst)
-                        } else {
-                            self.error(TypeError::InstanceNotImported {
-                                class,
-                                type_id: tid,
-                                module: mod_qn.display(&self.env.strings),
-                                span,
-                            });
-                            InstanceLookup::NotImported
-                        }
-                    }
-                },
-                None => InstanceLookup::Missing,
-            }
-        }
-    }
-
-    fn instances_for(
-        &mut self,
-        use_: InstanceUse,
-        class: ClassId,
-        tid: TypeId,
-        span: Span,
-    ) -> InstancesLookup {
-        if self.blocks_self_instance(use_, class, tid) {
-            self.error(TypeError::SelfInstanceUse {
-                class,
-                type_id: tid,
-                span,
-            });
-            InstancesLookup::BlockedSelf
-        } else {
-            let insts = self.instance_registry.lookup_all(class, tid);
-            if insts.is_empty() {
-                InstancesLookup::Missing
-            } else {
-                let found: SmallVec<[Instance; 2]> = insts
-                    .iter()
-                    .filter_map(|inst| match inst.module {
-                        None => Some(inst.clone()),
-                        Some(ref mod_qn) => {
-                            if self.inst_mod_in_scope(mod_qn) {
-                                Some(inst.clone())
-                            } else {
-                                None
-                            }
-                        }
-                    })
-                    .collect();
-                if found.is_empty() {
-                    let mod_qn =
-                        insts.first().and_then(|inst| inst.module.clone());
-                    mod_qn.map_or(InstancesLookup::Missing, |mod_qn| {
-                        self.error(TypeError::InstanceNotImported {
-                            class,
-                            type_id: tid,
-                            module: mod_qn.display(&self.env.strings),
-                            span,
-                        });
-                        InstancesLookup::NotImported
-                    })
-                } else {
-                    InstancesLookup::Found(found)
-                }
-            }
-        }
-    }
-
     fn inst_mod_in_scope(&self, qn: &QualifiedName) -> bool {
         self.current_module.as_ref() == Some(qn)
             || self.env.is_module_imported(
@@ -1370,7 +1329,7 @@ impl<'a> InferCtx<'a> {
             errors: &mut self.errors,
             ast: self.ast,
             current_module: module,
-            class_context: &self.class_context,
+            class_context: self.class_context.clone(),
             hkt_var_classes: HashMap::new(),
         }
     }
@@ -1617,21 +1576,20 @@ impl<'a> InferCtx<'a> {
         &mut self,
         from: TyId,
         to: TyId,
-        span: Span,
     ) -> Option<(TypeId, Instance)> {
         let (tid, args) = self.type_id_args(from)?;
-        let insts = match self.instances_for(
-            InstanceUse::Evidence,
-            ClassId::TRY_INTO,
-            tid,
-            span,
-        ) {
-            InstancesLookup::Found(insts) => insts,
-            InstancesLookup::Missing
-            | InstancesLookup::BlockedSelf
-            | InstancesLookup::NotImported => SmallVec::new(),
-        };
         let to = self.uf.resolve(to, &mut self.ty_arena);
+        let insts: SmallVec<[Instance; 2]> = self
+            .instance_registry
+            .lookup_all(ClassId::TRY_INTO, tid)
+            .iter()
+            .filter(|inst| {
+                inst.module
+                    .as_ref()
+                    .is_none_or(|qn| self.inst_mod_in_scope(qn))
+            })
+            .cloned()
+            .collect();
         insts
             .into_iter()
             .find(|inst| {
@@ -1646,13 +1604,12 @@ impl<'a> InferCtx<'a> {
 
     pub(crate) fn resolve_read_metadata(&mut self) {
         let reads = mem::take(&mut self.read_checks);
-        reads.into_iter().for_each(|(id, from, to, span, _)| {
+        reads.into_iter().for_each(|(id, from, to, _, _)| {
             let from = self.uf.resolve(from, &mut self.ty_arena);
             let to = self.uf.resolve(to, &mut self.ty_arena);
             if from == to {
                 self.expand_alias_for_read(to);
-            } else if let Some((tid, inst)) = self.read_try_inst(from, to, span)
-            {
+            } else if let Some((tid, inst)) = self.read_try_inst(from, to) {
                 let method = self.env.intern("try-into");
                 self.expand_alias_for_read(to);
                 self.set_instance_call(id, tid);
@@ -1744,13 +1701,33 @@ impl<'a> InferCtx<'a> {
                 };
 
                 if let Some(tid) = type_id {
-                    match self.instance_for(use_, kind, tid, span) {
-                        InstanceLookup::Found(_) => {
-                            self.set_instance_call(expr_id, tid);
+                    if self.blocks_self_instance(use_, kind, tid) {
+                        self.error(TypeError::SelfInstanceUse {
+                            class: kind,
+                            type_id: tid,
+                            span,
+                        });
+                    } else if let Some(inst) =
+                        self.instance_registry.lookup(kind, tid).cloned()
+                    {
+                        match inst.module.as_ref() {
+                            None => self.set_instance_call(expr_id, tid),
+                            Some(mod_qn) => {
+                                if self.inst_mod_in_scope(mod_qn) {
+                                    self.set_instance_call(expr_id, tid);
+                                } else {
+                                    self.error(
+                                        TypeError::InstanceNotImported {
+                                            class: kind,
+                                            type_id: tid,
+                                            module: mod_qn
+                                                .display(&self.env.strings),
+                                            span,
+                                        },
+                                    );
+                                }
+                            }
                         }
-                        InstanceLookup::Missing
-                        | InstanceLookup::BlockedSelf
-                        | InstanceLookup::NotImported => {}
                     }
                 }
             });
@@ -1773,10 +1750,46 @@ impl<'a> InferCtx<'a> {
                     _ => None,
                 };
                 if let Some(tid) = tid {
-                    match self.instances_for(use_, cid, tid, span) {
-                        InstancesLookup::Found(insts) => {
-                            if insts.len() > 1 {
+                    if self.blocks_self_instance(use_, cid, tid) {
+                        self.error(TypeError::SelfInstanceUse {
+                            class: cid,
+                            type_id: tid,
+                            span,
+                        });
+                    } else {
+                        let insts = self.instance_registry.lookup_all(cid, tid);
+                        if !insts.is_empty() {
+                            let found: SmallVec<[Instance; 2]> = insts
+                                .iter()
+                                .filter_map(|inst| match inst.module {
+                                    None => Some(inst.clone()),
+                                    Some(ref mod_qn) => {
+                                        if self.inst_mod_in_scope(mod_qn) {
+                                            Some(inst.clone())
+                                        } else {
+                                            None
+                                        }
+                                    }
+                                })
+                                .collect();
+                            if found.is_empty() {
                                 insts
+                                    .first()
+                                    .and_then(|inst| inst.module.clone())
+                                    .into_iter()
+                                    .for_each(|mod_qn| {
+                                        self.error(
+                                            TypeError::InstanceNotImported {
+                                                class: cid,
+                                                type_id: tid,
+                                                module: mod_qn
+                                                    .display(&self.env.strings),
+                                                span,
+                                            },
+                                        );
+                                    });
+                            } else if found.len() > 1 {
+                                found
                                     .iter()
                                     .find(|i| {
                                         i.class_args.first().copied()
@@ -1792,9 +1805,6 @@ impl<'a> InferCtx<'a> {
                                     });
                             }
                         }
-                        InstancesLookup::Missing
-                        | InstancesLookup::BlockedSelf
-                        | InstancesLookup::NotImported => {}
                     }
                 }
             },
@@ -1812,10 +1822,48 @@ impl<'a> InferCtx<'a> {
             .for_each(|(eid, cid, method, ty, span, use_)| {
                 let resolved = self.uf.resolve(ty, &mut self.ty_arena);
                 if let Ty::Tuple(ts) = self.ty_arena.get(resolved).clone() {
-                    match self.instances_for(use_, cid, TypeId::TUPLE, span) {
-                        InstancesLookup::Found(insts) => {
-                            if insts.len() > 1 {
+                    if self.blocks_self_instance(use_, cid, TypeId::TUPLE) {
+                        self.error(TypeError::SelfInstanceUse {
+                            class: cid,
+                            type_id: TypeId::TUPLE,
+                            span,
+                        });
+                    } else {
+                        let insts = self
+                            .instance_registry
+                            .lookup_all(cid, TypeId::TUPLE);
+                        if !insts.is_empty() {
+                            let found: SmallVec<[Instance; 2]> = insts
+                                .iter()
+                                .filter_map(|inst| match inst.module {
+                                    None => Some(inst.clone()),
+                                    Some(ref mod_qn) => {
+                                        if self.inst_mod_in_scope(mod_qn) {
+                                            Some(inst.clone())
+                                        } else {
+                                            None
+                                        }
+                                    }
+                                })
+                                .collect();
+                            if found.is_empty() {
                                 insts
+                                    .first()
+                                    .and_then(|inst| inst.module.clone())
+                                    .into_iter()
+                                    .for_each(|mod_qn| {
+                                        self.error(
+                                            TypeError::InstanceNotImported {
+                                                class: cid,
+                                                type_id: TypeId::TUPLE,
+                                                module: mod_qn
+                                                    .display(&self.env.strings),
+                                                span,
+                                            },
+                                        );
+                                    });
+                            } else if found.len() > 1 {
+                                found
                                     .iter()
                                     .find(|i| i.type_params.len() == ts.len())
                                     .and_then(|i| {
@@ -1828,14 +1876,10 @@ impl<'a> InferCtx<'a> {
                                     });
                             }
                         }
-                        InstancesLookup::Missing
-                        | InstancesLookup::BlockedSelf
-                        | InstancesLookup::NotImported => {}
                     }
                 }
             });
     }
-
     /// Check for illegal union narrowing in `let` annotations.
     ///
     /// After constraint solving, if a `let` binding's RHS resolved to a

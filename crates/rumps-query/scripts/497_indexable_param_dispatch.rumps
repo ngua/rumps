@@ -1,0 +1,33 @@
+variant W = W(Int)
+
+class Indexable[String] for W {
+  newtype Index = Int
+
+  fun index(w: W, i: :Index) -> String {
+    "s:{i}"
+  }
+
+  fun get(w: W, i: :Index) -> Option[String] {
+    Option.Some("s:{i}")
+  }
+}
+
+class Indexable[Int] for W {
+  newtype Index = Int
+
+  fun index(w: W, i: :Index) -> Int {
+    i
+  }
+
+  fun get(w: W, i: :Index) -> Option[Int] {
+    Option.Some(i)
+  }
+}
+
+fun main() {
+  let w = W.W(0)
+  let s: String = w[0]
+  write s
+  let os: Option[String] = w?[0]
+  write os
+}

@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "newtype UserId = Int\n\nfun main() {\n  let x: UserId = 7\n  write x as String\n}\n"
+---
+ERROR: cannot cast `UserId` to `String`

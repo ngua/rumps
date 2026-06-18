@@ -1,0 +1,7 @@
+#(deriving: Display)
+variant Box = Box(Int, String) | Empty
+
+fun main() {
+  write Box.Box(1, "a")
+  write Box.Empty
+}

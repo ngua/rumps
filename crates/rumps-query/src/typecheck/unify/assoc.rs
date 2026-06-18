@@ -1,181 +1,114 @@
+use super::evidence::{Evidence, EvidenceQuery};
 use super::*;
 
 impl SolveCtx<'_> {
-    /// Resolve an associated type projection to a concrete type.
-    ///
-    /// Given a base type (`Array[Int]`, `Map[String, Int]`, etc.) and a class
-    /// with an associated type (`Indexable:Index`), returns the concrete type
-    /// that the associated type resolves to.
-    ///
-    /// # Builtin Rules
-    ///
-    /// - `Array[T]` with `Indexable:Index` -> `Int`
-    /// - `Map[K, V]` with `Indexable:Index` -> `K`
-    /// - `String` with `Indexable:Index` -> `Int`
-    ///
-    /// # User Types
-    ///
-    /// For user instances, associated type definitions are interpreted in the
-    /// instance type parameter scope. For `class C for Box[K, V] { newtype A = K }`,
-    /// projecting `C:A` from `Box[String, Int]` resolves to `String`.
-    ///
     pub(super) fn resolve_assoc_type(
+        &mut self,
+        base: TyId,
+        class: &TypeClass<TyId>,
+        assoc_name: StringId,
+        span: Span,
+    ) -> Result<TyId, TypeError> {
+        let id = match class {
+            TypeClass::Concrete { id, .. } | TypeClass::Hkt { id, .. } => *id,
+        };
+        if !self.env.class_def(id).assoc_types.contains(&assoc_name) {
+            Err(TypeError::NoSuchAssocType {
+                class: id,
+                name: assoc_name,
+                span,
+            })
+        } else if self.assoc_blocks_self(base, id) {
+            Ok(TyArena::ERROR)
+        } else {
+            match self.ty_arena.get(base).clone() {
+                Ty::Array(_) if id == ClassId::INDEXABLE => Ok(TyArena::INT),
+                Ty::Map(k, _) if id == ClassId::INDEXABLE => Ok(k),
+                Ty::String if id == ClassId::INDEXABLE => Ok(TyArena::INT),
+                Ty::Var(_) => Err(TypeError::UnknownAssocType {
+                    ty: base,
+                    assoc: assoc_name,
+                    span,
+                }),
+                Ty::Error | Ty::Unknown => Ok(TyArena::ERROR),
+                _ => {
+                    let ev = self.evidence(EvidenceQuery {
+                        class,
+                        ty: base,
+                        span,
+                    });
+                    match ev {
+                        Evidence::Manual { inst, args } => self
+                            .resolve_assoc_from_inst(
+                                &inst, &args, id, assoc_name, span,
+                            ),
+                        Evidence::ManualMany { insts, args } => {
+                            match insts.first() {
+                                Some(inst) => self.resolve_assoc_from_inst(
+                                    inst, &args, id, assoc_name, span,
+                                ),
+                                None => {
+                                    invariant!(
+                                        "`ManualMany` has at least one instance"
+                                    )
+                                }
+                            }
+                        }
+                        Evidence::Repr { ty: repr, .. } => self
+                            .resolve_assoc_type(repr, class, assoc_name, span),
+                        Evidence::BlockedSelf | Evidence::NotImported => {
+                            Ok(TyArena::ERROR)
+                        }
+                        Evidence::Missing
+                        | Evidence::Union { .. }
+                        | Evidence::DerivedVariant { .. }
+                        | Evidence::BuiltinNamed => {
+                            Err(TypeError::UnsatisfiedClass(
+                                class.clone(),
+                                base,
+                                span,
+                            ))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn assoc_blocks_self(&self, base: TyId, class: ClassId) -> bool {
+        self.ty_to_type_id_and_args(base).is_some_and(|(tid, _)| {
+            self.class_context.as_ref().is_some_and(|ctx| {
+                ctx.class == class && ctx.type_id == Some(tid)
+            })
+        })
+    }
+
+    fn resolve_assoc_from_inst(
+        &mut self,
+        inst: &Instance,
+        args: &[TyId],
+        class: ClassId,
+        assoc: StringId,
+        span: Span,
+    ) -> Result<TyId, TypeError> {
+        let sub = self.build_instance_subst(inst, args, span);
+        match inst.get_assoc_type(assoc) {
+            Some(def) => Ok(self.ty_arena.apply(def.ty, &sub)),
+            None => Err(TypeError::MissingAssocType { class, assoc, span }),
+        }
+    }
+
+    pub(super) fn resolve_assoc_type_by_id(
         &mut self,
         base: TyId,
         class: ClassId,
         assoc_name: StringId,
         span: Span,
     ) -> Result<TyId, TypeError> {
-        // Validate that assoc_name is a valid associated type for this class
-        let assoc_types = &self.env.class_def(class).assoc_types;
-        if !assoc_types.contains(&assoc_name) {
-            Err(TypeError::NoSuchAssocType {
-                class,
-                name: assoc_name,
-                span,
-            })
-        } else {
-            let shape = self.ty_arena.get(base).clone();
-            match shape {
-                // Builtin: Array[T] with Indexable:Index = Int
-                Ty::Array(_) if class == ClassId::INDEXABLE => Ok(TyArena::INT),
-
-                // Builtin: Map[K, V] with Indexable:Index = K
-                Ty::Map(k, _) if class == ClassId::INDEXABLE => Ok(k),
-
-                // Builtin: String with Indexable:Index = Int
-                Ty::String if class == ClassId::INDEXABLE => Ok(TyArena::INT),
-
-                // User type: look up instance in registry
-                Ty::Named(type_id, ref type_args) => {
-                    let type_args: SmallVec<[TyId; 4]> = type_args.clone();
-                    match self.instance_for(
-                        InstanceUse::Evidence,
-                        class,
-                        type_id,
-                        span,
-                    ) {
-                        InstanceLookup::Found(inst) => {
-                            let param_rename = self
-                                .build_instance_subst(&inst, &type_args, span);
-                            // Find the associated type definition
-                            match inst.get_assoc_type(assoc_name) {
-                                Some(assoc_def) => {
-                                    let assoc_ty = assoc_def.ty;
-                                    Ok(self
-                                        .ty_arena
-                                        .apply(assoc_ty, &param_rename))
-                                }
-                                None => Err(TypeError::MissingAssocType {
-                                    class,
-                                    assoc: assoc_name,
-                                    span,
-                                }),
-                            }
-                        }
-                        InstanceLookup::BlockedSelf => Ok(TyArena::ERROR),
-                        InstanceLookup::Missing
-                        | InstanceLookup::NotImported => {
-                            let repr = if class.idx() < ClassId::BUILTIN_COUNT {
-                                self.newtype_repr_for_assoc(class, base, span)
-                            } else {
-                                None
-                            };
-                            match repr {
-                                Some(repr) => self.resolve_assoc_type(
-                                    repr, class, assoc_name, span,
-                                ),
-                                None => Err(TypeError::UnsatisfiedClass(
-                                    TypeClass::placeholder(
-                                        class,
-                                        self.env.class_def(class).shape,
-                                    ),
-                                    base,
-                                    span,
-                                )),
-                            }
-                        }
-                    }
-                }
-
-                // Type variable: cannot resolve yet (defer resolution)
-                Ty::Var(_) => Err(TypeError::UnknownAssocType {
-                    ty: base,
-                    assoc: assoc_name,
-                    span,
-                }),
-
-                // Error/Unknown: propagate
-                Ty::Error | Ty::Unknown => Ok(TyArena::ERROR),
-
-                // User classes: handle parameterized builtins via instance lookup
-                _ if class.idx() >= ClassId::BUILTIN_COUNT => {
-                    match self.ty_to_type_id_and_args(base) {
-                        Some((tid, type_args)) => {
-                            match self.instance_for(
-                                InstanceUse::Evidence,
-                                class,
-                                tid,
-                                span,
-                            ) {
-                                InstanceLookup::Found(inst) => {
-                                    let param_rename = self
-                                        .build_instance_subst(
-                                            &inst, &type_args, span,
-                                        );
-                                    match inst.get_assoc_type(assoc_name) {
-                                        Some(assoc_def) => {
-                                            Ok(self.ty_arena.apply(
-                                                assoc_def.ty,
-                                                &param_rename,
-                                            ))
-                                        }
-                                        None => {
-                                            Err(TypeError::MissingAssocType {
-                                                class,
-                                                assoc: assoc_name,
-                                                span,
-                                            })
-                                        }
-                                    }
-                                }
-                                InstanceLookup::BlockedSelf => {
-                                    Ok(TyArena::ERROR)
-                                }
-                                InstanceLookup::Missing
-                                | InstanceLookup::NotImported => {
-                                    Err(TypeError::UnsatisfiedClass(
-                                        TypeClass::placeholder(
-                                            class,
-                                            self.env.class_def(class).shape,
-                                        ),
-                                        base,
-                                        span,
-                                    ))
-                                }
-                            }
-                        }
-                        None => Err(TypeError::UnsatisfiedClass(
-                            TypeClass::placeholder(
-                                class,
-                                self.env.class_def(class).shape,
-                            ),
-                            base,
-                            span,
-                        )),
-                    }
-                }
-
-                // Other types: no instance for this class
-                _ => Err(TypeError::UnsatisfiedClass(
-                    TypeClass::placeholder(
-                        class,
-                        self.env.class_def(class).shape,
-                    ),
-                    base,
-                    span,
-                )),
-            }
-        }
+        // Stored projections carry only a `ClassId`; use a placeholder query
+        // when no class arguments are available.
+        let class =
+            TypeClass::placeholder(class, self.env.class_def(class).shape);
+        self.resolve_assoc_type(base, &class, assoc_name, span)
     }
 }

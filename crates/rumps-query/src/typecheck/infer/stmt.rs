@@ -14,7 +14,7 @@ use super::scheme::SchemePolicy;
 use super::{
     ClassContext, ClassDefaultMethodInput, ClassInstanceInput, Constraint,
     HoistCtx, HoistState, InferCtx, InstanceMethodInput, MethodBodyInput,
-    NewtypeIntoOverlap,
+    NewtypeIntoOverlap, PendingConstraint,
 };
 use crate::ast::{
     pragma, ArrayElem, AssocTypeDef, AstTypeExpr, AstTypeExprId,
@@ -1066,21 +1066,22 @@ impl InferCtx<'_> {
     fn has_open_residual(
         &mut self,
         scheme: &Scheme,
-        residual: &[(Constraint, Option<QualifiedName>)],
+        residual: &[PendingConstraint],
     ) -> bool {
         let vars: HashSet<_> = scheme.vars.iter().copied().collect();
-        residual.iter().any(|(c, _)| match c {
+        residual.iter().any(|pc| match &pc.c {
             Constraint::Unify(a, b, _)
                 if matches!(self.ty_arena.get(*a), Ty::Var(_))
                     && matches!(self.ty_arena.get(*b), Ty::Var(_)) =>
             {
                 false
             }
-            _ => c
-                .free_vars(&self.ty_arena, &mut self.uf)
-                .into_iter()
-                .map(|v| self.uf.find(v))
-                .any(|v| vars.contains(&v)),
+            _ => {
+                pc.c.free_vars(&self.ty_arena, &mut self.uf)
+                    .into_iter()
+                    .map(|v| self.uf.find(v))
+                    .any(|v| vars.contains(&v))
+            }
         })
     }
 
@@ -1496,7 +1497,7 @@ impl InferCtx<'_> {
     /// Infer types for a `write` statement or expression.
     ///
     /// Type-checks the expression and adds constraints based on format and target:
-    /// - `Into[String]` for default format
+    /// - `Display` for default format
     /// - `Into[Json]` for JSON format
     /// - `FilePath | String` for file target path
     pub(super) fn write(&mut self, output: &WriteExpr, span: Span) {
@@ -1505,10 +1506,10 @@ impl InferCtx<'_> {
         // Format constraint: must be convertible to target format
         match output.format {
             OutputFormat::Default | OutputFormat::Raw => {
-                // Must be convertible to String
+                // Must be displayable.
                 self.constrain(Constraint::Class {
                     ty: expr_ty,
-                    class: TypeClass::param(ClassId::INTO, TyArena::STRING),
+                    class: TypeClass::simple(ClassId::DISPLAY),
                     span,
                 });
             }

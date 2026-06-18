@@ -1,0 +1,7 @@
+#(deriving: Display)
+newtype Label = Int
+
+fun main() {
+  let x: Label = 7
+  write x as String
+}

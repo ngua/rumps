@@ -1,0 +1,6 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(deriving: Display)\nvariant Box = Box(Int, String) | Empty\n\nfun main() {\n  write Box.Box(1, \"a\")\n  write Box.Empty\n}\n"
+---
+Box.Box(1, "a")
+Box.Empty

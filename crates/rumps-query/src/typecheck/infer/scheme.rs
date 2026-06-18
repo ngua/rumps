@@ -6,8 +6,8 @@ use std::ops::Range;
 use smallvec::SmallVec;
 
 use super::constraint_region::ConstraintRegion;
-use super::{Constraint, InferCtx};
-use crate::intern::{QualifiedName, StringId};
+use super::{Constraint, InferCtx, PendingConstraint};
+use crate::intern::StringId;
 use crate::typecheck::error::TypeError;
 use crate::typecheck::ty::{Scheme, Ty, TyId, TyVar, TypeClass};
 use crate::Span;
@@ -25,7 +25,7 @@ pub(super) enum SchemePolicy<'a> {
 pub(super) struct SchemeOut {
     pub(super) scheme: Scheme,
     /// Constraints from the requested region that stay in the global solver.
-    pub(super) residual: Vec<(Constraint, Option<QualifiedName>)>,
+    pub(super) residual: Vec<PendingConstraint>,
 }
 
 enum RootPolicy {
@@ -177,15 +177,15 @@ impl InferCtx<'_> {
 
     fn capture_region_classes(
         &mut self,
-        reg: &[(Constraint, Option<QualifiedName>)],
+        reg: &[PendingConstraint],
         policy: &RootPolicy,
         env_fv: &HashSet<TyVar>,
         cap: &mut CaptureState<'_>,
     ) {
         (0..reg.len()).for_each(|_| {
-            reg.iter().enumerate().for_each(|(i, (c, _))| {
+            reg.iter().enumerate().for_each(|(i, pc)| {
                 if cap.ix.contains(&i) {
-                } else if let Constraint::Class { ty, class, span } = c {
+                } else if let Constraint::Class { ty, class, span } = &pc.c {
                     if let Some(v) = self.constraint_subject_var(*ty) {
                         if cap.vars.contains(&v) {
                             let class = class.resolve_inner(
@@ -301,11 +301,8 @@ impl InferCtx<'_> {
         }
     }
 
-    fn apply_scheme_shapes(
-        &mut self,
-        reg: &[(Constraint, Option<QualifiedName>)],
-    ) {
-        reg.iter().for_each(|(c, _)| match c {
+    fn apply_scheme_shapes(&mut self, reg: &[PendingConstraint]) {
+        reg.iter().for_each(|pc| match &pc.c {
             Constraint::Unify(a, b, _) => self.scheme_unify(*a, *b),
             Constraint::Callable {
                 callee, args, ret, ..

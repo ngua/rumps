@@ -22,15 +22,6 @@ pub(crate) enum InstanceUse {
     Super,
 }
 
-#[allow(clippy::large_enum_variant)]
-#[derive(Clone, Debug)]
-pub(crate) enum InstanceLookup {
-    Found(Instance),
-    Missing,
-    BlockedSelf,
-    NotImported,
-}
-
 /// An associated type definition within a class instance.
 ///
 /// Example: `newtype Index = Int` inside `class Indexable[T] FOR MyVec[T] { ... }`

@@ -21,7 +21,7 @@ use crate::env::TxnReq;
 use crate::intern::{QualifiedName, StringId};
 use crate::typecheck::env::MethodRefOrigin;
 use crate::typecheck::error::TypeError;
-use crate::typecheck::instance::{InstanceLookup, InstanceUse};
+use crate::typecheck::instance::InstanceUse;
 use crate::typecheck::ty::{
     ClassShape, MethodSpec, Scheme, TrackKind, Ty, TyArena, TyId, TyVar,
     TypeClass,
@@ -113,11 +113,11 @@ impl InferCtx<'_> {
             Expr::TupleIndex(base, idx) => self.tuple_index(*base, *idx, span),
 
             // Index access: arr[i] or map[k]
-            Expr::Index(base, idx) => self.index(*base, *idx, span),
+            Expr::Index(base, idx) => self.index(id, *base, *idx, span),
 
             // Optional index access: arr?[i] or str?[i] (safe, returns Option)
             Expr::OptionalIndex(base, idx) => {
-                self.optional_index(*base, *idx, span)
+                self.optional_index(id, *base, *idx, span)
             }
 
             // JSON access: data.field, data..field, data->"key", data->>"key"
@@ -489,7 +489,8 @@ impl InferCtx<'_> {
                                         self.unify(target, arg_ty, span);
                                         if matches!(
                                             class,
-                                            TypeClass::Concrete { ref params, .. } if !params.is_empty()
+                                            TypeClass::Concrete { ref params, .. }
+                                              if !params.is_empty()
                                         ) && k.idx()
                                             >= ClassId::BUILTIN_COUNT
                                         {
@@ -770,19 +771,38 @@ impl InferCtx<'_> {
         use_: InstanceUse,
     ) -> bool {
         match self.nominal_type_id(ty) {
-            Some(tid) => match self.instance_for(use_, kind, tid, span) {
-                InstanceLookup::Found(_) => {
-                    self.set_instance_call(id, tid);
-                    true
+            Some(tid) if self.blocks_self_instance(use_, kind, tid) => {
+                self.error(TypeError::SelfInstanceUse {
+                    class: kind,
+                    type_id: tid,
+                    span,
+                });
+                false
+            }
+            Some(tid) => {
+                match self.instance_registry.lookup(kind, tid).cloned() {
+                    Some(inst) => match inst.module.as_ref() {
+                        Some(mod_qn) if !self.inst_mod_in_scope(mod_qn) => {
+                            self.error(TypeError::InstanceNotImported {
+                                class: kind,
+                                type_id: tid,
+                                module: mod_qn.display(&self.env.strings),
+                                span,
+                            });
+                            false
+                        }
+                        Some(_) | None => {
+                            self.set_instance_call(id, tid);
+                            true
+                        }
+                    },
+                    None => {
+                        self.deferred_inst_calls
+                            .push((id, ty, kind, span, use_));
+                        true
+                    }
                 }
-                InstanceLookup::Missing => {
-                    self.deferred_inst_calls.push((id, ty, kind, span, use_));
-                    true
-                }
-                InstanceLookup::BlockedSelf | InstanceLookup::NotImported => {
-                    false
-                }
-            },
+            }
             None => {
                 self.deferred_inst_calls.push((id, ty, kind, span, use_));
                 true
@@ -1748,7 +1768,13 @@ impl InferCtx<'_> {
     /// Works for `Array[T]` (index must be `Int`, returns `T`),
     /// `Map[K, V]` (index unifies with `K`, returns `V`),
     /// and `String` (index must be `Int`, returns `Char`).
-    fn index(&mut self, base_id: ExprId, idx_id: ExprId, span: Span) -> TyId {
+    fn index(
+        &mut self,
+        id: ExprId,
+        base_id: ExprId,
+        idx_id: ExprId,
+        span: Span,
+    ) -> TyId {
         let base_ty = self.expr(base_id);
         let idx_ty = self.expr(idx_id);
 
@@ -1792,9 +1818,9 @@ impl InferCtx<'_> {
                 TyArena::CHAR
             }
 
-            Ty::Named(id, type_args) => {
-                let (id, type_args) = (*id, type_args.clone());
-                self.named_index_elem(base_ty, idx_ty, id, &type_args, span)
+            Ty::Named(_, _) => {
+                let method = self.env.intern("index");
+                self.named_index_elem(id, base_ty, idx_ty, method, span)
             }
 
             _ => {
@@ -1816,6 +1842,7 @@ impl InferCtx<'_> {
     /// - `String?[Int]` returns `Option[Char]`
     fn optional_index(
         &mut self,
+        id: ExprId,
         base_id: ExprId,
         idx_id: ExprId,
         span: Span,
@@ -1863,10 +1890,10 @@ impl InferCtx<'_> {
                 self.ty_arena.option(TyArena::CHAR)
             }
 
-            Ty::Named(id, type_args) => {
-                let (id, type_args) = (*id, type_args.clone());
-                let elem = self
-                    .named_index_elem(base_ty, idx_ty, id, &type_args, span);
+            Ty::Named(_, _) => {
+                let method = self.env.intern("get");
+                let elem =
+                    self.named_index_elem(id, base_ty, idx_ty, method, span);
                 if elem == TyArena::ERROR {
                     TyArena::ERROR
                 } else {
@@ -1887,56 +1914,37 @@ impl InferCtx<'_> {
 
     fn named_index_elem(
         &mut self,
+        expr: ExprId,
         base_ty: TyId,
         idx_ty: TyId,
-        id: TypeId,
-        type_args: &[TyId],
+        method: StringId,
         span: Span,
     ) -> TyId {
-        match self.instance_for(
-            InstanceUse::Evidence,
-            ClassId::INDEXABLE,
-            id,
+        let elem = self.fresh();
+        let class = TypeClass::param(ClassId::INDEXABLE, elem);
+        self.constrain_in_class_context(Constraint::Class {
+            ty: base_ty,
+            class: class.clone(),
             span,
-        ) {
-            InstanceLookup::Found(inst) => {
-                let subst = self.build_instance_subst(&inst, type_args, span);
-                let idx_name = self.env.intern("Index");
-                match inst.get_assoc_type(idx_name) {
-                    Some(a) => {
-                        let inst_idx = self.ty_arena.apply(a.ty, &subst);
-                        self.unify(idx_ty, inst_idx, span);
-                        let elem =
-                            inst.class_args.first().copied().unwrap_or_else(
-                                || {
-                                    invariant!(
-                                        "`Indexable` instance has a class arg"
-                                    )
-                                },
-                            );
-                        self.ty_arena.apply(elem, &subst)
-                    }
-                    None => {
-                        self.error(TypeError::MissingAssocType {
-                            class: ClassId::INDEXABLE,
-                            assoc: idx_name,
-                            span,
-                        });
-                        TyArena::ERROR
-                    }
-                }
-            }
-            InstanceLookup::Missing => {
-                self.error(TypeError::UnsatisfiedClass(
-                    TypeClass::param(ClassId::INDEXABLE, TyArena::ERROR),
-                    base_ty,
-                    span,
-                ));
-                TyArena::ERROR
-            }
-            InstanceLookup::BlockedSelf => TyArena::ERROR,
-            InstanceLookup::NotImported => TyArena::ERROR,
-        }
+        });
+        let assoc = self.env.intern("Index");
+        self.constrain_in_class_context(Constraint::AssocProjection {
+            base: base_ty,
+            class,
+            assoc,
+            ty: idx_ty,
+            span,
+        });
+        self.deferred_param_calls.push((
+            expr,
+            ClassId::INDEXABLE,
+            method,
+            base_ty,
+            elem,
+            span,
+            InstanceUse::Evidence,
+        ));
+        elem
     }
 
     /// Infer type of JSON access operators.
@@ -3578,7 +3586,7 @@ impl InferCtx<'_> {
     /// Infer type of `as` cast expression.
     ///
     /// Emits an `Into` constraint to verify the conversion is valid.
-    /// The actual validation happens in `check_into` during constraint solving.
+    /// The actual validation happens through class constraint solving.
     ///
     /// Special case: when casting a type variable to a numeric type, also
     /// emit a `Numeric` constraint to ensure polymorphic expressions like

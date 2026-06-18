@@ -1,0 +1,16 @@
+; Error: derived variant `Display` payload evidence cannot use a direct self instance.
+
+#(deriving: Display)
+variant Box = Box(Item)
+
+variant Item = Item(String)
+
+class Display for Item {
+  fun display(x: Item) -> String {
+    Display:display(x)
+  }
+}
+
+fun main() {
+  write Box.Box(Item.Item("a"))
+}

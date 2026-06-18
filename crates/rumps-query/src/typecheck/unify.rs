@@ -25,10 +25,8 @@ use super::convert::ConvertCtx;
 use super::decl::TypeDeclRegistry;
 use super::env::TypeEnv;
 use super::error::TypeError;
-use super::infer::{ClassContext, Constraint};
-use super::instance::{
-    Instance, InstanceLookup, InstanceRegistry, InstanceUse,
-};
+use super::infer::{ClassContext, Constraint, PendingConstraint};
+use super::instance::{Instance, InstanceRegistry};
 use super::ty::{Rename, Ty, TyArena, TyId, TyVar, TypeClass};
 use super::uf::UnionFind;
 use crate::ast::{Ast, AstTypeExpr, AstTypeExprId};
@@ -36,31 +34,21 @@ use crate::intern::{QualifiedName, StringId};
 use crate::value::{TypeDef, TypeId, TypeRegistry};
 use crate::{ClassId, Span};
 
+mod alias;
+mod apply;
+mod assoc;
+mod classes;
+mod constraints;
+mod core;
+mod edge;
+mod evidence;
+mod instances;
+mod ops;
+
 /// Result of a unification attempt.
 ///
 /// With union-find, successful unification mutates the UF in-place.
 type UnifyResult = Result<(), TypeError>;
-
-#[allow(clippy::large_enum_variant)]
-pub(super) enum InstancesLookup {
-    Found(SmallVec<[Instance; 2]>),
-    BlockedSelf,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct NewtypeEdge {
-    pub(super) alias: TypeId,
-    pub(super) from: TyId,
-    pub(super) to: TyId,
-    pub(super) repr: TyId,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum NewtypeEdgeStatus {
-    Allowed,
-    Blocked,
-    Missing,
-}
 
 /// Context for constraint solving (unification, class satisfaction, etc.).
 ///
@@ -79,22 +67,27 @@ pub(super) struct SolveCtx<'a> {
     /// Current module path (for module-aware type name resolution).
     pub(super) current_module: Option<QualifiedName>,
     /// Current class context (for associated type resolution).
-    pub(super) class_context: &'a Option<ClassContext>,
+    pub(super) class_context: Option<ClassContext>,
     /// Maps HKT class-constrained type variables to their `ClassId`, so
     /// `unify_apply` can look up tuple constructor instances for
     /// position-aware decomposition.
     pub(super) hkt_var_classes: HashMap<TyVar, ClassId>,
 }
 
-mod alias;
-mod apply;
-mod assoc;
-mod classes;
-mod constraints;
-mod core;
-mod edge;
-mod instances;
-mod ops;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct NewtypeEdge {
+    pub(super) alias: TypeId,
+    pub(super) from: TyId,
+    pub(super) to: TyId,
+    pub(super) repr: TyId,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum NewtypeEdgeStatus {
+    Allowed,
+    Blocked,
+    Missing,
+}
 
 impl SolveCtx<'_> {
     fn convert_ctx(&mut self) -> ConvertCtx<'_> {
@@ -107,7 +100,7 @@ impl SolveCtx<'_> {
             ast: self.ast,
             errors: self.errors,
             current_module: &self.current_module,
-            class_context: self.class_context,
+            class_context: &self.class_context,
             rewrite_ast: false,
         }
     }
@@ -262,7 +255,8 @@ mod tests {
             *got == t
                 && matches!(
                     class,
-                    TypeClass::Concrete { id: ClassId::DISPLAY, params } if params.is_empty()
+                    TypeClass::Concrete { id: ClassId::DISPLAY, params }
+                      if params.is_empty()
                 )
         }));
     }
@@ -285,7 +279,8 @@ mod tests {
         assert!(
             matches!(
                 resolved,
-                TypeClass::Hkt { id: ClassId::MAPPABLE, ref elems, .. } if elems.first() == Some(&TyArena::INT)
+                TypeClass::Hkt { id: ClassId::MAPPABLE, ref elems, .. }
+                  if elems.first() == Some(&TyArena::INT)
             ),
             "constraint should be Mappable with elems=[Int] after rename"
         );

@@ -1,0 +1,6 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "variant W = W(Int)\n\nclass Indexable[String] for W {\n  newtype Index = Int\n\n  fun index(w: W, i: :Index) -> String {\n    \"s:{i}\"\n  }\n\n  fun get(w: W, i: :Index) -> Option[String] {\n    Option.Some(\"s:{i}\")\n  }\n}\n\nclass Indexable[Int] for W {\n  newtype Index = Int\n\n  fun index(w: W, i: :Index) -> Int {\n    i\n  }\n\n  fun get(w: W, i: :Index) -> Option[Int] {\n    Option.Some(i)\n  }\n}\n\nfun main() {\n  let w = W.W(0)\n  let s: String = w[0]\n  write s\n  let os: Option[String] = w?[0]\n  write os\n}\n"
+---
+"s:0"
+Option.Some("s:0")

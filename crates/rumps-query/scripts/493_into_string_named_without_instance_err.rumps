@@ -1,0 +1,6 @@
+newtype UserId = Int
+
+fun main() {
+  let x: UserId = 7
+  write x as String
+}

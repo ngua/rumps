@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "#(deriving: Display)\nnewtype Label = Int\n\nfun main() {\n  let x: Label = 7\n  write x as String\n}\n"
+---
+ERROR: cannot cast `Label` to `String`

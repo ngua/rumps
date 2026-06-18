@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "newtype Label = Int\n\nclass Into[String] for Label {\n  fun into(x: Label) -> String {\n    let n: Int = x\n    \"{n}\"\n  }\n}\n\nfun main() {\n  let x: Label = 7\n  write x as String\n}\n"
+---
+"7"

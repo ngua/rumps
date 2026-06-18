@@ -1,3 +1,4 @@
+use super::evidence::{Evidence, EvidenceQuery};
 use super::*;
 
 enum Satisfaction {
@@ -71,110 +72,6 @@ impl SolveCtx<'_> {
             ref shape => {
                 Self::primitive_type_id(shape).map(|id| (id, smallvec![]))
             }
-        }
-    }
-
-    /// Check that a type satisfies a class constraint.
-    ///
-    /// This is the unified constraint checking method that handles all class
-    /// constraints. The `class` parameter contains any associated types (e.g.,
-    /// `Into(target)`, `Indexable(elem)`). The union-find is updated in-place
-    /// when the constraint involves unification (e.g., `Fallible`, `Indexable`,
-    /// `Indexable`).
-    pub(in crate::typecheck) fn satisfies_class(
-        &mut self,
-        class: &TypeClass<TyId>,
-        ty: TyId,
-        span: Span,
-    ) {
-        // Handle associated types: resolve to concrete type before checking
-        let shape = self.ty_arena.get(ty).clone();
-        if let Ty::AssocType(tv, assoc_class, name) = shape {
-            // Resolve the base type variable through union-find
-            match self.uf.resolve_var(tv, self.ty_arena) {
-                Some(base) => {
-                    if let Ok(resolved) =
-                        self.resolve_assoc_type(base, assoc_class, name, span)
-                    {
-                        self.satisfies_class(class, resolved, span);
-                    }
-                }
-                None => {
-                    // Base type still unresolved; defer constraint
-                }
-            }
-        } else {
-            self.satisfies_class_inner(class, ty, span);
-        }
-    }
-
-    /// Inner implementation of class constraint checking.
-    fn satisfies_class_inner(
-        &mut self,
-        class: &TypeClass<TyId>,
-        ty: TyId,
-        span: Span,
-    ) {
-        match class {
-            TypeClass::Concrete { id, ref params } if params.is_empty() => {
-                self.check_simple_class(*id, class, ty, span)
-            }
-            TypeClass::Concrete {
-                id: ClassId::INTO,
-                ref params,
-            } => {
-                let to = params.first().copied().unwrap_or(TyArena::UNKNOWN);
-                self.check_into(ty, to, span)
-            }
-            TypeClass::Concrete {
-                id: ClassId::TRY_INTO,
-                ref params,
-            } => {
-                let to = params.first().copied().unwrap_or(TyArena::UNKNOWN);
-                self.check_try_into(ty, to, span)
-            }
-            TypeClass::Concrete {
-                id: ClassId::INDEXABLE,
-                ref params,
-            } => {
-                let elem = params.first().copied().unwrap_or(TyArena::UNKNOWN);
-                self.check_indexable(class, ty, elem, span)
-            }
-            TypeClass::Concrete { id, ref params }
-                if id.idx() >= ClassId::BUILTIN_COUNT && !params.is_empty() =>
-            {
-                self.check_user_parameterized(*id, params, class, ty, span)
-            }
-            TypeClass::Hkt {
-                id: ClassId::ITERABLE,
-                ..
-            } => {
-                self.errors.push(TypeError::UnsatisfiedClass(
-                    class.clone(),
-                    ty,
-                    span,
-                ));
-            }
-            TypeClass::Hkt { id, ref elems, .. }
-                if matches!(
-                    *id,
-                    ClassId::MAPPABLE
-                        | ClassId::FILTERABLE
-                        | ClassId::FOLDABLE
-                        | ClassId::BIMAPPABLE
-                ) =>
-            {
-                self.check_hkt_class(*id, elems, class, ty, span)
-            }
-            TypeClass::Hkt { id, ref elems, .. }
-                if id.idx() < ClassId::BUILTIN_COUNT =>
-            {
-                self.satisfies_hkt_class(*id, elems, class, ty, span);
-            }
-            TypeClass::Hkt { id, ref elems, .. } => {
-                self.check_user_hkt(*id, elems, class, ty, span);
-            }
-            _ => {}
         }
     }
 
@@ -310,7 +207,7 @@ impl SolveCtx<'_> {
     /// `Named` with no instance falls back to alias expansion. All others
     /// require every `Union` member to satisfy, and a `Named` with no instance
     /// is an error.
-    fn check_simple_class(
+    pub(in crate::typecheck::unify) fn satisfy_simple(
         &mut self,
         class_id: ClassId,
         class: &TypeClass<TyId>,
@@ -332,22 +229,24 @@ impl SolveCtx<'_> {
             }
             None => match shape {
                 Ty::Var(_) | Ty::Error | Ty::Unknown => {}
-                Ty::Union(prov, members) => {
-                    let lookup = prov.map(|id| {
-                        self.instance_for(
-                            InstanceUse::Evidence,
-                            class_id,
-                            id,
-                            span,
-                        )
-                    });
-                    match lookup {
-                        Some(InstanceLookup::Found(inst)) => self
-                            .check_instance_constraints(&inst, &[], span, None),
-                        Some(InstanceLookup::BlockedSelf) => {}
-                        Some(InstanceLookup::Missing)
-                        | Some(InstanceLookup::NotImported)
-                        | None => {
+                Ty::Union(_, _) => {
+                    match self.evidence(EvidenceQuery { class, ty, span }) {
+                        Evidence::Manual { inst, args } => self
+                            .apply_inst_constraints(&inst, &args, span, None),
+                        Evidence::ManualMany { insts, args } => {
+                            match insts.first() {
+                                Some(inst) => self.apply_inst_constraints(
+                                    inst, &args, span, None,
+                                ),
+                                None => {
+                                    invariant!(
+                                        "`ManualMany` has at least one instance"
+                                    )
+                                }
+                            }
+                        }
+                        Evidence::BlockedSelf | Evidence::NotImported => {}
+                        Evidence::Union { members, .. } => {
                             if Self::is_numeric_capability(class_id) {
                                 let any_sat = members.iter().any(|&m| {
                                     let sh = self.ty_arena.get(m).clone();
@@ -373,81 +272,89 @@ impl SolveCtx<'_> {
                                 });
                             }
                         }
+                        Evidence::Missing => {
+                            self.errors.push(TypeError::UnsatisfiedClass(
+                                class.clone(),
+                                ty,
+                                span,
+                            ))
+                        }
+                        Evidence::DerivedVariant { .. }
+                        | Evidence::Repr { .. }
+                        | Evidence::BuiltinNamed => {
+                            self.errors.push(TypeError::UnsatisfiedClass(
+                                class.clone(),
+                                ty,
+                                span,
+                            ))
+                        }
                     }
                 }
-                Ty::Named(id, args) => {
-                    match self.instance_for(
-                        InstanceUse::Evidence,
-                        class_id,
-                        id,
-                        span,
-                    ) {
-                        InstanceLookup::Found(inst) => self
-                            .check_instance_constraints(
-                                &inst, &args, span, None,
-                            ),
-                        InstanceLookup::BlockedSelf => {}
-                        InstanceLookup::Missing
-                        | InstanceLookup::NotImported => {
-                            if self.check_derived_variant_payloads(
-                                id, &args, class_id, span,
-                            ) {
-                            } else {
-                                let expanded = if class_id.idx()
-                                    < ClassId::BUILTIN_COUNT
-                                {
-                                    self.expand_alias_fully_for_type_class(
-                                        class, ty, span,
+                Ty::Named(_, _) => {
+                    match self.evidence(EvidenceQuery { class, ty, span }) {
+                        Evidence::Manual { inst, args } => self
+                            .apply_inst_constraints(&inst, &args, span, None),
+                        Evidence::ManualMany { insts, args } => {
+                            match insts.first() {
+                                Some(inst) => self.apply_inst_constraints(
+                                    inst, &args, span, None,
+                                ),
+                                None => {
+                                    invariant!(
+                                        "`ManualMany` has at least one instance"
                                     )
-                                } else {
-                                    None
-                                };
-                                match expanded {
-                                    Some(e) => {
-                                        self.satisfies_class(class, e, span)
-                                    }
-                                    None => self.errors.push(
-                                        TypeError::UnsatisfiedClass(
-                                            class.clone(),
-                                            ty,
-                                            span,
-                                        ),
-                                    ),
                                 }
                             }
+                        }
+                        Evidence::DerivedVariant { payloads } => {
+                            payloads.iter().for_each(|&p| {
+                                self.satisfies_class(class, p, span)
+                            });
+                        }
+                        Evidence::Repr { ty: repr, .. } => {
+                            self.satisfies_class(class, repr, span);
+                        }
+                        Evidence::BlockedSelf | Evidence::NotImported => {}
+                        Evidence::Missing
+                        | Evidence::Union { .. }
+                        | Evidence::BuiltinNamed => {
+                            self.errors.push(TypeError::UnsatisfiedClass(
+                                class.clone(),
+                                ty,
+                                span,
+                            ))
                         }
                     }
                 }
                 // User classes: handle parameterized builtins via instance lookup
                 _ if class_id.idx() >= ClassId::BUILTIN_COUNT => {
-                    match self.ty_to_type_id_and_args(ty) {
-                        Some((tid, args)) => {
-                            match self.instance_for(
-                                InstanceUse::Evidence,
-                                class_id,
-                                tid,
-                                span,
-                            ) {
-                                InstanceLookup::Found(inst) => self
-                                    .check_instance_constraints(
-                                        &inst, &args, span, None,
-                                    ),
-                                InstanceLookup::BlockedSelf => {}
-                                InstanceLookup::Missing
-                                | InstanceLookup::NotImported => self
-                                    .errors
-                                    .push(TypeError::UnsatisfiedClass(
-                                        class.clone(),
-                                        ty,
-                                        span,
-                                    )),
+                    match self.evidence(EvidenceQuery { class, ty, span }) {
+                        Evidence::Manual { inst, args } => self
+                            .apply_inst_constraints(&inst, &args, span, None),
+                        Evidence::ManualMany { insts, args } => {
+                            match insts.first() {
+                                Some(inst) => self.apply_inst_constraints(
+                                    inst, &args, span, None,
+                                ),
+                                None => {
+                                    invariant!(
+                                        "`ManualMany` has at least one instance"
+                                    )
+                                }
                             }
                         }
-                        None => self.errors.push(TypeError::UnsatisfiedClass(
-                            class.clone(),
-                            ty,
-                            span,
-                        )),
+                        Evidence::BlockedSelf | Evidence::NotImported => {}
+                        Evidence::Missing
+                        | Evidence::Union { .. }
+                        | Evidence::DerivedVariant { .. }
+                        | Evidence::Repr { .. }
+                        | Evidence::BuiltinNamed => {
+                            self.errors.push(TypeError::UnsatisfiedClass(
+                                class.clone(),
+                                ty,
+                                span,
+                            ))
+                        }
                     }
                 }
                 _ => {
@@ -461,57 +368,9 @@ impl SolveCtx<'_> {
         }
     }
 
-    fn check_derived_variant_payloads(
-        &mut self,
-        id: TypeId,
-        args: &[TyId],
-        class_id: ClassId,
-        span: Span,
-    ) -> bool {
-        let is_variant = self
-            .registry
-            .get_def(id)
-            .is_some_and(|def| matches!(def, TypeDef::Sum { .. }));
-        if is_variant
-            && self.decls.derives_simple(id, class_id)
-            && matches!(class_id, ClassId::EQ | ClassId::ORD | ClassId::DISPLAY)
-        {
-            let subst = self.type_param_subst(id, args);
-            let payloads: SmallVec<[AstTypeExprId; 8]> =
-                self.decls.variant_payload_exprs(id).collect();
-            payloads.iter().for_each(|&p| {
-                let ty = self.convert_ctx().ast_type_to_ty(p, &subst);
-                self.satisfies_class(&TypeClass::simple(class_id), ty, span);
-            });
-            true
-        } else {
-            false
-        }
-    }
-
-    fn type_param_subst(
-        &self,
-        id: TypeId,
-        args: &[TyId],
-    ) -> IndexMap<StringId, TyId> {
-        self.registry
-            .get_def(id)
-            .map(|def| match def {
-                TypeDef::Sum { type_params, .. }
-                | TypeDef::Alias { type_params, .. }
-                | TypeDef::Union { type_params, .. } => type_params,
-                TypeDef::Builtin(_) => {
-                    typechecked!("type parameters", "user declaration")
-                }
-            })
-            .into_iter()
-            .flat_map(|ps| ps.iter().copied().zip(args.iter().copied()))
-            .collect()
-    }
-
     /// Check an HKT class (`Mappable`, `Filterable`, `Foldable`, `Bimappable`)
     /// against `ty`, optionally unifying element types with `elems`.
-    fn check_hkt_class(
+    pub(in crate::typecheck::unify) fn satisfy_builtin_hkt(
         &mut self,
         class_id: ClassId,
         elems: &[TyId],
@@ -550,85 +409,17 @@ impl SolveCtx<'_> {
                         .for_each(|&m| self.satisfies_class(class, m, span));
                 }
                 Ty::Var(_) | Ty::Apply(_, _) | Ty::Error | Ty::Unknown => {}
-                Ty::Named(id, type_args) => {
-                    match self.instance_for(
-                        InstanceUse::Evidence,
-                        class_id,
-                        id,
-                        span,
-                    ) {
-                        InstanceLookup::Found(inst) => {
-                            let param_subst = self
-                                .build_instance_subst(&inst, &type_args, span);
-                            self.unify_hkt_inst_args(
-                                elems,
-                                &inst.class_args,
-                                &param_subst,
-                                span,
-                            );
-                            self.check_instance_constraints(
-                                &inst,
-                                &type_args,
-                                span,
-                                Some(&param_subst),
-                            );
-                        }
-                        InstanceLookup::BlockedSelf => {}
-                        InstanceLookup::Missing
-                        | InstanceLookup::NotImported => {
-                            match self.expand_alias_fully_for_type_class(
-                                class, ty, span,
-                            ) {
-                                Some(e) => self.satisfies_class(class, e, span),
-                                None => self.errors.push(
-                                    TypeError::UnsatisfiedClass(
-                                        class.clone(),
-                                        ty,
-                                        span,
-                                    ),
-                                ),
-                            }
-                        }
-                    }
+                Ty::Named(_, _) => {
+                    self.apply_hkt_evidence(elems, class, ty, span, true);
                 }
-                Ty::Tuple(ts) => {
-                    match self.instances_for(
-                        InstanceUse::Evidence,
-                        class_id,
-                        TypeId::TUPLE,
-                        span,
-                    ) {
-                        InstancesLookup::Found(insts) => {
-                            match insts
-                                .into_iter()
-                                .find(|i| i.type_params.len() == ts.len())
-                            {
-                                Some(inst) => {
-                                    let subst = self
-                                        .build_instance_subst(&inst, &ts, span);
-                                    self.unify_hkt_inst_args(
-                                        elems,
-                                        &inst.class_args,
-                                        &subst,
-                                        span,
-                                    );
-                                    self.check_instance_constraints(
-                                        &inst,
-                                        &ts,
-                                        span,
-                                        Some(&subst),
-                                    );
-                                }
-                                None => self.errors.push(
-                                    TypeError::UnsatisfiedClass(
-                                        class.clone(),
-                                        ty,
-                                        span,
-                                    ),
-                                ),
-                            }
-                        }
-                        InstancesLookup::BlockedSelf => {}
+                Ty::Tuple(_) => {
+                    if self.apply_hkt_evidence(elems, class, ty, span, false) {
+                    } else {
+                        self.errors.push(TypeError::UnsatisfiedClass(
+                            class.clone(),
+                            ty,
+                            span,
+                        ));
                     }
                 }
                 _ => {
@@ -644,12 +435,12 @@ impl SolveCtx<'_> {
 
     /// Shared HKT class satisfaction logic for `Fallible`, `Wrappable`, and `Chainable`.
     ///
-    /// All three handle the same set of types (`Option`, `Result`, `Tuple`, `Union`,
-    /// `Var` defaulting to `Option`, `Apply`, `Named` via instance registry) and differ
-    /// only in which tag is used for registry lookups and error messages.
-    fn satisfies_hkt_class(
+    /// All three handle the same set of types, including `Option`, `Result`,
+    /// `Tuple`, `Union`, `Var` defaulting to `Option`, `Apply`, and `Named`
+    /// via evidence. They differ only in which tag is used for evidence lookup
+    /// and error messages.
+    pub(in crate::typecheck::unify) fn satisfy_hkt_stack(
         &mut self,
-        tag: ClassId,
         elems: &[TyId],
         class: &TypeClass<TyId>,
         ty: TyId,
@@ -668,40 +459,9 @@ impl SolveCtx<'_> {
                 self.unify_hkt_known_args(elems, &builtin, span);
             }
             Ty::Tuple(ts) => {
-                match self.instances_for(
-                    InstanceUse::Evidence,
-                    tag,
-                    TypeId::TUPLE,
-                    span,
-                ) {
-                    InstancesLookup::Found(insts) => {
-                        let inst = insts
-                            .into_iter()
-                            .find(|i| i.type_params.len() == ts.len());
-                        match inst {
-                            Some(inst) => {
-                                let subst =
-                                    self.build_instance_subst(&inst, &ts, span);
-                                self.unify_hkt_inst_args(
-                                    elems,
-                                    &inst.class_args,
-                                    &subst,
-                                    span,
-                                );
-                                self.check_instance_constraints(
-                                    &inst,
-                                    &ts,
-                                    span,
-                                    Some(&subst),
-                                );
-                            }
-                            None => {
-                                // Fallback for fully-unapplied tuple constructors.
-                                self.unify_hkt_known_args(elems, &ts, span);
-                            }
-                        }
-                    }
-                    InstancesLookup::BlockedSelf => {}
+                if self.apply_hkt_evidence(elems, class, ty, span, false) {
+                } else {
+                    self.unify_hkt_known_args(elems, &ts, span);
                 }
             }
             Ty::Union(_, members) => {
@@ -722,40 +482,8 @@ impl SolveCtx<'_> {
             }
             Ty::Apply(_, _) => {}
             Ty::Error | Ty::Unknown => {}
-            Ty::Named(id, type_args) => {
-                match self.instance_for(InstanceUse::Evidence, tag, id, span) {
-                    InstanceLookup::Found(inst) => {
-                        let param_subst =
-                            self.build_instance_subst(&inst, &type_args, span);
-                        self.unify_hkt_inst_args(
-                            elems,
-                            &inst.class_args,
-                            &param_subst,
-                            span,
-                        );
-                        self.check_instance_constraints(
-                            &inst,
-                            &type_args,
-                            span,
-                            Some(&param_subst),
-                        );
-                    }
-                    InstanceLookup::BlockedSelf => {}
-                    InstanceLookup::Missing | InstanceLookup::NotImported => {
-                        match self
-                            .expand_alias_fully_for_type_class(class, ty, span)
-                        {
-                            Some(e) => self.satisfies_class(class, e, span),
-                            None => {
-                                self.errors.push(TypeError::UnsatisfiedClass(
-                                    class.clone(),
-                                    ty,
-                                    span,
-                                ))
-                            }
-                        }
-                    }
-                }
+            Ty::Named(_, _) => {
+                self.apply_hkt_evidence(elems, class, ty, span, true);
             }
             _ => {
                 self.errors.push(TypeError::UnsatisfiedClass(
@@ -767,115 +495,12 @@ impl SolveCtx<'_> {
         }
     }
 
-    /// Check a parameterized user class constraint via instance lookup.
-    fn check_user_parameterized(
-        &mut self,
-        class_id: ClassId,
-        params: &[TyId],
-        class: &TypeClass<TyId>,
-        ty: TyId,
-        span: Span,
-    ) {
-        let class_arg = params.first().copied().unwrap_or(TyArena::UNKNOWN);
-        let shape = self.ty_arena.get(ty).clone();
-        match shape {
-            Ty::Var(_) | Ty::Error | Ty::Unknown => {}
-            Ty::Union(prov, members) => {
-                match prov.map(|id| {
-                    self.instances_for(
-                        InstanceUse::Evidence,
-                        class_id,
-                        id,
-                        span,
-                    )
-                }) {
-                    Some(InstancesLookup::BlockedSelf) => {}
-                    Some(InstancesLookup::Found(insts))
-                        if !insts.is_empty() =>
-                    {
-                        match self.find_matching_instance(
-                            &insts,
-                            class_arg,
-                            &[],
-                        ) {
-                            Some(inst) => self.check_instance_constraints(
-                                &inst,
-                                &[],
-                                span,
-                                None,
-                            ),
-                            None => members.iter().for_each(|&m| {
-                                self.satisfies_class(class, m, span)
-                            }),
-                        }
-                    }
-                    Some(InstancesLookup::Found(_)) | None => {
-                        members.iter().for_each(|&m| {
-                            self.satisfies_class(class, m, span)
-                        });
-                    }
-                }
-            }
-            _ => match self.ty_to_type_id_and_args(ty) {
-                Some((tid, args)) => {
-                    match self.instances_for(
-                        InstanceUse::Evidence,
-                        class_id,
-                        tid,
-                        span,
-                    ) {
-                        InstancesLookup::Found(insts) => {
-                            match self.find_matching_instance(
-                                &insts, class_arg, &args,
-                            ) {
-                                Some(inst) => {
-                                    let subst = self.build_instance_subst(
-                                        &inst, &args, span,
-                                    );
-                                    if let Some(&ia) = inst.class_args.first() {
-                                        let resolved =
-                                            self.ty_arena.apply(ia, &subst);
-                                        if let Err(e) = self.unify_types(
-                                            class_arg, resolved, span,
-                                        ) {
-                                            self.errors.push(e);
-                                        }
-                                    }
-                                    self.check_instance_constraints(
-                                        &inst,
-                                        &args,
-                                        span,
-                                        Some(&subst),
-                                    );
-                                }
-                                None => self.errors.push(
-                                    TypeError::UnsatisfiedClass(
-                                        class.clone(),
-                                        ty,
-                                        span,
-                                    ),
-                                ),
-                            }
-                        }
-                        InstancesLookup::BlockedSelf => {}
-                    }
-                }
-                None => self.errors.push(TypeError::UnsatisfiedClass(
-                    class.clone(),
-                    ty,
-                    span,
-                )),
-            },
-        }
-    }
-
     /// Check a user-defined HKT class constraint via instance lookup.
     ///
-    /// Unlike `satisfies_hkt_class`, does NOT default `Ty::Var` to `Option`
+    /// Unlike `satisfy_hkt_stack`, does NOT default `Ty::Var` to `Option`
     /// and does NOT hardcode `Ty::Option`/`Ty::Result` as satisfying.
-    fn check_user_hkt(
+    pub(in crate::typecheck::unify) fn satisfy_user_hkt(
         &mut self,
-        class_id: ClassId,
         elems: &[TyId],
         class: &TypeClass<TyId>,
         ty: TyId,
@@ -890,80 +515,14 @@ impl SolveCtx<'_> {
                     .for_each(|&m| self.satisfies_class(class, m, span));
             }
             _ => match self.ty_to_type_id_and_args(ty) {
-                Some((tid, args)) => {
-                    if tid == TypeId::TUPLE {
-                        match self.instances_for(
-                            InstanceUse::Evidence,
-                            class_id,
-                            TypeId::TUPLE,
-                            span,
-                        ) {
-                            InstancesLookup::Found(insts) => {
-                                match insts
-                                    .into_iter()
-                                    .find(|i| i.type_params.len() == args.len())
-                                {
-                                    Some(inst) => {
-                                        let subst = self.build_instance_subst(
-                                            &inst, &args, span,
-                                        );
-                                        self.unify_hkt_inst_args(
-                                            elems,
-                                            &inst.class_args,
-                                            &subst,
-                                            span,
-                                        );
-                                        self.check_instance_constraints(
-                                            &inst,
-                                            &args,
-                                            span,
-                                            Some(&subst),
-                                        );
-                                    }
-                                    None => self.errors.push(
-                                        TypeError::UnsatisfiedClass(
-                                            class.clone(),
-                                            ty,
-                                            span,
-                                        ),
-                                    ),
-                                }
-                            }
-                            InstancesLookup::BlockedSelf => {}
-                        }
+                Some(_) => {
+                    if self.apply_hkt_evidence(elems, class, ty, span, false) {
                     } else {
-                        match self.instance_for(
-                            InstanceUse::Evidence,
-                            class_id,
-                            tid,
+                        self.errors.push(TypeError::UnsatisfiedClass(
+                            class.clone(),
+                            ty,
                             span,
-                        ) {
-                            InstanceLookup::Found(inst) => {
-                                let subst = self
-                                    .build_instance_subst(&inst, &args, span);
-                                self.unify_hkt_inst_args(
-                                    elems,
-                                    &inst.class_args,
-                                    &subst,
-                                    span,
-                                );
-                                self.check_instance_constraints(
-                                    &inst,
-                                    &args,
-                                    span,
-                                    Some(&subst),
-                                );
-                            }
-                            InstanceLookup::BlockedSelf => {}
-                            InstanceLookup::Missing
-                            | InstanceLookup::NotImported => {
-                                self.errors.push(TypeError::UnsatisfiedClass(
-                                    class.clone(),
-                                    ty,
-                                    span,
-                                ));
-                            }
-                        }
+                        ));
                     }
                 }
                 None => self.errors.push(TypeError::UnsatisfiedClass(
@@ -973,5 +532,52 @@ impl SolveCtx<'_> {
                 )),
             },
         }
+    }
+
+    fn apply_hkt_evidence(
+        &mut self,
+        elems: &[TyId],
+        class: &TypeClass<TyId>,
+        ty: TyId,
+        span: Span,
+        allow_repr: bool,
+    ) -> bool {
+        match self.evidence(EvidenceQuery { class, ty, span }) {
+            Evidence::Manual { inst, args } => {
+                self.apply_hkt_inst(&inst, elems, &args, span);
+                true
+            }
+            Evidence::ManualMany { insts, args } => match insts.first() {
+                Some(inst) => {
+                    self.apply_hkt_inst(inst, elems, &args, span);
+                    true
+                }
+                None => {
+                    invariant!("`ManualMany` has at least one instance")
+                }
+            },
+            Evidence::Repr { ty: repr, .. } if allow_repr => {
+                self.satisfies_class(class, repr, span);
+                true
+            }
+            Evidence::BlockedSelf | Evidence::NotImported => true,
+            Evidence::Missing
+            | Evidence::Union { .. }
+            | Evidence::DerivedVariant { .. }
+            | Evidence::Repr { .. }
+            | Evidence::BuiltinNamed => false,
+        }
+    }
+
+    fn apply_hkt_inst(
+        &mut self,
+        inst: &Instance,
+        elems: &[TyId],
+        args: &[TyId],
+        span: Span,
+    ) {
+        let subst = self.build_instance_subst(inst, args, span);
+        self.unify_hkt_inst_args(elems, &inst.class_args, &subst, span);
+        self.apply_inst_constraints(inst, args, span, Some(&subst));
     }
 }

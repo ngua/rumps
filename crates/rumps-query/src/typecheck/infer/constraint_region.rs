@@ -3,7 +3,7 @@ use std::ops::Range;
 
 use smallvec::SmallVec;
 
-use super::Constraint;
+use super::{Constraint, PendingConstraint};
 use crate::intern::QualifiedName;
 use crate::typecheck::ty::{Rename, Ty, TyArena, TyId, TyVar, TypeClass};
 use crate::typecheck::uf::UnionFind;
@@ -47,7 +47,7 @@ impl ConstraintRegion {
     }
 
     pub(super) fn build_unions(
-        cs: &[(Constraint, Option<QualifiedName>)],
+        cs: &[PendingConstraint],
         rg: Range<usize>,
         uf: &mut UnionFind,
         tys: &TyArena,
@@ -55,7 +55,7 @@ impl ConstraintRegion {
         cs.get(rg)
             .unwrap_or_else(|| invariant!("constraint region range in bounds"))
             .iter()
-            .for_each(|(c, _)| match c {
+            .for_each(|pc| match &pc.c {
                 Constraint::Unify(a, b, _) => {
                     Self::union_vars(*a, *b, uf, tys);
                     if let (Ty::Fn(pa, ra), Ty::Fn(pb, rb)) =
@@ -105,7 +105,7 @@ impl ConstraintRegion {
     }
 
     pub(super) fn reachable_constraint_pairs(
-        cs: &[(Constraint, Option<QualifiedName>)],
+        cs: &[PendingConstraint],
         rg: Range<usize>,
         map: &HashMap<TyVar, TyId>,
         rename: &Rename,
@@ -123,7 +123,7 @@ impl ConstraintRegion {
     }
 
     pub(super) fn reachable_classes<K>(
-        cs: &[(Constraint, Option<QualifiedName>)],
+        cs: &[PendingConstraint],
         rg: Range<usize>,
         roots: &HashMap<TyVar, K>,
         uf: &mut UnionFind,
@@ -135,8 +135,16 @@ impl ConstraintRegion {
         cs.get(rg)
             .unwrap_or_else(|| invariant!("constraint region range in bounds"))
             .iter()
-            .filter_map(|(c, _)| match c {
+            .filter_map(|pc| match &pc.c {
                 Constraint::Class { ty, class, span } => match tys.get(*ty) {
+                    Ty::Var(tv) => roots
+                        .get(&uf.find(*tv))
+                        .map(|&orig| (orig, class.clone(), *span)),
+                    _ => None,
+                },
+                Constraint::AssocProjection {
+                    base, class, span, ..
+                } => match tys.get(*base) {
                     Ty::Var(tv) => roots
                         .get(&uf.find(*tv))
                         .map(|&orig| (orig, class.clone(), *span)),

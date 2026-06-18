@@ -327,7 +327,7 @@ impl SolveCtx<'_> {
             (Ty::AssocType(tv, class, name), _) => {
                 let (tv, class, name) = (*tv, *class, *name);
                 let base = self.ty_arena.alloc(Ty::Var(tv));
-                match self.resolve_assoc_type(base, class, name, span) {
+                match self.resolve_assoc_type_by_id(base, class, name, span) {
                     Ok(resolved) => self.unify_inner(resolved, t2, span),
                     Err(_) => {
                         // Base type is unresolved (type variable); defer
@@ -338,7 +338,7 @@ impl SolveCtx<'_> {
             (_, Ty::AssocType(tv, class, name)) => {
                 let (tv, class, name) = (*tv, *class, *name);
                 let base = self.ty_arena.alloc(Ty::Var(tv));
-                match self.resolve_assoc_type(base, class, name, span) {
+                match self.resolve_assoc_type_by_id(base, class, name, span) {
                     Ok(resolved) => self.unify_inner(t1, resolved, span),
                     Err(_) => Ok(()),
                 }
