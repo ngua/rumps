@@ -43,7 +43,6 @@ mod core;
 mod edge;
 mod evidence;
 mod instances;
-mod ops;
 
 /// Result of a unification attempt.
 ///
