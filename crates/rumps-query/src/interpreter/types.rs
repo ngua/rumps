@@ -1,14 +1,13 @@
 //! Type checking, matching, and validation.
 
 use super::Interpreter;
-use crate::io::IoContext;
 use crate::typecheck::Ty;
 use crate::value::{Payload, TypeDef, TypeId, Value};
 use crate::{ClassId, Result, Span};
 
-impl<I: IoContext> Interpreter<'_, I> {
+impl Interpreter<'_, '_> {
     /// Perform type coercion for `AS` casts with full value metadata.
-    pub(super) fn coerce_value(
+    pub(super) async fn coerce_value(
         &mut self,
         val: &Value,
         target_base: TypeId,
@@ -21,7 +20,8 @@ impl<I: IoContext> Interpreter<'_, I> {
             Ok(val.payload.clone())
         } else {
             let mid = self.arena.intern("into");
-            self.dispatch_convert_value(ClassId::INTO, mid, val, target, span)
+            self.class_convert_value(ClassId::INTO, mid, val, target, span)
+                .await
         }
     }
 

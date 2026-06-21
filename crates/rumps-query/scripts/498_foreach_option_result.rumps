@@ -1,0 +1,20 @@
+fun main() {
+  write "option some:"
+  let some-r = foreach(x => { write "some:{x}" }, Option.Some(5))
+  write some-r
+
+  write "option none:"
+  let none: Option[Int] = Option.None
+  let none-r = foreach(x => { write "none:{x}" }, none)
+  write none-r
+
+  write "result ok:"
+  let ok: Result[Int, String] = Result.Ok(7)
+  let ok-r = foreach(x => { write "ok:{x}" }, ok)
+  write ok-r
+
+  write "result err:"
+  let err: Result[Int, String] = Result.Err("bad")
+  let err-r = foreach(x => { write "err:{x}" }, err)
+  write err-r
+}

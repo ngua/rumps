@@ -8,11 +8,10 @@ use smallvec::SmallVec;
 
 use super::Interpreter;
 use crate::ast::{DbRef, ExprId, Intrinsic, RefTarget, SubscriptElem, TxnId};
-use crate::io::IoContext;
 use crate::value::{Payload, ValueId};
 use crate::{Result, Span};
 
-impl<I: IoContext> Interpreter<'_, I> {
+impl Interpreter<'_, '_> {
     /// Evaluate a `DbRef` literal to a `Payload::Ref`.
     ///
     /// Evaluates all subscript expressions and creates a first-class `Ref` value.

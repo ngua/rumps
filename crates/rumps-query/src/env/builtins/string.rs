@@ -1,7 +1,7 @@
 use rumps_query_macros::scheme;
 
-use super::super::{Environment, Module, PrimDef};
-use crate::primitives::Str;
+use super::super::{Environment, Module};
+use crate::builtins::{Def, Impl, Str};
 
 impl Environment {
     pub(super) fn register_string_builtin(&mut self) {
@@ -10,56 +10,56 @@ impl Environment {
         let str_id = self.consts.strings.intern("String");
         self.modules.insert(
             str_id,
-            Module::from_prims(
+            Module::from_defs(
                 &[
-                    PrimDef {
+                    Def {
                         name: "length",
-                        f: Str::length,
+                        imp: Impl::Sync(Str::length),
                         ty: scheme!(a, (String) -> Int),
                     },
-                    PrimDef {
+                    Def {
                         name: "upper",
-                        f: Str::upper,
+                        imp: Impl::Sync(Str::upper),
                         ty: scheme!(a, (String) -> String),
                     },
-                    PrimDef {
+                    Def {
                         name: "lower",
-                        f: Str::lower,
+                        imp: Impl::Sync(Str::lower),
                         ty: scheme!(a, (String) -> String),
                     },
-                    PrimDef {
+                    Def {
                         name: "trim",
-                        f: Str::trim,
+                        imp: Impl::Sync(Str::trim),
                         ty: scheme!(a, (String) -> String),
                     },
-                    PrimDef {
+                    Def {
                         name: "split",
-                        f: Str::split,
+                        imp: Impl::Sync(Str::split),
                         ty: scheme!(a, (String, String) -> Array[String]),
                     },
-                    PrimDef {
+                    Def {
                         name: "join",
-                        f: Str::join,
+                        imp: Impl::Sync(Str::join),
                         ty: scheme!(a, (Array[String], String) -> String),
                     },
-                    PrimDef {
+                    Def {
                         name: "slice",
-                        f: Str::slice,
+                        imp: Impl::Sync(Str::slice),
                         ty: scheme!(a, (String, Int, Int) -> String),
                     },
-                    PrimDef {
+                    Def {
                         name: "contains",
-                        f: Str::contains,
+                        imp: Impl::Sync(Str::contains),
                         ty: scheme!(a, (String, String) -> Bool),
                     },
-                    PrimDef {
+                    Def {
                         name: "replace",
-                        f: Str::replace,
+                        imp: Impl::Sync(Str::replace),
                         ty: scheme!(a, (String, String, String) -> String),
                     },
-                    PrimDef {
+                    Def {
                         name: "escape",
-                        f: Str::escape,
+                        imp: Impl::Sync(Str::escape),
                         ty: scheme!(a, (String) -> String),
                     },
                 ],

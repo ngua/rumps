@@ -16,222 +16,31 @@ impl Class for TryInto {
             methods,
             i,
             "try-into",
-            MethodFn::Convert(Self::try_into),
+            MethodAbi::Convert,
+            Builtin::Fixed(Impl::Sync(Self::try_into)),
         );
     }
 }
 
 impl TryInto {
-    /// Try to convert a value to the target type.
-    ///
-    /// Returns `Result[U, String]` where `Err` contains an error message.
-    /// Mirrors the `read` operator behavior exactly.
     pub(crate) fn try_into(
-        ctx: &mut ClassCtx<'_>,
-        val: &Payload,
-        target: &Ty,
-    ) -> Result<Payload> {
-        match (val, target) {
-            // Same type: identity conversion always succeeds
-            _ if Self::types_match(val, target) => {
-                Ok(Self::make_result_ok(ctx, val.clone()))
+        ctx: &mut BuiltinCtx<'_, '_, '_>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> Result<ValueId> {
+        let id = args[0];
+        let target = ctx.convert_target()?;
+        let edge = ctx.approved_edge();
+        let mut vals = ctx.vals();
+        match edge {
+            Some(meta) => {
+                let id = vals.id_with_meta(id, meta);
+                Ok(vals.result_ok(id))
             }
-
-            // String -> Int
-            (Payload::String(sid), Ty::Int) => {
-                let s = ctx.arena.get_str(*sid).unwrap_or("").to_owned();
-                Ok(match s.parse::<i64>() {
-                    Ok(n) => Self::make_result_ok(ctx, Payload::Int(n)),
-                    Err(_) => Self::make_result_err(
-                        ctx,
-                        &format!("invalid integer: {s}"),
-                    ),
-                })
+            None => {
+                let target_ty = vals.ty(target);
+                let v = vals.value(id)?.clone();
+                Self::try_value(&mut vals, id, &v, target, &target_ty)
             }
-
-            // String -> Float
-            (Payload::String(sid), Ty::Float) => {
-                let s = ctx.arena.get_str(*sid).unwrap_or("").to_owned();
-                Ok(match s.parse::<f64>() {
-                    Ok(n) => Self::make_result_ok(
-                        ctx,
-                        Payload::Float(OrderedFloat(n)),
-                    ),
-                    Err(_) => Self::make_result_err(
-                        ctx,
-                        &format!("invalid float: {s}"),
-                    ),
-                })
-            }
-
-            // String -> Word
-            (Payload::String(sid), Ty::Word) => {
-                let s = ctx.arena.get_str(*sid).unwrap_or("").to_owned();
-                Ok(match s.parse::<usize>() {
-                    Ok(n) => Self::make_result_ok(ctx, Payload::Word(n)),
-                    Err(_) => Self::make_result_err(
-                        ctx,
-                        &format!("invalid unsigned integer: {s}"),
-                    ),
-                })
-            }
-
-            // Int -> Bool (strict: only 0 and 1)
-            (Payload::Int(n), Ty::Bool) => Ok(match *n {
-                0 => Self::make_result_ok(ctx, Payload::Bool(false)),
-                1 => Self::make_result_ok(ctx, Payload::Bool(true)),
-                _ => Self::make_result_err(
-                    ctx,
-                    &format!("expected 0 or 1 for Bool, got {n}"),
-                ),
-            }),
-
-            // Int -> Word (must be non-negative)
-            (Payload::Int(n), Ty::Word) => Ok(if *n >= 0 {
-                Self::make_result_ok(ctx, Payload::Word(*n as usize))
-            } else {
-                Self::make_result_err(
-                    ctx,
-                    &format!("expected non-negative Int for Word, got {n}"),
-                )
-            }),
-
-            // Json -> Bool
-            (Payload::Json(j), Ty::Bool) => Ok(match &**j {
-                serde_json::Value::Bool(b) => {
-                    Self::make_result_ok(ctx, Payload::Bool(*b))
-                }
-                serde_json::Value::Null => {
-                    Self::make_result_err(ctx, "expected Bool, got null")
-                }
-                _ => Self::make_result_err(
-                    ctx,
-                    &format!("expected Bool, got {}", Self::json_type_name(j)),
-                ),
-            }),
-
-            // Json -> Int
-            (Payload::Json(j), Ty::Int) => Ok(match &**j {
-                serde_json::Value::Number(n) => n
-                    .as_i64()
-                    .map(|i| Self::make_result_ok(ctx, Payload::Int(i)))
-                    .unwrap_or_else(|| {
-                        Self::make_result_err(
-                            ctx,
-                            &format!(
-                                "expected Int, got non-integer number {n}"
-                            ),
-                        )
-                    }),
-                serde_json::Value::Null => {
-                    Self::make_result_err(ctx, "expected Int, got null")
-                }
-                _ => Self::make_result_err(
-                    ctx,
-                    &format!("expected Int, got {}", Self::json_type_name(j)),
-                ),
-            }),
-
-            // Json -> Float
-            (Payload::Json(j), Ty::Float) => Ok(match &**j {
-                serde_json::Value::Number(n) => n
-                    .as_f64()
-                    .map(|f| {
-                        Self::make_result_ok(
-                            ctx,
-                            Payload::Float(OrderedFloat(f)),
-                        )
-                    })
-                    .unwrap_or_else(|| {
-                        Self::make_result_err(
-                            ctx,
-                            &format!("expected Float, got invalid number {n}"),
-                        )
-                    }),
-                serde_json::Value::Null => {
-                    Self::make_result_err(ctx, "expected Float, got null")
-                }
-                _ => Self::make_result_err(
-                    ctx,
-                    &format!("expected Float, got {}", Self::json_type_name(j)),
-                ),
-            }),
-
-            // Json -> String
-            (Payload::Json(j), Ty::String) => Ok(match &**j {
-                serde_json::Value::String(s) => {
-                    let id = ctx.arena.intern(s);
-                    Self::make_result_ok(ctx, Payload::String(id))
-                }
-                serde_json::Value::Null => {
-                    Self::make_result_err(ctx, "expected String, got null")
-                }
-                _ => Self::make_result_err(
-                    ctx,
-                    &format!(
-                        "expected String, got {}",
-                        Self::json_type_name(j)
-                    ),
-                ),
-            }),
-
-            // T -> Json (jsonify)
-            (_, Ty::Json) => Ok(Self::make_result_ok(
-                ctx,
-                Payload::Json(Arc::new(Into::jsonify(ctx, val))),
-            )),
-
-            // Int -> DataStatus (MUMPS @data values: 0, 1, 10, 11 -> variants)
-            (Payload::Int(n), Ty::DataStatus) => {
-                let (variant_idx, valid) = match *n {
-                    0 => (0, true),  // NoData
-                    1 => (1, true),  // HasValue
-                    10 => (2, true), // HasDescendants
-                    11 => (3, true), // Both
-                    _ => (0, false),
-                };
-
-                Ok(if valid {
-                    let status_id = ctx.arena.add_typed(
-                        Payload::Variant {
-                            tag: variant_idx,
-                            vals: SmallVec::new(),
-                        },
-                        ctx.runtime_types.meta_data_status(),
-                        ctx.span,
-                    );
-                    Self::make_result_ok_id(status_id)
-                } else {
-                    Self::make_result_err(
-                        ctx,
-                        &format!(
-                            "invalid DataStatus value: {n} (expected 0, 1, 10, or 11)"
-                        ),
-                    )
-                })
-            }
-
-            // Unsupported conversion: return Result.Err
-            _ => {
-                let src = Into::value_type_name(ctx, val);
-                let tgt = Into::ty_name(target);
-                let msg = format!("cannot read {src} as {tgt}");
-                Ok(Self::make_result_err(ctx, &msg))
-            }
-        }
-    }
-
-    pub(crate) fn try_into_value(
-        ctx: &mut ClassCtx<'_>,
-        val: &Value,
-        target: &Ty,
-    ) -> Result<Payload> {
-        match target {
-            Ty::Json => Ok(Self::make_result_ok(
-                ctx,
-                Payload::Json(Arc::new(Into::jsonify_value(ctx, val))),
-            )),
-            _ => Self::try_into(ctx, &val.payload, target),
         }
     }
 
@@ -263,24 +72,224 @@ impl TryInto {
         }
     }
 
-    /// Create a `Result.Ok(val)` value.
-    fn make_result_ok(ctx: &mut ClassCtx<'_>, val: Payload) -> Payload {
-        let val_id = ctx.add(val);
-        Self::make_result_ok_id(val_id)
+    fn try_value(
+        vals: &mut Values<'_, '_, '_, '_>,
+        id: ValueId,
+        v: &Value,
+        target: RuntimeTyId,
+        target_ty: &Ty,
+    ) -> Result<ValueId> {
+        match (&v.payload, target_ty) {
+            _ if Self::types_match(&v.payload, target_ty) => {
+                Ok(vals.result_ok(id))
+            }
+            (_, Ty::Json) => {
+                let json = Into::json_value(vals, v)?;
+                let id = vals.add_typed(Payload::Json(Arc::new(json)), target);
+                Ok(vals.result_ok(id))
+            }
+            (Payload::String(sid), Ty::Int) => {
+                let s = vals.str(*sid)?.to_owned();
+                Ok(match s.parse::<i64>() {
+                    Ok(n) => {
+                        let id = vals.add_typed(
+                            Payload::Int(n),
+                            RuntimeTyId::from(TyArena::INT),
+                        );
+                        vals.result_ok(id)
+                    }
+                    Err(_) => Self::result_err(
+                        vals,
+                        format!("invalid integer: {s}"),
+                    ),
+                })
+            }
+            (Payload::String(sid), Ty::Float) => {
+                let s = vals.str(*sid)?.to_owned();
+                Ok(match s.parse::<f64>() {
+                    Ok(n) => {
+                        let id = vals.add_typed(
+                            Payload::Float(OrderedFloat(n)),
+                            RuntimeTyId::from(TyArena::FLOAT),
+                        );
+                        vals.result_ok(id)
+                    }
+                    Err(_) => Self::result_err(
+                        vals,
+                        format!("invalid float: {s}"),
+                    ),
+                })
+            }
+            (Payload::String(sid), Ty::Word) => {
+                let s = vals.str(*sid)?.to_owned();
+                Ok(match s.parse::<usize>() {
+                    Ok(n) => {
+                        let id = vals.add_typed(
+                            Payload::Word(n),
+                            RuntimeTyId::from(TyArena::WORD),
+                        );
+                        vals.result_ok(id)
+                    }
+                    Err(_) => Self::result_err(
+                        vals,
+                        format!("invalid unsigned integer: {s}"),
+                    ),
+                })
+            }
+            (Payload::Int(n), Ty::Bool) => Ok(match *n {
+                0 => {
+                    let id = vals.add_typed(
+                        Payload::Bool(false),
+                        RuntimeTyId::from(TyArena::BOOL),
+                    );
+                    vals.result_ok(id)
+                }
+                1 => {
+                    let id = vals.add_typed(
+                        Payload::Bool(true),
+                        RuntimeTyId::from(TyArena::BOOL),
+                    );
+                    vals.result_ok(id)
+                }
+                _ => Self::result_err(
+                    vals,
+                    format!("expected 0 or 1 for Bool, got {n}"),
+                ),
+            }),
+            (Payload::Int(n), Ty::Word) => Ok(if *n >= 0 {
+                let id = vals.add_typed(
+                    Payload::Word(*n as usize),
+                    RuntimeTyId::from(TyArena::WORD),
+                );
+                vals.result_ok(id)
+            } else {
+                Self::result_err(
+                    vals,
+                    format!("expected non-negative Int for Word, got {n}"),
+                )
+            }),
+            (Payload::Json(j), Ty::Bool) => Ok(match &**j {
+                serde_json::Value::Bool(b) => {
+                    let id = vals.add_typed(
+                        Payload::Bool(*b),
+                        RuntimeTyId::from(TyArena::BOOL),
+                    );
+                    vals.result_ok(id)
+                }
+                serde_json::Value::Null => {
+                    Self::result_err(vals, "expected Bool, got null")
+                }
+                _ => Self::result_err(
+                    vals,
+                    format!("expected Bool, got {}", Self::json_type_name(j)),
+                ),
+            }),
+            (Payload::Json(j), Ty::Int) => Ok(match &**j {
+                serde_json::Value::Number(n) => match n.as_i64() {
+                    Some(n) => {
+                        let id = vals.add_typed(
+                            Payload::Int(n),
+                            RuntimeTyId::from(TyArena::INT),
+                        );
+                        vals.result_ok(id)
+                    }
+                    None => Self::result_err(
+                        vals,
+                        format!("expected Int, got non-integer number {n}"),
+                    ),
+                },
+                serde_json::Value::Null => {
+                    Self::result_err(vals, "expected Int, got null")
+                }
+                _ => Self::result_err(
+                    vals,
+                    format!("expected Int, got {}", Self::json_type_name(j)),
+                ),
+            }),
+            (Payload::Json(j), Ty::Float) => Ok(match &**j {
+                serde_json::Value::Number(n) => match n.as_f64() {
+                    Some(n) => {
+                        let id = vals.add_typed(
+                            Payload::Float(OrderedFloat(n)),
+                            RuntimeTyId::from(TyArena::FLOAT),
+                        );
+                        vals.result_ok(id)
+                    }
+                    None => Self::result_err(
+                        vals,
+                        format!("expected Float, got invalid number {n}"),
+                    ),
+                },
+                serde_json::Value::Null => {
+                    Self::result_err(vals, "expected Float, got null")
+                }
+                _ => Self::result_err(
+                    vals,
+                    format!("expected Float, got {}", Self::json_type_name(j)),
+                ),
+            }),
+            (Payload::Json(j), Ty::String) => Ok(match &**j {
+                serde_json::Value::String(s) => {
+                    let sid = vals.intern(s);
+                    let id = vals.add_typed(
+                        Payload::String(sid),
+                        RuntimeTyId::from(TyArena::STRING),
+                    );
+                    vals.result_ok(id)
+                }
+                serde_json::Value::Null => {
+                    Self::result_err(vals, "expected String, got null")
+                }
+                _ => Self::result_err(
+                    vals,
+                    format!("expected String, got {}", Self::json_type_name(j)),
+                ),
+            }),
+            (Payload::Int(n), Ty::DataStatus) => Ok(match *n {
+                0..=1 | 10..=11 => {
+                    let tag = match *n {
+                        0 => 0,
+                        1 => 1,
+                        10 => 2,
+                        11 => 3,
+                        _ => typechecked!("DataStatus", "valid tag"),
+                    };
+                    let id = vals.add_typed(
+                        Payload::Variant {
+                            tag,
+                            vals: SmallVec::new(),
+                        },
+                        target,
+                    );
+                    vals.result_ok(id)
+                }
+                _ => Self::result_err(
+                    vals,
+                    format!(
+                        "invalid DataStatus value: {n} (expected 0, 1, 10, or 11)"
+                    ),
+                ),
+            }),
+            _ => {
+                let src = Into::payload_name(&v.payload);
+                let tgt = Into::ty_name(target_ty);
+                Ok(Self::result_err(
+                    vals,
+                    format!("cannot read {src} as {tgt}"),
+                ))
+            }
+        }
     }
 
-    fn make_result_ok_id(val_id: ValueId) -> Payload {
-        Payload::ok(val_id)
-    }
-
-    /// Create a `Result.Err(msg)` value.
-    fn make_result_err(ctx: &mut ClassCtx<'_>, msg: &str) -> Payload {
-        let msg_id = ctx.arena.intern(msg);
-        let msg_val_id = ctx.arena.add_typed(
-            Payload::String(msg_id),
-            ctx.runtime_types.meta_string(),
-            ctx.span,
+    fn result_err(
+        vals: &mut Values<'_, '_, '_, '_>,
+        msg: impl AsRef<str>,
+    ) -> ValueId {
+        let sid = vals.intern(msg.as_ref());
+        let id = vals.add_typed(
+            Payload::String(sid),
+            RuntimeTyId::from(TyArena::STRING),
         );
-        Payload::err(msg_val_id)
+        vals.result_err(id)
     }
 }

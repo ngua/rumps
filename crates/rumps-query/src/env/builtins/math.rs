@@ -5,8 +5,8 @@ use std::f64;
 use ordered_float::OrderedFloat;
 use rumps_query_macros::scheme;
 
-use super::super::{Environment, Module, PrimDef};
-use crate::primitives::Math;
+use super::super::{Environment, Module};
+use crate::builtins::{Def, Impl, Math};
 use crate::typecheck::{RuntimeTyId, TyArena};
 use crate::value::{Payload, ValueMeta};
 use crate::Span;
@@ -15,46 +15,46 @@ impl Environment {
     pub(super) fn register_math_builtin(&mut self) {
         let a = &mut self.ty_arena;
 
-        let mut math_module = Module::from_prims(
+        let mut math_module = Module::from_defs(
             &[
-                PrimDef {
+                Def {
                     name: "abs",
-                    f: Math::abs,
+                    imp: Impl::Sync(Math::abs),
                     ty: scheme!(a, forall T: Numeric. (T) -> T),
                 },
-                PrimDef {
+                Def {
                     name: "min",
-                    f: Math::min,
+                    imp: Impl::Sync(Math::min),
                     ty: scheme!(a, forall T: Numeric. (T, T) -> T),
                 },
-                PrimDef {
+                Def {
                     name: "max",
-                    f: Math::max,
+                    imp: Impl::Sync(Math::max),
                     ty: scheme!(a, forall T: Numeric. (T, T) -> T),
                 },
-                PrimDef {
+                Def {
                     name: "floor",
-                    f: Math::floor,
+                    imp: Impl::Sync(Math::floor),
                     ty: scheme!(a, (Float) -> Int),
                 },
-                PrimDef {
+                Def {
                     name: "ceil",
-                    f: Math::ceil,
+                    imp: Impl::Sync(Math::ceil),
                     ty: scheme!(a, (Float) -> Int),
                 },
-                PrimDef {
+                Def {
                     name: "round",
-                    f: Math::round,
+                    imp: Impl::Sync(Math::round),
                     ty: scheme!(a, (Float) -> Int),
                 },
-                PrimDef {
+                Def {
                     name: "sqrt",
-                    f: Math::sqrt,
+                    imp: Impl::Sync(Math::sqrt),
                     ty: scheme!(a, (Float) -> Float),
                 },
-                PrimDef {
+                Def {
                     name: "log",
-                    f: Math::log,
+                    imp: Impl::Sync(Math::log),
                     ty: scheme!(a, (Float) -> Float),
                 },
             ],

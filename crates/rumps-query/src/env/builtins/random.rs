@@ -1,7 +1,7 @@
 use rumps_query_macros::scheme;
 
-use super::super::{Environment, Module, PrimDef};
-use crate::primitives::Random;
+use super::super::{Environment, Module};
+use crate::builtins::{Def, Impl, Random};
 
 impl Environment {
     pub(super) fn register_random_builtin(&mut self) {
@@ -10,49 +10,49 @@ impl Environment {
         let rand_id = self.consts.strings.intern("Random");
         self.modules.insert(
             rand_id,
-            Module::from_prims(
+            Module::from_defs(
                 &[
-                    PrimDef {
+                    Def {
                         name: "random",
-                        f: Random::random,
+                        imp: Impl::Sync(Random::random),
                         ty: scheme!(a, () -> Float),
                     },
-                    PrimDef {
+                    Def {
                         name: "range",
-                        f: Random::range,
+                        imp: Impl::Sync(Random::range),
                         ty: scheme!(a, (Float, Float) -> Float),
                     },
-                    PrimDef {
+                    Def {
                         name: "int",
-                        f: Random::int,
+                        imp: Impl::Sync(Random::int),
                         ty: scheme!(a, (Int, Int) -> Int),
                     },
-                    PrimDef {
+                    Def {
                         name: "bool",
-                        f: Random::bool,
+                        imp: Impl::Sync(Random::bool),
                         ty: scheme!(a, () -> Bool),
                     },
-                    PrimDef {
+                    Def {
                         name: "choice",
-                        f: Random::choice,
+                        imp: Impl::Sync(Random::choice),
                         ty: scheme!(a, forall T. (Array[T]) -> Option[T]),
                     },
-                    PrimDef {
+                    Def {
                         name: "shuffle",
-                        f: Random::shuffle,
+                        imp: Impl::Sync(Random::shuffle),
                         ty: scheme!(a, forall T. (Array[T]) -> Array[T]),
                     },
-                    PrimDef {
+                    Def {
                         name: "sample",
-                        f: Random::sample,
+                        imp: Impl::Sync(Random::sample),
                         ty: scheme!(
                             a,
                             forall T. (Array[T], Int) -> Result[Array[T], String]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "uuid",
-                        f: Random::uuid,
+                        imp: Impl::Sync(Random::uuid),
                         ty: scheme!(a, () -> String),
                     },
                 ],

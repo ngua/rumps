@@ -15,11 +15,10 @@ use crate::ast::{AstClassMethod, InstanceMethodDef, Stmt, StmtId};
 use crate::intern::StringId;
 use crate::interpreter::instance::RuntimeInstance;
 use crate::interpreter::Interpreter;
-use crate::io::IoContext;
 use crate::resolve::ResolvedMethod;
 use crate::{ClassId, Result, Span};
 
-impl<I: IoContext> Interpreter<'_, I> {
+impl Interpreter<'_, '_> {
     /// Pass 1: Hoist all function and module declarations.
     ///
     /// Pre-registers functions and modules so they can be referenced before

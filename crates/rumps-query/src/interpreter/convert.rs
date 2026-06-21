@@ -13,13 +13,12 @@ use ordered_float::OrderedFloat;
 use rumps_types::Subscript;
 use smallvec::SmallVec;
 
-use super::class::{self, ClassCtx};
-use super::Interpreter;
-use crate::io::IoContext;
+use super::{class, Interpreter};
+use crate::builtins::{BuiltinCtx, OutputMeta};
 use crate::value::{Payload, Value, ValueId};
 use crate::Span;
 
-impl<I: IoContext> Interpreter<'_, I> {
+impl Interpreter<'_, '_> {
     /// Convert a runtime value to a storage value.
     ///
     /// Scalars convert directly; complex values serialize to JSON.
@@ -308,58 +307,64 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Produces valid RUMPS syntax; strings and file paths are quoted.
     /// This is distinct from `Into[String]` which produces raw strings.
     ///
-    /// This is a convenience wrapper around `Display::format`; the class
-    /// method is used so frequently that constructing a `ClassCtx` at every
-    /// call site would be overly verbose.
+    /// This is a convenience wrapper around `Display::fmt`.
     pub(crate) fn stringify(&mut self, v: &Payload) -> String {
-        let ctx = ClassCtx {
-            arena: &mut self.arena,
-            runtime_types: &mut self.checked.types,
-            registry: &self.registry,
-            regex_cache: &self.checked.regex_cache,
-            span: Span::default(),
-        };
-        class::Display::format(&ctx, v)
+        let v = self.value_from_payload(v.clone());
+        let id = self.add_value(v, Span::default());
+        let mut ctx =
+            BuiltinCtx::new(self, Span::default(), OutputMeta::Payload, None);
+        let mut vals = ctx.vals();
+        let v = vals
+            .value(id)
+            .unwrap_or_else(|e| invariant!(format!("{}", e)))
+            .clone();
+        class::Display::fmt_value(&mut vals, &v)
+            .unwrap_or_else(|e| invariant!(format!("{}", e)))
     }
 
     pub(crate) fn stringify_value(&mut self, v: &Value) -> String {
-        let ctx = ClassCtx {
-            arena: &mut self.arena,
-            runtime_types: &mut self.checked.types,
-            registry: &self.registry,
-            regex_cache: &self.checked.regex_cache,
-            span: Span::default(),
-        };
-        class::Display::format_value(&ctx, v)
+        let id = self.add_value(v.clone(), Span::default());
+        let mut ctx =
+            BuiltinCtx::new(self, Span::default(), OutputMeta::Payload, None);
+        let mut vals = ctx.vals();
+        let v = vals
+            .value(id)
+            .unwrap_or_else(|e| invariant!(format!("{}", e)))
+            .clone();
+        class::Display::fmt_value(&mut vals, &v)
+            .unwrap_or_else(|e| invariant!(format!("{}", e)))
     }
 
     /// Convert a value to JSON via `Into[Json]`.
     ///
     /// Used for JSON output and storage serialization.
     ///
-    /// This is a convenience wrapper around `Into::jsonify`; the class
-    /// method is used so frequently that constructing a `ClassCtx` at every
-    /// call site would be overly verbose.
+    /// This is a convenience wrapper around `Into::json`.
     pub(crate) fn jsonify(&mut self, v: &Payload) -> serde_json::Value {
-        let ctx = ClassCtx {
-            arena: &mut self.arena,
-            runtime_types: &mut self.checked.types,
-            registry: &self.registry,
-            regex_cache: &self.checked.regex_cache,
-            span: Span::default(),
-        };
-        class::Into::jsonify(&ctx, v)
+        let v = self.value_from_payload(v.clone());
+        let id = self.add_value(v, Span::default());
+        let mut ctx =
+            BuiltinCtx::new(self, Span::default(), OutputMeta::Payload, None);
+        let mut vals = ctx.vals();
+        let v = vals
+            .value(id)
+            .unwrap_or_else(|e| invariant!(format!("{}", e)))
+            .clone();
+        class::Into::json_value(&mut vals, &v)
+            .unwrap_or_else(|e| invariant!(format!("{}", e)))
     }
 
     pub(crate) fn jsonify_value(&mut self, v: &Value) -> serde_json::Value {
-        let ctx = ClassCtx {
-            arena: &mut self.arena,
-            runtime_types: &mut self.checked.types,
-            registry: &self.registry,
-            regex_cache: &self.checked.regex_cache,
-            span: Span::default(),
-        };
-        class::Into::jsonify_value(&ctx, v)
+        let id = self.add_value(v.clone(), Span::default());
+        let mut ctx =
+            BuiltinCtx::new(self, Span::default(), OutputMeta::Payload, None);
+        let mut vals = ctx.vals();
+        let v = vals
+            .value(id)
+            .unwrap_or_else(|e| invariant!(format!("{}", e)))
+            .clone();
+        class::Into::json_value(&mut vals, &v)
+            .unwrap_or_else(|e| invariant!(format!("{}", e)))
     }
 
     /// Convert a JSON value to a runtime value.

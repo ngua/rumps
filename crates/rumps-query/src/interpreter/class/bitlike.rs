@@ -7,46 +7,72 @@ impl Class for BitLike {
     const ID: ClassId = ClassId::BIT_LIKE;
 
     fn register_all(methods: &mut ClassMethods, i: &mut StringInterner) {
-        Self::register(methods, i, "bit-and", MethodFn::Binary(Self::and));
-        Self::register(methods, i, "bit-or", MethodFn::Binary(Self::or));
-        Self::register(methods, i, "shl", MethodFn::Binary(Self::shl));
-        Self::register(methods, i, "shr", MethodFn::Binary(Self::shr));
+        Self::register(
+            methods,
+            i,
+            "bit-and",
+            MethodAbi::Binary,
+            Builtin::Fixed(Impl::Sync(Self::and)),
+        );
+        Self::register(
+            methods,
+            i,
+            "bit-or",
+            MethodAbi::Binary,
+            Builtin::Fixed(Impl::Sync(Self::or)),
+        );
+        Self::register(
+            methods,
+            i,
+            "shl",
+            MethodAbi::Binary,
+            Builtin::Fixed(Impl::Sync(Self::shl)),
+        );
+        Self::register(
+            methods,
+            i,
+            "shr",
+            MethodAbi::Binary,
+            Builtin::Fixed(Impl::Sync(Self::shr)),
+        );
     }
 }
 
 impl BitLike {
     pub(crate) fn and(
-        _: &mut ClassCtx<'_>,
-        l: &Payload,
-        r: &Payload,
-    ) -> Result<Payload> {
-        Ok(match (l, r) {
+        ctx: &mut BuiltinCtx<'_, '_, '_>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> Result<ValueId> {
+        let vals = ctx.vals();
+        let v = match (vals.payload(args[0])?, vals.payload(args[1])?) {
             (Payload::Bool(a), Payload::Bool(b)) => Payload::Bool(*a && *b),
             (Payload::Int(a), Payload::Int(b)) => Payload::Int(a & b),
             (Payload::Word(a), Payload::Word(b)) => Payload::Word(a & b),
-            _ => typechecked!("&", "BitLike"),
-        })
+            _ => typechecked!("&", "BitLike instance"),
+        };
+        Ok(ctx.vals().add(v))
     }
 
     pub(crate) fn or(
-        _: &mut ClassCtx<'_>,
-        l: &Payload,
-        r: &Payload,
-    ) -> Result<Payload> {
-        Ok(match (l, r) {
+        ctx: &mut BuiltinCtx<'_, '_, '_>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> Result<ValueId> {
+        let vals = ctx.vals();
+        let v = match (vals.payload(args[0])?, vals.payload(args[1])?) {
             (Payload::Bool(a), Payload::Bool(b)) => Payload::Bool(*a || *b),
             (Payload::Int(a), Payload::Int(b)) => Payload::Int(a | b),
             (Payload::Word(a), Payload::Word(b)) => Payload::Word(a | b),
-            _ => typechecked!("|", "BitLike"),
-        })
+            _ => typechecked!("|", "BitLike instance"),
+        };
+        Ok(ctx.vals().add(v))
     }
 
     pub(crate) fn shl(
-        _: &mut ClassCtx<'_>,
-        l: &Payload,
-        r: &Payload,
-    ) -> Result<Payload> {
-        Ok(match (l, r) {
+        ctx: &mut BuiltinCtx<'_, '_, '_>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> Result<ValueId> {
+        let vals = ctx.vals();
+        let v = match (vals.payload(args[0])?, vals.payload(args[1])?) {
             (Payload::Bool(_), Payload::Bool(_)) => Payload::Bool(false),
             (Payload::Int(a), Payload::Int(b)) => {
                 Payload::Int(a.wrapping_shl((*b as u32) & 63))
@@ -54,16 +80,17 @@ impl BitLike {
             (Payload::Word(a), Payload::Word(b)) => {
                 Payload::Word(a.wrapping_shl((*b as u32) & (usize::BITS - 1)))
             }
-            _ => typechecked!("<<", "BitLike"),
-        })
+            _ => typechecked!("<<", "BitLike instance"),
+        };
+        Ok(ctx.vals().add(v))
     }
 
     pub(crate) fn shr(
-        _: &mut ClassCtx<'_>,
-        l: &Payload,
-        r: &Payload,
-    ) -> Result<Payload> {
-        Ok(match (l, r) {
+        ctx: &mut BuiltinCtx<'_, '_, '_>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> Result<ValueId> {
+        let vals = ctx.vals();
+        let v = match (vals.payload(args[0])?, vals.payload(args[1])?) {
             (Payload::Bool(_), Payload::Bool(_)) => Payload::Bool(false),
             (Payload::Int(a), Payload::Int(b)) => {
                 Payload::Int(a.wrapping_shr((*b as u32) & 63))
@@ -71,7 +98,8 @@ impl BitLike {
             (Payload::Word(a), Payload::Word(b)) => {
                 Payload::Word(a.wrapping_shr((*b as u32) & (usize::BITS - 1)))
             }
-            _ => typechecked!(">>", "BitLike"),
-        })
+            _ => typechecked!(">>", "BitLike instance"),
+        };
+        Ok(ctx.vals().add(v))
     }
 }

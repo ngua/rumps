@@ -1,3 +1,5 @@
+use futures::future::BoxFuture;
+
 use super::*;
 
 /// `Filterable` class: `filter` method.
@@ -7,39 +9,38 @@ impl Class for Filterable {
     const ID: ClassId = ClassId::FILTERABLE;
 
     fn register_all(methods: &mut ClassMethods, i: &mut StringInterner) {
-        Self::register(methods, i, "filter", MethodFn::Hof(Self::filter));
+        Self::register(
+            methods,
+            i,
+            "filter",
+            MethodAbi::Hkt,
+            Builtin::Fixed(Impl::Async(Self::filter)),
+        );
     }
 }
 
 impl Filterable {
-    /// Start `Filterable:filter`; returns first invocation or done for empty.
-    pub(crate) fn filter(
-        ctx: &mut ClassCtx<'_>,
-        args: &[ValueId],
-    ) -> Result<hof::Step> {
-        let f = args[0];
-        let a = args[1];
+    pub(crate) fn filter<'a>(
+        ctx: &'a mut BuiltinCtx<'_, '_, '_>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> BoxFuture<'a, Result<ValueId>> {
+        Box::pin(async move {
+            let f = args[0];
+            let a = args[1];
+            let xs = ctx.vals().array_ids(a, "Filterable:filter")?;
+            let mut acc = SmallVec::new();
+            let mut it = xs.iter().copied();
 
-        match ctx.arena.payload(a) {
-            Some(Payload::Array(elems)) if elems.is_empty() => {
-                Ok(hof::Step::Done(Payload::Array(Arc::new(SmallVec::new()))))
+            while let Some(x) = it.next() {
+                let keep = ctx.invoke(f, smallvec![x]).await?;
+                acc.extend(
+                    ctx.vals()
+                        .bool_payload(keep, "Filterable:filter")?
+                        .then_some(x),
+                );
             }
-            Some(Payload::Array(elems)) => {
-                let first = *elems
-                    .first()
-                    .unwrap_or_else(|| invariant!("Array has first elem"));
-                Ok(hof::Step::Invoke(hof::Continuation {
-                    callee: f,
-                    args: smallvec![first],
-                    state: hof::State::FilterArray {
-                        source: a,
-                        idx: 0,
-                        acc: SmallVec::new(),
-                        pending: first,
-                    },
-                }))
-            }
-            _ => typechecked!("Filterable:filter", "Array"),
-        }
+
+            Ok(ctx.vals().add(Payload::Array(Arc::new(acc))))
+        })
     }
 }

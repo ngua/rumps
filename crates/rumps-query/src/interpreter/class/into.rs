@@ -11,166 +11,34 @@ impl Class for Into {
     const ID: ClassId = ClassId::INTO;
 
     fn register_all(methods: &mut ClassMethods, i: &mut StringInterner) {
-        Self::register(methods, i, "into", MethodFn::Convert(Self::into));
+        Self::register(
+            methods,
+            i,
+            "into",
+            MethodAbi::Convert,
+            Builtin::Fixed(Impl::Sync(Self::into)),
+        );
     }
 }
 
 impl Into {
-    /// Convert a value to the target type.
-    ///
-    /// Handles all conversions supported by `AS`:
-    /// - Numeric widening (`Int -> Float`, `Word -> Int`, etc.)
-    /// - `T -> String` (stringify)
-    /// - `T -> Json` (jsonify)
-    /// - `String -> FilePath`
-    /// - `Path -> FilePath`
-    /// - `DataStatus -> Int`
     pub(crate) fn into(
-        ctx: &mut ClassCtx<'_>,
-        val: &Payload,
-        target: &Ty,
-    ) -> Result<Payload> {
-        match (val, target) {
-            // Identity casts
-            (Payload::Int(_), Ty::Int)
-            | (Payload::Word(_), Ty::Word)
-            | (Payload::Float(_), Ty::Float)
-            | (Payload::Bool(_), Ty::Bool)
-            | (Payload::Char(_), Ty::Char)
-            | (Payload::String(_), Ty::String)
-            | (Payload::FilePath(_), Ty::FilePath) => Ok(val.clone()),
-
-            // Int -> Float (widen)
-            (Payload::Int(n), Ty::Float) => {
-                Ok(Payload::Float(OrderedFloat(*n as f64)))
+        ctx: &mut BuiltinCtx<'_, '_, '_>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> Result<ValueId> {
+        let id = args[0];
+        let target = ctx.convert_target()?;
+        let edge = ctx.approved_edge();
+        let span = ctx.span();
+        let mut vals = ctx.vals();
+        match edge {
+            Some(meta) => Ok(vals.id_with_meta(id, meta)),
+            None => {
+                let target_ty = vals.ty(target);
+                let val = vals.value(id)?.clone();
+                Self::conv_value(&mut vals, &val, &target_ty, span)
+                    .map(|v| vals.add_typed(v, target))
             }
-
-            // Word -> Int (always safe)
-            (Payload::Word(n), Ty::Int) => Ok(Payload::Int(*n as i64)),
-
-            // Word -> Float (widen)
-            (Payload::Word(n), Ty::Float) => {
-                Ok(Payload::Float(OrderedFloat(*n as f64)))
-            }
-
-            // Float -> Int (truncate)
-            (Payload::Float(f), Ty::Int) => Ok(Payload::Int(f.0 as i64)),
-
-            // Bool -> Int
-            (Payload::Bool(b), Ty::Int) => {
-                Ok(Payload::Int(if *b { 1 } else { 0 }))
-            }
-
-            // T -> String (stringify)
-            (_, Ty::String) => {
-                let s = Self::stringify(ctx, val);
-                let id = ctx.arena.intern(&s);
-                Ok(Payload::String(id))
-            }
-
-            // T -> Json (jsonify)
-            (_, Ty::Json) => {
-                Ok(Payload::Json(Arc::new(Self::jsonify(ctx, val))))
-            }
-
-            // String -> FilePath
-            (Payload::String(sid), Ty::FilePath) => Ok(Payload::FilePath(*sid)),
-
-            // Range -> Array[Int]
-            (
-                Payload::Range {
-                    start,
-                    end,
-                    inclusive,
-                },
-                Ty::Array(elem),
-            ) if *elem == TyArena::INT => {
-                let elems = Range::vals(*start, *end, *inclusive)
-                    .map(|n| {
-                        ctx.arena.add_typed(
-                            Payload::Int(n),
-                            ctx.runtime_types.meta_int(),
-                            ctx.span,
-                        )
-                    })
-                    .collect();
-                Ok(Payload::Array(Arc::new(elems)))
-            }
-
-            // Storable narrowing: `Storable AS T` where T is a Storable member.
-            // This is the ONLY case that requires runtime type checking; all other
-            // casts are validated by the type checker. If the value doesn't match
-            // the target type, we return a runtime error.
-            _ if matches!(
-                target,
-                Ty::Bool
-                    | Ty::Int
-                    | Ty::Float
-                    | Ty::Char
-                    | Ty::String
-                    | Ty::Json
-            ) && Self::is_storable_mismatch(val, target) =>
-            {
-                let src_name = Self::value_type_name(ctx, val);
-                let tgt_name = Self::ty_name(target);
-                Err(Error::runtime_type(
-                    ctx.span,
-                    format!("cannot cast {src_name} as {tgt_name}"),
-                ))
-            }
-
-            // Compound types: identity cast only
-            (_, _) => Ok(val.clone()),
-        }
-    }
-
-    pub(crate) fn into_value(
-        ctx: &mut ClassCtx<'_>,
-        val: &Value,
-        target: &Ty,
-    ) -> Result<Payload> {
-        match (&val.payload, target) {
-            (_, Ty::String) => {
-                let s = Self::coerce_to_str_value(ctx, val);
-                let id = ctx.arena.intern(&s);
-                Ok(Payload::String(id))
-            }
-            (_, Ty::Json) => {
-                Ok(Payload::Json(Arc::new(Self::jsonify_value(ctx, val))))
-            }
-            (Payload::Variant { tag: idx, .. }, Ty::Int)
-                if ctx
-                    .value_variant_base_type(val)
-                    .is_some_and(|ty| ty == TypeId::DATA_STATUS) =>
-            {
-                let mumps_val = match idx {
-                    0 => 0,
-                    1 => 1,
-                    2 => 10,
-                    3 => 11,
-                    _ => typechecked!("DataStatus AS Int", "valid variant"),
-                };
-                Ok(Payload::Int(mumps_val))
-            }
-            (Payload::Variant { .. }, Ty::Int) => {
-                typechecked!("DataStatus AS Int", "DataStatus")
-            }
-            (Payload::Variant { vals, .. }, Ty::FilePath)
-                if ctx
-                    .value_variant_base_type(val)
-                    .is_some_and(|ty| ty == TypeId::PATH) =>
-            {
-                Ok(vals
-                    .first()
-                    .and_then(|id| ctx.arena.payload(*id).cloned())
-                    .unwrap_or_else(|| {
-                        typechecked!("Path AS FilePath", "valid Path")
-                    }))
-            }
-            (Payload::Variant { .. }, Ty::FilePath) => {
-                typechecked!("Path AS FilePath", "Path")
-            }
-            _ => Self::into(ctx, &val.payload, target),
         }
     }
 
@@ -195,44 +63,6 @@ impl Into {
             ) => true,
             // Not a Storable type at all; don't trigger this branch
             _ => false,
-        }
-    }
-
-    /// Get a human-readable name for a value's type.
-    pub(super) fn value_type_name(
-        _ctx: &ClassCtx<'_>,
-        val: &Payload,
-    ) -> String {
-        match val {
-            Payload::Unit => "Unit".to_owned(),
-            Payload::Bool(_) => "Bool".to_owned(),
-            Payload::Int(_) => "Int".to_owned(),
-            Payload::Word(_) => "Word".to_owned(),
-            Payload::Float(_) => "Float".to_owned(),
-            Payload::Char(_) => "Char".to_owned(),
-            Payload::String(_) => "String".to_owned(),
-            Payload::FilePath(_) => "FilePath".to_owned(),
-            Payload::Json(_) => "Json".to_owned(),
-            Payload::Array(_) => "Array".to_owned(),
-            Payload::Tuple(_) => "Tuple".to_owned(),
-            Payload::Object(_) => "Object".to_owned(),
-            Payload::Map(_) => "Map".to_owned(),
-            Payload::Time(_) => "Time".to_owned(),
-            Payload::Regex(_) => "Regex".to_owned(),
-            Payload::Range { .. } => "Range".to_owned(),
-            Payload::Variant { .. } => "Variant".to_owned(),
-            Payload::VariantCtor { .. } => "VariantCtor".to_owned(),
-            Payload::Closure { .. } => "Closure".to_owned(),
-            Payload::Function { .. } => "Function".to_owned(),
-            Payload::ModuleFn { .. } => "ModuleFn".to_owned(),
-            Payload::ClassMethodFn { .. } => "ClassMethodFn".to_owned(),
-            Payload::PartialApp { .. } => "PartialApp".to_owned(),
-            Payload::ModuleConst { .. } => "ModuleConst".to_owned(),
-            Payload::LoopContinuation => "Continuation".to_owned(),
-            Payload::LoopContinue(_) => "LoopContinue".to_owned(),
-            Payload::Ref(is_global, _, _) => {
-                if *is_global { "Global" } else { "Local" }.to_owned()
-            }
         }
     }
 
@@ -274,143 +104,266 @@ impl Into {
         }
     }
 
-    /// Stringify a value to produce raw string content (not quoted).
-    fn coerce_to_str(ctx: &ClassCtx<'_>, v: &Payload) -> String {
-        match v {
-            Payload::String(id) | Payload::FilePath(id) => {
-                ctx.arena.get_str(*id).unwrap_or("").to_owned()
+    pub(crate) fn conv_value(
+        vals: &mut Values<'_, '_, '_, '_>,
+        val: &Value,
+        target: &Ty,
+        span: Span,
+    ) -> Result<Payload> {
+        match (&val.payload, target) {
+            (_, Ty::String) => {
+                let s = Self::str_value(vals, val)?;
+                let id = vals.intern(&s);
+                Ok(Payload::String(id))
             }
-            _ => Display::format(ctx, v),
+            (_, Ty::Json) => {
+                Ok(Payload::Json(Arc::new(Self::json_value(vals, val)?)))
+            }
+            (Payload::Variant { tag: idx, .. }, Ty::Int)
+                if vals
+                    .value_variant_base_type(val)
+                    .is_some_and(|ty| ty == TypeId::DATA_STATUS) =>
+            {
+                Ok(Payload::Int(match idx {
+                    0 => 0,
+                    1 => 1,
+                    2 => 10,
+                    3 => 11,
+                    _ => typechecked!("DataStatus AS Int", "valid variant"),
+                }))
+            }
+            (Payload::Variant { .. }, Ty::Int) => {
+                typechecked!("DataStatus AS Int", "DataStatus")
+            }
+            (Payload::Variant { vals: ids, .. }, Ty::FilePath)
+                if vals
+                    .value_variant_base_type(val)
+                    .is_some_and(|ty| ty == TypeId::PATH) =>
+            {
+                ids.first()
+                    .and_then(|id| vals.payload(*id).ok().cloned())
+                    .ok_or_else(|| {
+                        typechecked!("Path AS FilePath", "valid Path")
+                    })
+            }
+            (Payload::Variant { .. }, Ty::FilePath) => {
+                typechecked!("Path AS FilePath", "Path")
+            }
+            _ => Self::conv_payload(vals, &val.payload, target, span),
         }
     }
 
-    /// Stringify a value for `AS String` conversion.
-    fn stringify(ctx: &ClassCtx<'_>, v: &Payload) -> String {
-        Self::coerce_to_str(ctx, v)
+    fn conv_payload(
+        vals: &mut Values<'_, '_, '_, '_>,
+        val: &Payload,
+        target: &Ty,
+        span: Span,
+    ) -> Result<Payload> {
+        match (val, target) {
+            (Payload::Int(_), Ty::Int)
+            | (Payload::Word(_), Ty::Word)
+            | (Payload::Float(_), Ty::Float)
+            | (Payload::Bool(_), Ty::Bool)
+            | (Payload::Char(_), Ty::Char)
+            | (Payload::String(_), Ty::String)
+            | (Payload::FilePath(_), Ty::FilePath) => Ok(val.clone()),
+            (Payload::Int(n), Ty::Float) => {
+                Ok(Payload::Float(OrderedFloat(*n as f64)))
+            }
+            (Payload::Word(n), Ty::Int) => Ok(Payload::Int(*n as i64)),
+            (Payload::Word(n), Ty::Float) => {
+                Ok(Payload::Float(OrderedFloat(*n as f64)))
+            }
+            (Payload::Float(f), Ty::Int) => Ok(Payload::Int(f.0 as i64)),
+            (Payload::Bool(b), Ty::Int) => {
+                Ok(Payload::Int(if *b { 1 } else { 0 }))
+            }
+            (_, Ty::String) => {
+                let s = Self::str_payload(vals, val)?;
+                let id = vals.intern(&s);
+                Ok(Payload::String(id))
+            }
+            (_, Ty::Json) => {
+                Ok(Payload::Json(Arc::new(Self::json(vals, val)?)))
+            }
+            (Payload::String(sid), Ty::FilePath) => Ok(Payload::FilePath(*sid)),
+            (
+                Payload::Range {
+                    start,
+                    end,
+                    inclusive,
+                },
+                Ty::Array(elem),
+            ) if *elem == TyArena::INT => {
+                let elems = Range::vals(*start, *end, *inclusive)
+                    .map(|n| {
+                        vals.add_typed(
+                            Payload::Int(n),
+                            RuntimeTyId::from(TyArena::INT),
+                        )
+                    })
+                    .collect();
+                Ok(Payload::Array(Arc::new(elems)))
+            }
+            _ if matches!(
+                target,
+                Ty::Bool
+                    | Ty::Int
+                    | Ty::Float
+                    | Ty::Char
+                    | Ty::String
+                    | Ty::Json
+            ) && Self::is_storable_mismatch(val, target) =>
+            {
+                let src_name = Self::payload_name(val);
+                let tgt_name = Self::ty_name(target);
+                Err(Error::runtime_type(
+                    span,
+                    format!("cannot cast {src_name} as {tgt_name}"),
+                ))
+            }
+            _ => Ok(val.clone()),
+        }
     }
 
-    fn coerce_to_str_value(ctx: &ClassCtx<'_>, v: &Value) -> String {
+    pub(super) fn payload_name(val: &Payload) -> String {
+        match val {
+            Payload::Unit => "Unit".to_owned(),
+            Payload::Bool(_) => "Bool".to_owned(),
+            Payload::Int(_) => "Int".to_owned(),
+            Payload::Word(_) => "Word".to_owned(),
+            Payload::Float(_) => "Float".to_owned(),
+            Payload::Char(_) => "Char".to_owned(),
+            Payload::String(_) => "String".to_owned(),
+            Payload::FilePath(_) => "FilePath".to_owned(),
+            Payload::Json(_) => "Json".to_owned(),
+            Payload::Array(_) => "Array".to_owned(),
+            Payload::Tuple(_) => "Tuple".to_owned(),
+            Payload::Object(_) => "Object".to_owned(),
+            Payload::Map(_) => "Map".to_owned(),
+            Payload::Time(_) => "Time".to_owned(),
+            Payload::Regex(_) => "Regex".to_owned(),
+            Payload::Range { .. } => "Range".to_owned(),
+            Payload::Variant { .. } => "Variant".to_owned(),
+            Payload::VariantCtor { .. } => "VariantCtor".to_owned(),
+            Payload::Closure { .. } => "Closure".to_owned(),
+            Payload::Function { .. } => "Function".to_owned(),
+            Payload::ModuleFn { .. } => "ModuleFn".to_owned(),
+            Payload::ClassMethodFn { .. } => "ClassMethodFn".to_owned(),
+            Payload::PartialApp { .. } => "PartialApp".to_owned(),
+            Payload::ModuleConst { .. } => "ModuleConst".to_owned(),
+            Payload::LoopContinuation => "Continuation".to_owned(),
+            Payload::LoopContinue(_) => "LoopContinue".to_owned(),
+            Payload::Ref(is_global, _, _) => {
+                if *is_global { "Global" } else { "Local" }.to_owned()
+            }
+        }
+    }
+
+    fn str_payload(
+        vals: &mut Values<'_, '_, '_, '_>,
+        v: &Payload,
+    ) -> Result<String> {
+        match v {
+            Payload::String(id) | Payload::FilePath(id) => {
+                vals.str(*id).map(ToOwned::to_owned)
+            }
+            _ => Display::fmt(vals, v),
+        }
+    }
+
+    fn str_value(
+        vals: &mut Values<'_, '_, '_, '_>,
+        v: &Value,
+    ) -> Result<String> {
         match &v.payload {
             Payload::String(id) | Payload::FilePath(id) => {
-                ctx.arena.get_str(*id).unwrap_or("").to_owned()
+                vals.str(*id).map(ToOwned::to_owned)
             }
-            _ => Display::format_value(ctx, v),
+            _ => Display::fmt_value(vals, v),
         }
     }
 
-    /// Convert a value to JSON.
-    ///
-    /// Returns the JSON directly; for the class method wrapper that returns
-    /// `Payload::Json`, dispatch to `Into[Json]` via `Into::into`.
-    pub(crate) fn jsonify(
-        ctx: &ClassCtx<'_>,
+    pub(crate) fn json_value(
+        vals: &mut Values<'_, '_, '_, '_>,
+        v: &Value,
+    ) -> Result<serde_json::Value> {
+        match &v.payload {
+            Payload::Variant { tag, vals: ids } => Self::json_variant(
+                vals,
+                vals.value_variant_base_type(v),
+                *tag,
+                ids,
+            ),
+            payload => Self::json(vals, payload),
+        }
+    }
+
+    pub(crate) fn json(
+        vals: &mut Values<'_, '_, '_, '_>,
         v: &Payload,
-    ) -> serde_json::Value {
-        match v {
+    ) -> Result<serde_json::Value> {
+        Ok(match v {
             Payload::Unit => serde_json::Value::Null,
             Payload::Bool(b) => serde_json::Value::Bool(*b),
             Payload::Int(n) => serde_json::json!(*n),
             Payload::Word(n) => serde_json::json!(*n),
             Payload::Float(f) => serde_json::json!(f.0),
             Payload::Char(c) => serde_json::Value::String(c.to_string()),
-            Payload::String(id) => {
-                let s = ctx
-                    .arena
-                    .get_str(*id)
-                    .unwrap_or_else(|| invariant!("StringId in arena"));
-                serde_json::Value::String(s.to_owned())
+            Payload::String(id) | Payload::FilePath(id) => {
+                serde_json::Value::String(vals.str(*id)?.to_owned())
             }
-            Payload::FilePath(id) => {
-                let s = ctx
-                    .arena
-                    .get_str(*id)
-                    .unwrap_or_else(|| invariant!("StringId in arena"));
-                serde_json::Value::String(s.to_owned())
-            }
-            Payload::Array(arr) => {
-                let elems: Vec<_> = arr
-                    .iter()
-                    .map(|id| {
-                        ctx.arena
-                            .value(*id)
-                            .unwrap_or_else(|| invariant!("ValueId in arena"))
-                    })
-                    .map(|v| Self::jsonify_value(ctx, v))
-                    .collect();
+            Payload::Array(arr) | Payload::Tuple(arr) => {
+                let elems =
+                    arr.iter().try_fold(Vec::new(), |mut acc, id| {
+                        let v = vals.value(*id)?.clone();
+                        acc.push(Self::json_value(vals, &v)?);
+                        Ok::<Vec<serde_json::Value>, Error>(acc)
+                    })?;
                 serde_json::Value::Array(elems)
             }
-            Payload::Tuple(elems) => {
-                let items: Vec<_> = elems
-                    .iter()
-                    .map(|id| {
-                        ctx.arena
-                            .value(*id)
-                            .unwrap_or_else(|| invariant!("ValueId in arena"))
-                    })
-                    .map(|v| Self::jsonify_value(ctx, v))
-                    .collect();
-                serde_json::Value::Array(items)
-            }
             Payload::Object(obj) => {
-                let map: serde_json::Map<_, _> = obj
+                let map = obj
                     .iter()
                     .map(|(k, vid)| {
-                        let key = ctx
-                            .arena
-                            .get_str(*k)
-                            .unwrap_or_else(|| invariant!("StringId in arena"));
-                        let val = ctx
-                            .arena
-                            .value(*vid)
-                            .unwrap_or_else(|| invariant!("ValueId in arena"));
-                        (key.to_owned(), Self::jsonify_value(ctx, val))
+                        let key = vals.str(*k)?.to_owned();
+                        let val = vals.value(*vid)?.clone();
+                        Self::json_value(vals, &val).map(|val| (key, val))
                     })
-                    .collect();
+                    .process_results(|iter| iter.collect())?;
                 serde_json::Value::Object(map)
             }
-            Payload::Variant { tag, vals } => {
-                Self::jsonify_variant(ctx, None, *tag, vals)
+            Payload::Variant { tag, vals: ids } => {
+                Self::json_variant(vals, None, *tag, ids)?
             }
             Payload::Map(entries) => {
-                let map: serde_json::Map<_, _> = entries
+                let map = entries
                     .entries()
                     .into_iter()
                     .map(|(k, vid)| {
-                        let key = ctx
-                            .arena
-                            .value(k)
-                            .map(|v| Self::jsonify_value(ctx, v).to_string())
-                            .unwrap_or_else(|| "?".to_owned());
-                        let val = ctx
-                            .arena
-                            .value(vid)
-                            .unwrap_or_else(|| invariant!("ValueId in arena"));
-                        (key, Self::jsonify_value(ctx, val))
+                        let key = vals.value(k)?.clone();
+                        let val = vals.value(vid)?.clone();
+                        let key = Self::json_value(vals, &key)?.to_string();
+                        Self::json_value(vals, &val).map(|val| (key, val))
                     })
-                    .collect();
+                    .process_results(|iter| iter.collect())?;
                 serde_json::Value::Object(map)
             }
             Payload::Time(t) => serde_json::Value::String(t.to_rfc3339()),
             Payload::Json(j) => j.as_ref().clone(),
             Payload::Regex(idx) => {
-                let pattern = ctx
-                    .regex_cache
-                    .get(*idx as usize)
-                    .map(|r| r.as_str())
-                    .unwrap_or("?");
+                let pattern = vals.regex_pattern(*idx).unwrap_or("?");
                 serde_json::Value::String(pattern.to_owned())
             }
             Payload::Range {
                 start,
                 end,
                 inclusive,
-            } => {
-                serde_json::json!({
-                    "start": *start,
-                    "end": *end,
-                    "inclusive": *inclusive
-                })
-            }
+            } => serde_json::json!({
+                "start": *start,
+                "end": *end,
+                "inclusive": *inclusive
+            }),
             Payload::Closure { .. }
             | Payload::Function { .. }
             | Payload::VariantCtor { .. }
@@ -422,88 +375,63 @@ impl Into {
             | Payload::LoopContinue(_) => serde_json::Value::Null,
             Payload::Ref(is_global, name_id, sub_ids) => {
                 let prefix = if *is_global { "^" } else { "" };
-                let name = ctx.arena.get_str(*name_id).unwrap_or("?");
-                let subs: Vec<_> = sub_ids
-                    .iter()
-                    .filter_map(|id| ctx.arena.value(*id))
-                    .map(|v| Self::jsonify_value(ctx, v))
-                    .collect();
+                let name = vals.str(*name_id)?.to_owned();
+                let subs =
+                    sub_ids.iter().try_fold(Vec::new(), |mut acc, id| {
+                        let v = vals.value(*id)?.clone();
+                        acc.push(Self::json_value(vals, &v)?);
+                        Ok::<Vec<serde_json::Value>, Error>(acc)
+                    })?;
                 serde_json::json!({
                     "ref": format!("{prefix}{name}"),
                     "subscripts": subs
                 })
             }
-        }
+        })
     }
 
-    pub(crate) fn jsonify_value(
-        ctx: &ClassCtx<'_>,
-        v: &Value,
-    ) -> serde_json::Value {
-        match &v.payload {
-            Payload::Variant { tag, vals } => Self::jsonify_variant(
-                ctx,
-                ctx.value_variant_base_type(v),
-                *tag,
-                vals,
-            ),
-            payload => Self::jsonify(ctx, payload),
-        }
-    }
-
-    fn jsonify_variant(
-        ctx: &ClassCtx<'_>,
+    fn json_variant(
+        vals: &mut Values<'_, '_, '_, '_>,
         type_id: Option<TypeId>,
         tag: u8,
-        vals: &[ValueId],
-    ) -> serde_json::Value {
+        ids: &[ValueId],
+    ) -> Result<serde_json::Value> {
         if type_id == Some(TypeId::OPTION) && tag == 0 {
-            serde_json::Value::Null
+            Ok(serde_json::Value::Null)
         } else if type_id == Some(TypeId::OPTION) && tag == 1 {
-            vals.first()
-                .and_then(|id| ctx.arena.value(*id))
-                .map(|v| Self::jsonify_value(ctx, v))
-                .unwrap_or(serde_json::Value::Null)
+            ids.first().map_or(Ok(serde_json::Value::Null), |id| {
+                let v = vals.value(*id)?.clone();
+                Self::json_value(vals, &v)
+            })
         } else {
-            let payload_json = if vals.is_empty() {
+            let payload_json = if ids.is_empty() {
                 serde_json::Value::Null
-            } else if vals.len() == 1 {
-                vals.first()
-                    .and_then(|id| ctx.arena.value(*id))
-                    .map(|v| Self::jsonify_value(ctx, v))
-                    .unwrap_or(serde_json::Value::Null)
+            } else if ids.len() == 1 {
+                ids.first().map_or(Ok(serde_json::Value::Null), |id| {
+                    let v = vals.value(*id)?.clone();
+                    Self::json_value(vals, &v)
+                })?
             } else {
-                let items: Vec<_> = vals
-                    .iter()
-                    .map(|id| {
-                        ctx.arena
-                            .value(*id)
-                            .unwrap_or_else(|| invariant!("ValueId in arena"))
-                    })
-                    .map(|v| Self::jsonify_value(ctx, v))
-                    .collect();
+                let items =
+                    ids.iter().try_fold(Vec::new(), |mut acc, id| {
+                        let v = vals.value(*id)?.clone();
+                        acc.push(Self::json_value(vals, &v)?);
+                        Ok::<Vec<serde_json::Value>, Error>(acc)
+                    })?;
                 serde_json::Value::Array(items)
             };
             let ty_name = type_id
-                .and_then(|type_id| {
-                    ctx.registry
-                        .type_name(type_id, ctx.arena)
-                        .map(ToOwned::to_owned)
-                })
-                .unwrap_or_else(|| "Variant".to_owned());
+                .and_then(|type_id| vals.type_name(type_id))
+                .unwrap_or("Variant")
+                .to_owned();
             let variant = type_id
-                .and_then(|type_id| {
-                    ctx.registry
-                        .variant_name(type_id, tag, ctx.arena)
-                        .map(ToOwned::to_owned)
-                })
-                .unwrap_or_else(|| tag.to_string());
-
-            serde_json::json!({
+                .and_then(|type_id| vals.variant_name(type_id, tag))
+                .map_or_else(|| tag.to_string(), ToOwned::to_owned);
+            Ok(serde_json::json!({
                 "type": ty_name,
                 "variant": variant,
                 "payload": payload_json
-            })
+            }))
         }
     }
 }

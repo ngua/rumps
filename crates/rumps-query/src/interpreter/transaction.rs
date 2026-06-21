@@ -2,11 +2,10 @@
 
 use super::Interpreter;
 use crate::ast::{ExprId, StmtId, TransactionExpr, TxnId};
-use crate::io::IoContext;
 use crate::value::{Payload, Value};
 use crate::{Result, Span};
 
-impl<I: IoContext> Interpreter<'_, I> {
+impl Interpreter<'_, '_> {
     /// Evaluate a transaction block expression.
     ///
     /// Returns `Result[T, String]` where `T` is the trailing expression type.

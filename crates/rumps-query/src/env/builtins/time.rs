@@ -1,7 +1,7 @@
 use rumps_query_macros::scheme;
 
-use super::super::{Environment, Module, PrimDef};
-use crate::primitives::Time;
+use super::super::{Environment, Module};
+use crate::builtins::{Def, Impl, Time};
 
 impl Environment {
     pub(super) fn register_time_builtin(&mut self) {
@@ -10,74 +10,74 @@ impl Environment {
         let time_id = self.consts.strings.intern("Time");
         self.modules.insert(
             time_id,
-            Module::from_prims(
+            Module::from_defs(
                 &[
-                    PrimDef {
+                    Def {
                         name: "now",
-                        f: Time::now,
+                        imp: Impl::Sync(Time::now),
                         ty: scheme!(a, () -> Time),
                     },
-                    PrimDef {
+                    Def {
                         name: "epoch",
-                        f: Time::epoch,
+                        imp: Impl::Sync(Time::epoch),
                         ty: scheme!(a, () -> Time),
                     },
-                    PrimDef {
+                    Def {
                         name: "parse",
-                        f: Time::parse,
+                        imp: Impl::Sync(Time::parse),
                         ty: scheme!(
                             a,
                             (String, String) -> Result[Time, String]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "format",
-                        f: Time::format,
+                        imp: Impl::Sync(Time::format),
                         ty: scheme!(a, (String, Time) -> String),
                     },
-                    PrimDef {
+                    Def {
                         name: "add-seconds",
-                        f: Time::add_seconds,
+                        imp: Impl::Sync(Time::add_seconds),
                         ty: scheme!(a, (Time, Int) -> Time),
                     },
-                    PrimDef {
+                    Def {
                         name: "diff-seconds",
-                        f: Time::diff_seconds,
+                        imp: Impl::Sync(Time::diff_seconds),
                         ty: scheme!(a, (Time, Time) -> Float),
                     },
-                    PrimDef {
+                    Def {
                         name: "year",
-                        f: Time::year,
+                        imp: Impl::Sync(Time::year),
                         ty: scheme!(a, (Time) -> Int),
                     },
-                    PrimDef {
+                    Def {
                         name: "month",
-                        f: Time::month,
+                        imp: Impl::Sync(Time::month),
                         ty: scheme!(a, (Time) -> Int),
                     },
-                    PrimDef {
+                    Def {
                         name: "day",
-                        f: Time::day,
+                        imp: Impl::Sync(Time::day),
                         ty: scheme!(a, (Time) -> Int),
                     },
-                    PrimDef {
+                    Def {
                         name: "hour",
-                        f: Time::hour,
+                        imp: Impl::Sync(Time::hour),
                         ty: scheme!(a, (Time) -> Int),
                     },
-                    PrimDef {
+                    Def {
                         name: "minute",
-                        f: Time::minute,
+                        imp: Impl::Sync(Time::minute),
                         ty: scheme!(a, (Time) -> Int),
                     },
-                    PrimDef {
+                    Def {
                         name: "second",
-                        f: Time::second,
+                        imp: Impl::Sync(Time::second),
                         ty: scheme!(a, (Time) -> Int),
                     },
-                    PrimDef {
+                    Def {
                         name: "sleep",
-                        f: Time::sleep,
+                        imp: Impl::Async(Time::sleep),
                         ty: scheme!(a, (Int) -> Unit),
                     },
                 ],

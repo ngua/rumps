@@ -1,4 +1,4 @@
-//! Variable environments for lexical scope and primitive functions.
+//! Variable environments for lexical scope and builtin functions.
 //!
 //! The `Environment` tracks lexical scope for `let` bindings and callable names.
 //! `set` variables (both local and global) go through the `Database`, not here.
@@ -7,17 +7,16 @@
 
 mod builtins;
 mod modules;
-mod prims;
 mod scopes;
 
 use std::collections::HashMap;
 
 pub(crate) use modules::{Module, UserModule};
-pub(crate) use prims::{PrimCtx, PrimDef, PrimFn, PrimResult};
 use rumps_query_macros::scheme;
 pub(crate) use scopes::Scopes;
 
 use crate::ast::{BinOp, Intrinsic, PostfixOp, UnOp};
+use crate::builtins as runtime_builtins;
 use crate::intern::{StringId, StringInterner};
 use crate::typecheck::{Scheme, TyArena, TyId};
 use crate::value::{FunctionDef, ValueArena, ValueId};
@@ -45,7 +44,7 @@ pub(crate) enum TxnReq {
 
 /// Definition of a database intrinsic with its type signature.
 ///
-/// Similar to `PrimDef` but for DB intrinsics which have special syntax
+/// Similar to `builtins::Def` but for DB intrinsics which have special syntax
 /// (`@` prefix) and take `RefTarget` arguments rather than expressions.
 pub(crate) struct IntrinsicDef {
     pub(crate) name: &'static str,
@@ -417,7 +416,10 @@ impl Environment {
     /// Examples:
     /// - `["Iter", "length"]` -> `Iter.length`
     /// - `["Math", "Trig", "sin"]` -> `Math.Trig.sin`
-    pub(crate) fn get_module_fn(&self, path: &[StringId]) -> Option<&PrimFn> {
+    pub(crate) fn get_module_fn(
+        &self,
+        path: &[StringId],
+    ) -> Option<&runtime_builtins::Impl> {
         path.split_first().and_then(|(module, rest)| {
             self.modules.get(module).and_then(|m| m.get_fn(rest))
         })

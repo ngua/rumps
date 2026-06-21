@@ -1,7 +1,7 @@
 use rumps_query_macros::scheme;
 
-use super::super::{Environment, Module, PrimDef};
-use crate::primitives::{Prelude, Prim};
+use super::super::{Environment, Module};
+use crate::builtins::{Def, Impl, Prelude};
 
 impl Environment {
     pub(super) fn register_prelude_builtin(&mut self) {
@@ -12,19 +12,19 @@ impl Environment {
         let prelude_id = self.consts.strings.intern("Prelude");
         self.modules.insert(
             prelude_id,
-            Module::from_prims(
+            Module::from_defs(
                 &[
-                    PrimDef {
+                    Def {
                         name: "foreach",
-                        f: Prelude::placeholder,
+                        imp: Impl::Async(Prelude::foreach),
                         ty: scheme!(
                             a,
                             forall T, U, F: Mappable. ((T) -> U, F[T]) -> Unit
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "identity",
-                        f: Prelude::identity,
+                        imp: Impl::Sync(Prelude::identity),
                         ty: scheme!(a, forall T. (T) -> T),
                     },
                 ],

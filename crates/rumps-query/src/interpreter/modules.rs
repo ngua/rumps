@@ -29,11 +29,10 @@ use smallvec::SmallVec;
 use super::Interpreter;
 use crate::ast::ExprId;
 use crate::intern::{QualifiedName, StringId};
-use crate::io::IoContext;
 use crate::value::{Payload, Value};
 use crate::Result;
 
-impl<I: IoContext> Interpreter<'_, I> {
+impl Interpreter<'_, '_> {
     /// Evaluate a namespace path to a module function.
     ///
     /// Handles paths of any length:

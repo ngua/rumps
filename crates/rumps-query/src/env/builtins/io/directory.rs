@@ -1,7 +1,7 @@
 use rumps_query_macros::scheme;
 
-use super::super::super::{Environment, Module, PrimDef};
-use crate::primitives::Directory;
+use super::super::super::{Environment, Module};
+use crate::builtins::{Def, Directory, Impl};
 
 impl Environment {
     /// Build the `Io.Directory` submodule.
@@ -35,126 +35,126 @@ impl Environment {
             )
         };
 
-        Module::from_prims(
+        Module::from_defs(
             &[
-                PrimDef {
+                Def {
                     name: "list-dir",
-                    f: Directory::list_dir,
+                    imp: Impl::Async(Directory::list_dir),
                     ty: scheme!(a, (FilePath) -> Array[Path]),
                 },
-                PrimDef {
+                Def {
                     name: "exists",
-                    f: Directory::exists,
+                    imp: Impl::Async(Directory::exists),
                     ty: scheme!(a, (FilePath) -> Bool),
                 },
-                PrimDef {
+                Def {
                     name: "is-file",
-                    f: Directory::is_file,
+                    imp: Impl::Async(Directory::is_file),
                     ty: scheme!(a, (FilePath) -> Bool),
                 },
-                PrimDef {
+                Def {
                     name: "is-dir",
-                    f: Directory::is_dir,
+                    imp: Impl::Async(Directory::is_dir),
                     ty: scheme!(a, (FilePath) -> Bool),
                 },
-                PrimDef {
+                Def {
                     name: "read-file",
-                    f: Directory::read_file,
+                    imp: Impl::Async(Directory::read_file),
                     ty: scheme!(a, (FilePath) -> String),
                 },
-                PrimDef {
+                Def {
                     name: "remove",
-                    f: Directory::remove,
+                    imp: Impl::Async(Directory::remove),
                     ty: scheme!(a, (FilePath) -> Unit),
                 },
-                PrimDef {
+                Def {
                     name: "remove-all",
-                    f: Directory::remove_all,
+                    imp: Impl::Async(Directory::remove_all),
                     ty: scheme!(a, (FilePath) -> Unit),
                 },
-                PrimDef {
+                Def {
                     name: "create-dir",
-                    f: Directory::create_dir,
+                    imp: Impl::Async(Directory::create_dir),
                     ty: scheme!(a, (FilePath) -> Unit),
                 },
-                PrimDef {
+                Def {
                     name: "create-dir-all",
-                    f: Directory::create_dir_all,
+                    imp: Impl::Async(Directory::create_dir_all),
                     ty: scheme!(a, (FilePath) -> Unit),
                 },
-                PrimDef {
+                Def {
                     name: "pwd",
-                    f: Directory::pwd,
+                    imp: Impl::Sync(Directory::pwd),
                     ty: scheme!(a, () -> FilePath),
                 },
-                PrimDef {
+                Def {
                     name: "set-pwd",
-                    f: Directory::set_pwd,
+                    imp: Impl::Sync(Directory::set_pwd),
                     ty: scheme!(a, (FilePath) -> Unit),
                 },
-                PrimDef {
+                Def {
                     name: "get-env",
-                    f: Directory::get_env,
+                    imp: Impl::Sync(Directory::get_env),
                     ty: scheme!(a, (String) -> Option[String]),
                 },
-                PrimDef {
+                Def {
                     name: "move-path",
-                    f: Directory::move_path,
+                    imp: Impl::Async(Directory::move_path),
                     ty: mv_sc,
                 },
-                PrimDef {
+                Def {
                     name: "copy-path",
-                    f: Directory::copy_path,
+                    imp: Impl::Async(Directory::copy_path),
                     ty: cp_sc,
                 },
-                PrimDef {
+                Def {
                     name: "write-file",
-                    f: Directory::write_file,
+                    imp: Impl::Async(Directory::write_file),
                     ty: wr_sc,
                 },
-                PrimDef {
+                Def {
                     name: "append-file",
-                    f: Directory::append_file,
+                    imp: Impl::Async(Directory::append_file),
                     ty: app_sc,
                 },
-                PrimDef {
+                Def {
                     name: "set-env",
-                    f: Directory::set_env,
+                    imp: Impl::Sync(Directory::set_env),
                     ty: set_env_sc,
                 },
-                PrimDef {
+                Def {
                     name: "canonicalize",
-                    f: Directory::canonicalize,
+                    imp: Impl::Async(Directory::canonicalize),
                     ty: scheme!(a, (FilePath) -> FilePath),
                 },
-                PrimDef {
+                Def {
                     name: "parent",
-                    f: Directory::parent,
+                    imp: Impl::Sync(Directory::parent),
                     ty: scheme!(a, (FilePath) -> Option[FilePath]),
                 },
-                PrimDef {
+                Def {
                     name: "file-name",
-                    f: Directory::file_name,
+                    imp: Impl::Sync(Directory::file_name),
                     ty: scheme!(a, (FilePath) -> Option[String]),
                 },
-                PrimDef {
+                Def {
                     name: "extension",
-                    f: Directory::extension,
+                    imp: Impl::Sync(Directory::extension),
                     ty: scheme!(a, (FilePath) -> Option[String]),
                 },
-                PrimDef {
+                Def {
                     name: "join",
-                    f: Directory::join,
+                    imp: Impl::Sync(Directory::join),
                     ty: scheme!(a, (FilePath, Array[String]) -> FilePath),
                 },
-                PrimDef {
+                Def {
                     name: "temp-dir",
-                    f: Directory::temp_dir,
+                    imp: Impl::Sync(Directory::temp_dir),
                     ty: scheme!(a, () -> FilePath),
                 },
-                PrimDef {
+                Def {
                     name: "with-extension",
-                    f: Directory::with_extension,
+                    imp: Impl::Sync(Directory::with_extension),
                     ty: scheme!(a, (FilePath, String) -> FilePath),
                 },
             ],

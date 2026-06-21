@@ -3,16 +3,14 @@
 use async_recursion::async_recursion;
 use smallvec::SmallVec;
 
-use super::class::ClassCtx;
-use super::Interpreter;
+use super::{class, Interpreter};
 use crate::ast::ExprId;
 use crate::intern::{QualifiedName, StringId};
-use crate::io::IoContext;
 use crate::typecheck::RuntimeTyId;
 use crate::value::{Payload, Value, ValueId};
 use crate::{ClassId, Result, Span};
 
-impl<I: IoContext> Interpreter<'_, I> {
+impl Interpreter<'_, '_> {
     /// Create an `Option.None` value.
     pub(super) fn make_none(&self) -> Payload {
         Payload::none()
@@ -159,27 +157,23 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// Evaluate a default-value expression: `_`.
     ///
     /// Dispatches with the inferred type to produce the appropriate default value.
-    pub(super) fn default_value(
+    pub(super) async fn default_value(
         &mut self,
         id: ExprId,
         span: Span,
     ) -> Result<Payload> {
-        let ty_id = self.checked.expr(id).ty;
-        let ty = self.checked.types.get(ty_id).clone();
-
+        let ty = self.checked.expr(id).ty;
         let mid = self.arena.intern("default");
-        let mut ctx = ClassCtx {
-            arena: &mut self.arena,
-            runtime_types: &mut self.checked.types,
-            registry: &self.registry,
-            regex_cache: &self.checked.regex_cache,
+        self.dispatch_class_method_value(class::Dispatch {
+            dispatch_expr_id: Some(id),
+            output_expr_id: Some(id),
+            output_ty: Some(ty),
+            class: ClassId::DEFAULT,
+            method: mid,
+            args: SmallVec::new(),
             span,
-        };
-        self.class_methods.dispatch_nullary(
-            ClassId::DEFAULT,
-            mid,
-            &mut ctx,
-            &ty,
-        )
+        })
+        .await
+        .map(|v| v.payload)
     }
 }

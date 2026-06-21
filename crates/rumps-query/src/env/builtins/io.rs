@@ -2,8 +2,8 @@ mod directory;
 
 use rumps_query_macros::scheme;
 
-use super::super::{Environment, Module, PrimDef};
-use crate::primitives::Io;
+use super::super::{Environment, Module};
+use crate::builtins::{Def, Impl, Io};
 
 impl Environment {
     pub(super) fn register_io_builtin(&mut self) {
@@ -14,31 +14,31 @@ impl Environment {
 
         let io_id = self.consts.strings.intern("Io");
         let dir_id = self.consts.strings.intern("Directory");
-        let io_mod = Module::from_prims(
+        let io_mod = Module::from_defs(
             &[
-                PrimDef {
+                Def {
                     name: "get-line",
-                    f: Io::get_line,
+                    imp: Impl::Async(Io::get_line),
                     ty: scheme!(a, () -> String),
                 },
-                PrimDef {
+                Def {
                     name: "print",
-                    f: Io::print,
+                    imp: Impl::Async(Io::print),
                     ty: scheme!(a, (String) -> Unit),
                 },
-                PrimDef {
+                Def {
                     name: "println",
-                    f: Io::println,
+                    imp: Impl::Async(Io::println),
                     ty: scheme!(a, (String) -> Unit),
                 },
-                PrimDef {
+                Def {
                     name: "eprint",
-                    f: Io::eprint,
+                    imp: Impl::Async(Io::eprint),
                     ty: scheme!(a, (String) -> Unit),
                 },
-                PrimDef {
+                Def {
                     name: "eprintln",
-                    f: Io::eprintln,
+                    imp: Impl::Async(Io::eprintln),
                     ty: scheme!(a, (String) -> Unit),
                 },
             ],

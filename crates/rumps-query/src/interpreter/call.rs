@@ -1,25 +1,19 @@
 //! Function and closure calling.
 
-use std::cmp::Ordering;
-use std::ops::ControlFlow;
-use std::sync::Arc;
-
 use async_recursion::async_recursion;
 use smallvec::SmallVec;
 
-use super::class::{self, ClassCtx, MethodFn};
-use super::{hof, Interpreter};
+use super::{class, Interpreter};
 use crate::ast::{Expr, ExprId};
-use crate::env::{PrimCtx, PrimFn};
+use crate::builtins::{self, BuiltinCtx, OutputMeta};
 use crate::intern::{QualifiedName, StringId};
-use crate::io::IoContext;
 use crate::typecheck::{
     ClassShape, ExprAux, RuntimeTyId, Ty, TyArena, TyId, TyVar, TypeClass,
 };
 use crate::value::{
     CapturedEnv, FunctionDef, Payload, TypeId, Value, ValueId, ValueMeta,
 };
-use crate::{ClassId, Error, Result, Span};
+use crate::{ClassId, Result, Span};
 
 struct FnCall<'a> {
     call_id: ExprId,
@@ -41,36 +35,7 @@ struct ClosureCall<'a> {
     span: Span,
 }
 
-#[derive(Clone)]
-pub(super) struct ClassDispatch {
-    pub(super) dispatch_expr_id: Option<ExprId>,
-    pub(super) output_expr_id: Option<ExprId>,
-    pub(super) output_ty: Option<RuntimeTyId>,
-    pub(super) class: ClassId,
-    pub(super) method: StringId,
-    pub(super) args: SmallVec<[ValueId; 4]>,
-    pub(super) span: Span,
-}
-
-#[derive(Clone)]
-struct ClassMethodInvoke {
-    class: StringId,
-    method: StringId,
-    dispatch_expr_id: Option<ExprId>,
-    output_expr_id: Option<ExprId>,
-    args: SmallVec<[ValueId; 4]>,
-    span: Span,
-}
-
-#[derive(Clone, Copy)]
-enum OutputMeta {
-    Expr(ExprId),
-    Ty(RuntimeTyId),
-    Meta(ValueMeta),
-    Payload,
-}
-
-impl<I: IoContext> Interpreter<'_, I> {
+impl Interpreter<'_, '_> {
     /// Pipeline operator implementation.
     ///
     /// Applies the right operand (function/closure) to the left operand (value):
@@ -147,27 +112,17 @@ impl<I: IoContext> Interpreter<'_, I> {
                     class,
                     method,
                     expr_id,
-                } => self
-                    .invoke_class_method_fn_value(ClassMethodInvoke {
+                } => {
+                    self.call_method(
+                        call_id,
                         class,
                         method,
-                        dispatch_expr_id: expr_id,
-                        output_expr_id: Some(call_id),
-                        args: SmallVec::from_slice(&[arg_id]),
+                        expr_id,
+                        SmallVec::from_slice(&[arg_id]),
                         span,
-                    })
+                    )
                     .await
-                    .map(|value| {
-                        let kind = self
-                            .checked
-                            .class_registry
-                            .lookup_by_name(class)
-                            .unwrap_or_else(|| {
-                                typechecked!("class method class", "known")
-                            });
-                        let meta = self.class_method_call_meta(kind, call_id);
-                        self.value_with_context_meta(value, meta)
-                    }),
+                }
                 // Type checker guarantees rhs is callable
                 _ => typechecked!("|>", "Callable"),
             }
@@ -350,37 +305,6 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Call a built-in primitive function.
-    ///
-    /// Evaluates arguments first, then invokes the primitive with a `PrimCtx`.
-    #[async_recursion]
-    async fn call_primitive(
-        &mut self,
-        prim: PrimFn,
-        args: &[ExprId],
-        span: Span,
-    ) -> Result<Payload> {
-        // Evaluate arguments
-        let arg_ids: SmallVec<[ValueId; 4]> =
-            self.eval_args(args).await?.into_iter().collect();
-
-        // Create context and call primitive
-        let mut ctx = PrimCtx {
-            arena: &mut self.arena,
-            runtime_types: &mut self.checked.types,
-            io: &mut self.io,
-            span,
-        };
-        let result_id = prim(&mut ctx, arg_ids).await?;
-
-        // Look up and clone the result value
-        Ok(self
-            .arena
-            .payload(result_id)
-            .cloned()
-            .unwrap_or_else(|| invariant!("ValueId in arena")))
-    }
-
     /// Invoke a module function with pre-evaluated arguments.
     ///
     /// Iterable functions (`Iter.map`, `Iter.filter`, `Iter.reduce`) are
@@ -392,37 +316,20 @@ impl<I: IoContext> Interpreter<'_, I> {
         args: &[ValueId],
         span: Span,
     ) -> Result<Value> {
-        // Builtins that need interpreter services are intercepted before sync
-        // primitive dispatch. This includes HoFs that invoke closures and async
-        // builtins that need class dispatch or other interpreter-owned context.
-        if let Some(value) =
-            self.invoke_async_map_module_fn(path, args, span).await?
-        {
-            Ok(value)
-        } else if let Some((hof, result)) = self.module_hofs.lookup(path) {
-            let value = self
-                .run_hof_trampoline(OutputMeta::Payload, hof, args, span)
-                .await?;
-            // Some HoFs (e.g. `foreach`) delegate to another HoF but discard
-            // the produced value, evaluating to `Unit` instead.
-            match result {
-                hof::ResultMode::Keep => Ok(value),
-                hof::ResultMode::Discard => {
-                    Ok(self.value_from_payload(Payload::Unit))
-                }
-            }
-        } else if let Some(fn_def) = self.env.get_user_module_fn(path).cloned()
-        {
+        if let Some(fn_def) = self.env.get_user_module_fn(path).cloned() {
             // User-defined module function
             self.invoke_user_module_fn(path, &fn_def, args, span).await
         } else {
             // Builtin sync module function; resolver guarantees it exists
-            let prim =
+            let imp =
                 self.env.get_module_fn(path).copied().unwrap_or_else(|| {
                     typechecked!("invoke_module_fn", "known module function")
                 });
 
-            self.invoke_primitive(prim, args, span).await
+            let arg_ids: SmallVec<[ValueId; 4]> =
+                args.iter().copied().collect();
+            self.invoke_builtin(imp, arg_ids, span, OutputMeta::Payload, None)
+                .await
         }
     }
 
@@ -532,76 +439,85 @@ impl<I: IoContext> Interpreter<'_, I> {
         {
             Ok(self.value_for_expr(expr_id, partial))
         } else {
-            let kind = self
-                .checked
-                .class_registry
-                .lookup_by_name(class)
-                .unwrap_or_else(|| {
-                    typechecked!("class method class", "known class")
-                });
-            self.dispatch_class_method_value(ClassDispatch {
-                dispatch_expr_id: Some(expr_id),
-                output_expr_id: Some(expr_id),
-                output_ty: None,
-                class: kind,
+            self.dispatch_method(
+                class,
                 method,
-                args: arg_ids.into(),
+                Some(expr_id),
+                Some(expr_id),
+                arg_ids.into(),
                 span,
-            })
+            )
             .await
         }
     }
 
-    /// Invoke a class method from a `ClassMethodFn` value.
-    ///
-    /// Looks up class/method strings and dispatches to the class method.
-    ///
-    /// The `expr_id` is the expression ID of the `ClassMethodRef` that created
-    /// this value; needed for convert methods to look up target types.
-    #[async_recursion]
-    async fn invoke_class_method_fn(
-        &mut self,
-        class: StringId,
+    fn resolve_method(
+        &self,
+        cls: StringId,
         method: StringId,
-        expr_id: Option<ExprId>,
-        args: &[ValueId],
+        dispatch_expr_id: Option<ExprId>,
+        output_expr_id: Option<ExprId>,
+        args: SmallVec<[ValueId; 4]>,
         span: Span,
-    ) -> Result<Payload> {
-        self.invoke_class_method_fn_value(ClassMethodInvoke {
-            class,
-            method,
-            dispatch_expr_id: expr_id,
-            output_expr_id: None,
-            args: SmallVec::from_slice(args),
-            span,
-        })
-        .await
-        .map(|value| value.payload)
-    }
-
-    #[async_recursion]
-    async fn invoke_class_method_fn_value(
-        &mut self,
-        invoke: ClassMethodInvoke,
-    ) -> Result<Value> {
-        let kind = self
+    ) -> class::Dispatch {
+        let class = self
             .checked
             .class_registry
-            .lookup_by_name(invoke.class)
-            .unwrap_or_else(|| {
-                typechecked!("invoke_class_method_fn", "known class")
-            });
+            .lookup_by_name(cls)
+            .unwrap_or_else(|| typechecked!("method dispatch", "known class"));
 
-        self.dispatch_class_method_value(ClassDispatch {
-            dispatch_expr_id: invoke.dispatch_expr_id,
-            output_expr_id: invoke.output_expr_id,
+        class::Dispatch {
+            dispatch_expr_id,
+            output_expr_id,
             output_ty: None,
-            class: kind,
-            method: invoke.method,
-            args: invoke.args,
-            span: invoke.span,
-        })
-        .await
+            class,
+            method,
+            args,
+            span,
+        }
+    }
+
+    async fn dispatch_method(
+        &mut self,
+        cls: StringId,
+        method: StringId,
+        dispatch_expr_id: Option<ExprId>,
+        output_expr_id: Option<ExprId>,
+        args: SmallVec<[ValueId; 4]>,
+        span: Span,
+    ) -> Result<Value> {
+        let dispatch = self.resolve_method(
+            cls,
+            method,
+            dispatch_expr_id,
+            output_expr_id,
+            args,
+            span,
+        );
+        self.dispatch_class_method_value(dispatch).await
+    }
+
+    async fn call_method(
+        &mut self,
+        call_id: ExprId,
+        cls: StringId,
+        method: StringId,
+        dispatch_expr_id: Option<ExprId>,
+        args: SmallVec<[ValueId; 4]>,
+        span: Span,
+    ) -> Result<Value> {
+        let dispatch = self.resolve_method(
+            cls,
+            method,
+            dispatch_expr_id,
+            Some(call_id),
+            args,
+            span,
+        );
+        let class = dispatch.class;
+        let value = self.dispatch_class_method_value(dispatch).await?;
+        let meta = self.class_method_call_meta(class, call_id);
+        Ok(self.value_with_context_meta(value, meta))
     }
 
     /// Dispatch a class method call.
@@ -619,7 +535,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         args: &[ValueId],
         span: Span,
     ) -> Result<Payload> {
-        self.dispatch_class_method_value(ClassDispatch {
+        self.dispatch_class_method_value(class::Dispatch {
             dispatch_expr_id: expr_id,
             output_expr_id: expr_id,
             output_ty: None,
@@ -633,10 +549,31 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     #[async_recursion]
-    pub(super) async fn dispatch_class_method_value(
+    pub(crate) async fn dispatch_class_method_value(
         &mut self,
-        dispatch: ClassDispatch,
+        dispatch: class::Dispatch,
     ) -> Result<Value> {
+        match self.select_class_call(&dispatch)? {
+            builtins::Selected::User(name) => {
+                self.invoke_user_instance_fn(name, dispatch).await
+            }
+            builtins::Selected::Builtin(call) => {
+                self.invoke_builtin(
+                    call.imp,
+                    call.args,
+                    call.span,
+                    call.output,
+                    call.meta,
+                )
+                .await
+            }
+        }
+    }
+
+    pub(super) fn select_class_call(
+        &mut self,
+        dispatch: &class::Dispatch,
+    ) -> Result<builtins::Selected> {
         let inst = dispatch
             .output_expr_id
             .into_iter()
@@ -660,9 +597,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 None => fun,
             };
             match fn_name {
-                Some(name) => {
-                    self.invoke_user_instance_fn(name, dispatch).await
-                }
+                Some(name) => Ok(builtins::Selected::User(name)),
                 None => {
                     typechecked!(
                         "class instance dispatch",
@@ -670,10 +605,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                     )
                 }
             }
-        } else if let Some(name) = self.hkt_method(&dispatch) {
-            self.invoke_user_instance_fn(name, dispatch).await
-        } else if let Some(name) = self.output_ty_method(&dispatch) {
-            self.invoke_user_instance_fn(name, dispatch).await
+        } else if let Some(name) = self.hkt_method(dispatch) {
+            Ok(builtins::Selected::User(name))
+        } else if let Some(name) = self.output_ty_method(dispatch) {
+            Ok(builtins::Selected::User(name))
         } else if let Some(tid) = dispatch
             .args
             .first()
@@ -685,18 +620,18 @@ impl<I: IoContext> Interpreter<'_, I> {
                 tid,
                 dispatch.method,
             ) {
-                self.invoke_user_instance_fn(name, dispatch).await
+                Ok(builtins::Selected::User(name))
             } else {
-                self.dispatch_via_repr_or_builtin(dispatch).await
+                self.select_repr_or_registered_class_call(dispatch)
             }
         } else {
-            self.dispatch_via_repr_or_builtin(dispatch).await
+            self.select_repr_or_registered_class_call(dispatch)
         }
     }
 
     fn output_ty_method(
         &mut self,
-        dispatch: &ClassDispatch,
+        dispatch: &class::Dispatch,
     ) -> Option<StringId> {
         self.dispatch_output_ty(dispatch)
             .and_then(|ty| self.checked.types.to_type_id(ty))
@@ -711,7 +646,7 @@ impl<I: IoContext> Interpreter<'_, I> {
 
     fn dispatch_output_ty(
         &mut self,
-        dispatch: &ClassDispatch,
+        dispatch: &class::Dispatch,
     ) -> Option<RuntimeTyId> {
         dispatch
             .output_ty
@@ -724,7 +659,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             .map(|ty| self.runtime_ty(ty))
     }
 
-    fn hkt_method(&self, dispatch: &ClassDispatch) -> Option<StringId> {
+    fn hkt_method(&self, dispatch: &class::Dispatch) -> Option<StringId> {
         if matches!(
             self.checked.class_registry.shape(dispatch.class),
             ClassShape::Hkt { .. }
@@ -822,11 +757,10 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    #[async_recursion]
-    async fn dispatch_via_repr_or_builtin(
+    fn select_repr_or_registered_class_call(
         &mut self,
-        dispatch: ClassDispatch,
-    ) -> Result<Value> {
+        dispatch: &class::Dispatch,
+    ) -> Result<builtins::Selected> {
         let repr_ty =
             if matches!(dispatch.class, ClassId::INTO | ClassId::TRY_INTO) {
                 None
@@ -844,20 +778,134 @@ impl<I: IoContext> Interpreter<'_, I> {
                 type_id,
                 dispatch.method,
             ) {
-                self.invoke_user_instance_fn(fn_name, dispatch).await
+                Ok(builtins::Selected::User(fn_name))
             } else {
-                self.dispatch_builtin_or_hof(dispatch).await
+                self.select_registered_class_call(dispatch)
             }
         } else {
-            self.dispatch_builtin_or_hof(dispatch).await
+            self.select_registered_class_call(dispatch)
         }
+    }
+
+    fn select_registered_class_call(
+        &mut self,
+        dispatch: &class::Dispatch,
+    ) -> Result<builtins::Selected> {
+        let def = *self
+            .class_methods
+            .lookup(dispatch.class, dispatch.method)
+            .unwrap_or_else(|| typechecked!("class method", "registered"));
+        let output = self.class_output_meta(
+            dispatch.output_expr_id,
+            dispatch.dispatch_expr_id,
+            dispatch.output_ty,
+            dispatch.class,
+        );
+        let meta = self.class_call_meta(dispatch, def.abi)?;
+        match def.builtin {
+            class::Builtin::Fixed(imp) => {
+                Ok(builtins::Selected::Builtin(builtins::Call {
+                    imp,
+                    args: dispatch.args.clone(),
+                    span: dispatch.span,
+                    output,
+                    meta,
+                }))
+            }
+            class::Builtin::Selected(f) => {
+                f(self, dispatch).map(builtins::Selected::Builtin)
+            }
+        }
+    }
+
+    fn class_call_meta(
+        &mut self,
+        dispatch: &class::Dispatch,
+        abi: class::MethodAbi,
+    ) -> Result<Option<builtins::CallMeta>> {
+        match abi {
+            class::MethodAbi::Nullary => {
+                let ty = self.class_nullary_target(dispatch)?;
+                Ok(Some(builtins::CallMeta::Nullary { ty }))
+            }
+            class::MethodAbi::Convert => {
+                let target = self.class_convert_target(dispatch)?;
+                let edge = self.class_approved_edge(dispatch);
+                Ok(Some(builtins::CallMeta::Convert { target, edge }))
+            }
+            class::MethodAbi::Binary
+            | class::MethodAbi::Unary
+            | class::MethodAbi::Hkt => Ok(None),
+        }
+    }
+
+    fn class_nullary_target(
+        &mut self,
+        dispatch: &class::Dispatch,
+    ) -> Result<RuntimeTyId> {
+        dispatch
+            .output_ty
+            .or_else(|| {
+                dispatch
+                    .output_expr_id
+                    .or(dispatch.dispatch_expr_id)
+                    .map(|id| self.checked.expr(id).ty)
+            })
+            .map(|ty| self.runtime_ty(ty))
+            .ok_or_else(|| {
+                typechecked!("nullary class method", "expression id")
+            })
+    }
+
+    fn class_convert_target(
+        &mut self,
+        dispatch: &class::Dispatch,
+    ) -> Result<RuntimeTyId> {
+        self.class_approved_edge(dispatch)
+            .map(|meta| meta.ty)
+            .or_else(|| {
+                dispatch.output_ty.or_else(|| {
+                    dispatch
+                        .output_expr_id
+                        .or(dispatch.dispatch_expr_id)
+                        .map(|id| self.checked.expr(id).ty)
+                })
+            })
+            .map(|ty| self.runtime_ty(ty))
+            .map(|ty| {
+                if dispatch.class == ClassId::TRY_INTO {
+                    match self.checked.types.get(ty) {
+                        Ty::Result(ok, _) => RuntimeTyId::from(*ok),
+                        _ => ty,
+                    }
+                } else {
+                    ty
+                }
+            })
+            .ok_or_else(|| {
+                typechecked!("convert class method", "expression id")
+            })
+    }
+
+    fn class_approved_edge(
+        &self,
+        dispatch: &class::Dispatch,
+    ) -> Option<ValueMeta> {
+        dispatch
+            .output_expr_id
+            .and_then(|id| self.approved_newtype_edge_meta(id))
+            .or_else(|| {
+                dispatch
+                    .dispatch_expr_id
+                    .and_then(|id| self.approved_newtype_edge_meta(id))
+            })
     }
 
     #[async_recursion]
     async fn invoke_user_instance_fn(
         &mut self,
         name: StringId,
-        dispatch: ClassDispatch,
+        dispatch: class::Dispatch,
     ) -> Result<Value> {
         let def = self.functions.get(&name).cloned();
         if let Some(def) = def {
@@ -873,61 +921,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Dispatch to builtin class method or async HOF.
-    ///
-    /// Async wrapper that handles both sync builtin methods and async HOFs.
-    #[async_recursion]
-    async fn dispatch_builtin_or_hof(
-        &mut self,
-        dispatch: ClassDispatch,
-    ) -> Result<Value> {
-        // Check for HOF first (requires async)
-        let output = self.class_output_meta(
-            dispatch.output_expr_id,
-            dispatch.dispatch_expr_id,
-            dispatch.output_ty,
-            dispatch.class,
-        );
-        if let Some(value) = self
-            .dispatch_async_map_class_method(
-                output,
-                dispatch.class,
-                dispatch.method,
-                &dispatch.args,
-                dispatch.span,
-            )
-            .await?
-        {
-            Ok(value)
-        } else if let Some(result) = self
-            .dispatch_forwarding_builtin_class_method(
-                dispatch.output_expr_id,
-                dispatch.class,
-                dispatch.method,
-                &dispatch.args,
-                dispatch.span,
-            )
-        {
-            result
-        } else if let Some(MethodFn::Hof(f)) =
-            self.class_methods.lookup(dispatch.class, dispatch.method)
-        {
-            self.run_hof_trampoline(output, f, &dispatch.args, dispatch.span)
-                .await
-        } else {
-            self.dispatch_builtin_class_method(&dispatch)
-                .map(|payload| {
-                    let output = self.refine_variant_output(
-                        output,
-                        &payload,
-                        &dispatch.args,
-                    );
-                    self.value_for_output(output, payload)
-                })
-        }
-    }
-
-    fn refine_variant_output(
+    pub(super) fn refine_variant_output(
         &self,
         output: OutputMeta,
         payload: &Payload,
@@ -957,7 +951,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    fn class_output_meta(
+    pub(in crate::interpreter) fn class_output_meta(
         &mut self,
         output_expr_id: Option<ExprId>,
         dispatch_expr_id: Option<ExprId>,
@@ -1033,7 +1027,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    fn callable_ret(&self, ty: RuntimeTyId) -> Option<RuntimeTyId> {
+    pub(super) fn callable_ret(&self, ty: RuntimeTyId) -> Option<RuntimeTyId> {
         match self.checked.types.get(ty) {
             Ty::Fn(_, ret) => Some(RuntimeTyId::from(*ret)),
             _ => None,
@@ -1072,7 +1066,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    fn value_for_output(
+    pub(super) fn value_for_output(
         &mut self,
         output: OutputMeta,
         payload: Payload,
@@ -1088,7 +1082,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    fn value_for_output_value(
+    pub(super) fn value_for_output_value(
         &mut self,
         output: OutputMeta,
         value: Value,
@@ -1123,589 +1117,11 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    fn dispatch_forwarding_builtin_class_method(
-        &mut self,
-        output_expr_id: Option<ExprId>,
-        class: ClassId,
-        method: StringId,
-        args: &[ValueId],
-        span: Span,
-    ) -> Option<Result<Value>> {
-        let unwrap = self.arena.intern("unwrap");
-        let index = self.arena.intern("index");
-        if class == ClassId::FALLIBLE && method == unwrap {
-            Some(self.fallible_unwrap_value(args, span))
-        } else if class == ClassId::INDEXABLE && method == index {
-            Some(self.indexable_index_value(output_expr_id, args, span))
-        } else {
-            None
-        }
-    }
-
-    fn fallible_unwrap_value(
-        &mut self,
-        args: &[ValueId],
-        span: Span,
-    ) -> Result<Value> {
-        let recv = *args
-            .first()
-            .unwrap_or_else(|| typechecked!("unwrap", "1 arg"));
-        let recv_ty = self.arena.meta(recv).and_then(|m| {
-            self.checked
-                .types
-                .to_type_id(m.repr)
-                .or_else(|| self.checked.types.to_type_id(m.ty))
-        });
-        match self.arena.payload(recv).cloned() {
-            Some(Payload::Variant { tag: 1, vals })
-                if recv_ty.is_some_and(|ty| ty == TypeId::OPTION) =>
-            {
-                vals.first()
-                    .and_then(|id| self.arena.value(*id).cloned())
-                    .ok_or_else(|| {
-                        typechecked!("unwrap", "Option.Some payload")
-                    })
-            }
-            Some(Payload::Variant { tag: 0, .. })
-                if recv_ty.is_some_and(|ty| ty == TypeId::OPTION) =>
-            {
-                Err(Error::runtime(span, "cannot unwrap Option.None"))
-            }
-            Some(Payload::Variant { tag: 0, vals })
-                if recv_ty.is_some_and(|ty| ty == TypeId::RESULT) =>
-            {
-                vals.first()
-                    .and_then(|id| self.arena.value(*id).cloned())
-                    .ok_or_else(|| typechecked!("unwrap", "Result.Ok payload"))
-            }
-            Some(Payload::Variant { tag: 1, .. })
-                if recv_ty.is_some_and(|ty| ty == TypeId::RESULT) =>
-            {
-                Err(Error::runtime(span, "cannot unwrap Result.Err"))
-            }
-            _ => typechecked!("unwrap", "Fallible"),
-        }
-    }
-
-    async fn dispatch_async_map_class_method(
-        &mut self,
-        output: OutputMeta,
-        class: ClassId,
-        method: StringId,
-        args: &[ValueId],
-        span: Span,
-    ) -> Result<Option<Value>> {
-        let index = self.arena.intern("index");
-        let get = self.arena.intern("get");
-        let eq = self.arena.intern("eq");
-        let compare = self.arena.intern("compare");
-        let concat = self.arena.intern("concat");
-        let base_id = args.first().copied();
-        let idx_id = args.get(1).copied();
-        let map = base_id.and_then(|id| self.arena.get_map(id).cloned());
-
-        if class == ClassId::EQ && method == eq {
-            let other =
-                args.get(1).and_then(|id| self.arena.get_map(*id)).cloned();
-            match (map, other) {
-                (Some(map), Some(other)) => {
-                    let b = self.map_eq_maps(&map, &other, span).await?;
-                    Ok(Some(self.value_for_output(output, Payload::Bool(b))))
-                }
-                (Some(_), None) => typechecked!("Eq:eq", "Map"),
-                _ => Ok(None),
-            }
-        } else if class == ClassId::ORD && method == compare {
-            let other =
-                args.get(1).and_then(|id| self.arena.get_map(*id)).cloned();
-            match (map, other) {
-                (Some(map), Some(other)) => {
-                    let payload =
-                        match self.map_cmp_maps(&map, &other, span).await? {
-                            Ordering::Less => Payload::lt(),
-                            Ordering::Equal => Payload::eq_ord(),
-                            Ordering::Greater => Payload::gt(),
-                        };
-                    let value = match output {
-                        OutputMeta::Payload => self.value_from_meta(
-                            payload,
-                            self.checked.types.meta_ordering(),
-                        ),
-                        _ => self.value_for_output(output, payload),
-                    };
-                    Ok(Some(value))
-                }
-                (Some(_), None) => typechecked!("Ord:compare", "Map"),
-                _ => Ok(None),
-            }
-        } else if class == ClassId::CONCATABLE && method == concat {
-            let other =
-                args.get(1).and_then(|id| self.arena.get_map(*id)).cloned();
-            match (map, other) {
-                (Some(map), Some(other)) => {
-                    let map = self.map_merge_maps(&map, &other, span).await?;
-                    Ok(Some(
-                        self.value_for_output(
-                            output,
-                            Payload::Map(Arc::new(map)),
-                        ),
-                    ))
-                }
-                (Some(_), None) => typechecked!("Concatable:concat", "Map"),
-                _ => Ok(None),
-            }
-        } else if class == ClassId::INDEXABLE && method == index {
-            match (map, idx_id) {
-                (Some(map), Some(idx_id)) => {
-                    let value = self
-                        .map_lookup_id(&map, idx_id, span)
-                        .await?
-                        .and_then(|id| self.arena.value(id).cloned())
-                        .ok_or_else(|| {
-                            Error::runtime(span, "map key not found")
-                        })?;
-                    Ok(Some(self.value_for_output_value(output, value)))
-                }
-                _ => Ok(None),
-            }
-        } else if class == ClassId::INDEXABLE && method == get {
-            match (map, idx_id) {
-                (Some(map), Some(idx_id)) => {
-                    let payload = self
-                        .map_lookup_id(&map, idx_id, span)
-                        .await?
-                        .map(Payload::some)
-                        .unwrap_or_else(Payload::none);
-                    Ok(Some(self.value_for_output(output, payload)))
-                }
-                _ => Ok(None),
-            }
-        } else {
-            Ok(None)
-        }
-    }
-
-    fn indexable_index_value(
-        &mut self,
-        output_expr_id: Option<ExprId>,
-        args: &[ValueId],
-        span: Span,
-    ) -> Result<Value> {
-        let base_id = *args
-            .first()
-            .unwrap_or_else(|| typechecked!("Indexable:index", "2 args"));
-        let idx_id = *args
-            .get(1)
-            .unwrap_or_else(|| typechecked!("Indexable:index", "2 args"));
-        let base = self
-            .arena
-            .payload(base_id)
-            .cloned()
-            .unwrap_or_else(|| invariant!("index base in arena"));
-        let idx = self
-            .arena
-            .payload(idx_id)
-            .cloned()
-            .unwrap_or_else(|| invariant!("index arg in arena"));
-
-        match (&base, &idx) {
-            (Payload::Array(elems), Payload::Int(i)) => {
-                let index = if *i < 0 {
-                    elems.len().checked_sub((-*i) as usize)
-                } else {
-                    Some(*i as usize)
-                };
-                index
-                    .and_then(|idx| elems.get(idx))
-                    .and_then(|id| self.arena.value(*id).cloned())
-                    .ok_or_else(|| {
-                        Error::runtime(
-                            span,
-                            format!("array index {i} out of bounds"),
-                        )
-                    })
-            }
-            (Payload::Map(_), _) => {
-                typechecked!("Indexable:index", "async Map index")
-            }
-            (Payload::String(sid), Payload::Int(i)) => {
-                let s = self.arena.get_str(*sid).unwrap_or("");
-                let len = s.chars().count() as i64;
-                let index = if *i < 0 { len + *i } else { *i };
-                s.chars()
-                    .nth(index as usize)
-                    .map(|c| {
-                        self.value_for_optional_expr(
-                            output_expr_id,
-                            Payload::Char(c),
-                        )
-                    })
-                    .ok_or_else(|| {
-                        Error::runtime(
-                            span,
-                            format!("string index {i} out of bounds"),
-                        )
-                    })
-            }
-            _ => typechecked!("Indexable:index", "Array, Map, or String"),
-        }
-    }
-
-    /// Dispatch to builtin class method implementations.
-    ///
-    /// Handles all class methods defined in `class.rs`. Sync methods execute
-    /// directly; async HOFs use the trampoline pattern.
-    fn dispatch_builtin_class_method(
-        &mut self,
-        dispatch: &ClassDispatch,
-    ) -> Result<Payload> {
-        let class = dispatch.class;
-        let method = dispatch.method;
-        let args = dispatch.args.as_slice();
-        let span = dispatch.span;
-        let val = |i: usize| {
-            self.arena
-                .payload(args[i])
-                .cloned()
-                .unwrap_or_else(|| invariant!("class method arg in arena"))
-        };
-
-        match self.class_methods.lookup(class, method) {
-            Some(MethodFn::Binary(_)) if class == ClassId::ORD => {
-                let left =
-                    self.arena.value(args[0]).cloned().unwrap_or_else(|| {
-                        invariant!("class method arg in arena")
-                    });
-                let right =
-                    self.arena.value(args[1]).cloned().unwrap_or_else(|| {
-                        invariant!("class method arg in arena")
-                    });
-                let mut ctx = ClassCtx {
-                    arena: &mut self.arena,
-                    runtime_types: &mut self.checked.types,
-                    registry: &self.registry,
-                    regex_cache: &self.checked.regex_cache,
-                    span,
-                };
-                Ok(class::Ord::compare_values(&mut ctx, &left, &right))
-            }
-            Some(MethodFn::Binary(_)) if class == ClassId::EQ => {
-                let left =
-                    self.arena.value(args[0]).cloned().unwrap_or_else(|| {
-                        invariant!("class method arg in arena")
-                    });
-                let right =
-                    self.arena.value(args[1]).cloned().unwrap_or_else(|| {
-                        invariant!("class method arg in arena")
-                    });
-                let mut ctx = ClassCtx {
-                    arena: &mut self.arena,
-                    runtime_types: &mut self.checked.types,
-                    registry: &self.registry,
-                    regex_cache: &self.checked.regex_cache,
-                    span,
-                };
-                Ok(class::Eq::eq_values(&mut ctx, &left, &right))
-            }
-            Some(MethodFn::Binary(_)) if class == ClassId::CONCATABLE => {
-                let left =
-                    self.arena.value(args[0]).cloned().unwrap_or_else(|| {
-                        invariant!("class method arg in arena")
-                    });
-                let right =
-                    self.arena.value(args[1]).cloned().unwrap_or_else(|| {
-                        invariant!("class method arg in arena")
-                    });
-                let mut ctx = ClassCtx {
-                    arena: &mut self.arena,
-                    runtime_types: &mut self.checked.types,
-                    registry: &self.registry,
-                    regex_cache: &self.checked.regex_cache,
-                    span,
-                };
-                class::Concatable::concat_values(&mut ctx, &left, &right)
-            }
-            Some(MethodFn::Binary(_)) => {
-                let left = val(0);
-                let right = val(1);
-                let mut ctx = ClassCtx {
-                    arena: &mut self.arena,
-                    runtime_types: &mut self.checked.types,
-                    registry: &self.registry,
-                    regex_cache: &self.checked.regex_cache,
-                    span,
-                };
-                self.class_methods
-                    .dispatch_binary(class, method, &mut ctx, &left, &right)
-            }
-            Some(MethodFn::Unary(_)) if class == ClassId::DISPLAY => {
-                let v =
-                    self.arena.value(args[0]).cloned().unwrap_or_else(|| {
-                        invariant!("class method arg in arena")
-                    });
-                let mut ctx = ClassCtx {
-                    arena: &mut self.arena,
-                    runtime_types: &mut self.checked.types,
-                    registry: &self.registry,
-                    regex_cache: &self.checked.regex_cache,
-                    span,
-                };
-                Ok(class::Display::display_value(&mut ctx, &v))
-            }
-            Some(MethodFn::Unary(_)) if class == ClassId::FALLIBLE => {
-                let v =
-                    self.arena.value(args[0]).cloned().unwrap_or_else(|| {
-                        invariant!("class method arg in arena")
-                    });
-                let mut ctx = ClassCtx {
-                    arena: &mut self.arena,
-                    runtime_types: &mut self.checked.types,
-                    registry: &self.registry,
-                    regex_cache: &self.checked.regex_cache,
-                    span,
-                };
-                class::Fallible::unwrap_value(&mut ctx, &v)
-            }
-            Some(MethodFn::Unary(_)) => {
-                let v = val(0);
-                let mut ctx = ClassCtx {
-                    arena: &mut self.arena,
-                    runtime_types: &mut self.checked.types,
-                    registry: &self.registry,
-                    regex_cache: &self.checked.regex_cache,
-                    span,
-                };
-                self.class_methods
-                    .dispatch_unary(class, method, &mut ctx, &v)
-            }
-            Some(MethodFn::Nullary(_)) => {
-                let ty_id = dispatch.output_ty.unwrap_or_else(|| {
-                    let id = dispatch
-                        .output_expr_id
-                        .or(dispatch.dispatch_expr_id)
-                        .unwrap_or_else(|| {
-                            typechecked!(
-                                "nullary class method",
-                                "expression id"
-                            )
-                        });
-                    self.checked.expr(id).ty
-                });
-                let ty_id = self.runtime_ty(ty_id);
-                let ty = self.checked.types.get(ty_id).clone();
-                let mut ctx = ClassCtx {
-                    arena: &mut self.arena,
-                    runtime_types: &mut self.checked.types,
-                    registry: &self.registry,
-                    regex_cache: &self.checked.regex_cache,
-                    span,
-                };
-                self.class_methods
-                    .dispatch_nullary(class, method, &mut ctx, &ty)
-            }
-            Some(MethodFn::Convert(_)) => {
-                let v =
-                    self.arena.value(args[0]).cloned().unwrap_or_else(|| {
-                        invariant!("class method arg in arena")
-                    });
-                let id = dispatch
-                    .output_expr_id
-                    .or(dispatch.dispatch_expr_id)
-                    .unwrap_or_else(|| {
-                        typechecked!("convert class method", "expression id")
-                    });
-                let edge = dispatch
-                    .output_expr_id
-                    .and_then(|edge_id| {
-                        self.approved_newtype_edge_meta(edge_id)
-                    })
-                    .or_else(|| self.approved_newtype_edge_meta(id));
-                match edge {
-                    Some(meta) if class == ClassId::INTO => {
-                        Ok(self.value_with_context_meta(v, meta).payload)
-                    }
-                    Some(meta) if class == ClassId::TRY_INTO => {
-                        let val = self.value_with_context_meta(v, meta);
-                        Ok(self.make_result_ok_value(val, span))
-                    }
-                    _ => {
-                        let ty_id = self.checked.expr(id).ty;
-                        let ty = self.checked.types.get(ty_id).clone();
-                        let mut ctx = ClassCtx {
-                            arena: &mut self.arena,
-                            runtime_types: &mut self.checked.types,
-                            registry: &self.registry,
-                            regex_cache: &self.checked.regex_cache,
-                            span,
-                        };
-                        match class {
-                            ClassId::INTO => {
-                                class::Into::into_value(&mut ctx, &v, &ty)
-                            }
-                            ClassId::TRY_INTO => {
-                                class::TryInto::try_into_value(
-                                    &mut ctx, &v, &ty,
-                                )
-                            }
-                            _ => self.class_methods.dispatch_convert(
-                                class, method, &mut ctx, &v.payload, &ty,
-                            ),
-                        }
-                    }
-                }
-            }
-            Some(MethodFn::Hof(_)) => {
-                // HOFs need async; caller should use dispatch_class_method
-                typechecked!("builtin Hof", "async context")
-            }
-            None => typechecked!("class method", "registered"),
-        }
-    }
-
-    /// Run a HoF method using a trampoline loop.
-    ///
-    /// The loop is necessary because Rust lacks tail-call optimization. Without
-    /// it, processing a 10,000-element array would create 10,000 stack frames.
-    /// The trampoline keeps stack depth O(1) regardless of input size.
-    async fn run_hof_trampoline(
-        &mut self,
-        output: OutputMeta,
-        starter: hof::MethodFn,
-        args: &[ValueId],
-        span: Span,
-    ) -> Result<Value> {
-        let mut ctx = ClassCtx {
-            arena: &mut self.arena,
-            runtime_types: &mut self.checked.types,
-            registry: &self.registry,
-            regex_cache: &self.checked.regex_cache,
-            span,
-        };
-        let result = starter(&mut ctx, args)?;
-
-        // Trampoline loop; see doc comment for why we avoid recursion here.
-        let mut flow = ControlFlow::Continue(result);
-        while let ControlFlow::Continue(result) = flow {
-            match result {
-                hof::Step::Done(v) => {
-                    let output = self.refine_variant_output(output, &v, args);
-                    flow = ControlFlow::Break(self.value_for_output(output, v));
-                }
-                hof::Step::DoneValue(id) => {
-                    let value =
-                        self.arena.value(id).cloned().unwrap_or_else(|| {
-                            invariant!("HoF result in arena")
-                        });
-                    let output = self.refine_variant_output(
-                        output,
-                        &value.payload,
-                        args,
-                    );
-                    flow = ControlFlow::Break(
-                        self.value_for_output_value(output, value),
-                    );
-                }
-                hof::Step::Compare(cmp) => {
-                    let method = self.arena.intern("compare");
-                    let value = self
-                        .dispatch_class_method_value(ClassDispatch {
-                            dispatch_expr_id: None,
-                            output_expr_id: None,
-                            output_ty: Some(RuntimeTyId::from(
-                                TyArena::ORDERING,
-                            )),
-                            class: ClassId::ORD,
-                            method,
-                            args: cmp.args.iter().copied().collect(),
-                            span,
-                        })
-                        .await?;
-                    let id = self.add_value(value, span);
-                    let mut ctx = ClassCtx {
-                        arena: &mut self.arena,
-                        runtime_types: &mut self.checked.types,
-                        registry: &self.registry,
-                        regex_cache: &self.checked.regex_cache,
-                        span,
-                    };
-                    flow = ControlFlow::Continue(
-                        ctx.resume_compare(cmp.state, id)?,
-                    );
-                }
-                hof::Step::Eq(eq) => {
-                    let method = self.arena.intern("eq");
-                    let value = self
-                        .dispatch_class_method_value(ClassDispatch {
-                            dispatch_expr_id: None,
-                            output_expr_id: None,
-                            output_ty: Some(RuntimeTyId::from(TyArena::BOOL)),
-                            class: ClassId::EQ,
-                            method,
-                            args: eq.args.iter().copied().collect(),
-                            span,
-                        })
-                        .await?;
-                    let id = self.add_value(value, span);
-                    let mut ctx = ClassCtx {
-                        arena: &mut self.arena,
-                        runtime_types: &mut self.checked.types,
-                        registry: &self.registry,
-                        regex_cache: &self.checked.regex_cache,
-                        span,
-                    };
-                    flow = ControlFlow::Continue(ctx.resume_eq(eq.state, id)?);
-                }
-                hof::Step::ClassCall(call) => {
-                    let value = self
-                        .dispatch_class_method_value(ClassDispatch {
-                            dispatch_expr_id: None,
-                            output_expr_id: None,
-                            output_ty: call.output_ty,
-                            class: call.class,
-                            method: call.method,
-                            args: call.args.iter().copied().collect(),
-                            span,
-                        })
-                        .await?;
-                    let id = self.add_value(value, span);
-                    let mut ctx = ClassCtx {
-                        arena: &mut self.arena,
-                        runtime_types: &mut self.checked.types,
-                        registry: &self.registry,
-                        regex_cache: &self.checked.regex_cache,
-                        span,
-                    };
-                    flow = ControlFlow::Continue(
-                        ctx.resume_class_call(call.state, id)?,
-                    );
-                }
-                hof::Step::Invoke(cont) => {
-                    let call_result = self
-                        .invoke_callable(cont.callee, &cont.args, span)
-                        .await?;
-                    let mut ctx = ClassCtx {
-                        arena: &mut self.arena,
-                        runtime_types: &mut self.checked.types,
-                        registry: &self.registry,
-                        regex_cache: &self.checked.regex_cache,
-                        span,
-                    };
-                    flow =
-                        ControlFlow::Continue(ctx.resume(cont, call_result)?);
-                }
-            }
-        }
-        match flow {
-            ControlFlow::Break(value) => Ok(value),
-            ControlFlow::Continue(_) => invariant!("HoF trampoline completed"),
-        }
-    }
-
     /// Invoke a callable value (closure/function) with arguments.
     ///
     /// Used by higher-order primitives to call user-provided functions.
     #[async_recursion]
-    async fn invoke_callable(
+    pub(crate) async fn invoke_callable(
         &mut self,
         callee_id: ValueId,
         args: &[ValueId],
@@ -1769,14 +1185,14 @@ impl<I: IoContext> Interpreter<'_, I> {
                 expr_id,
             } => {
                 let result = self
-                    .invoke_class_method_fn_value(ClassMethodInvoke {
+                    .dispatch_method(
                         class,
                         method,
-                        dispatch_expr_id: expr_id,
-                        output_expr_id: None,
-                        args: SmallVec::from_slice(args),
+                        expr_id,
+                        None,
+                        SmallVec::from_slice(args),
                         span,
-                    })
+                    )
                     .await?;
                 let result = self.callable_ret(callee_ty).map_or(
                     result.clone(),
@@ -1811,29 +1227,28 @@ impl<I: IoContext> Interpreter<'_, I> {
         }
     }
 
-    /// Invoke a primitive with pre-evaluated arguments.
-    #[async_recursion]
-    async fn invoke_primitive(
+    /// Execute a selected builtin implementation.
+    ///
+    /// The caller supplies output metadata and call metadata. The sync branch
+    /// calls the function pointer directly. The async branch is the only path
+    /// that awaits a boxed future. Both branches finish through `BuiltinCtx`
+    /// so output refinement stays centralized.
+    pub(super) async fn invoke_builtin(
         &mut self,
-        prim: PrimFn,
-        args: &[ValueId],
+        imp: builtins::Impl,
+        args: SmallVec<[ValueId; 4]>,
         span: Span,
+        output: OutputMeta,
+        meta: Option<builtins::CallMeta>,
     ) -> Result<Value> {
-        let arg_ids: SmallVec<[ValueId; 4]> = args.iter().copied().collect();
+        let mut ctx = BuiltinCtx::new(self, span, output, meta);
 
-        let mut ctx = PrimCtx {
-            arena: &mut self.arena,
-            runtime_types: &mut self.checked.types,
-            io: &mut self.io,
-            span,
+        let id = match imp {
+            builtins::Impl::Sync(f) => f(&mut ctx, args)?,
+            builtins::Impl::Async(f) => f(&mut ctx, args).await?,
         };
-        let result_id = prim(&mut ctx, arg_ids).await?;
 
-        Ok(self
-            .arena
-            .value(result_id)
-            .cloned()
-            .unwrap_or_else(|| invariant!("ValueId in arena")))
+        ctx.finish(id)
     }
 
     /// Call a function or closure value.
@@ -1929,26 +1344,15 @@ impl<I: IoContext> Interpreter<'_, I> {
                 ) {
                     Ok(self.value_for_expr(call_id, partial))
                 } else {
-                    self.invoke_class_method_fn_value(ClassMethodInvoke {
+                    self.call_method(
+                        call_id,
                         class,
                         method,
-                        dispatch_expr_id: expr_id,
-                        output_expr_id: Some(call_id),
-                        args: SmallVec::from_slice(&vals),
+                        expr_id,
+                        SmallVec::from_slice(&vals),
                         span,
-                    })
+                    )
                     .await
-                    .map(|value| {
-                        let kind = self
-                            .checked
-                            .class_registry
-                            .lookup_by_name(class)
-                            .unwrap_or_else(|| {
-                                typechecked!("class method class", "known")
-                            });
-                        let meta = self.class_method_call_meta(kind, call_id);
-                        self.value_with_context_meta(value, meta)
-                    })
                 }
             }
             // `loop` continuation: calling it signals loop continuation
@@ -2165,14 +1569,14 @@ impl<I: IoContext> Interpreter<'_, I> {
                     method,
                     expr_id,
                 } => {
-                    self.invoke_class_method_fn_value(ClassMethodInvoke {
+                    self.dispatch_method(
                         class,
                         method,
-                        dispatch_expr_id: expr_id,
-                        output_expr_id: output_expr_id.or(partial_expr_id),
-                        args: SmallVec::from_slice(&all_args),
+                        expr_id,
+                        output_expr_id.or(partial_expr_id),
+                        SmallVec::from_slice(&all_args),
                         span,
-                    })
+                    )
                     .await
                 }
                 _ => typechecked!("resolve_partial_app", "Callable callee"),

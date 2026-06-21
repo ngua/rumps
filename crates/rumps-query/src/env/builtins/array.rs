@@ -1,7 +1,7 @@
 use rumps_query_macros::scheme;
 
-use super::super::{Environment, Module, PrimDef};
-use crate::primitives::{Array, Prim};
+use super::super::{Environment, Module};
+use crate::builtins::{Array, Def, Impl};
 
 impl Environment {
     pub(super) fn register_array_builtin(&mut self) {
@@ -10,335 +10,335 @@ impl Environment {
         let arr_id = self.consts.strings.intern("Array");
         self.modules.insert(
             arr_id,
-            Module::from_prims(
+            Module::from_defs(
                 &[
-                    PrimDef {
+                    Def {
                         name: "push",
-                        f: Array::push,
+                        imp: Impl::Sync(Array::push),
                         ty: scheme!(a, forall T. (Array[T], T) -> Array[T]),
                     },
-                    PrimDef {
+                    Def {
                         name: "pop",
-                        f: Array::pop,
+                        imp: Impl::Sync(Array::pop),
                         ty: scheme!(a, forall T. (Array[T]) -> Array[T]),
                     },
-                    PrimDef {
+                    Def {
                         name: "head",
-                        f: Array::head,
+                        imp: Impl::Sync(Array::head),
                         ty: scheme!(a, forall T. (Array[T]) -> Option[T]),
                     },
-                    PrimDef {
+                    Def {
                         name: "tail",
-                        f: Array::tail,
+                        imp: Impl::Sync(Array::tail),
                         ty: scheme!(a, forall T. (Array[T]) -> Array[T]),
                     },
-                    PrimDef {
+                    Def {
                         name: "last",
-                        f: Array::last,
+                        imp: Impl::Sync(Array::last),
                         ty: scheme!(a, forall T. (Array[T]) -> Option[T]),
                     },
-                    PrimDef {
+                    Def {
                         name: "init",
-                        f: Array::init,
+                        imp: Impl::Sync(Array::init),
                         ty: scheme!(a, forall T. (Array[T]) -> Array[T]),
                     },
-                    PrimDef {
+                    Def {
                         name: "uncons",
-                        f: Array::uncons,
+                        imp: Impl::Sync(Array::uncons),
                         ty: scheme!(
                             a,
                             forall T. (Array[T]) -> Option[(T, Array[T])]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "unsnoc",
-                        f: Array::unsnoc,
+                        imp: Impl::Sync(Array::unsnoc),
                         ty: scheme!(
                             a,
                             forall T. (Array[T]) -> Option[(Array[T], T)]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "take",
-                        f: Array::take,
+                        imp: Impl::Sync(Array::take),
                         ty: scheme!(a, forall T. (Int, Array[T]) -> Array[T]),
                     },
-                    PrimDef {
+                    Def {
                         name: "drop",
-                        f: Array::drop,
+                        imp: Impl::Sync(Array::drop),
                         ty: scheme!(a, forall T. (Int, Array[T]) -> Array[T]),
                     },
-                    PrimDef {
+                    Def {
                         name: "split-at",
-                        f: Array::split_at,
+                        imp: Impl::Sync(Array::split_at),
                         ty: scheme!(
                             a,
                             forall T. (Int, Array[T]) -> (Array[T], Array[T])
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "indexed",
-                        f: Array::indexed,
+                        imp: Impl::Sync(Array::indexed),
                         ty: scheme!(a, forall T. (Array[T]) -> Array[(Int, T)]),
                     },
-                    PrimDef {
+                    Def {
                         name: "singleton",
-                        f: Array::singleton,
+                        imp: Impl::Sync(Array::singleton),
                         ty: scheme!(a, forall T. (T) -> Array[T]),
                     },
-                    PrimDef {
+                    Def {
                         name: "cons",
-                        f: Array::cons,
+                        imp: Impl::Sync(Array::cons),
                         ty: scheme!(a, forall T. (T, Array[T]) -> Array[T]),
                     },
-                    PrimDef {
+                    Def {
                         name: "set-at",
-                        f: Array::set_at,
+                        imp: Impl::Sync(Array::set_at),
                         ty: scheme!(
                             a,
                             forall T. (Array[T], Int, T) -> Option[Array[T]]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "remove-at",
-                        f: Array::remove_at,
+                        imp: Impl::Sync(Array::remove_at),
                         ty: scheme!(
                             a,
                             forall T. (Array[T], Int) -> Option[Array[T]]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "insert-at",
-                        f: Array::insert_at,
+                        imp: Impl::Sync(Array::insert_at),
                         ty: scheme!(
                             a,
                             forall T. (Array[T], Int, T) -> Array[T]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "adjust-at",
-                        f: Array::placeholder,
+                        imp: Impl::Async(Array::adjust_at),
                         ty: scheme!(
                             a,
                             forall T. ((T) -> T, Array[T], Int) -> Option[Array[T]]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "flatten",
-                        f: Array::flatten,
+                        imp: Impl::Sync(Array::flatten),
                         ty: scheme!(
                             a,
                             forall T. (Array[Array[T]]) -> Array[T]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "chunks-of",
-                        f: Array::chunks_of,
+                        imp: Impl::Sync(Array::chunks_of),
                         ty: scheme!(
                             a,
                             forall T. (Word, Array[T]) -> Array[Array[T]]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "windows",
-                        f: Array::windows,
+                        imp: Impl::Sync(Array::windows),
                         ty: scheme!(
                             a,
                             forall T. (Word, Array[T]) -> Array[Array[T]]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "replicate",
-                        f: Array::replicate,
+                        imp: Impl::Sync(Array::replicate),
                         ty: scheme!(a, forall T. (Int, T) -> Array[T]),
                     },
-                    PrimDef {
+                    Def {
                         name: "sort",
-                        f: Array::placeholder,
+                        imp: Impl::Async(Array::sort),
                         ty: scheme!(
                             a,
                             forall T: Ord. (Array[T]) -> Array[T]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "minimum",
-                        f: Array::placeholder,
+                        imp: Impl::Async(Array::minimum),
                         ty: scheme!(
                             a,
                             forall T: Ord. (Array[T]) -> Option[T]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "maximum",
-                        f: Array::placeholder,
+                        imp: Impl::Async(Array::maximum),
                         ty: scheme!(
                             a,
                             forall T: Ord. (Array[T]) -> Option[T]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "contains",
-                        f: Array::placeholder,
+                        imp: Impl::Async(Array::contains),
                         ty: scheme!(
                             a,
                             forall T: Eq. (Array[T], T) -> Bool
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "elem-index",
-                        f: Array::placeholder,
+                        imp: Impl::Async(Array::elem_index),
                         ty: scheme!(
                             a,
                             forall T: Eq. (Array[T], T) -> Option[Int]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "slice",
-                        f: Array::slice,
+                        imp: Impl::Sync(Array::slice),
                         ty: scheme!(
                             a,
                             forall T. (Array[T], Int, Int) -> Array[T]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "concat",
-                        f: Array::concat,
+                        imp: Impl::Sync(Array::concat),
                         ty: scheme!(
                             a,
                             forall T. (Array[T], Array[T]) -> Array[T]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "sort-by",
-                        f: Array::placeholder,
+                        imp: Impl::Async(Array::sort_by),
                         ty: scheme!(
                             a,
                             forall T. ((T, T) -> Ordering, Array[T]) -> Array[T]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "zip",
-                        f: Array::zip,
+                        imp: Impl::Sync(Array::zip),
                         ty: scheme!(
                             a,
                             forall T, U. (Array[T], Array[U]) -> Array[(T, U)]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "zip-with",
-                        f: Array::placeholder,
+                        imp: Impl::Async(Array::zip_with),
                         ty: scheme!(
                             a,
                             forall T, U, V. ((T, U) -> V, Array[T], Array[U]) -> Array[V]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "any",
-                        f: Array::placeholder,
+                        imp: Impl::Async(Array::any),
                         ty: scheme!(
                             a,
                             forall T. ((T) -> Bool, Array[T]) -> Bool
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "all",
-                        f: Array::placeholder,
+                        imp: Impl::Async(Array::all),
                         ty: scheme!(
                             a,
                             forall T. ((T) -> Bool, Array[T]) -> Bool
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "find",
-                        f: Array::placeholder,
+                        imp: Impl::Async(Array::find),
                         ty: scheme!(
                             a,
                             forall T. ((T) -> Bool, Array[T]) -> Option[T]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "find-index",
-                        f: Array::placeholder,
+                        imp: Impl::Async(Array::find_index),
                         ty: scheme!(
                             a,
                             forall T. ((T) -> Bool, Array[T]) -> Option[Int]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "find-indices",
-                        f: Array::placeholder,
+                        imp: Impl::Async(Array::find_indices),
                         ty: scheme!(
                             a,
                             forall T. ((T) -> Bool, Array[T]) -> Array[Int]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "take-while",
-                        f: Array::placeholder,
+                        imp: Impl::Async(Array::take_while),
                         ty: scheme!(
                             a,
                             forall T. ((T) -> Bool, Array[T]) -> Array[T]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "drop-while",
-                        f: Array::placeholder,
+                        imp: Impl::Async(Array::drop_while),
                         ty: scheme!(
                             a,
                             forall T. ((T) -> Bool, Array[T]) -> Array[T]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "span",
-                        f: Array::placeholder,
+                        imp: Impl::Async(Array::span),
                         ty: scheme!(
                             a,
                             forall T. ((T) -> Bool, Array[T]) -> (Array[T], Array[T])
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "break",
-                        f: Array::placeholder,
+                        imp: Impl::Async(Array::break_),
                         ty: scheme!(
                             a,
                             forall T. ((T) -> Bool, Array[T]) -> (Array[T], Array[T])
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "partition",
-                        f: Array::placeholder,
+                        imp: Impl::Async(Array::partition),
                         ty: scheme!(
                             a,
                             forall T. ((T) -> Bool, Array[T]) -> (Array[T], Array[T])
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "concat-map",
-                        f: Array::placeholder,
+                        imp: Impl::Async(Array::concat_map),
                         ty: scheme!(
                             a,
                             forall T, U. ((T) -> Array[U], Array[T]) -> Array[U]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "map-option",
-                        f: Array::placeholder,
+                        imp: Impl::Async(Array::map_option),
                         ty: scheme!(
                             a,
                             forall T, U. ((T) -> Option[U], Array[T]) -> Array[U]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "unzip",
-                        f: Array::unzip,
+                        imp: Impl::Sync(Array::unzip),
                         ty: scheme!(
                             a,
                             forall T, U. (Array[(T, U)]) -> (Array[T], Array[U])
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "intersperse",
-                        f: Array::intersperse,
+                        imp: Impl::Sync(Array::intersperse),
                         ty: scheme!(a, forall T. (T, Array[T]) -> Array[T]),
                     },
                 ],

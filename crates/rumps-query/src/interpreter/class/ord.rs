@@ -1,3 +1,5 @@
+use futures::future::BoxFuture;
+
 use super::*;
 
 pub(crate) struct Ord;
@@ -6,93 +8,135 @@ impl Class for Ord {
     const ID: ClassId = ClassId::ORD;
 
     fn register_all(methods: &mut ClassMethods, i: &mut StringInterner) {
-        Self::register(methods, i, "compare", MethodFn::Binary(Self::compare));
+        Self::register(
+            methods,
+            i,
+            "compare",
+            MethodAbi::Binary,
+            Builtin::Selected(Self::select),
+        );
     }
 }
 
 impl Ord {
-    pub(crate) fn compare(
-        ctx: &mut ClassCtx<'_>,
-        l: &Payload,
-        r: &Payload,
-    ) -> Result<Payload> {
-        let ord = Self::cmp_values(ctx, l, r);
-        Ok(Payload::Int(match ord {
-            Ordering::Less => -1,
-            Ordering::Equal => 0,
-            Ordering::Greater => 1,
-        }))
-    }
-
-    pub(crate) fn compare_values(
-        ctx: &mut ClassCtx<'_>,
-        l: &Value,
-        r: &Value,
-    ) -> Payload {
-        let ord = Self::cmp_runtime_values(ctx, l, r);
-        Payload::Int(match ord {
-            Ordering::Less => -1,
-            Ordering::Equal => 0,
-            Ordering::Greater => 1,
+    pub(crate) fn select(
+        interp: &mut Interpreter<'_, '_>,
+        d: &Dispatch,
+    ) -> Result<builtins::Call> {
+        let imp = if interp
+            .arena
+            .payload(d.args[0])
+            .is_some_and(|v| matches!(v, Payload::Map(_)))
+        {
+            Impl::Async(Self::map_compare)
+        } else {
+            Impl::Sync(Self::compare)
+        };
+        Ok(builtins::Call {
+            imp,
+            args: d.args.clone(),
+            span: d.span,
+            output: interp.class_output_meta(
+                d.output_expr_id,
+                d.dispatch_expr_id,
+                d.output_ty,
+                d.class,
+            ),
+            meta: None,
         })
     }
 
-    /// Recursive comparison helper returning `Ordering`.
-    fn cmp_values(
-        ctx: &mut ClassCtx<'_>,
+    pub(crate) fn compare(
+        ctx: &mut BuiltinCtx<'_, '_, '_>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> Result<ValueId> {
+        let l = args[0];
+        let r = args[1];
+        let (l, r) = {
+            let vals = ctx.vals();
+            (vals.value(l)?.clone(), vals.value(r)?.clone())
+        };
+        let ord = Self::value_cmp(&mut ctx.vals(), &l, &r)?;
+        Ok(ctx.vals().add(Payload::Int(match ord {
+            Ordering::Less => -1,
+            Ordering::Equal => 0,
+            Ordering::Greater => 1,
+        })))
+    }
+
+    pub(crate) fn map_compare<'a>(
+        ctx: &'a mut BuiltinCtx<'_, '_, '_>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> BoxFuture<'a, Result<ValueId>> {
+        Box::pin(async move {
+            let l = args[0];
+            let r = args[1];
+            let (l, r) = {
+                let vals = ctx.vals();
+                (vals.value(l)?.clone(), vals.value(r)?.clone())
+            };
+            let ord = match (&l.payload, &r.payload) {
+                (Payload::Map(l), Payload::Map(r)) => {
+                    ctx.maps().cmp(l, r).await?
+                }
+                (Payload::Map(_), _) => typechecked!("compare", "Map"),
+                _ => typechecked!("compare", "Map"),
+            };
+            Ok(ctx.vals().add(Payload::Int(match ord {
+                Ordering::Less => -1,
+                Ordering::Equal => 0,
+                Ordering::Greater => 1,
+            })))
+        })
+    }
+
+    fn payload_cmp(
+        vals: &mut Values<'_, '_, '_, '_>,
         l: &Payload,
         r: &Payload,
-    ) -> Ordering {
+    ) -> Result<Ordering> {
         match (l, r) {
-            (Payload::Int(a), Payload::Int(b)) => a.cmp(b),
-            (Payload::Word(a), Payload::Word(b)) => a.cmp(b),
-            (Payload::Float(a), Payload::Float(b)) => a.cmp(b),
+            (Payload::Int(a), Payload::Int(b)) => Ok(a.cmp(b)),
+            (Payload::Word(a), Payload::Word(b)) => Ok(a.cmp(b)),
+            (Payload::Float(a), Payload::Float(b)) => Ok(a.cmp(b)),
             (Payload::String(a), Payload::String(b)) => {
-                let sa = ctx.arena.get_str(*a).unwrap_or("");
-                let sb = ctx.arena.get_str(*b).unwrap_or("");
-                sa.cmp(sb)
+                Ok(vals.str(*a)?.cmp(vals.str(*b)?))
             }
-            (Payload::Char(a), Payload::Char(b)) => a.cmp(b),
-            (Payload::Bool(a), Payload::Bool(b)) => a.cmp(b),
-            (Payload::Time(a), Payload::Time(b)) => a.cmp(b),
-            // Arrays: lexicographic comparison
+            (Payload::Char(a), Payload::Char(b)) => Ok(a.cmp(b)),
+            (Payload::Bool(a), Payload::Bool(b)) => Ok(a.cmp(b)),
+            (Payload::Time(a), Payload::Time(b)) => Ok(a.cmp(b)),
             (Payload::Array(a), Payload::Array(b)) => {
-                Self::cmp_seqs(ctx, a.as_slice(), b.as_slice())
+                Self::seq_cmp(vals, a.as_slice(), b.as_slice())
             }
-            // Tuples: lexicographic comparison
             (Payload::Tuple(a), Payload::Tuple(b)) => {
-                Self::cmp_seqs(ctx, a.as_slice(), b.as_slice())
+                Self::seq_cmp(vals, a.as_slice(), b.as_slice())
             }
             (Payload::Map(_), Payload::Map(_)) => {
                 typechecked!("compare", "async Map compare")
             }
-            // Variants compare by tag, then payload.
             (
                 Payload::Variant { tag: i1, vals: p1 },
                 Payload::Variant { tag: i2, vals: p2 },
-            ) => {
-                let idx_ord = i1.cmp(i2);
-                match idx_ord {
-                    Ordering::Equal => Self::cmp_seqs(ctx, p1, p2),
-                    ord => ord,
-                }
-            }
-            _ => typechecked!("compare", "same Ord type"),
+            ) => match i1.cmp(i2) {
+                Ordering::Equal => Self::seq_cmp(vals, p1, p2),
+                ord => Ok(ord),
+            },
+            _ => typechecked!("compare", "Ord instance"),
         }
     }
 
-    fn cmp_runtime_values(
-        ctx: &mut ClassCtx<'_>,
+    fn value_cmp(
+        vals: &mut Values<'_, '_, '_, '_>,
         l: &Value,
         r: &Value,
-    ) -> Ordering {
+    ) -> Result<Ordering> {
         match (&l.payload, &r.payload) {
             (
                 Payload::Variant { tag: i1, vals: p1 },
                 Payload::Variant { tag: i2, vals: p2 },
             ) => {
-                let l_ty = ctx.value_variant_base_type(l);
-                let r_ty = ctx.value_variant_base_type(r);
+                let l_ty = vals.value_variant_base_type(l);
+                let r_ty = vals.value_variant_base_type(r);
                 match l_ty.cmp(&r_ty) {
                     Ordering::Equal => {
                         let idx_ord = if l_ty == Some(TypeId::RESULT) {
@@ -101,40 +145,41 @@ impl Ord {
                             i1.cmp(i2)
                         };
                         match idx_ord {
-                            Ordering::Equal => Self::cmp_seqs(ctx, p1, p2),
-                            ord => ord,
+                            Ordering::Equal => Self::seq_cmp(vals, p1, p2),
+                            ord => Ok(ord),
                         }
                     }
-                    ord => ord,
+                    ord => Ok(ord),
                 }
             }
-            _ => Self::cmp_values(ctx, &l.payload, &r.payload),
+            _ => Self::payload_cmp(vals, &l.payload, &r.payload),
         }
     }
 
-    fn cmp_value_ids(
-        ctx: &mut ClassCtx<'_>,
+    fn id_cmp(
+        vals: &mut Values<'_, '_, '_, '_>,
         l: ValueId,
         r: ValueId,
-    ) -> Ordering {
-        let lv = ctx.arena.value(l).cloned();
-        let rv = ctx.arena.value(r).cloned();
-        match (lv, rv) {
-            (Some(lv), Some(rv)) => Self::cmp_runtime_values(ctx, &lv, &rv),
-            _ => Ordering::Equal,
-        }
+    ) -> Result<Ordering> {
+        let lv = vals.value(l)?.clone();
+        let rv = vals.value(r)?.clone();
+        Self::value_cmp(vals, &lv, &rv)
     }
 
-    /// Lexicographic comparison of sequences of `ValueId`s.
-    fn cmp_seqs(
-        ctx: &mut ClassCtx<'_>,
+    fn seq_cmp(
+        vals: &mut Values<'_, '_, '_, '_>,
         a: &[ValueId],
         b: &[ValueId],
-    ) -> Ordering {
+    ) -> Result<Ordering> {
         a.iter()
             .zip(b.iter())
-            .map(|(ai, bi)| Self::cmp_value_ids(ctx, *ai, *bi))
-            .find(|o| *o != Ordering::Equal)
-            .unwrap_or_else(|| a.len().cmp(&b.len()))
+            .try_fold(Ordering::Equal, |ord, (ai, bi)| match ord {
+                Ordering::Equal => Self::id_cmp(vals, *ai, *bi),
+                ord => Ok(ord),
+            })
+            .map(|ord| match ord {
+                Ordering::Equal => a.len().cmp(&b.len()),
+                ord => ord,
+            })
     }
 }

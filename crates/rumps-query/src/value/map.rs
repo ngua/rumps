@@ -7,7 +7,7 @@
 //! Cloning a `Map` is `O(1)`. Updates path copy `O(log n)` nodes plus the cost
 //! of key comparison. `entries`, `keys`, and `values` are `O(n)` and allocate
 //! `O(n)` result storage. Comparator dependent operations live in
-//! `interpreter::map`.
+//! `builtins::Maps`.
 
 use std::sync::Arc;
 

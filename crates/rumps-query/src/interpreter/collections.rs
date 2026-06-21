@@ -6,18 +6,17 @@ use async_recursion::async_recursion;
 use indexmap::IndexMap;
 use smallvec::SmallVec;
 
-use super::call::ClassDispatch;
-use super::Interpreter;
+use super::{class, Interpreter};
 use crate::ast::{ArrayElem, Expr, ExprId, ObjectEntry};
+use crate::builtins::{BuiltinCtx, OutputMeta};
 use crate::intern::{QualifiedName, StringId};
-use crate::io::IoContext;
 use crate::typecheck::{RuntimeTyId, Ty};
 use crate::value::{
     Map as RumpsMap, Payload, TypeDef, TypeId, Value, ValueId, ValueMeta,
 };
 use crate::{ClassId, Error, Result, Span};
 
-impl<I: IoContext> Interpreter<'_, I> {
+impl Interpreter<'_, '_> {
     /// Evaluate an object literal with potential spread entries.
     ///
     /// Type checker guarantees spreads are on object types.
@@ -395,7 +394,11 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let v_val = self.value_with_context_meta(v_val, v_meta);
                 let k_id = self.add_value(k_val, k_span);
                 let v_id = self.add_value(v_val, v_span);
-                let acc = self.map_insert_id(&acc, k_id, v_id, span).await?;
+                let acc = {
+                    let mut ctx =
+                        BuiltinCtx::new(self, span, OutputMeta::Payload, None);
+                    ctx.maps().insert(&acc, k_id, v_id).await?
+                };
 
                 self.map_lit_entries(tail, acc, span).await
             }
@@ -486,8 +489,16 @@ impl<I: IoContext> Interpreter<'_, I> {
                     let map = entries.as_ref().clone();
                     let key = key.clone();
                     let idx_id = self.add_value(idx_val, span);
-                    self.map_lookup_id(&map, idx_id, span)
-                        .await?
+                    let found = {
+                        let mut ctx = BuiltinCtx::new(
+                            self,
+                            span,
+                            OutputMeta::Payload,
+                            None,
+                        );
+                        ctx.maps().lookup(&map, idx_id).await?
+                    };
+                    found
                         .and_then(|id| self.arena.value(id).cloned())
                         .ok_or_else(|| {
                             Error::runtime(
@@ -517,7 +528,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     let base_id = self.add_value(base_val, span);
                     let idx_id = self.add_value(idx_val, span);
                     let mid = self.arena.intern("index");
-                    self.dispatch_class_method_value(ClassDispatch {
+                    self.dispatch_class_method_value(class::Dispatch {
                         dispatch_expr_id: Some(expr_id),
                         output_expr_id: Some(expr_id),
                         output_ty: None,
@@ -577,11 +588,16 @@ impl<I: IoContext> Interpreter<'_, I> {
                 (Payload::Map(entries), _) => {
                     let map = entries.as_ref().clone();
                     let idx_id = self.add_value(idx_val, span);
-                    Ok(self
-                        .map_lookup_id(&map, idx_id, span)
-                        .await?
-                        .map(Payload::some)
-                        .unwrap_or_else(Payload::none))
+                    let found = {
+                        let mut ctx = BuiltinCtx::new(
+                            self,
+                            span,
+                            OutputMeta::Payload,
+                            None,
+                        );
+                        ctx.maps().lookup(&map, idx_id).await?
+                    };
+                    Ok(found.map(Payload::some).unwrap_or_else(Payload::none))
                 }
                 (Payload::String(sid), Payload::Int(i)) => {
                     let s = self.arena.get_str(*sid).unwrap_or("");
@@ -644,7 +660,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         {
             let base_id = self.add_value(base_val, span);
             let idx_id = self.add_value(idx_val, span);
-            self.dispatch_class_method_value(ClassDispatch {
+            self.dispatch_class_method_value(class::Dispatch {
                 dispatch_expr_id: Some(expr_id),
                 output_expr_id: Some(expr_id),
                 output_ty: None,

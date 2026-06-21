@@ -1,7 +1,7 @@
 use rumps_query_macros::scheme;
 
-use super::super::{Environment, Module, PrimDef};
-use crate::primitives::Opt;
+use super::super::{Environment, Module};
+use crate::builtins::{Def, Impl, Opt};
 
 impl Environment {
     pub(super) fn register_option_builtin(&mut self) {
@@ -10,24 +10,24 @@ impl Environment {
         let opt_id = self.consts.strings.intern("Option");
         self.modules.insert(
             opt_id,
-            Module::from_prims(
+            Module::from_defs(
                 &[
-                    PrimDef {
+                    Def {
                         name: "unwrap-or",
-                        f: Opt::unwrap_or,
+                        imp: Impl::Sync(Opt::unwrap_or),
                         ty: scheme!(a, forall T. (Option[T], T) -> T),
                     },
-                    PrimDef {
+                    Def {
                         name: "flatten",
-                        f: Opt::flatten,
+                        imp: Impl::Sync(Opt::flatten),
                         ty: scheme!(
                             a,
                             forall T. (Option[Option[T]]) -> Option[T]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "note",
-                        f: Opt::note,
+                        imp: Impl::Sync(Opt::note),
                         ty: scheme!(
                             a,
                             forall T, U. (U, Option[T]) -> Result[T, U]

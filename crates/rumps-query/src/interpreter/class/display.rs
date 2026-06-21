@@ -7,117 +7,111 @@ impl Class for Display {
     const ID: ClassId = ClassId::DISPLAY;
 
     fn register_all(methods: &mut ClassMethods, i: &mut StringInterner) {
-        Self::register(methods, i, "display", MethodFn::Unary(Self::display));
+        Self::register(
+            methods,
+            i,
+            "display",
+            MethodAbi::Unary,
+            Builtin::Fixed(Impl::Sync(Self::display)),
+        );
     }
 }
 
 impl Display {
-    /// Format a value as valid RUMPS syntax (strings quoted).
-    ///
-    /// Unlike `Into[String]` which produces raw string content, this produces
-    /// output suitable for display (e.g., `write` statements) where strings
-    /// are quoted and complex types are formatted for readability.
     pub(crate) fn display(
-        ctx: &mut ClassCtx<'_>,
+        ctx: &mut BuiltinCtx<'_, '_, '_>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> Result<ValueId> {
+        let id = args[0];
+        let mut vals = ctx.vals();
+        let v = vals.value(id)?.clone();
+        let s = Self::fmt_value(&mut vals, &v)?;
+        let id = vals.intern(&s);
+        Ok(vals.add(Payload::String(id)))
+    }
+
+    pub(crate) fn fmt(
+        vals: &mut Values<'_, '_, '_, '_>,
         v: &Payload,
-    ) -> Result<Payload> {
-        let s = Self::format(ctx, v);
-        let id = ctx.arena.intern(&s);
-        Ok(Payload::String(id))
-    }
-
-    pub(crate) fn display_value(ctx: &mut ClassCtx<'_>, v: &Value) -> Payload {
-        let s = Self::format_value(ctx, v);
-        let id = ctx.arena.intern(&s);
-        Payload::String(id)
-    }
-
-    /// Format a value as valid RUMPS syntax.
-    ///
-    /// Returns the string directly; for the class method wrapper that returns
-    /// `Payload::String`, see [`display`](Self::display).
-    pub(crate) fn format(ctx: &ClassCtx<'_>, v: &Payload) -> String {
+    ) -> Result<String> {
         match v {
-            Payload::Unit => "Unit".into(),
-            Payload::Bool(b) => b.to_string(),
-            Payload::Int(n) => n.to_string(),
-            Payload::Word(n) => n.to_string(),
+            Payload::Unit => Ok("Unit".into()),
+            Payload::Bool(b) => Ok(b.to_string()),
+            Payload::Int(n) => Ok(n.to_string()),
+            Payload::Word(n) => Ok(n.to_string()),
             Payload::Float(f) => {
                 let s = f.to_string();
-                if s.contains('.') || s.contains('e') || s.contains('E') {
+                Ok(if s.contains('.') || s.contains('e') || s.contains('E') {
                     s
                 } else {
                     format!("{s}.0")
-                }
+                })
             }
-            Payload::Char(c) => format!("'{c}'"),
+            Payload::Char(c) => Ok(format!("'{c}'")),
             Payload::String(id) | Payload::FilePath(id) => {
-                let s = ctx.arena.get_str(*id).unwrap_or("");
-                format!("\"{s}\"")
+                Ok(format!("\"{}\"", vals.str(*id)?))
             }
             Payload::Regex(idx) => {
-                let re =
-                    ctx.regex_cache.get(*idx as usize).unwrap_or_else(|| {
-                        typechecked!("Display", "valid Regex cache index")
-                    });
-                format!("/{}/", re.as_str())
+                let re = vals.regex_pattern(*idx).unwrap_or_else(|| {
+                    typechecked!("Display", "valid Regex cache index")
+                });
+                Ok(format!("/{re}/"))
             }
             Payload::Array(elems) => {
                 let items = elems
                     .iter()
-                    .filter_map(|id| ctx.arena.value(*id))
-                    .map(|v| Self::format_value(ctx, v))
+                    .try_fold(Vec::new(), |mut acc, id| {
+                        let v = vals.value(*id)?.clone();
+                        acc.push(Self::fmt_value(vals, &v)?);
+                        Ok::<Vec<String>, Error>(acc)
+                    })?
+                    .into_iter()
                     .join(", ");
-                format!("[ {items} ]")
+                Ok(format!("[ {items} ]"))
             }
             Payload::Tuple(elems) => {
                 let items = elems
                     .iter()
-                    .filter_map(|id| ctx.arena.value(*id))
-                    .map(|v| Self::format_value(ctx, v))
+                    .try_fold(Vec::new(), |mut acc, id| {
+                        let v = vals.value(*id)?.clone();
+                        acc.push(Self::fmt_value(vals, &v)?);
+                        Ok::<Vec<String>, Error>(acc)
+                    })?
+                    .into_iter()
                     .join(", ");
                 let trail = if elems.len() == 1 { "," } else { "" };
-                format!("({items}{trail})")
+                Ok(format!("({items}{trail})"))
             }
             Payload::Object(obj) => {
                 let fields = obj
                     .iter()
                     .map(|(k, vid)| {
-                        let key = ctx.arena.get_str(*k).unwrap_or("?");
-                        let val = ctx
-                            .arena
-                            .value(*vid)
-                            .map(|v| Self::format_value(ctx, v))
-                            .unwrap_or_else(|| "?".to_owned());
-                        format!("{key}: {val}")
+                        let key = vals.str(*k)?.to_owned();
+                        let val = vals.value(*vid)?.clone();
+                        Self::fmt_value(vals, &val)
+                            .map(|val| format!("{key}: {val}"))
                     })
-                    .join(", ");
-                format!("{{ {fields} }}")
+                    .process_results(|mut iter| iter.join(", "))?;
+                Ok(format!("{{ {fields} }}"))
             }
             Payload::Map(entries) => {
                 let items = entries
                     .entries()
                     .into_iter()
                     .map(|(k, vid)| {
-                        let key = ctx
-                            .arena
-                            .value(k)
-                            .map(|v| Self::format_value(ctx, v))
-                            .unwrap_or_else(|| "?".to_owned());
-                        let val = ctx
-                            .arena
-                            .value(vid)
-                            .map(|v| Self::format_value(ctx, v))
-                            .unwrap_or_else(|| "?".to_owned());
-                        format!("{key} => {val}")
+                        let key = vals.value(k)?.clone();
+                        let val = vals.value(vid)?.clone();
+                        let key = Self::fmt_value(vals, &key)?;
+                        let val = Self::fmt_value(vals, &val)?;
+                        Ok::<String, Error>(format!("{key} => {val}"))
                     })
-                    .join(", ");
-                format!("{{ {items} }}")
+                    .process_results(|mut iter| iter.join(", "))?;
+                Ok(format!("{{ {items} }}"))
             }
-            Payload::Time(t) => t.to_rfc3339(),
-            Payload::Json(j) => j.to_string(),
-            Payload::Variant { tag, vals } => {
-                Self::format_variant(ctx, None, *tag, vals)
+            Payload::Time(t) => Ok(t.to_rfc3339()),
+            Payload::Json(j) => Ok(j.to_string()),
+            Payload::Variant { tag, vals: ids } => {
+                Self::fmt_variant(vals, None, *tag, ids)
             }
             Payload::VariantCtor { .. } => {
                 typechecked!("Display", "Display (not VariantCtor)")
@@ -138,75 +132,81 @@ impl Display {
                 typechecked!("Display", "Display (not PartialApp)")
             }
             Payload::ModuleConst { path } => {
-                let path_str: String = path
+                let path_str = path
                     .iter()
-                    .filter_map(|id| ctx.arena.get_str(*id))
-                    .join(".");
-                format!("<{path_str}>")
+                    .map(|id| vals.str(*id).map(ToOwned::to_owned))
+                    .process_results(|mut iter| iter.join("."))?;
+                Ok(format!("<{path_str}>"))
             }
             Payload::Range {
                 start,
                 end,
                 inclusive,
-            } => {
-                if *inclusive {
-                    format!("{start} ..= {end}")
-                } else {
-                    format!("{start} .. {end}")
-                }
-            }
-            Payload::LoopContinuation => "<continuation>".into(),
-            Payload::LoopContinue(_) => "<loop-continue>".into(),
+            } => Ok(if *inclusive {
+                format!("{start} ..= {end}")
+            } else {
+                format!("{start} .. {end}")
+            }),
+            Payload::LoopContinuation => Ok("<continuation>".into()),
+            Payload::LoopContinue(_) => Ok("<loop-continue>".into()),
             Payload::Ref(is_global, name_id, sub_ids) => {
                 let prefix = if *is_global { "^" } else { "" };
-                let name = ctx.arena.get_str(*name_id).unwrap_or("?");
+                let name = vals.str(*name_id)?.to_owned();
                 let subs = sub_ids
                     .iter()
-                    .filter_map(|id| ctx.arena.value(*id))
-                    .map(|v| Self::format_value(ctx, v))
+                    .try_fold(Vec::new(), |mut acc, id| {
+                        let v = vals.value(*id)?.clone();
+                        acc.push(Self::fmt_value(vals, &v)?);
+                        Ok::<Vec<String>, Error>(acc)
+                    })?
+                    .into_iter()
                     .join(", ");
-                format!("{prefix}{name}{{{subs}}}")
+                Ok(format!("{prefix}{name}{{{subs}}}"))
             }
         }
     }
 
-    pub(crate) fn format_value(ctx: &ClassCtx<'_>, v: &Value) -> String {
+    pub(crate) fn fmt_value(
+        vals: &mut Values<'_, '_, '_, '_>,
+        v: &Value,
+    ) -> Result<String> {
         match &v.payload {
-            Payload::Variant { tag, vals } => Self::format_variant(
-                ctx,
-                ctx.value_variant_base_type(v),
-                *tag,
+            Payload::Variant { tag, vals: ids } => Self::fmt_variant(
                 vals,
+                vals.value_variant_base_type(v),
+                *tag,
+                ids,
             ),
-            payload => Self::format(ctx, payload),
+            payload => Self::fmt(vals, payload),
         }
     }
 
-    fn format_variant(
-        ctx: &ClassCtx<'_>,
+    fn fmt_variant(
+        vals: &mut Values<'_, '_, '_, '_>,
         type_id: Option<TypeId>,
         tag: u8,
-        vals: &[ValueId],
-    ) -> String {
+        ids: &[ValueId],
+    ) -> Result<String> {
         let ty_name = type_id
-            .and_then(|type_id| ctx.registry.type_name(type_id, ctx.arena))
-            .unwrap_or("Variant");
+            .and_then(|type_id| vals.type_name(type_id))
+            .unwrap_or("Variant")
+            .to_owned();
         let var_name = type_id
-            .and_then(|type_id| {
-                ctx.registry.variant_name(type_id, tag, ctx.arena)
-            })
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| tag.to_string());
-
-        if vals.is_empty() {
-            format!("{ty_name}.{var_name}")
+            .and_then(|type_id| vals.variant_name(type_id, tag))
+            .map_or_else(|| tag.to_string(), ToOwned::to_owned);
+        if ids.is_empty() {
+            Ok(format!("{ty_name}.{var_name}"))
         } else {
-            let args = vals
+            let args = ids
                 .iter()
-                .filter_map(|id| ctx.arena.value(*id))
-                .map(|v| Self::format_value(ctx, v))
+                .try_fold(Vec::new(), |mut acc, id| {
+                    let v = vals.value(*id)?.clone();
+                    acc.push(Self::fmt_value(vals, &v)?);
+                    Ok::<Vec<String>, Error>(acc)
+                })?
+                .into_iter()
                 .join(", ");
-            format!("{ty_name}.{var_name}({args})")
+            Ok(format!("{ty_name}.{var_name}({args})"))
         }
     }
 }

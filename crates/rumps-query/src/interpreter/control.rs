@@ -6,11 +6,10 @@ use smallvec::SmallVec;
 use super::Interpreter;
 use crate::ast::{Expr, ExprId, MatchArm, PostfixOp, StmtId, TypePattern};
 use crate::intern::{QualifiedName, StringId};
-use crate::io::IoContext;
 use crate::value::{Payload, TypeId, Value, ValueId};
 use crate::{Error, Result, Span};
 
-impl<I: IoContext> Interpreter<'_, I> {
+impl Interpreter<'_, '_> {
     /// Postfix operator implementation.
     ///
     /// Type checker guarantees operand satisfies the operator's constraints.

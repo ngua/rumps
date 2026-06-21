@@ -1,0 +1,14 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "fun main() {\n  write \"option some:\"\n  let some-r = foreach(x => { write \"some:{x}\" }, Option.Some(5))\n  write some-r\n\n  write \"option none:\"\n  let none: Option[Int] = Option.None\n  let none-r = foreach(x => { write \"none:{x}\" }, none)\n  write none-r\n\n  write \"result ok:\"\n  let ok: Result[Int, String] = Result.Ok(7)\n  let ok-r = foreach(x => { write \"ok:{x}\" }, ok)\n  write ok-r\n\n  write \"result err:\"\n  let err: Result[Int, String] = Result.Err(\"bad\")\n  let err-r = foreach(x => { write \"err:{x}\" }, err)\n  write err-r\n}\n"
+---
+"option some:"
+"some:5"
+Unit
+"option none:"
+Unit
+"result ok:"
+"ok:7"
+Unit
+"result err:"
+Unit

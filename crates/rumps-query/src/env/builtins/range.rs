@@ -1,7 +1,7 @@
 use rumps_query_macros::scheme;
 
-use super::super::{Environment, Module, PrimDef};
-use crate::primitives::Range;
+use super::super::{Environment, Module};
+use crate::builtins::{Def, Impl, Range};
 
 impl Environment {
     pub(super) fn register_range_builtin(&mut self) {
@@ -10,36 +10,36 @@ impl Environment {
         let range_id = self.consts.strings.intern("Range");
         self.modules.insert(
             range_id,
-            Module::from_prims(
+            Module::from_defs(
                 &[
-                    PrimDef {
+                    Def {
                         name: "collect",
-                        f: Range::collect,
+                        imp: Impl::Sync(Range::collect),
                         ty: scheme!(a, (Range) -> Array[Int]),
                     },
-                    PrimDef {
+                    Def {
                         name: "contains",
-                        f: Range::contains,
+                        imp: Impl::Sync(Range::contains),
                         ty: scheme!(a, (Int, Range) -> Bool),
                     },
-                    PrimDef {
+                    Def {
                         name: "extend",
-                        f: Range::extend,
+                        imp: Impl::Sync(Range::extend),
                         ty: scheme!(a, (Word, Range) -> Range),
                     },
-                    PrimDef {
+                    Def {
                         name: "is-empty",
-                        f: Range::is_empty,
+                        imp: Impl::Sync(Range::is_empty),
                         ty: scheme!(a, (Range) -> Bool),
                     },
-                    PrimDef {
+                    Def {
                         name: "first",
-                        f: Range::first,
+                        imp: Impl::Sync(Range::first),
                         ty: scheme!(a, (Range) -> Option[Int]),
                     },
-                    PrimDef {
+                    Def {
                         name: "last",
-                        f: Range::last,
+                        imp: Impl::Sync(Range::last),
                         ty: scheme!(a, (Range) -> Option[Int]),
                     },
                 ],

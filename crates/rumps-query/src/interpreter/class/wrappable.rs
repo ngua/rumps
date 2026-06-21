@@ -6,33 +6,40 @@ impl Class for Wrappable {
     const ID: ClassId = ClassId::WRAPPABLE;
 
     fn register_all(methods: &mut ClassMethods, i: &mut StringInterner) {
-        Self::register(methods, i, "wrap", MethodFn::Convert(Self::wrap));
+        Self::register(
+            methods,
+            i,
+            "wrap",
+            MethodAbi::Convert,
+            Builtin::Fixed(Impl::Sync(Self::wrap)),
+        );
     }
 }
 
 impl Wrappable {
-    /// Wrap a value in a `Wrappable` container (`Option.Some` or `Result.Ok`).
-    ///
-    /// The target type determines whether to produce:
-    /// - `Option[T]` -> `Option.Some(v)`
-    /// - `Result[T, E]` -> `Result.Ok(v)`
     pub(crate) fn wrap(
-        ctx: &mut ClassCtx<'_>,
-        v: &Payload,
-        target: &Ty,
-    ) -> Result<Payload> {
-        match target {
-            Ty::Option(inner) => {
-                let meta = ctx.runtime_types.meta(RuntimeTyId::from(*inner));
-                let v_id = ctx.arena.add_typed(v.clone(), meta, ctx.span);
-                Ok(Payload::some(v_id))
-            }
-            Ty::Result(ok, _) => {
-                let meta = ctx.runtime_types.meta(RuntimeTyId::from(*ok));
-                let v_id = ctx.arena.add_typed(v.clone(), meta, ctx.span);
-                Ok(Payload::ok(v_id))
-            }
-            _ => typechecked!("wrap", "Wrappable (Option or Result)"),
+        ctx: &mut BuiltinCtx<'_, '_, '_>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> Result<ValueId> {
+        let id = args[0];
+        let target = ctx.convert_target()?;
+        let edge = ctx.approved_edge();
+        let mut vals = ctx.vals();
+        let ty = vals.ty(target);
+        let id = match edge {
+            Some(meta) => vals.id_with_meta(id, meta),
+            None => match &ty {
+                Ty::Option(inner) | Ty::Result(inner, _) => {
+                    let v = vals.payload(id)?.clone();
+                    vals.add_typed(v, RuntimeTyId::from(*inner))
+                }
+                _ => typechecked!("wrap", "Wrappable instance"),
+            },
+        };
+        match ty {
+            Ty::Option(_) => Ok(vals.add_typed(Payload::some(id), target)),
+            Ty::Result(_, _) => Ok(vals.add_typed(Payload::ok(id), target)),
+            _ => typechecked!("wrap", "Wrappable instance"),
         }
     }
 }

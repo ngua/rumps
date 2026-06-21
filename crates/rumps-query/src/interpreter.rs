@@ -98,10 +98,8 @@ mod collections;
 mod control;
 pub(crate) mod convert;
 mod db;
-mod hof;
 mod hoist;
 pub(crate) mod instance;
-mod map;
 mod modules;
 mod ops;
 mod pattern;
@@ -109,6 +107,7 @@ mod transaction;
 mod types;
 mod variant;
 
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -124,16 +123,17 @@ use crate::ast::{
     OutputFormat, OutputTarget, Stmt, StmtId, TxnId, TypeDefAst, TypeParam,
     TypePattern, UnOp, WriteExpr,
 };
+use crate::builtins::{BuiltinCtx, CallMeta, Maps, OutputMeta, Values};
 use crate::intern::{QualifiedName, StringId, StringInterner};
 use crate::io::IoContext;
 use crate::resolve::{InstanceMap, ResolveCtx};
 use crate::typecheck::{
     CheckedProgram, ClassDef, ClassRegistry, ClassShape, ExprAux, MethodSpec,
-    RuntimeTyId, Scheme, TyArena, TyVar,
+    RuntimeTyId, Scheme, Ty, TyArena, TyVar,
 };
 use crate::value::{
-    CapturedEnv, FunctionDef, Payload, TypeDef, TypeId, TypeRegistry, Value,
-    ValueArena, ValueId, ValueMeta, VariantDef,
+    CapturedEnv, FunctionDef, Map, MapNode, Payload, TypeDef, TypeId,
+    TypeRegistry, Value, ValueArena, ValueId, ValueMeta, VariantDef,
 };
 use crate::{env, typecheck, ClassId, Error, Result, Span};
 
@@ -155,10 +155,9 @@ enum ReadTarget {
 /// runtime state (value arena, type registry, environment) and has access
 /// to the database for persistent storage operations.
 ///
-/// Generic over `I: IoContext` to support both real I/O and test captures.
-pub(crate) struct Interpreter<'a, I: IoContext> {
+pub(crate) struct Interpreter<'ast, 'io> {
     /// The parsed AST (borrowed; immutable during interpretation).
-    ast: &'a Ast,
+    ast: &'ast Ast,
 
     /// Variable environment for lexical `let` bindings and built-in functions.
     env: Environment,
@@ -185,16 +184,13 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
     functions: HashMap<StringId, FunctionDef>,
 
     /// I/O context for output operations.
-    io: I,
+    io: &'io mut dyn IoContext,
 
     /// Checked program metadata produced by typechecking.
     checked: CheckedProgram,
 
     /// Registry of class methods for dispatch.
     class_methods: class::ClassMethods,
-
-    /// Registry of module-level HoFs for dispatch.
-    module_hofs: hof::Registry,
 
     /// Registry of user-defined class instances for runtime dispatch.
     ///
@@ -217,7 +213,7 @@ pub(crate) struct Interpreter<'a, I: IoContext> {
 }
 
 // Public API
-impl<'a, I: IoContext> Interpreter<'a, I> {
+impl<'ast, 'io> Interpreter<'ast, 'io> {
     /// Create a new interpreter for the given AST, database, and I/O context.
     ///
     /// This is the main constructor. It creates the value arena and type
@@ -228,10 +224,10 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
     /// since interpretation only reads. Set `interactive` to `true` to skip
     /// the `main` function requirement.
     pub(crate) fn new(
-        ast: &'a mut Ast,
+        ast: &'ast mut Ast,
         stmts: &[StmtId],
         db: Database,
-        io: I,
+        io: &'io mut dyn IoContext,
         interactive: bool,
         interner: StringInterner,
         program_pragmas: pragma::Program,
@@ -277,7 +273,6 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
         )
         .check(stmts, &registry, &arena)?;
 
-        let module_hofs = hof::Registry::new(&mut arena.strings);
         let class_methods = {
             let mut cm = class::ClassMethods::new();
             cm.register_all(&mut arena.strings);
@@ -297,7 +292,6 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             functions: HashMap::new(),
             io,
             class_methods,
-            module_hofs,
             user_instances: instance::RuntimeInstanceRegistry::new(),
             resolved_instances,
             runtime_ty_substs: Vec::new(),
@@ -403,24 +397,18 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             .map(|_| ())
     }
 
-    /// Consume the interpreter and return the I/O context.
-    pub(crate) fn into_io(self) -> I {
-        self.io
-    }
-
     /// Create an interpreter with a pre-created arena and registry.
     ///
     /// Used by tests that need direct control over the arena/registry,
     /// bypassing name resolution and typechecking.
     #[cfg(test)]
     pub(crate) fn with_arena(
-        ast: &'a Ast,
+        ast: &'ast Ast,
         db: Database,
-        io: I,
+        io: &'io mut dyn IoContext,
         mut arena: ValueArena,
         registry: TypeRegistry,
     ) -> Self {
-        let module_hofs = hof::Registry::new(&mut arena.strings);
         let class_methods = {
             let mut cm = class::ClassMethods::new();
             cm.register_all(&mut arena.strings);
@@ -457,7 +445,6 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
             functions: HashMap::new(),
             io,
             class_methods,
-            module_hofs,
             user_instances: instance::RuntimeInstanceRegistry::new(),
             resolved_instances: HashMap::new(),
             runtime_ty_substs: Vec::new(),
@@ -591,7 +578,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 ) {
                     let val_id = self.add_value(val, span);
                     let mid = self.arena.intern("unwrap");
-                    self.dispatch_class_method_value(call::ClassDispatch {
+                    self.dispatch_class_method_value(class::Dispatch {
                         dispatch_expr_id: Some(id),
                         output_expr_id: Some(id),
                         output_ty: None,
@@ -660,7 +647,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
                 self.transaction(txn, span).await.map(Evaluated::Payload)
             }
             Expr::DefaultValue => {
-                self.default_value(id, span).map(Evaluated::Payload)
+                self.default_value(id, span).await.map(Evaluated::Payload)
             }
             Expr::Ref(ref dbref) => {
                 self.ref_lit(dbref, span).await.map(Evaluated::Payload)
@@ -725,7 +712,7 @@ impl<'a, I: IoContext> Interpreter<'a, I> {
 }
 
 // Private helpers
-impl<I: IoContext> Interpreter<'_, I> {
+impl Interpreter<'_, '_> {
     fn resolve_class_registry(
         ast: &Ast,
         stmts: &[StmtId],
@@ -2165,7 +2152,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     let val_id = self.add_value(left, span);
                     let mid = self.arena.intern("unwrap");
                     match self
-                        .dispatch_class_method_value(call::ClassDispatch {
+                        .dispatch_class_method_value(class::Dispatch {
                             dispatch_expr_id: Some(id),
                             output_expr_id: Some(id),
                             output_ty: None,
@@ -2224,6 +2211,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     let (left, right) =
                         self.numeric_binop_payloads(id, op, left, right);
                     self.apply_binop(&left, op, &right, span)
+                        .await
                         .map(|payload| self.value_for_expr(id, payload))
                 }
             }
@@ -2248,7 +2236,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             let val = self.eval(operand).await?;
             let val_id = self.add_value(val, span);
             let mid = self.arena.intern("wrap");
-            self.dispatch_class_method_value(call::ClassDispatch {
+            self.dispatch_class_method_value(class::Dispatch {
                 dispatch_expr_id: Some(id),
                 output_expr_id: Some(id),
                 output_ty: None,
@@ -2261,6 +2249,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         } else {
             let val = self.eval_payload(operand).await?;
             self.apply_unop(id, op, val, span)
+                .await
                 .map(|payload| self.value_for_expr(id, payload))
         }
     }
@@ -2296,7 +2285,6 @@ impl<I: IoContext> Interpreter<'_, I> {
     /// require `read` for fallible conversion or `match` for type narrowing.
     /// `newtype` representation casts use metadata approved by static
     /// `type visibility` and `repr visibility` checks.
-    #[async_recursion]
     async fn r#as(
         &mut self,
         id: ExprId,
@@ -2325,6 +2313,7 @@ impl<I: IoContext> Interpreter<'_, I> {
             } else {
                 let target = self.checked.types.get(rty).clone();
                 self.coerce_value(&val, target_base, &target, span)
+                    .await
                     .map(|payload| self.value_for_expr(id, payload))
             }
         } else if matches!(
@@ -2368,7 +2357,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         } else if has_inst {
             let val_id = self.add_value(val, span);
             let mid = self.arena.intern("try-into");
-            self.dispatch_class_method_value(call::ClassDispatch {
+            self.dispatch_class_method_value(class::Dispatch {
                 dispatch_expr_id: Some(id),
                 output_expr_id: Some(id),
                 output_ty: None,
@@ -2380,11 +2369,13 @@ impl<I: IoContext> Interpreter<'_, I> {
             .await
         } else {
             self.read_target_value(&val, rty, span)
+                .await
                 .map(|payload| self.value_for_expr(id, payload))
         }
     }
 
-    fn read_target_value(
+    #[async_recursion]
+    async fn read_target_value(
         &mut self,
         val: &Value,
         target: RuntimeTyId,
@@ -2400,10 +2391,13 @@ impl<I: IoContext> Interpreter<'_, I> {
             match self.resolve_read_target(target) {
                 ReadTarget::Object { target, fields } => {
                     self.read_to_object(&val.payload, target, &fields, span)
+                        .await
                 }
-                ReadTarget::Ty { target, convert } => self
-                    .read_ty_runtime_value(val, convert, span)
-                    .map(|rv| self.retype_read_ok(rv, target, span)),
+                ReadTarget::Ty { target, convert } => {
+                    let rv =
+                        self.read_ty_runtime_value(val, convert, span).await?;
+                    Ok(self.retype_read_ok(rv, target, span))
+                }
             }
         }
     }
@@ -2439,7 +2433,7 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Read using an exact type, preserving type arguments.
-    fn read_ty_runtime_value(
+    async fn read_ty_runtime_value(
         &mut self,
         val: &Value,
         target: RuntimeTyId,
@@ -2448,37 +2442,32 @@ impl<I: IoContext> Interpreter<'_, I> {
         match self.checked.types.get(target).clone() {
             typecheck::Ty::Array(elem) => {
                 self.read_array_value(val, RuntimeTyId::from(elem), span)
+                    .await
             }
             typecheck::Ty::Option(inner) => {
                 self.read_option_value(val, RuntimeTyId::from(inner), span)
+                    .await
             }
             typecheck::Ty::Object(fields) => {
                 self.read_to_object(&val.payload, target, &fields, span)
+                    .await
             }
             typecheck::Ty::Range => self.read_range_value(val, span),
             typecheck::Ty::Json => {
-                let mut ctx = class::ClassCtx {
-                    arena: &mut self.arena,
-                    runtime_types: &mut self.checked.types,
-                    registry: &self.registry,
-                    regex_cache: &self.checked.regex_cache,
-                    span,
-                };
-                class::TryInto::try_into_value(
-                    &mut ctx,
-                    val,
-                    &typecheck::Ty::Json,
-                )
-            }
-            ty => {
                 let mid = self.arena.intern("try-into");
-                self.dispatch_convert_value(
+                self.class_convert_value(
                     ClassId::TRY_INTO,
                     mid,
                     val,
-                    &ty,
+                    &typecheck::Ty::Json,
                     span,
                 )
+                .await
+            }
+            ty => {
+                let mid = self.arena.intern("try-into");
+                self.class_convert_value(ClassId::TRY_INTO, mid, val, &ty, span)
+                    .await
             }
         }
     }
@@ -2537,7 +2526,8 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Read a JSON array as `Array[T]`.
-    fn read_array_value(
+    #[async_recursion]
+    async fn read_array_value(
         &mut self,
         val: &Value,
         elem: RuntimeTyId,
@@ -2546,13 +2536,20 @@ impl<I: IoContext> Interpreter<'_, I> {
         match &val.payload {
             Payload::Json(j) => match j.as_ref() {
                 serde_json::Value::Array(arr) => {
-                    let elems =
-                        arr.iter().try_fold(SmallVec::new(), |mut acc, jv| {
+                    let mut elems = SmallVec::new();
+                    let mut err = None;
+                    let mut vals = arr.iter();
+                    while let Some(jv) = vals.next() {
+                        if err.is_some() {
+                        } else {
                             let fval = self.value_from_meta(
                                 Payload::Json(Arc::new(jv.clone())),
                                 self.checked.types.meta_json(),
                             );
-                            match self.read_target_value(&fval, elem, span) {
+                            match self
+                                .read_target_value(&fval, elem, span)
+                                .await
+                            {
                                 Ok(rv) if self.result_payload_is_ok(&rv) => {
                                     let inner = self
                                         .unwrap_result_ok(&rv)
@@ -2564,15 +2561,20 @@ impl<I: IoContext> Interpreter<'_, I> {
                                         self.checked.types.meta(elem),
                                         span,
                                     );
-                                    acc.push(id);
-                                    Ok(acc)
+                                    elems.push(id);
                                 }
-                                Ok(rv) => Err(self.extract_result_err_msg(&rv)),
-                                Err(e) => Err(e.to_string()),
+                                Ok(rv) => {
+                                    err =
+                                        Some(self.extract_result_err_msg(&rv));
+                                }
+                                Err(e) => {
+                                    err = Some(e.to_string());
+                                }
                             }
-                        });
+                        }
+                    }
                     Ok(match elems {
-                        Ok(elems) => {
+                        elems if err.is_none() => {
                             let ty = self.checked.types.array(elem);
                             self.make_result_ok_typed(
                                 Payload::Array(Arc::new(elems)),
@@ -2580,7 +2582,10 @@ impl<I: IoContext> Interpreter<'_, I> {
                                 span,
                             )
                         }
-                        Err(msg) => self.make_result_err(&msg, span),
+                        _ => self.make_result_err(
+                            &err.unwrap_or_else(|| "unknown error".to_owned()),
+                            span,
+                        ),
                     })
                 }
                 _ => Ok(self.make_result_err("expected array", span)),
@@ -2598,7 +2603,8 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Read a value as `Option[T]`, treating JSON null as `None`.
-    fn read_option_value(
+    #[async_recursion]
+    async fn read_option_value(
         &mut self,
         val: &Value,
         inner: RuntimeTyId,
@@ -2611,7 +2617,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 let ty = self.checked.types.option(inner);
                 Ok(self.make_result_ok_typed(Payload::none(), ty, span))
             }
-            _ => match self.read_target_value(val, inner, span) {
+            _ => match self.read_target_value(val, inner, span).await {
                 Ok(rv) if self.result_payload_is_ok(&rv) => {
                     let inner_val =
                         self.unwrap_result_ok(&rv).unwrap_or_else(|_| {
@@ -2640,7 +2646,8 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Convert a JSON or Object value to a typed object via `read`.
-    fn read_to_object(
+    #[async_recursion]
+    async fn read_to_object(
         &mut self,
         val: &Payload,
         target: RuntimeTyId,
@@ -2650,7 +2657,7 @@ impl<I: IoContext> Interpreter<'_, I> {
         match val {
             Payload::Json(j) => match j.as_ref() {
                 serde_json::Value::Object(obj) => {
-                    self.read_json_object(obj, target, fields, span)
+                    self.read_json_object(obj, target, fields, span).await
                 }
                 _ => {
                     let msg = "cannot read non-object JSON as object";
@@ -2658,7 +2665,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                 }
             },
             Payload::Object(obj) => {
-                self.read_native_object(obj, target, fields, span)
+                self.read_native_object(obj, target, fields, span).await
             }
             _ => {
                 let src = val.type_name(&self.registry, &self.arena);
@@ -2669,7 +2676,8 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Read fields from a JSON object, converting each field via `read_value`.
-    fn read_json_object(
+    #[async_recursion]
+    async fn read_json_object(
         &mut self,
         obj: &serde_json::Map<std::string::String, serde_json::Value>,
         target: RuntimeTyId,
@@ -2679,7 +2687,8 @@ impl<I: IoContext> Interpreter<'_, I> {
         let mut result = indexmap::IndexMap::new();
         let mut err = None;
 
-        fields.iter().for_each(|(&fid, &fty)| {
+        let mut entries = fields.iter();
+        while let Some((&fid, &fty)) = entries.next() {
             if err.is_some() {
             } else {
                 let fname = self
@@ -2701,11 +2710,14 @@ impl<I: IoContext> Interpreter<'_, I> {
                             .resolve_read_field_target(RuntimeTyId::from(fty))
                         {
                             ReadTarget::Ty { .. } => {
-                                match self.read_target_value(
-                                    &fval,
-                                    RuntimeTyId::from(fty),
-                                    span,
-                                ) {
+                                match self
+                                    .read_target_value(
+                                        &fval,
+                                        RuntimeTyId::from(fty),
+                                        span,
+                                    )
+                                    .await
+                                {
                                     Ok(rv)
                                         if self.result_payload_is_ok(&rv) =>
                                     {
@@ -2739,7 +2751,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                                     target,
                                     &fields,
                                     span,
-                                ) {
+                                )
+                                .await
+                            {
                                 Ok(rv) if self.result_payload_is_ok(&rv) => {
                                     let inner = self
                                         .unwrap_result_ok(&rv)
@@ -2767,7 +2781,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     }
                 }
             }
-        });
+        }
 
         match err {
             Some(msg) => Ok(self.make_result_err(&msg, span)),
@@ -2779,7 +2793,8 @@ impl<I: IoContext> Interpreter<'_, I> {
     }
 
     /// Read fields from a native object, validating field types.
-    fn read_native_object(
+    #[async_recursion]
+    async fn read_native_object(
         &mut self,
         obj: &Arc<indexmap::IndexMap<StringId, ValueId>>,
         target: RuntimeTyId,
@@ -2789,7 +2804,8 @@ impl<I: IoContext> Interpreter<'_, I> {
         let mut result = indexmap::IndexMap::new();
         let mut err = None;
 
-        fields.iter().for_each(|(&fid, &fty)| {
+        let mut entries = fields.iter();
+        while let Some((&fid, &fty)) = entries.next() {
             if err.is_some() {
             } else {
                 match obj.get(&fid) {
@@ -2807,7 +2823,9 @@ impl<I: IoContext> Interpreter<'_, I> {
                                         &fval,
                                         RuntimeTyId::from(fty),
                                         span,
-                                    ) {
+                                    )
+                                    .await
+                                {
                                     Ok(rv)
                                         if self.result_payload_is_ok(&rv) =>
                                     {
@@ -2835,12 +2853,15 @@ impl<I: IoContext> Interpreter<'_, I> {
                                     }
                                 },
                                 ReadTarget::Object { target, fields } => {
-                                    match self.read_to_object(
-                                        &fval.payload,
-                                        target,
-                                        &fields,
-                                        span,
-                                    ) {
+                                    match self
+                                        .read_to_object(
+                                            &fval.payload,
+                                            target,
+                                            &fields,
+                                            span,
+                                        )
+                                        .await
+                                    {
                                         Ok(rv)
                                             if self
                                                 .result_payload_is_ok(&rv) =>
@@ -2879,7 +2900,7 @@ impl<I: IoContext> Interpreter<'_, I> {
                     },
                 }
             }
-        });
+        }
 
         match err {
             Some(msg) => Ok(self.make_result_err(&msg, span)),
@@ -3081,6 +3102,940 @@ impl<I: IoContext> Interpreter<'_, I> {
             Some(serde_json::Value::Object(_)) => {
                 typechecked!("json scalar access", "Scalar")
             }
+        }
+    }
+}
+
+impl<'i, 'ast, 'io> BuiltinCtx<'i, 'ast, 'io> {
+    /// Opens the value arena facet.
+    ///
+    /// Keep the returned `Values` short lived and do not hold it across
+    /// `.await`.
+    pub(super) fn vals(&mut self) -> Values<'_, 'i, 'ast, 'io> {
+        Values { ctx: self }
+    }
+
+    /// Opens the persistent map facet.
+    ///
+    /// Use this when map operations need ordering or equality dispatch.
+    pub(super) fn maps(&mut self) -> Maps<'_, 'i, 'ast, 'io> {
+        Maps { ctx: self }
+    }
+
+    /// Returns the caller supplied output type when one was provided.
+    pub(super) fn output_ty(&self) -> Option<RuntimeTyId> {
+        match self.output {
+            OutputMeta::Ty(ty) => Some(ty),
+            _ => None,
+        }
+    }
+
+    /// Returns the target type for nullary class builtins.
+    pub(super) fn nullary_ty(&self) -> Result<RuntimeTyId> {
+        match self.meta {
+            Some(CallMeta::Nullary { ty }) => Ok(ty),
+            _ => Err(self.runtime_error("missing nullary target type")),
+        }
+    }
+
+    /// Returns the target type for conversion class builtins.
+    pub(super) fn convert_target(&self) -> Result<RuntimeTyId> {
+        match self.meta {
+            Some(CallMeta::Convert { target, .. }) => Ok(target),
+            _ => Err(self.runtime_error("missing conversion target type")),
+        }
+    }
+
+    /// Returns the approved conversion edge metadata, if dispatch supplied it.
+    pub(super) fn approved_edge(&self) -> Option<ValueMeta> {
+        match self.meta {
+            Some(CallMeta::Convert { edge, .. }) => edge,
+            _ => None,
+        }
+    }
+
+    /// Returns the call site `Span` for diagnostics and value metadata.
+    pub(super) fn span(&self) -> Span {
+        self.span
+    }
+
+    /// Builds a runtime error at this builtin call site.
+    pub(super) fn runtime_error(&self, msg: impl Into<String>) -> Error {
+        Error::runtime(self.span, msg)
+    }
+
+    /// Returns the interpreter `I/O` capability.
+    pub(super) fn io(&mut self) -> &mut dyn IoContext {
+        self.interp.io
+    }
+
+    /// Invokes a callable value with already allocated argument values.
+    pub(super) async fn invoke(
+        &mut self,
+        f: ValueId,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> Result<ValueId> {
+        self.interp.invoke_callable(f, &args, self.span).await
+    }
+
+    /// Dispatches a class method and stores the returned `Value`.
+    pub(super) async fn class_call(
+        &mut self,
+        class: ClassId,
+        method: StringId,
+        args: SmallVec<[ValueId; 4]>,
+        output_ty: Option<RuntimeTyId>,
+    ) -> Result<ValueId> {
+        let value = self
+            .interp
+            .dispatch_class_method_value(class::Dispatch::internal(
+                class, method, args, output_ty, self.span,
+            ))
+            .await?;
+        Ok(self.interp.add_value(value, self.span))
+    }
+
+    /// Applies caller requested output refinement to `id`.
+    pub(super) fn finish(&mut self, id: ValueId) -> Result<Value> {
+        let value = self
+            .interp
+            .arena
+            .value(id)
+            .cloned()
+            .unwrap_or_else(|| invariant!("ValueId in arena"));
+        let output =
+            self.interp
+                .refine_variant_output(self.output, &value.payload, &[]);
+        Ok(self.interp.value_for_output_value(output, value))
+    }
+}
+
+impl Values<'_, '_, '_, '_> {
+    /// Adds a `Payload` using metadata inferred from the payload shape.
+    pub(super) fn add(&mut self, v: Payload) -> ValueId {
+        let meta = self
+            .ctx
+            .interp
+            .checked
+            .types
+            .meta_for_payload(&self.ctx.interp.arena, &v);
+        self.ctx.interp.arena.add_typed(v, meta, self.ctx.span)
+    }
+
+    /// Adds a complete `Value` without changing its existing metadata.
+    pub(super) fn add_value(&mut self, v: Value) -> ValueId {
+        self.ctx.interp.arena.add(v, self.ctx.span)
+    }
+
+    /// Adds a `Payload` with metadata for an explicit runtime type.
+    pub(super) fn add_typed(&mut self, v: Payload, ty: RuntimeTyId) -> ValueId {
+        let meta = self.ctx.interp.checked.types.meta(ty);
+        self.ctx.interp.arena.add_typed(v, meta, self.ctx.span)
+    }
+
+    /// Returns value metadata for an explicit runtime type.
+    pub(super) fn meta_for_ty(&mut self, ty: RuntimeTyId) -> ValueMeta {
+        self.ctx.interp.checked.types.meta(ty)
+    }
+
+    /// Adds a `Payload` with existing value metadata.
+    pub(super) fn add_meta(&mut self, v: Payload, meta: ValueMeta) -> ValueId {
+        let value = self.ctx.interp.value_from_meta(v, meta);
+        self.add_value(value)
+    }
+
+    /// Copies a value and applies existing value metadata.
+    pub(super) fn id_with_meta(
+        &mut self,
+        id: ValueId,
+        meta: ValueMeta,
+    ) -> ValueId {
+        let value = self
+            .ctx
+            .interp
+            .arena
+            .value(id)
+            .cloned()
+            .unwrap_or_else(|| invariant!("ValueId in arena"));
+        let span = self.ctx.interp.arena.span(id).unwrap_or(self.ctx.span);
+        let value = self.ctx.interp.value_with_context_meta(value, meta);
+        self.ctx.interp.arena.add(value, span)
+    }
+
+    /// Adds a variant payload with metadata for a variant `TypeId` and args.
+    pub(super) fn add_variant(
+        &mut self,
+        v: Payload,
+        id: TypeId,
+        args: SmallVec<[RuntimeTyId; 4]>,
+    ) -> ValueId {
+        let ty = match id {
+            TypeId::OPTION => match args.as_slice() {
+                [inner] => self.ctx.interp.checked.types.option(*inner),
+                _ => invariant!("Option variant args"),
+            },
+            TypeId::RESULT => match args.as_slice() {
+                [ok, err] => self.ctx.interp.checked.types.result(*ok, *err),
+                _ => invariant!("Result variant args"),
+            },
+            _ => self.ctx.interp.checked.types.named(id, args),
+        };
+        self.add_typed(v, ty)
+    }
+
+    /// Returns the complete `Value` for a valid `ValueId`.
+    pub(super) fn value(&self, id: ValueId) -> Result<&Value> {
+        self.ctx
+            .interp
+            .arena
+            .value(id)
+            .ok_or_else(|| invariant!("ValueId in arena"))
+    }
+
+    /// Returns the `Payload` for a valid `ValueId`.
+    pub(super) fn payload(&self, id: ValueId) -> Result<&Payload> {
+        self.ctx
+            .interp
+            .arena
+            .payload(id)
+            .ok_or_else(|| invariant!("ValueId in arena"))
+    }
+
+    /// Returns stored metadata for a value, if present.
+    pub(super) fn meta(&self, id: ValueId) -> Option<ValueMeta> {
+        self.ctx.interp.arena.meta(id)
+    }
+
+    /// Interns a string in the value arena.
+    pub(super) fn intern(&mut self, s: &str) -> StringId {
+        self.ctx.interp.arena.intern(s)
+    }
+
+    /// Extracts a statically checked `Bool` payload.
+    pub(super) fn bool_payload(
+        &self,
+        id: ValueId,
+        label: &str,
+    ) -> Result<bool> {
+        match self.payload(id)? {
+            Payload::Bool(b) => Ok(*b),
+            _ => typechecked!(label, "Bool"),
+        }
+    }
+
+    /// Extracts a statically checked string payload id.
+    pub(super) fn string_payload(
+        &self,
+        id: ValueId,
+        label: &str,
+    ) -> Result<StringId> {
+        match self.payload(id)? {
+            Payload::String(s) => Ok(*s),
+            _ => typechecked!(label, "String"),
+        }
+    }
+
+    /// Extracts a string id through the arena string coercion helper.
+    pub(super) fn string_id(
+        &self,
+        id: ValueId,
+        label: &str,
+    ) -> Result<StringId> {
+        self.ctx
+            .interp
+            .arena
+            .get_string_id(id)
+            .ok_or_else(|| typechecked!(label, "String"))
+    }
+
+    /// Returns an interned string slice for a valid `StringId`.
+    pub(super) fn str(&self, id: StringId) -> Result<&str> {
+        self.ctx
+            .interp
+            .arena
+            .get_str(id)
+            .ok_or_else(|| invariant!("StringId in arena"))
+    }
+
+    /// Extracts a statically checked `Int` payload.
+    pub(super) fn int_payload(&self, id: ValueId, label: &str) -> Result<i64> {
+        match self.payload(id)? {
+            Payload::Int(n) => Ok(*n),
+            _ => typechecked!(label, "Int"),
+        }
+    }
+
+    /// Extracts a statically checked `Float` payload.
+    pub(super) fn float_payload(
+        &self,
+        id: ValueId,
+        label: &str,
+    ) -> Result<f64> {
+        match self.payload(id)? {
+            Payload::Float(n) => Ok(n.0),
+            _ => typechecked!(label, "Float"),
+        }
+    }
+
+    /// Returns the source language type id when value metadata provides one.
+    pub(super) fn value_base_type(&self, id: ValueId) -> Option<TypeId> {
+        self.meta(id).and_then(|meta| {
+            self.runtime_base_type(meta.repr)
+                .or_else(|| self.runtime_base_type(meta.ty))
+        })
+    }
+
+    /// Converts a runtime type id back to a source language type id.
+    pub(super) fn runtime_base_type(&self, ty: RuntimeTyId) -> Option<TypeId> {
+        self.ctx.interp.checked.types.to_type_id(ty)
+    }
+
+    /// Normalizes generic runtime type references through current substitutions.
+    pub(super) fn runtime_ty(&mut self, ty: RuntimeTyId) -> RuntimeTyId {
+        self.ctx.interp.runtime_ty(ty)
+    }
+
+    /// Returns the normalized shape of a runtime type.
+    pub(super) fn ty(&mut self, ty: RuntimeTyId) -> Ty {
+        let ty = self.runtime_ty(ty);
+        self.ctx.interp.checked.types.get(ty).clone()
+    }
+
+    /// Converts a source language type id to a runtime type id.
+    pub(super) fn type_id(&mut self, id: TypeId) -> RuntimeTyId {
+        self.ctx.interp.checked.types.type_id(id)
+    }
+
+    /// Returns the source language variant base type for a complete `Value`.
+    pub(super) fn value_variant_base_type(
+        &self,
+        value: &Value,
+    ) -> Option<TypeId> {
+        self.runtime_base_type(value.repr)
+            .or_else(|| self.runtime_base_type(value.ty))
+    }
+
+    /// Returns the source language type name for `id`.
+    pub(super) fn type_name(&self, id: TypeId) -> Option<&str> {
+        self.ctx
+            .interp
+            .registry
+            .type_name(id, &self.ctx.interp.arena)
+    }
+
+    /// Returns the source language variant name for `id` and `tag`.
+    pub(super) fn variant_name(&self, id: TypeId, tag: u8) -> Option<&str> {
+        self.ctx
+            .interp
+            .registry
+            .variant_name(id, tag, &self.ctx.interp.arena)
+    }
+
+    /// Returns the compiled regex pattern for `idx`.
+    pub(super) fn regex_pattern(&self, idx: u32) -> Option<&str> {
+        self.ctx
+            .interp
+            .checked
+            .regex_cache
+            .get(idx as usize)
+            .map(|re| re.as_str())
+    }
+
+    /// Returns the statically known return type of a callable value.
+    pub(super) fn callable_ret_ty(&self, id: ValueId) -> Option<RuntimeTyId> {
+        self.value(id)
+            .ok()
+            .and_then(|value| self.ctx.interp.callable_ret(value.ty))
+    }
+
+    /// Returns type args for a value of the expected variant `TypeId`.
+    pub(super) fn variant_args(
+        &self,
+        id: ValueId,
+        expected: TypeId,
+    ) -> Option<SmallVec<[RuntimeTyId; 4]>> {
+        self.meta(id)
+            .map(|meta| meta.repr)
+            .or_else(|| self.ctx.interp.arena.ty(id))
+            .and_then(|ty| match self.ctx.interp.checked.types.get(ty) {
+                Ty::Option(inner) if expected == TypeId::OPTION => {
+                    Some([RuntimeTyId::from(*inner)].into_iter().collect())
+                }
+                Ty::Result(ok, err) if expected == TypeId::RESULT => Some(
+                    [RuntimeTyId::from(*ok), RuntimeTyId::from(*err)]
+                        .into_iter()
+                        .collect(),
+                ),
+                Ty::Named(id, args) if *id == expected => {
+                    Some(args.iter().copied().map(RuntimeTyId::from).collect())
+                }
+                _ => None,
+            })
+    }
+
+    /// Returns an owned array id snapshot for async traversal.
+    pub(super) fn array_ids(
+        &self,
+        id: ValueId,
+        label: &str,
+    ) -> Result<Arc<SmallVec<[ValueId; 4]>>> {
+        match self.payload(id)? {
+            Payload::Array(ids) => Ok(ids.clone()),
+            _ => typechecked!(label, "Array"),
+        }
+    }
+
+    /// Returns a borrowed array payload for immediate sync use.
+    pub(super) fn array(
+        &self,
+        id: ValueId,
+        label: &str,
+    ) -> Result<&SmallVec<[ValueId; 4]>> {
+        self.ctx
+            .interp
+            .arena
+            .get_array(id)
+            .ok_or_else(|| typechecked!(label, "Array"))
+    }
+
+    /// Takes an owned array payload for update operations.
+    pub(super) fn take_array(
+        &self,
+        id: ValueId,
+        label: &str,
+    ) -> Result<SmallVec<[ValueId; 4]>> {
+        match self.payload(id)? {
+            Payload::Array(ids) => Ok(Arc::unwrap_or_clone(ids.clone())),
+            _ => typechecked!(label, "Array"),
+        }
+    }
+
+    /// Materializes map entries once for builtin traversal.
+    pub(super) fn map_entries(
+        &self,
+        id: ValueId,
+        label: &str,
+    ) -> Result<SmallVec<[(ValueId, ValueId); 8]>> {
+        match self.payload(id)? {
+            Payload::Map(m) => Ok(m.entries()),
+            _ => typechecked!(label, "Map"),
+        }
+    }
+
+    /// Builds a `Result.Ok` value with metadata from `v`.
+    pub(super) fn result_ok(&mut self, v: ValueId) -> ValueId {
+        let ok = Payload::ok(v);
+        let ok_ty = self
+            .ctx
+            .interp
+            .arena
+            .meta(v)
+            .map(|m| m.ty)
+            .unwrap_or_else(|| RuntimeTyId::from(TyArena::UNIT));
+        let err_ty = RuntimeTyId::from(TyArena::STRING);
+        let ty = self.ctx.interp.checked.types.result(ok_ty, err_ty);
+        let meta = self.ctx.interp.checked.types.meta(ty);
+        self.ctx.interp.arena.add_typed(ok, meta, self.ctx.span)
+    }
+
+    /// Builds a `Result.Err` value with metadata from `msg`.
+    pub(super) fn result_err(&mut self, msg: ValueId) -> ValueId {
+        let err = Payload::err(msg);
+        let ok_ty = RuntimeTyId::from(TyArena::UNIT);
+        let err_ty = self
+            .ctx
+            .interp
+            .arena
+            .meta(msg)
+            .map(|m| m.ty)
+            .unwrap_or_else(|| RuntimeTyId::from(TyArena::STRING));
+        let ty = self.ctx.interp.checked.types.result(ok_ty, err_ty);
+        let meta = self.ctx.interp.checked.types.meta(ty);
+        self.ctx.interp.arena.add_typed(err, meta, self.ctx.span)
+    }
+
+    /// Builds an `Option.Some` value with metadata from `v`.
+    pub(super) fn option_some(&mut self, v: ValueId) -> ValueId {
+        let some = Payload::some(v);
+        let elem = self
+            .ctx
+            .interp
+            .arena
+            .meta(v)
+            .map(|m| m.ty)
+            .unwrap_or_else(|| RuntimeTyId::from(TyArena::UNIT));
+        let ty = self.ctx.interp.checked.types.option(elem);
+        let meta = self.ctx.interp.checked.types.meta(ty);
+        self.ctx.interp.arena.add_typed(some, meta, self.ctx.span)
+    }
+
+    /// Builds an `Option.None` value with the default option metadata.
+    pub(super) fn option_none(&mut self) -> ValueId {
+        let none = Payload::none();
+        let ty = self
+            .ctx
+            .interp
+            .checked
+            .types
+            .option(RuntimeTyId::from(TyArena::UNIT));
+        let meta = self.ctx.interp.checked.types.meta(ty);
+        self.ctx.interp.arena.add_typed(none, meta, self.ctx.span)
+    }
+}
+
+impl Maps<'_, '_, '_, '_> {
+    /// Looks up a key using class backed map ordering.
+    pub(super) async fn lookup(
+        &mut self,
+        map: &Map,
+        key: ValueId,
+    ) -> Result<Option<ValueId>> {
+        self.lookup_node(map.root(), key).await
+    }
+
+    /// Inserts a key and value using class backed map ordering.
+    pub(super) async fn insert(
+        &mut self,
+        map: &Map,
+        key: ValueId,
+        val: ValueId,
+    ) -> Result<Map> {
+        let (root, added) = self.insert_node(map.root(), key, val).await?;
+        let len = if added {
+            map.len().saturating_add(1)
+        } else {
+            map.len()
+        };
+        Ok(Map::from_root(root, len))
+    }
+
+    /// Removes a key using class backed map ordering.
+    pub(super) async fn remove(
+        &mut self,
+        map: &Map,
+        key: ValueId,
+    ) -> Result<Map> {
+        let (root, removed) = self.remove_node(map.root(), key).await?;
+        let len = if removed {
+            map.len().saturating_sub(1)
+        } else {
+            map.len()
+        };
+        Ok(Map::from_root(root, len))
+    }
+
+    /// Merges two maps using class backed key ordering.
+    pub(super) async fn merge(&mut self, l: &Map, r: &Map) -> Result<Map> {
+        let entries = r.entries();
+        self.insert_entries(l.clone(), entries.as_slice()).await
+    }
+
+    /// Builds a map from entries using class backed key ordering.
+    #[allow(clippy::wrong_self_convention)]
+    pub(super) async fn from_entries(
+        &mut self,
+        entries: impl IntoIterator<Item = (ValueId, ValueId)>,
+    ) -> Result<Map> {
+        let entries: Vec<_> = entries.into_iter().collect();
+        self.insert_entries(Map::new(), entries.as_slice()).await
+    }
+
+    /// Compares two maps for equality through class dispatch.
+    pub(super) async fn eq(&mut self, l: &Map, r: &Map) -> Result<bool> {
+        if l.len() == r.len() {
+            let l_entries = l.entries();
+            let r_entries = r.entries();
+            self.eq_entries(l_entries.as_slice(), r_entries.as_slice())
+                .await
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Compares two maps for ordering through class dispatch.
+    pub(super) async fn cmp(&mut self, l: &Map, r: &Map) -> Result<Ordering> {
+        let l_entries = l.entries();
+        let r_entries = r.entries();
+        self.cmp_entries(l_entries.as_slice(), r_entries.as_slice())
+            .await
+    }
+
+    async fn cmp_value_ids(
+        &mut self,
+        l: ValueId,
+        r: ValueId,
+    ) -> Result<Ordering> {
+        let method = self.ctx.interp.arena.intern("compare");
+        let value = self
+            .ctx
+            .interp
+            .dispatch_class_method_value(class::Dispatch {
+                dispatch_expr_id: None,
+                output_expr_id: None,
+                output_ty: Some(RuntimeTyId::from(TyArena::ORDERING)),
+                class: ClassId::ORD,
+                method,
+                args: SmallVec::from_slice(&[l, r]),
+                span: self.ctx.span,
+            })
+            .await?;
+        let ty = self
+            .ctx
+            .interp
+            .checked
+            .types
+            .to_type_id(value.repr)
+            .or_else(|| self.ctx.interp.checked.types.to_type_id(value.ty));
+
+        match value.payload {
+            Payload::Variant { tag: 0, .. }
+                if ty.is_some_and(|ty| ty == TypeId::ORDERING) =>
+            {
+                Ok(Ordering::Less)
+            }
+            Payload::Variant { tag: 1, .. }
+                if ty.is_some_and(|ty| ty == TypeId::ORDERING) =>
+            {
+                Ok(Ordering::Equal)
+            }
+            Payload::Variant { tag: 2, .. }
+                if ty.is_some_and(|ty| ty == TypeId::ORDERING) =>
+            {
+                Ok(Ordering::Greater)
+            }
+            Payload::Int(n) if n < 0 => Ok(Ordering::Less),
+            Payload::Int(0) => Ok(Ordering::Equal),
+            Payload::Int(_) => Ok(Ordering::Greater),
+            _ => typechecked!("Ord:compare", "Ordering | Int"),
+        }
+    }
+
+    async fn eq_value_ids(&mut self, l: ValueId, r: ValueId) -> Result<bool> {
+        let method = self.ctx.interp.arena.intern("eq");
+        let value = self
+            .ctx
+            .interp
+            .dispatch_class_method_value(class::Dispatch {
+                dispatch_expr_id: None,
+                output_expr_id: None,
+                output_ty: Some(RuntimeTyId::from(TyArena::BOOL)),
+                class: ClassId::EQ,
+                method,
+                args: SmallVec::from_slice(&[l, r]),
+                span: self.ctx.span,
+            })
+            .await?;
+
+        match value.payload {
+            Payload::Bool(b) => Ok(b),
+            _ => typechecked!("Eq:eq", "Bool"),
+        }
+    }
+
+    async fn eq_entries(
+        &mut self,
+        l: &[(ValueId, ValueId)],
+        r: &[(ValueId, ValueId)],
+    ) -> Result<bool> {
+        let mut pairs = l.iter().copied().zip(r.iter().copied());
+        let mut ok = l.len() == r.len();
+
+        while let Some(((lk, lv), (rk, rv))) =
+            if ok { pairs.next() } else { None }
+        {
+            let keys_eq = self.cmp_value_ids(lk, rk).await? == Ordering::Equal;
+            let vals_eq = self.eq_value_ids(lv, rv).await?;
+            ok = keys_eq && vals_eq;
+        }
+
+        Ok(ok)
+    }
+
+    async fn cmp_entries(
+        &mut self,
+        l: &[(ValueId, ValueId)],
+        r: &[(ValueId, ValueId)],
+    ) -> Result<Ordering> {
+        let mut pairs = l.iter().copied().zip(r.iter().copied());
+        let mut out = Ordering::Equal;
+
+        while let Some(((lk, lv), (rk, rv))) = if out == Ordering::Equal {
+            pairs.next()
+        } else {
+            None
+        } {
+            out = match self.cmp_value_ids(lk, rk).await? {
+                Ordering::Equal => self.cmp_value_ids(lv, rv).await?,
+                ord => ord,
+            };
+        }
+
+        Ok(if out == Ordering::Equal {
+            l.len().cmp(&r.len())
+        } else {
+            out
+        })
+    }
+
+    async fn insert_entries(
+        &mut self,
+        mut acc: Map,
+        entries: &[(ValueId, ValueId)],
+    ) -> Result<Map> {
+        let mut it = entries.iter().copied();
+
+        while let Some((key, val)) = it.next() {
+            acc = self.insert(&acc, key, val).await?;
+        }
+
+        Ok(acc)
+    }
+
+    async fn lookup_node(
+        &mut self,
+        node: Option<Arc<MapNode>>,
+        key: ValueId,
+    ) -> Result<Option<ValueId>> {
+        let mut cur = node;
+        let mut out = None;
+
+        while let Some(n) = cur.take() {
+            match self.cmp_value_ids(key, n.key()).await? {
+                Ordering::Less => {
+                    cur = n.left();
+                }
+                Ordering::Equal => {
+                    out = Some(n.val());
+                    cur = None;
+                }
+                Ordering::Greater => {
+                    cur = n.right();
+                }
+            }
+        }
+
+        Ok(out)
+    }
+
+    async fn insert_node(
+        &mut self,
+        node: Option<Arc<MapNode>>,
+        key: ValueId,
+        val: ValueId,
+    ) -> Result<(Option<Arc<MapNode>>, bool)> {
+        struct Frame {
+            dir: Ordering,
+            k: ValueId,
+            v: ValueId,
+            sibling: Option<Arc<MapNode>>,
+        }
+
+        if let Some(root) = node {
+            let mut cur = Some(root);
+            let mut path = Vec::new();
+            let mut done = None;
+
+            while let Some(n) = cur.take() {
+                match self.cmp_value_ids(key, n.key()).await? {
+                    Ordering::Less => match n.left() {
+                        Some(left) => {
+                            path.push(Frame {
+                                dir: Ordering::Less,
+                                k: n.key(),
+                                v: n.val(),
+                                sibling: n.right(),
+                            });
+                            cur = Some(left);
+                        }
+                        None => {
+                            let child = MapNode::new(key, val, None, None);
+                            let root = MapNode::balance(
+                                n.key(),
+                                n.val(),
+                                Some(child),
+                                n.right(),
+                            );
+                            done = Some((Some(root), true));
+                            cur = None;
+                        }
+                    },
+                    Ordering::Equal => {
+                        let root =
+                            MapNode::balance(n.key(), val, n.left(), n.right());
+                        done = Some((Some(root), false));
+                        cur = None;
+                    }
+                    Ordering::Greater => match n.right() {
+                        Some(right) => {
+                            path.push(Frame {
+                                dir: Ordering::Greater,
+                                k: n.key(),
+                                v: n.val(),
+                                sibling: n.left(),
+                            });
+                            cur = Some(right);
+                        }
+                        None => {
+                            let child = MapNode::new(key, val, None, None);
+                            let root = MapNode::balance(
+                                n.key(),
+                                n.val(),
+                                n.left(),
+                                Some(child),
+                            );
+                            done = Some((Some(root), true));
+                            cur = None;
+                        }
+                    },
+                }
+            }
+
+            let (mut root, added) =
+                done.unwrap_or_else(|| invariant!("map insert result"));
+            while let Some(frame) = path.pop() {
+                root = Some(
+                    if frame.dir == Ordering::Less {
+                        MapNode::balance(frame.k, frame.v, root, frame.sibling)
+                    } else {
+                        MapNode::balance(frame.k, frame.v, frame.sibling, root)
+                    },
+                );
+            }
+
+            Ok((root, added))
+        } else {
+            Ok((Some(MapNode::new(key, val, None, None)), true))
+        }
+    }
+
+    async fn remove_node(
+        &mut self,
+        node: Option<Arc<MapNode>>,
+        key: ValueId,
+    ) -> Result<(Option<Arc<MapNode>>, bool)> {
+        struct Frame {
+            dir: Ordering,
+            k: ValueId,
+            v: ValueId,
+            sibling: Option<Arc<MapNode>>,
+        }
+
+        if let Some(root) = node {
+            let mut cur = Some(root);
+            let mut path = Vec::new();
+            let mut done = None;
+
+            while let Some(n) = cur.take() {
+                match self.cmp_value_ids(key, n.key()).await? {
+                    Ordering::Less => match n.left() {
+                        Some(left) => {
+                            path.push(Frame {
+                                dir: Ordering::Less,
+                                k: n.key(),
+                                v: n.val(),
+                                sibling: n.right(),
+                            });
+                            cur = Some(left);
+                        }
+                        None => {
+                            done = Some((Some(n), false));
+                            cur = None;
+                        }
+                    },
+                    Ordering::Equal => {
+                        let root = match (n.left(), n.right()) {
+                            (None, None) => None,
+                            (Some(left), None) => Some(left),
+                            (None, Some(right)) => Some(right),
+                            (Some(left), Some(right)) => {
+                                struct MinFrame {
+                                    k: ValueId,
+                                    v: ValueId,
+                                    right: Option<Arc<MapNode>>,
+                                }
+
+                                let mut cur = Some(right);
+                                let mut min_path = Vec::new();
+                                let mut min = None;
+
+                                while let Some(m) = cur.take() {
+                                    match m.left() {
+                                        Some(next) => {
+                                            min_path.push(MinFrame {
+                                                k: m.key(),
+                                                v: m.val(),
+                                                right: m.right(),
+                                            });
+                                            cur = Some(next);
+                                        }
+                                        None => {
+                                            min = Some((
+                                                m.right(),
+                                                m.key(),
+                                                m.val(),
+                                            ));
+                                            cur = None;
+                                        }
+                                    }
+                                }
+
+                                let (mut right, key, val) =
+                                    min.unwrap_or_else(|| {
+                                        invariant!("map remove min result")
+                                    });
+                                while let Some(frame) = min_path.pop() {
+                                    right = Some(MapNode::balance(
+                                        frame.k,
+                                        frame.v,
+                                        right,
+                                        frame.right,
+                                    ));
+                                }
+
+                                Some(MapNode::balance(
+                                    key,
+                                    val,
+                                    Some(left),
+                                    right,
+                                ))
+                            }
+                        };
+                        done = Some((root, true));
+                        cur = None;
+                    }
+                    Ordering::Greater => match n.right() {
+                        Some(right) => {
+                            path.push(Frame {
+                                dir: Ordering::Greater,
+                                k: n.key(),
+                                v: n.val(),
+                                sibling: n.left(),
+                            });
+                            cur = Some(right);
+                        }
+                        None => {
+                            done = Some((Some(n), false));
+                            cur = None;
+                        }
+                    },
+                }
+            }
+
+            let (mut root, removed) =
+                done.unwrap_or_else(|| invariant!("map remove result"));
+            while let Some(frame) = path.pop() {
+                root = Some(
+                    if frame.dir == Ordering::Less {
+                        MapNode::balance(frame.k, frame.v, root, frame.sibling)
+                    } else {
+                        MapNode::balance(frame.k, frame.v, frame.sibling, root)
+                    },
+                );
+            }
+
+            Ok((root, removed))
+        } else {
+            Ok((None, false))
         }
     }
 }

@@ -1,3 +1,5 @@
+use futures::future::BoxFuture;
+
 use super::*;
 
 /// `Mappable` class: `map` method.
@@ -7,123 +9,126 @@ impl Class for Mappable {
     const ID: ClassId = ClassId::MAPPABLE;
 
     fn register_all(methods: &mut ClassMethods, i: &mut StringInterner) {
-        Self::register(methods, i, "map", MethodFn::Hof(Self::map));
+        Self::register(
+            methods,
+            i,
+            "map",
+            MethodAbi::Hkt,
+            Builtin::Fixed(Impl::Async(Self::map)),
+        );
     }
 }
 
 impl Mappable {
-    /// Start `Mappable:map`; returns first invocation or done for empty.
-    pub(crate) fn map(
-        ctx: &mut ClassCtx<'_>,
-        args: &[ValueId],
-    ) -> Result<hof::Step> {
-        let f = args[0];
-        let a = args[1];
+    pub(crate) fn map<'a>(
+        ctx: &'a mut BuiltinCtx<'_, '_, '_>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> BoxFuture<'a, Result<ValueId>> {
+        Box::pin(async move {
+            enum Target {
+                Array(Arc<SmallVec<[ValueId; 4]>>),
+                Tuple(ValueId, ValueId),
+                OptionSome(ValueId),
+                OptionNone,
+                ResultOk(ValueId),
+                ResultErr,
+            }
 
-        // Extract data to avoid borrow conflicts
-        enum Kind {
-            EmptyArray,
-            Array(ValueId),
-            Tuple(ValueId, ValueId),
-            OptionSome(ValueId),
-            OptionNone,
-            ResultOk(ValueId),
-            ResultErr(Payload),
-            Other,
-        }
-        let ty = ctx.value_base_type(a);
-        let kind = match ctx.arena.payload(a) {
-            Some(Payload::Array(elems)) if elems.is_empty() => Kind::EmptyArray,
-            Some(Payload::Array(elems)) => Kind::Array(
-                *elems
-                    .first()
-                    .unwrap_or_else(|| invariant!("Array has first elem")),
-            ),
-            Some(Payload::Tuple(elems)) if elems.len() == 2 => {
-                let first = *elems
-                    .first()
-                    .unwrap_or_else(|| invariant!("Tuple has first elem"));
-                let second = *elems
-                    .get(1)
-                    .unwrap_or_else(|| invariant!("Tuple has second elem"));
-                Kind::Tuple(first, second)
-            }
-            // Option.Some(v) -> map inner
-            Some(Payload::Variant {
-                tag: 1,
-                vals: payloads,
-            }) if ty == Some(TypeId::OPTION) => Kind::OptionSome(
-                *payloads
-                    .first()
-                    .unwrap_or_else(|| invariant!("Some has payload")),
-            ),
-            // Option.None -> return None
-            Some(Payload::Variant { tag: 0, .. })
-                if ty == Some(TypeId::OPTION) =>
-            {
-                Kind::OptionNone
-            }
-            // Result.Ok(v) -> map inner
-            Some(Payload::Variant {
-                tag: 0,
-                vals: payloads,
-            }) if ty == Some(TypeId::RESULT) => {
-                let inner = *payloads
-                    .first()
-                    .unwrap_or_else(|| invariant!("Ok has payload"));
-                Kind::ResultOk(inner)
-            }
-            // Result.Err(e) -> return unchanged
-            Some(v @ Payload::Variant { tag: 1, .. })
-                if ty == Some(TypeId::RESULT) =>
-            {
-                Kind::ResultErr(v.clone())
-            }
-            _ => Kind::Other,
-        };
+            let f = args[0];
+            let a = args[1];
+            let out = ctx.output_ty();
+            let target: Result<Target> = {
+                let vals = ctx.vals();
+                let v = vals.value(a)?;
+                let ty = vals.value_variant_base_type(v);
 
-        match kind {
-            Kind::EmptyArray => {
-                Ok(hof::Step::Done(Payload::Array(Arc::new(SmallVec::new()))))
+                match &v.payload {
+                    Payload::Array(elems) => Ok(Target::Array(elems.clone())),
+                    Payload::Tuple(elems) if elems.len() == 2 => {
+                        let fst = *elems.first().unwrap_or_else(|| {
+                            invariant!("Tuple has first elem")
+                        });
+                        let snd = *elems.get(1).unwrap_or_else(|| {
+                            invariant!("Tuple has second elem")
+                        });
+                        Ok(Target::Tuple(fst, snd))
+                    }
+                    Payload::Variant { tag: 1, vals }
+                        if ty.is_some_and(|ty| ty == TypeId::OPTION) =>
+                    {
+                        let inner = *vals.first().unwrap_or_else(|| {
+                            typechecked!("Mappable:map", "Option.Some")
+                        });
+                        Ok(Target::OptionSome(inner))
+                    }
+                    Payload::Variant { tag: 0, .. }
+                        if ty.is_some_and(|ty| ty == TypeId::OPTION) =>
+                    {
+                        Ok(Target::OptionNone)
+                    }
+                    Payload::Variant { tag: 0, vals }
+                        if ty.is_some_and(|ty| ty == TypeId::RESULT) =>
+                    {
+                        let inner = *vals.first().unwrap_or_else(|| {
+                            typechecked!("Mappable:map", "Result.Ok")
+                        });
+                        Ok(Target::ResultOk(inner))
+                    }
+                    Payload::Variant { tag: 1, .. }
+                        if ty.is_some_and(|ty| ty == TypeId::RESULT) =>
+                    {
+                        Ok(Target::ResultErr)
+                    }
+                    _ => typechecked!("Mappable:map", "Mappable instance"),
+                }
+            };
+            let target = target?;
+
+            match target {
+                Target::Array(xs) => {
+                    let mut acc = SmallVec::new();
+                    let mut it = xs.iter().copied();
+
+                    while let Some(x) = it.next() {
+                        acc.push(ctx.invoke(f, smallvec![x]).await?);
+                    }
+
+                    let v = Payload::Array(Arc::new(acc));
+                    Ok(match out {
+                        Some(ty) => ctx.vals().add_typed(v, ty),
+                        None => ctx.vals().add(v),
+                    })
+                }
+                Target::Tuple(fst, snd) => {
+                    let res = ctx.invoke(f, smallvec![snd]).await?;
+                    let v = Payload::Tuple(Arc::new(smallvec![fst, res]));
+                    Ok(match out {
+                        Some(ty) => ctx.vals().add_typed(v, ty),
+                        None => ctx.vals().add(v),
+                    })
+                }
+                Target::OptionSome(inner) => {
+                    let res = ctx.invoke(f, smallvec![inner]).await?;
+                    Ok(match out {
+                        Some(ty) => {
+                            ctx.vals().add_typed(Payload::some(res), ty)
+                        }
+                        None => ctx.vals().option_some(res),
+                    })
+                }
+                Target::OptionNone => Ok(match out {
+                    Some(ty) => ctx.vals().add_typed(Payload::none(), ty),
+                    None => a,
+                }),
+                Target::ResultOk(inner) => {
+                    let res = ctx.invoke(f, smallvec![inner]).await?;
+                    Ok(match out {
+                        Some(ty) => ctx.vals().add_typed(Payload::ok(res), ty),
+                        None => ctx.vals().result_ok(res),
+                    })
+                }
+                Target::ResultErr => Ok(a),
             }
-            Kind::Array(first) => Ok(hof::Step::Invoke(hof::Continuation {
-                callee: f,
-                args: smallvec![first],
-                state: hof::State::MapIter {
-                    kind: hof::IterKind::Array { source: a, idx: 0 },
-                    acc: SmallVec::new(),
-                },
-            })),
-            Kind::Tuple(first, second) => {
-                Ok(hof::Step::Invoke(hof::Continuation {
-                    callee: f,
-                    args: smallvec![second],
-                    state: hof::State::MapTuple { first },
-                }))
-            }
-            Kind::OptionSome(inner) => {
-                Ok(hof::Step::Invoke(hof::Continuation {
-                    callee: f,
-                    args: smallvec![inner],
-                    state: hof::State::MapContainer {
-                        ctor_ty: TypeId::OPTION,
-                        tag: 1, // Some
-                    },
-                }))
-            }
-            Kind::OptionNone => Ok(hof::Step::Done(Payload::none())),
-            Kind::ResultOk(inner) => {
-                Ok(hof::Step::Invoke(hof::Continuation {
-                    callee: f,
-                    args: smallvec![inner],
-                    state: hof::State::MapContainer {
-                        ctor_ty: TypeId::RESULT,
-                        tag: 0, // Ok
-                    },
-                }))
-            }
-            Kind::ResultErr(v) => Ok(hof::Step::Done(v)),
-            Kind::Other => typechecked!("Mappable:map", "Mappable"),
-        }
+        })
     }
 }

@@ -1,8 +1,8 @@
-//! Class method dispatch infrastructure.
+//! Class method target registry.
 //!
-//! Provides a registry for class methods (like `Additive:add`, `Fallible:unwrap`)
-//! and dispatch functions to invoke them. The dispatch table is indexed by
-//! `ClassId` for O(1) lookup.
+//! Provides a registry for class methods like `Additive:add` and
+//! `Fallible:unwrap`. The dispatch table is indexed by `ClassId` for `O(1)`
+//! lookup.
 //!
 //! # Organization
 //!
@@ -30,117 +30,54 @@
 //! - `Iterable`: `length`, `reverse`
 //! - `Bimappable`: `bimap`
 //!
-//! Higher-order class methods use a continuation/trampoline pattern defined in
-//! the [`hof`](super::hof) module.
-//!
 //! [`Interpreter`]: super::Interpreter
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+pub(crate) use dispatch::Dispatch;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use ordered_float::OrderedFloat;
 use smallvec::{smallvec, SmallVec};
 
-use super::hof;
+use super::Interpreter;
+use crate::builtins::{self, BuiltinCtx, Impl, Range, Values};
 use crate::intern::{StringId, StringInterner};
-use crate::primitives::Range;
-use crate::typecheck::{RuntimeTyId, RuntimeTypes, Ty, TyArena};
-use crate::value::{
-    Map, Payload, TypeId, TypeRegistry, Value, ValueArena, ValueId,
-};
+use crate::typecheck::{RuntimeTyId, Ty, TyArena};
+use crate::value::{Map, Payload, TypeId, Value, ValueId};
 use crate::{ClassId, Error, Result, Span};
 
-/// Context for class method dispatch.
-pub(crate) struct ClassCtx<'a> {
-    pub(crate) arena: &'a mut ValueArena,
-    pub(crate) runtime_types: &'a mut RuntimeTypes,
-    pub(crate) registry: &'a TypeRegistry,
-    pub(crate) regex_cache: &'a [regex::Regex],
-    pub(crate) span: Span,
-}
-
-impl ClassCtx<'_> {
-    pub(crate) fn add(&mut self, v: Payload) -> ValueId {
-        let meta = self.runtime_types.meta_for_payload(self.arena, &v);
-        self.arena.add_typed(v, meta, self.span)
-    }
-
-    pub(crate) fn option_some(&mut self, v: ValueId) -> ValueId {
-        let elem = self
-            .arena
-            .meta(v)
-            .map(|m| m.ty)
-            .unwrap_or_else(|| RuntimeTyId::from(TyArena::UNIT));
-        let ty = self.runtime_types.option(elem);
-        self.arena.add_typed(
-            Payload::some(v),
-            self.runtime_types.meta(ty),
-            self.span,
-        )
-    }
-
-    pub(crate) fn option_none(&mut self) -> ValueId {
-        let ty = self.runtime_types.option(RuntimeTyId::from(TyArena::UNIT));
-        self.arena.add_typed(
-            Payload::none(),
-            self.runtime_types.meta(ty),
-            self.span,
-        )
-    }
-
-    fn value_base_type(&self, id: ValueId) -> Option<TypeId> {
-        self.arena.meta(id).and_then(|meta| {
-            self.runtime_types
-                .to_type_id(meta.repr)
-                .or_else(|| self.runtime_types.to_type_id(meta.ty))
-        })
-    }
-
-    fn runtime_base_type(&self, ty: RuntimeTyId) -> Option<TypeId> {
-        self.runtime_types.to_type_id(ty)
-    }
-
-    fn value_variant_base_type(&self, value: &Value) -> Option<TypeId> {
-        self.runtime_base_type(value.repr)
-            .or_else(|| self.runtime_base_type(value.ty))
-    }
-}
-
-/// Binary class method signature.
-pub(crate) type BinMethodFn =
-    fn(&mut ClassCtx<'_>, &Payload, &Payload) -> Result<Payload>;
-
-/// Unary class method signature.
-pub(crate) type UnaryMethodFn =
-    fn(&mut ClassCtx<'_>, &Payload) -> Result<Payload>;
-
-/// Nullary class method signature, e.g. `Default:default`.
-///
-/// Takes the statically-inferred type to produce the appropriate value.
-pub(crate) type NullaryMethodFn = fn(&mut ClassCtx<'_>, &Ty) -> Result<Payload>;
-
-/// Conversion method signature (e.g., `Into::into`, `TryInto::try_into`).
-///
-/// Takes a value and the target type to convert to.
-pub(crate) type ConvertMethodFn =
-    fn(&mut ClassCtx<'_>, &Payload, &Ty) -> Result<Payload>;
-
-/// Method dispatch function: binary, unary, nullary, convert, or hof.
 #[derive(Clone, Copy)]
-pub(crate) enum MethodFn {
-    Binary(BinMethodFn),
-    Unary(UnaryMethodFn),
-    Nullary(NullaryMethodFn),
-    Convert(ConvertMethodFn),
-    Hof(hof::MethodFn),
+pub(crate) struct MethodDef {
+    pub(crate) abi: MethodAbi,
+    pub(crate) builtin: Builtin,
 }
+
+#[derive(Clone, Copy)]
+pub(crate) enum MethodAbi {
+    Binary,
+    Unary,
+    Nullary,
+    Convert,
+    Hkt,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum Builtin {
+    Fixed(builtins::Impl),
+    Selected(SelectFn),
+}
+
+pub(crate) type SelectFn = for<'i, 'ast, 'io> fn(
+    &'i mut Interpreter<'ast, 'io>,
+    &Dispatch,
+) -> Result<builtins::Call>;
 
 /// Per-class method table.
 struct MethodTable {
-    methods: HashMap<StringId, MethodFn>,
+    methods: HashMap<StringId, MethodDef>,
 }
 
 impl MethodTable {
@@ -150,12 +87,12 @@ impl MethodTable {
         }
     }
 
-    fn register(&mut self, name: StringId, f: MethodFn) {
-        self.methods.insert(name, f);
+    fn register(&mut self, name: StringId, def: MethodDef) {
+        self.methods.insert(name, def);
     }
 
-    fn lookup(&self, name: StringId) -> Option<MethodFn> {
-        self.methods.get(&name).copied()
+    fn lookup(&self, name: StringId) -> Option<&MethodDef> {
+        self.methods.get(&name)
     }
 }
 
@@ -183,103 +120,17 @@ impl ClassMethods {
         &mut self,
         kind: ClassId,
         name: StringId,
-        f: MethodFn,
+        def: MethodDef,
     ) {
-        self.tables[kind.idx()].register(name, f);
+        self.tables[kind.idx()].register(name, def);
     }
 
     pub(crate) fn lookup(
         &self,
         kind: ClassId,
         name: StringId,
-    ) -> Option<MethodFn> {
+    ) -> Option<&MethodDef> {
         self.tables.get(kind.idx()).and_then(|t| t.lookup(name))
-    }
-
-    pub(crate) fn dispatch_binary(
-        &self,
-        kind: ClassId,
-        method: StringId,
-        ctx: &mut ClassCtx<'_>,
-        recv: &Payload,
-        arg: &Payload,
-    ) -> Result<Payload> {
-        match self.lookup(kind, method) {
-            Some(MethodFn::Binary(f)) => f(ctx, recv, arg),
-            Some(
-                MethodFn::Unary(_)
-                | MethodFn::Nullary(_)
-                | MethodFn::Convert(_)
-                | MethodFn::Hof(_),
-            ) => {
-                typechecked!("dispatch_binary", "binary method")
-            }
-            None => typechecked!("dispatch_binary", "registered method"),
-        }
-    }
-
-    pub(crate) fn dispatch_unary(
-        &self,
-        kind: ClassId,
-        method: StringId,
-        ctx: &mut ClassCtx<'_>,
-        recv: &Payload,
-    ) -> Result<Payload> {
-        match self.lookup(kind, method) {
-            Some(MethodFn::Unary(f)) => f(ctx, recv),
-            Some(
-                MethodFn::Binary(_)
-                | MethodFn::Nullary(_)
-                | MethodFn::Convert(_)
-                | MethodFn::Hof(_),
-            ) => {
-                typechecked!("dispatch_unary", "unary method")
-            }
-            None => typechecked!("dispatch_unary", "registered method"),
-        }
-    }
-
-    pub(crate) fn dispatch_nullary(
-        &self,
-        kind: ClassId,
-        method: StringId,
-        ctx: &mut ClassCtx<'_>,
-        ty: &Ty,
-    ) -> Result<Payload> {
-        match self.lookup(kind, method) {
-            Some(MethodFn::Nullary(f)) => f(ctx, ty),
-            Some(
-                MethodFn::Binary(_)
-                | MethodFn::Unary(_)
-                | MethodFn::Convert(_)
-                | MethodFn::Hof(_),
-            ) => {
-                typechecked!("dispatch_nullary", "nullary method")
-            }
-            None => typechecked!("dispatch_nullary", "registered method"),
-        }
-    }
-
-    pub(crate) fn dispatch_convert(
-        &self,
-        kind: ClassId,
-        method: StringId,
-        ctx: &mut ClassCtx<'_>,
-        val: &Payload,
-        target: &Ty,
-    ) -> Result<Payload> {
-        match self.lookup(kind, method) {
-            Some(MethodFn::Convert(f)) => f(ctx, val, target),
-            Some(
-                MethodFn::Binary(_)
-                | MethodFn::Unary(_)
-                | MethodFn::Nullary(_)
-                | MethodFn::Hof(_),
-            ) => {
-                typechecked!("dispatch_convert", "convert method")
-            }
-            None => typechecked!("dispatch_convert", "registered method"),
-        }
     }
 
     /// Register all class methods.
@@ -332,9 +183,17 @@ pub(crate) trait Class {
         methods: &mut ClassMethods,
         i: &mut StringInterner,
         name: &str,
-        f: MethodFn,
+        abi: MethodAbi,
+        target: Builtin,
     ) {
-        methods.register(Self::ID, i.intern(name), f);
+        methods.register(
+            Self::ID,
+            i.intern(name),
+            MethodDef {
+                abi,
+                builtin: target,
+            },
+        );
     }
 }
 
@@ -344,6 +203,7 @@ mod bitlike;
 mod chainable;
 mod concatable;
 mod default;
+mod dispatch;
 mod display;
 mod divisible;
 mod eq;

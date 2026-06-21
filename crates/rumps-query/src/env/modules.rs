@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
-use super::{PrimDef, PrimFn};
+use crate::builtins;
 use crate::intern::{StringId, StringInterner};
 use crate::typecheck::{Scheme, TyId};
 use crate::value::{FunctionDef, ValueId};
 
-/// A built-in module containing primitive functions, constants, and submodules.
+/// A built-in module containing builtin functions, constants, and submodules.
 ///
 /// Modules group related functions under a namespace (e.g., `Iter.map`,
 /// `String.split`). Supports nested modules for future extensibility
@@ -18,8 +18,8 @@ use crate::value::{FunctionDef, ValueId};
 /// modules will be supported in a future phase.
 #[derive(Default)]
 pub(crate) struct Module {
-    /// Functions in this module: `(primitive_fn, type_scheme)`.
-    functions: HashMap<StringId, (PrimFn, Scheme)>,
+    /// Functions in this module.
+    functions: HashMap<StringId, builtins::Def>,
 
     /// Constants in this module: `(value_id, type)`.
     /// `ValueId`s index into `Environment::consts`.
@@ -30,14 +30,23 @@ pub(crate) struct Module {
 }
 
 impl Module {
-    /// Create a module from primitive definitions.
-    pub(crate) fn from_prims(
-        prims: &[PrimDef],
+    /// Create a module from builtin definitions.
+    pub(crate) fn from_defs(
+        defs: &[builtins::Def],
         interner: &mut StringInterner,
     ) -> Self {
-        let functions = prims
+        let functions = defs
             .iter()
-            .map(|p| (interner.intern(p.name), (p.f, p.ty.clone())))
+            .map(|d| {
+                (
+                    interner.intern(d.name),
+                    builtins::Def {
+                        name: d.name,
+                        imp: d.imp,
+                        ty: d.ty.clone(),
+                    },
+                )
+            })
             .collect();
         Self {
             functions,
@@ -72,10 +81,10 @@ impl Module {
     ///
     /// For a single-segment path, looks up the function directly.
     /// For multi-segment paths, traverses submodules.
-    pub(crate) fn get_fn(&self, path: &[StringId]) -> Option<&PrimFn> {
+    pub(crate) fn get_fn(&self, path: &[StringId]) -> Option<&builtins::Impl> {
         match path {
             [] => None,
-            [name] => self.functions.get(name).map(|(f, _)| f),
+            [name] => self.functions.get(name).map(|d| &d.imp),
             [first, rest @ ..] => {
                 self.submodules.get(first).and_then(|m| m.get_fn(rest))
             }
@@ -86,7 +95,7 @@ impl Module {
     pub(crate) fn get_fn_type(&self, path: &[StringId]) -> Option<&Scheme> {
         match path {
             [] => None,
-            [name] => self.functions.get(name).map(|(_, ty)| ty),
+            [name] => self.functions.get(name).map(|d| &d.ty),
             [first, rest @ ..] => {
                 self.submodules.get(first).and_then(|m| m.get_fn_type(rest))
             }
@@ -131,10 +140,7 @@ impl Module {
     /// Returns `(name, scheme)` pairs for all top-level members.
     /// All builtin module members are public.
     pub(crate) fn public_members(&self) -> Vec<(StringId, Scheme)> {
-        let fns = self
-            .functions
-            .iter()
-            .map(|(name, (_, scheme))| (*name, scheme.clone()));
+        let fns = self.functions.iter().map(|(name, d)| (*name, d.ty.clone()));
         let consts = self
             .constants
             .iter()
@@ -160,9 +166,9 @@ impl Module {
         prefix: &mut Vec<StringId>,
         out: &mut HashMap<Vec<StringId>, Scheme>,
     ) {
-        self.functions.iter().for_each(|(&name, (_, scheme))| {
+        self.functions.iter().for_each(|(&name, d)| {
             prefix.push(name);
-            out.insert(prefix.clone(), scheme.clone());
+            out.insert(prefix.clone(), d.ty.clone());
             let _ = prefix.pop();
         });
         self.submodules.iter().for_each(|(&name, m)| {
@@ -192,7 +198,7 @@ impl Module {
 
 /// A user-defined module containing functions and constants.
 ///
-/// Unlike builtin `Module`s which use `PrimFn`, user modules store:
+/// Unlike builtin `Module`s which use `builtins::Impl`, user modules store:
 /// - Functions as `FunctionDef`s (not closures; siblings are bound at call time)
 /// - Constants as `ValueId`s pointing to evaluated values
 #[derive(Default, Clone)]

@@ -1,3 +1,5 @@
+use futures::future::BoxFuture;
+
 use super::*;
 
 /// `Foldable` class: `fold`, `fold-map` methods.
@@ -7,68 +9,86 @@ impl Class for Foldable {
     const ID: ClassId = ClassId::FOLDABLE;
 
     fn register_all(methods: &mut ClassMethods, i: &mut StringInterner) {
-        Self::register(methods, i, "fold", MethodFn::Hof(Self::fold));
-        Self::register(methods, i, "fold-map", MethodFn::Hof(Self::fold_map));
+        Self::register(
+            methods,
+            i,
+            "fold",
+            MethodAbi::Hkt,
+            Builtin::Fixed(Impl::Async(Self::fold)),
+        );
+        Self::register(
+            methods,
+            i,
+            "fold-map",
+            MethodAbi::Hkt,
+            Builtin::Fixed(Impl::Async(Self::fold_map)),
+        );
     }
 }
 
 impl Foldable {
-    /// Start `Foldable:fold`; returns first invocation.
-    pub(crate) fn fold(
-        ctx: &mut ClassCtx<'_>,
-        args: &[ValueId],
-    ) -> Result<hof::Step> {
-        let f = args[0];
-        let a = args[1];
-        let b = args[2];
+    pub(crate) fn fold<'a>(
+        ctx: &'a mut BuiltinCtx<'_, '_, '_>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> BoxFuture<'a, Result<ValueId>> {
+        Box::pin(async move {
+            let f = args[0];
+            let mut acc = args[1];
+            let a = args[2];
+            let xs = ctx.vals().array_ids(a, "Foldable:fold")?;
+            let mut it = xs.iter().copied();
 
-        // Extract data before second match to satisfy borrow checker.
-        enum Kind {
-            EmptyArray,
-            Array(ValueId),
-            Other,
-        }
-        let kind = match ctx.arena.payload(b) {
-            Some(Payload::Array(elems)) if elems.is_empty() => Kind::EmptyArray,
-            Some(Payload::Array(elems)) => Kind::Array(elems[0]),
-            _ => Kind::Other,
-        };
-        match kind {
-            Kind::EmptyArray => Ok(hof::Step::DoneValue(a)),
-            Kind::Array(first) => Ok(hof::Step::Invoke(hof::Continuation {
-                callee: f,
-                args: smallvec![a, first],
-                state: hof::State::ReduceArray {
-                    source: b,
-                    idx: 0,
-                    acc: a,
-                },
-            })),
-            Kind::Other => typechecked!("Foldable:fold", "Array"),
-        }
+            while let Some(x) = it.next() {
+                acc = ctx.invoke(f, smallvec![acc, x]).await?;
+            }
+
+            Ok(acc)
+        })
     }
 
-    /// Start `Foldable:fold-map`; requests the default accumulator first.
-    pub(crate) fn fold_map(
-        ctx: &mut ClassCtx<'_>,
-        args: &[ValueId],
-    ) -> Result<hof::Step> {
-        let f = args[0];
-        let source = args[1];
-        let out = ctx.callable_ret_ty(f, "Foldable:fold-map");
+    pub(crate) fn fold_map<'a>(
+        ctx: &'a mut BuiltinCtx<'_, '_, '_>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> BoxFuture<'a, Result<ValueId>> {
+        Box::pin(async move {
+            let f = args[0];
+            let a = args[1];
+            let out = ctx.vals().callable_ret_ty(f).unwrap_or_else(|| {
+                typechecked!("Foldable:fold-map", "callable metadata")
+            });
+            let xs = ctx.vals().array_ids(a, "Foldable:fold-map")?;
+            let default = ctx.vals().intern("default");
+            let concat = ctx.vals().intern("concat");
+            let mut acc = ctx
+                .class_call(
+                    ClassId::DEFAULT,
+                    default,
+                    SmallVec::new(),
+                    Some(out),
+                )
+                .await?;
+            let mut it = xs.iter().copied();
 
-        match ctx.arena.payload(source) {
-            Some(Payload::Array(_)) => {
-                let method = ctx.arena.intern("default");
-                Ok(hof::Step::ClassCall(hof::ClassCall {
-                    class: ClassId::DEFAULT,
-                    method,
-                    args: SmallVec::new(),
-                    output_ty: Some(out),
-                    state: hof::State::FoldMapArrayDefault { source, f },
-                }))
+            while let Some(x) = it.next() {
+                let mapped = ctx.invoke(f, smallvec![x]).await?;
+                let ty = ctx
+                    .vals()
+                    .meta(mapped)
+                    .map(|meta| meta.ty)
+                    .unwrap_or_else(|| {
+                        typechecked!("Foldable:fold-map", "mapper result meta")
+                    });
+                acc = ctx
+                    .class_call(
+                        ClassId::CONCATABLE,
+                        concat,
+                        smallvec![acc, mapped],
+                        Some(ty),
+                    )
+                    .await?;
             }
-            _ => typechecked!("Foldable:fold-map", "Array"),
-        }
+
+            Ok(acc)
+        })
     }
 }

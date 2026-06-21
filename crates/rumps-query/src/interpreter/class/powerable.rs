@@ -7,17 +7,23 @@ impl Class for Powerable {
     const ID: ClassId = ClassId::POWERABLE;
 
     fn register_all(methods: &mut ClassMethods, i: &mut StringInterner) {
-        Self::register(methods, i, "pow", MethodFn::Binary(Self::pow));
+        Self::register(
+            methods,
+            i,
+            "pow",
+            MethodAbi::Binary,
+            Builtin::Fixed(Impl::Sync(Self::pow)),
+        );
     }
 }
 
 impl Powerable {
     pub(crate) fn pow(
-        _: &mut ClassCtx<'_>,
-        l: &Payload,
-        r: &Payload,
-    ) -> Result<Payload> {
-        Ok(match (l, r) {
+        ctx: &mut BuiltinCtx<'_, '_, '_>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> Result<ValueId> {
+        let vals = ctx.vals();
+        let v = match (vals.payload(args[0])?, vals.payload(args[1])?) {
             (Payload::Int(base), Payload::Int(exp)) => {
                 if *exp < 0 {
                     Payload::Float(OrderedFloat(
@@ -46,7 +52,8 @@ impl Powerable {
             (Payload::Float(a), Payload::Float(b)) => {
                 Payload::Float(OrderedFloat(a.0.powf(b.0)))
             }
-            _ => typechecked!("**", "same Numeric type"),
-        })
+            _ => typechecked!("**", "Powerable instance"),
+        };
+        Ok(ctx.vals().add(v))
     }
 }

@@ -10,7 +10,6 @@ use crate::ast::{
     TypePattern,
 };
 use crate::intern::{QualifiedName, StringId};
-use crate::io::IoContext;
 use crate::typecheck::TypePatternInfo;
 use crate::value::{Payload, TypeId, Value, ValueId, VariantDef};
 use crate::{Result, Span};
@@ -25,7 +24,7 @@ struct VariantMatch<'a> {
     span: Span,
 }
 
-impl<I: IoContext> Interpreter<'_, I> {
+impl Interpreter<'_, '_> {
     /// Check if a value matches a type pattern (without binding).
     ///
     /// Uses the checked `Value` metadata for semantic and representation type

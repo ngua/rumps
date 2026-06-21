@@ -1,3 +1,5 @@
+use futures::future::BoxFuture;
+
 use super::*;
 
 /// Monadic chaining for `Option` and `Result`.
@@ -7,77 +9,70 @@ impl Class for Chainable {
     const ID: ClassId = ClassId::CHAINABLE;
 
     fn register_all(methods: &mut ClassMethods, i: &mut StringInterner) {
-        Self::register(methods, i, "chain", MethodFn::Hof(Self::chain));
+        Self::register(
+            methods,
+            i,
+            "chain",
+            MethodAbi::Hkt,
+            Builtin::Fixed(Impl::Async(Self::chain)),
+        );
     }
 }
 
-/// `Chainable` class: `chain` method.
 impl Chainable {
-    /// Start `Chainable:chain`; single invocation for Some/Ok, or done for None/Err.
-    pub(crate) fn chain(
-        ctx: &mut ClassCtx<'_>,
-        args: &[ValueId],
-    ) -> Result<hof::Step> {
-        let a = args[0];
-        let f = args[1];
+    pub(crate) fn chain<'a>(
+        ctx: &'a mut BuiltinCtx<'_, '_, '_>,
+        args: SmallVec<[ValueId; 4]>,
+    ) -> BoxFuture<'a, Result<ValueId>> {
+        Box::pin(async move {
+            enum Target {
+                Invoke(ValueId),
+                Keep,
+            }
 
-        let ty = ctx.value_base_type(a);
-        match ctx.arena.payload(a) {
-            // Option.None -> None
-            Some(Payload::Variant { tag: 0, .. })
-                if ty == Some(TypeId::OPTION) =>
-            {
-                Ok(hof::Step::Done(Payload::none()))
+            let a = args[0];
+            let f = args[1];
+            let target: Result<Target> = {
+                let vals = ctx.vals();
+                let v = vals.value(a)?;
+                let ty = vals.value_variant_base_type(v);
+
+                match &v.payload {
+                    Payload::Variant { tag: 0, .. }
+                        if ty.is_some_and(|ty| ty == TypeId::OPTION) =>
+                    {
+                        Ok(Target::Keep)
+                    }
+                    Payload::Variant { tag: 1, vals }
+                        if ty.is_some_and(|ty| ty == TypeId::OPTION) =>
+                    {
+                        let inner = *vals.first().unwrap_or_else(|| {
+                            typechecked!("Chainable:chain", "Option.Some")
+                        });
+                        Ok(Target::Invoke(inner))
+                    }
+                    Payload::Variant { tag: 0, vals }
+                        if ty.is_some_and(|ty| ty == TypeId::RESULT) =>
+                    {
+                        let inner = *vals.first().unwrap_or_else(|| {
+                            typechecked!("Chainable:chain", "Result.Ok")
+                        });
+                        Ok(Target::Invoke(inner))
+                    }
+                    Payload::Variant { tag: 1, .. }
+                        if ty.is_some_and(|ty| ty == TypeId::RESULT) =>
+                    {
+                        Ok(Target::Keep)
+                    }
+                    _ => typechecked!("Chainable:chain", "Chainable instance"),
+                }
+            };
+            let target = target?;
+
+            match target {
+                Target::Invoke(inner) => ctx.invoke(f, smallvec![inner]).await,
+                Target::Keep => Ok(a),
             }
-            // Option.Some(v) -> invoke fn(v)
-            Some(Payload::Variant {
-                tag: 1,
-                vals: payloads,
-            }) if ty == Some(TypeId::OPTION) => {
-                let inner = payloads
-                    .first()
-                    .copied()
-                    .unwrap_or_else(|| invariant!("Some has payload"));
-                Ok(hof::Step::Invoke(hof::Continuation {
-                    callee: f,
-                    args: smallvec![inner],
-                    state: hof::State::Chain {
-                        wrapper: hof::ChainWrapper::OptionSome,
-                    },
-                }))
-            }
-            // Result.Ok(v) -> invoke fn(v)
-            Some(Payload::Variant {
-                tag: 0,
-                vals: payloads,
-            }) if ty == Some(TypeId::RESULT) => {
-                let inner = payloads
-                    .first()
-                    .copied()
-                    .unwrap_or_else(|| invariant!("Ok has payload"));
-                Ok(hof::Step::Invoke(hof::Continuation {
-                    callee: f,
-                    args: smallvec![inner],
-                    state: hof::State::Chain {
-                        wrapper: hof::ChainWrapper::ResultOk,
-                    },
-                }))
-            }
-            // Result.Err(e) -> propagate error unchanged
-            Some(Payload::Variant {
-                tag: 1,
-                vals: payloads,
-            }) if ty == Some(TypeId::RESULT) => {
-                let err = payloads
-                    .first()
-                    .copied()
-                    .unwrap_or_else(|| invariant!("Err has payload"));
-                Ok(hof::Step::Done(Payload::Variant {
-                    tag: 1,
-                    vals: smallvec![err],
-                }))
-            }
-            _ => typechecked!("Chainable:chain", "Option or Result"),
-        }
+        })
     }
 }

@@ -1,3 +1,6 @@
+// NOTE Each module below may expose submodules corresponding to the RUMPS
+// submodule system. E.g. `mod directory` in `io`, corresponding to RUMPS'
+// `Directory.Io`, etc...
 mod array;
 mod io;
 mod map;

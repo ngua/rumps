@@ -1,7 +1,7 @@
 use rumps_query_macros::scheme;
 
-use super::super::{Environment, Module, PrimDef};
-use crate::primitives::{Map, Prim};
+use super::super::{Environment, Module};
+use crate::builtins::{Def, Impl, Map};
 
 impl Environment {
     pub(super) fn register_map_builtin(&mut self) {
@@ -10,140 +10,140 @@ impl Environment {
         let map_id = self.consts.strings.intern("Map");
         self.modules.insert(
             map_id,
-            Module::from_prims(
+            Module::from_defs(
                 &[
-                    PrimDef {
+                    Def {
                         name: "empty",
-                        f: Map::empty,
+                        imp: Impl::Sync(Map::empty),
                         ty: scheme!(a, forall T: Ord, U. () -> Map[T, U]),
                     },
-                    PrimDef {
+                    Def {
                         name: "length",
-                        f: Map::length,
+                        imp: Impl::Sync(Map::length),
                         ty: scheme!(a, forall T: Ord, U. (Map[T, U]) -> Int),
                     },
-                    PrimDef {
+                    Def {
                         name: "keys",
-                        f: Map::keys,
+                        imp: Impl::Sync(Map::keys),
                         ty: scheme!(
                             a,
                             forall T: Ord, U. (Map[T, U]) -> Array[T]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "values",
-                        f: Map::values,
+                        imp: Impl::Sync(Map::values),
                         ty: scheme!(
                             a,
                             forall T: Ord, U. (Map[T, U]) -> Array[U]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "entries",
-                        f: Map::entries,
+                        imp: Impl::Sync(Map::entries),
                         ty: scheme!(
                             a,
                             forall T: Ord, U. (Map[T, U]) -> Array[(T, U)]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "map",
-                        f: Map::placeholder,
+                        imp: Impl::Async(Map::map),
                         ty: scheme!(
                             a,
                             forall K: Ord, V, W. ((V) -> W, Map[K, V]) -> Map[K, W]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "map-with-key",
-                        f: Map::placeholder,
+                        imp: Impl::Async(Map::map_with_key),
                         ty: scheme!(
                             a,
                             forall K: Ord, V, W. ((K, V) -> W, Map[K, V]) -> Map[K, W]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "foreach",
-                        f: Map::placeholder,
+                        imp: Impl::Async(Map::foreach),
                         ty: scheme!(a, forall K: Ord, V, W. ((V) -> W, Map[K, V]) -> Unit),
                     },
-                    PrimDef {
+                    Def {
                         name: "foreach-with-key",
-                        f: Map::placeholder,
+                        imp: Impl::Async(Map::foreach_with_key),
                         ty: scheme!(
                             a,
                             forall K: Ord, V, W. ((K, V) -> W, Map[K, V]) -> Unit
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "fold",
-                        f: Map::placeholder,
+                        imp: Impl::Async(Map::fold),
                         ty: scheme!(
                             a,
                             forall K: Ord, V, A. ((A, V) -> A, A, Map[K, V]) -> A
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "fold-with-key",
-                        f: Map::placeholder,
+                        imp: Impl::Async(Map::fold_with_key),
                         ty: scheme!(
                             a,
                             forall K: Ord, V, A. ((A, K, V) -> A, A, Map[K, V]) -> A
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "map-entries",
-                        f: Map::placeholder,
+                        imp: Impl::Async(Map::map_entries),
                         ty: scheme!(
                             a,
                             forall K: Ord, L: Ord, V, W. ((K, V) -> (L, W), Map[K, V])
                                 -> Map[L, W]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "has",
-                        f: Map::placeholder,
+                        imp: Impl::Async(Map::has),
                         ty: scheme!(
                             a,
                             forall T: Ord, U. (Map[T, U], T) -> Bool
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "lookup",
-                        f: Map::placeholder,
+                        imp: Impl::Async(Map::lookup),
                         ty: scheme!(
                             a,
                             forall T: Ord, U. (Map[T, U], T) -> Option[U]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "insert",
-                        f: Map::placeholder,
+                        imp: Impl::Async(Map::insert),
                         ty: scheme!(
                             a,
                             forall T: Ord, U. (Map[T, U], T, U) -> Map[T, U]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "remove",
-                        f: Map::placeholder,
+                        imp: Impl::Async(Map::remove),
                         ty: scheme!(
                             a,
                             forall T: Ord, U. (Map[T, U], T) -> Map[T, U]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "merge",
-                        f: Map::placeholder,
+                        imp: Impl::Async(Map::merge),
                         ty: scheme!(
                             a,
                             forall T: Ord, U. (Map[T, U], Map[T, U])
                                 -> Map[T, U]
                         ),
                     },
-                    PrimDef {
+                    Def {
                         name: "from-entries",
-                        f: Map::placeholder,
+                        imp: Impl::Async(Map::from_entries),
                         ty: scheme!(
                             a,
                             forall T: Ord, U. (Array[(T, U)]) -> Map[T, U]

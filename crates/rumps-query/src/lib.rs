@@ -10,7 +10,7 @@
 //! use rumps_storage::Database;
 //!
 //! let db = Database::in_memory()?;
-//! run("OUTPUT 1 + 2", Path::new("/dev/stdin"), db).await?;
+//! run("write 1 + 2", Path::new("/dev/stdin"), db).await?;
 //! // Prints: 3
 //! ```
 
@@ -63,6 +63,7 @@ macro_rules! invariant {
 }
 
 mod ast;
+mod builtins;
 mod env;
 mod error;
 mod intern;
@@ -70,7 +71,6 @@ mod interpreter;
 mod io;
 mod lexer;
 mod parser;
-mod primitives;
 mod resolve;
 mod span;
 mod token;
@@ -86,7 +86,7 @@ pub(crate) use ast::{
     Ast, BinOp, Expr, ExprId, Literal, Stmt, StmtId, TypePattern, UnOp,
 };
 #[allow(unused_imports)]
-pub(crate) use env::{Environment, PrimCtx, PrimFn, PrimResult, Scopes};
+pub(crate) use env::{Environment, Scopes};
 pub use error::Error;
 #[allow(unused_imports)]
 pub(crate) use error::ErrorDisplay;
@@ -237,7 +237,11 @@ impl Program {
         DbOptions::from(&self.pragmas)
     }
 
-    async fn run_with_io<I: IoContext>(self, db: Database, io: I) -> Result<I> {
+    async fn run_with_io<I: IoContext>(
+        self,
+        db: Database,
+        mut io: I,
+    ) -> Result<I> {
         let Self {
             mut ast,
             stmts,
@@ -249,14 +253,15 @@ impl Program {
             &mut ast,
             &stmts,
             db,
-            io,
+            &mut io,
             interactive,
             interner,
             pragmas,
         )?;
         let interp = interp.run(&stmts, interactive).await?;
+        drop(interp);
 
-        Ok(interp.into_io())
+        Ok(io)
     }
 }
 
