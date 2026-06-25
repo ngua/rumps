@@ -358,14 +358,14 @@ impl<'ast, 'io> Interpreter<'ast, 'io> {
                     | Stmt::Module { .. }
                     | Stmt::ClassInstance { .. }
                     | Stmt::ClassDef { .. } => {}
-                    Stmt::Type {
+                    Stmt::Variant {
                         name,
                         type_params,
                         def,
                         ..
                     } => {
                         let n = self.arena.strings.resolve(name);
-                        self.type_decl(&n, &type_params, &def)?
+                        self.variant_decl(&n, &type_params, &def)?
                     }
                     Stmt::Newtype {
                         name, type_params, ..
@@ -817,14 +817,14 @@ impl Interpreter<'_, '_> {
                 params.iter().map(|(name, _)| *name).collect(),
                 body,
             ),
-            Stmt::Type {
+            Stmt::Variant {
                 name,
                 type_params,
                 def,
                 ..
             } => {
                 let n = self.arena.strings.resolve(name);
-                self.type_decl(&n, &type_params, &def)
+                self.variant_decl(&n, &type_params, &def)
             }
             Stmt::Newtype {
                 name, type_params, ..
@@ -977,18 +977,18 @@ impl Interpreter<'_, '_> {
                             module.submodules.insert(sub_name, sub);
                         }
 
-                        Stmt::Type {
+                        Stmt::Variant {
                             name: type_name,
                             type_params,
                             def,
                             ..
                         } => {
                             // Types are already registered with qualified names
-                            // by register_from_ast. The idempotent type_decl
+                            // by register_from_ast. The idempotent variant_decl
                             // will skip if already present.
                             let tn = self.arena.strings.resolve(type_name);
                             let qname = format!("{}.{}", mod_path, tn);
-                            self.type_decl(&qname, &type_params, &def)?;
+                            self.variant_decl(&qname, &type_params, &def)?;
                         }
 
                         Stmt::Newtype {
@@ -1226,7 +1226,7 @@ impl Interpreter<'_, '_> {
     ///
     /// Processes `variant Name = Variant1 | Variant2(T) | ...` and registers
     /// the type in the type registry if it was not pre-registered.
-    fn type_decl(
+    fn variant_decl(
         &mut self,
         name: &str,
         type_params: &[TypeParam],

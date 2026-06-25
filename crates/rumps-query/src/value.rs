@@ -1565,7 +1565,7 @@ impl TypeRegistry {
     ) {
         stmts.iter().for_each(|id| {
             ctx.ast.get_stmt(*id).cloned().inspect(|stmt| match stmt {
-                Stmt::Type {
+                Stmt::Variant {
                     name,
                     type_params,
                     def,

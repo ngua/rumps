@@ -402,7 +402,7 @@ impl InferCtx<'_> {
                 // `variant`/`union`/`newtype`: register visibility for imports.
                 // Type definitions are processed by registry; we only need
                 // to record visibility so imports can check access.
-                Some(Stmt::Type { ref name, vis, .. })
+                Some(Stmt::Variant { ref name, vis, .. })
                 | Some(Stmt::Union { ref name, vis, .. })
                 | Some(Stmt::Newtype { ref name, vis, .. }) => {
                     let n =

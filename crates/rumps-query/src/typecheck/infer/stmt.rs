@@ -101,7 +101,7 @@ impl InferCtx<'_> {
                 self.expr(expr);
             }
 
-            Some(Stmt::Type {
+            Some(Stmt::Variant {
                 ref type_params,
                 ref def,
                 ref pragmas,
@@ -112,7 +112,7 @@ impl InferCtx<'_> {
                 // Type definitions are registered in the registry, but we
                 // still validate that all type expressions in variant
                 // payloads are fully saturated.
-                self.validate_type_decl_body(type_params, def);
+                self.validate_variant_decl_body(type_params, def);
             }
 
             Some(Stmt::Union {
@@ -315,7 +315,7 @@ impl InferCtx<'_> {
                         span: item_span,
                     });
                 }
-                Some(Stmt::Type {
+                Some(Stmt::Variant {
                     ref name,
                     vis,
                     ref type_params,
@@ -326,7 +326,7 @@ impl InferCtx<'_> {
                     let qn = mod_path.child(*name);
                     self.env.register_user_module_type_vis(qn, vis);
                     self.validate_type_pragmas(TypeDeclKind::Variant, pragmas);
-                    self.validate_type_decl_body(type_params, def);
+                    self.validate_variant_decl_body(type_params, def);
                 }
                 Some(Stmt::Union {
                     ref name,
@@ -3188,7 +3188,11 @@ impl InferCtx<'_> {
 
     /// Validate that all type expressions in a `variant` declaration body are
     /// fully saturated (no unsaturated type synonyms like bare `Array`).
-    fn validate_type_decl_body(&mut self, tps: &[TypeParam], def: &TypeDefAst) {
+    fn validate_variant_decl_body(
+        &mut self,
+        tps: &[TypeParam],
+        def: &TypeDefAst,
+    ) {
         let subst = self.type_param_subst(tps);
         match def {
             TypeDefAst::Sum(variants) => {

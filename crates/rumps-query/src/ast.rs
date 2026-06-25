@@ -1370,7 +1370,7 @@ pub(crate) enum Stmt {
     /// - `variant Either[L, R] = Left(L) | Right(R)`
     ///
     /// The visibility is only meaningful inside modules (`+variant` for public).
-    Type {
+    Variant {
         name: StringId,
         type_params: SmallVec<[TypeParam; 2]>,
         def: TypeDefAst,

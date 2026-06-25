@@ -235,7 +235,7 @@ impl TypeDeclRegistry {
     ) {
         stmts.iter().for_each(|id| {
             ast.get_stmt(*id).cloned().inspect(|stmt| match stmt {
-                Stmt::Type {
+                Stmt::Variant {
                     name,
                     def: TypeDefAst::Sum(variants),
                     pragmas,

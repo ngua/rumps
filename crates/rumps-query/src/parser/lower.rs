@@ -234,7 +234,7 @@ impl<'a> LowerCtx<'a> {
         if let Some((p, span)) = pending.deriving.take() {
             if matches!(
                 &stmt.kind,
-                cst::StmtKind::Type { .. }
+                cst::StmtKind::Variant { .. }
                     | cst::StmtKind::Newtype { .. }
                     | cst::StmtKind::Union { .. }
             ) {
@@ -253,7 +253,7 @@ impl<'a> LowerCtx<'a> {
             // report a target-specific type error with the preserved span.
             if matches!(
                 &stmt.kind,
-                cst::StmtKind::Type { .. }
+                cst::StmtKind::Variant { .. }
                     | cst::StmtKind::Newtype { .. }
                     | cst::StmtKind::Union { .. }
             ) {
@@ -1308,7 +1308,7 @@ impl<'a> LowerCtx<'a> {
                     vis: Self::vis(vis),
                 }
             }
-            cst::StmtKind::Type {
+            cst::StmtKind::Variant {
                 name,
                 type_params,
                 def,
@@ -1320,7 +1320,7 @@ impl<'a> LowerCtx<'a> {
                 let def_lowered = self.type_def(def)?;
                 let tp_lowered = self.type_param_list(type_params)?;
                 self.pop_type_params();
-                Stmt::Type {
+                Stmt::Variant {
                     name,
                     type_params: tp_lowered,
                     def: def_lowered,
@@ -2614,7 +2614,7 @@ impl<'a> MergeCtx<'a> {
                     vis,
                 }
             }
-            Stmt::Type {
+            Stmt::Variant {
                 name,
                 type_params,
                 def,
@@ -2640,7 +2640,7 @@ impl<'a> MergeCtx<'a> {
                         TypeDefAst::Sum(new_variants?)
                     }
                 };
-                Stmt::Type {
+                Stmt::Variant {
                     name,
                     type_params,
                     def: new_def,

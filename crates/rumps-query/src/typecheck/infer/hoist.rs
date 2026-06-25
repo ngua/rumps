@@ -1064,7 +1064,7 @@ impl InferCtx<'_> {
                     }
                 }
 
-                Stmt::Type { .. }
+                Stmt::Variant { .. }
                 | Stmt::Union { .. }
                 | Stmt::Newtype { .. }
                 | Stmt::ClassDef { .. } => {}

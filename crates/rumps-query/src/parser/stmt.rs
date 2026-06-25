@@ -14,7 +14,7 @@ impl Parser {
         interner: &mut StringInterner,
     ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> {
         let import_stmt = Self::import();
-        let type_stmt = Self::type_stmt(interner);
+        let variant_stmt = Self::variant_stmt(interner);
         let newtype_stmt = Self::newtype_stmt(interner);
         let union_stmt = Self::union_stmt(interner);
         let pragma_stmt = Self::pragma_stmt(interner);
@@ -32,7 +32,7 @@ impl Parser {
                 let_stmt,
                 output_stmt,
                 fun_stmt,
-                type_stmt.clone(),
+                variant_stmt.clone(),
                 newtype_stmt.clone(),
                 union_stmt.clone(),
                 class_stmt,
@@ -190,7 +190,7 @@ impl Parser {
             )
     }
 
-    fn type_stmt(
+    fn variant_stmt(
         interner: &mut StringInterner,
     ) -> impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr> + Clone {
         // Variant: `Name` or `Name(Type, Type, ...)`
@@ -238,7 +238,7 @@ impl Parser {
             .then(sum_def)
             .map_with_span(|(((vis, name), type_params), def), span| {
                 cst::Stmt::new(
-                    cst::StmtKind::Type {
+                    cst::StmtKind::Variant {
                         name,
                         type_params,
                         def,

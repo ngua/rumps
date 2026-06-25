@@ -628,7 +628,7 @@ pub(crate) enum StmtKind {
     /// User-defined variant declaration: `variant Name = Variant1 | Variant2(T)`.
     ///
     /// The visibility is only meaningful inside modules (`+variant` for public).
-    Type {
+    Variant {
         name: StringId,
         type_params: Vec<TypeParam>,
         def: TypeDefCst,
