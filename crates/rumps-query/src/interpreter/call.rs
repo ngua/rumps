@@ -40,7 +40,6 @@ impl Interpreter<'_, '_> {
     ///
     /// Applies the right operand (function/closure) to the left operand (value):
     /// `value |> func` becomes `func(value)`
-    #[async_recursion]
     pub(super) async fn pipeline(
         &mut self,
         call_id: ExprId,
@@ -130,7 +129,6 @@ impl Interpreter<'_, '_> {
     }
 
     /// Invoke a closure with pre-evaluated arguments.
-    #[async_recursion]
     pub(super) async fn invoke_closure(
         &mut self,
         params: &[(StringId, RuntimeTyId)],
@@ -166,7 +164,6 @@ impl Interpreter<'_, '_> {
     }
 
     /// Invoke a named function with pre-evaluated arguments.
-    #[async_recursion]
     pub(super) async fn invoke_function(
         &mut self,
         params: &[(StringId, RuntimeTyId)],
@@ -203,7 +200,6 @@ impl Interpreter<'_, '_> {
     /// - A field access (`obj.method(x)`) evaluated then called
     /// - Another call (`make_adder(5)(10)`) for chained calls
     /// - A closure literal (`(x => x * 2)(5)`) for IIFE
-    #[async_recursion]
     pub(super) async fn call(
         &mut self,
         call_id: ExprId,
@@ -264,7 +260,6 @@ impl Interpreter<'_, '_> {
     ///
     /// Note: Built-in module functions (e.g., `Object.keys`) are resolved at
     /// parse time by `resolve.rs` and become `Expr::Path` nodes.
-    #[async_recursion]
     async fn call_by_name(
         &mut self,
         call_id: ExprId,
@@ -309,7 +304,6 @@ impl Interpreter<'_, '_> {
     ///
     /// Iterable functions (`Iter.map`, `Iter.filter`, `Iter.reduce`) are
     /// higher-order and need special handling since they invoke closures.
-    #[async_recursion]
     pub(super) async fn invoke_module_fn(
         &mut self,
         path: &[StringId],
@@ -333,7 +327,6 @@ impl Interpreter<'_, '_> {
         }
     }
 
-    #[async_recursion]
     async fn invoke_module_fn_for_expr(
         &mut self,
         expr_id: ExprId,
@@ -356,7 +349,6 @@ impl Interpreter<'_, '_> {
     /// Binds all sibling functions and constants at call time, enabling
     /// mutual recursion between module functions. This is different from
     /// closures which capture their environment at creation time.
-    #[async_recursion]
     async fn invoke_user_module_fn(
         &mut self,
         path: &[StringId],
@@ -418,7 +410,6 @@ impl Interpreter<'_, '_> {
     ///
     /// Parses the class name, evaluates arguments, and dispatches to the
     /// appropriate class method.
-    #[async_recursion]
     pub(super) async fn class_method_expr(
         &mut self,
         expr_id: ExprId,
@@ -526,7 +517,6 @@ impl Interpreter<'_, '_> {
     ///
     /// The `expr_id` parameter is used by nullary methods like
     /// `Default:default` to look up the inferred type.
-    #[async_recursion]
     pub(super) async fn dispatch_class_method(
         &mut self,
         expr_id: Option<ExprId>,
@@ -548,7 +538,6 @@ impl Interpreter<'_, '_> {
         .map(|value| value.payload)
     }
 
-    #[async_recursion]
     pub(crate) async fn dispatch_class_method_value(
         &mut self,
         dispatch: class::Dispatch,
@@ -901,7 +890,6 @@ impl Interpreter<'_, '_> {
             })
     }
 
-    #[async_recursion]
     async fn invoke_user_instance_fn(
         &mut self,
         name: StringId,
@@ -1120,7 +1108,6 @@ impl Interpreter<'_, '_> {
     /// Invoke a callable value (closure/function) with arguments.
     ///
     /// Used by higher-order primitives to call user-provided functions.
-    #[async_recursion]
     pub(crate) async fn invoke_callable(
         &mut self,
         callee_id: ValueId,
@@ -1252,7 +1239,6 @@ impl Interpreter<'_, '_> {
     }
 
     /// Call a function or closure value.
-    #[async_recursion]
     async fn call_value(
         &mut self,
         call_id: ExprId,
@@ -1514,7 +1500,6 @@ impl Interpreter<'_, '_> {
     ///
     /// Combines bound args with new args and either produces another
     /// `PartialApp` (still under-applied) or fully invokes the callee.
-    #[async_recursion]
     async fn resolve_partial_app(
         &mut self,
         callee_id: ValueId,
@@ -1585,7 +1570,6 @@ impl Interpreter<'_, '_> {
     }
 
     /// Evaluate a list of argument expressions.
-    #[async_recursion]
     pub(super) async fn eval_args(
         &mut self,
         args: &[ExprId],

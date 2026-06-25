@@ -150,7 +150,6 @@ where
     }
 
     /// Advances the snapshot stream (no `is_buffered` check needed).
-    #[async_recursion]
     async fn advance_snapshot(&mut self) {
         if self.next_snapshot.is_none() {
             match self.snapshot.next().await {

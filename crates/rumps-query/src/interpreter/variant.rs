@@ -86,7 +86,6 @@ impl Interpreter<'_, '_> {
     }
 
     /// Evaluate a variant constructor: `Type.Variant(args...)`.
-    #[async_recursion]
     pub(super) async fn variant(
         &mut self,
         expr_id: ExprId,

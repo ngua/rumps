@@ -705,7 +705,6 @@ impl<'ast, 'io> Interpreter<'ast, 'io> {
         }
     }
 
-    #[async_recursion]
     async fn eval_payload(&mut self, id: ExprId) -> Result<Payload> {
         self.eval(id).await.map(|v| v.payload)
     }
@@ -795,7 +794,6 @@ impl Interpreter<'_, '_> {
     }
 
     /// Execute a single statement.
-    #[async_recursion]
     async fn exec(&mut self, id: StmtId) -> Result<()> {
         let span = self.ast.stmt_span(id).unwrap_or_default();
         let stmt = self
@@ -879,7 +877,6 @@ impl Interpreter<'_, '_> {
     ///
     /// Recursively processes statement IDs, adding items to the module.
     /// The `mod_path` tracks the qualified module path for type registration.
-    #[async_recursion]
     async fn populate_module(
         &mut self,
         ids: &[StmtId],
@@ -2094,7 +2091,6 @@ impl Interpreter<'_, '_> {
     /// Handles short-circuit evaluation for `AND`, `OR`, and `Coalesce`.
     /// For class-dispatched operators (`==`, `+`, `<`, etc.), checks for
     /// user-defined class instances before falling through to builtin dispatch.
-    #[async_recursion]
     async fn binary(
         &mut self,
         id: ExprId,
@@ -2219,7 +2215,6 @@ impl Interpreter<'_, '_> {
     }
 
     /// Evaluate a unary operation.
-    #[async_recursion]
     async fn unary(
         &mut self,
         id: ExprId,
@@ -2259,7 +2254,6 @@ impl Interpreter<'_, '_> {
     /// Returns `true` if the value matches the pattern, `false` otherwise.
     /// For `VariantBind` patterns, bindings are NOT created here; they are
     /// handled specially by `if_with_bindings` when used as an `if` condition.
-    #[async_recursion]
     async fn is(
         &mut self,
         id: ExprId,
@@ -2339,7 +2333,6 @@ impl Interpreter<'_, '_> {
     /// `newtype` representation reads use checker metadata. If private
     /// `repr visibility` blocks an external edge, the checker requires an explicit
     /// `TryInto` instance instead.
-    #[async_recursion]
     async fn read(
         &mut self,
         id: ExprId,
@@ -2526,7 +2519,6 @@ impl Interpreter<'_, '_> {
     }
 
     /// Read a JSON array as `Array[T]`.
-    #[async_recursion]
     async fn read_array_value(
         &mut self,
         val: &Value,
@@ -2603,7 +2595,6 @@ impl Interpreter<'_, '_> {
     }
 
     /// Read a value as `Option[T]`, treating JSON null as `None`.
-    #[async_recursion]
     async fn read_option_value(
         &mut self,
         val: &Value,
@@ -2676,7 +2667,6 @@ impl Interpreter<'_, '_> {
     }
 
     /// Read fields from a JSON object, converting each field via `read_value`.
-    #[async_recursion]
     async fn read_json_object(
         &mut self,
         obj: &serde_json::Map<std::string::String, serde_json::Value>,
@@ -2793,7 +2783,6 @@ impl Interpreter<'_, '_> {
     }
 
     /// Read fields from a native object, validating field types.
-    #[async_recursion]
     async fn read_native_object(
         &mut self,
         obj: &Arc<indexmap::IndexMap<StringId, ValueId>>,
@@ -2917,7 +2906,6 @@ impl Interpreter<'_, '_> {
     /// this is a pass-through that simply evaluates the inner expression.
     /// Approved `newtype` annotation edges can still update value metadata so
     /// runtime class dispatch sees the checked `newtype` type.
-    #[async_recursion]
     async fn annotate(&mut self, id: ExprId, expr: ExprId) -> Result<Value> {
         match self.approved_newtype_edge_meta(id) {
             Some(meta) => {
@@ -2935,7 +2923,6 @@ impl Interpreter<'_, '_> {
     ///
     /// Type annotations are validated statically by the typechecker; at runtime
     /// this simply evaluates the expression and destructures into the pattern.
-    #[async_recursion]
     async fn r#let(
         &mut self,
         pat: &BindingPattern,
@@ -2958,7 +2945,6 @@ impl Interpreter<'_, '_> {
     ///
     /// Writes to stdout, stderr, or a file via the I/O context, with optional
     /// `json` or `raw` format modifier.
-    #[async_recursion]
     async fn write(&mut self, output: &WriteExpr) -> Result<()> {
         let span = self.ast.expr_span(output.expr).unwrap_or_default();
         let val = self.eval(output.expr).await?;
@@ -2990,7 +2976,6 @@ impl Interpreter<'_, '_> {
     ///
     /// Evaluates each field expression and converts to JSON via `jsonify_value`.
     /// Returns `Payload::Json(Object)`.
-    #[async_recursion]
     #[allow(clippy::while_let_on_iterator)]
     async fn json(&mut self, fields: &[(StringId, ExprId)]) -> Result<Payload> {
         let mut obj = serde_json::Map::new();
@@ -3008,7 +2993,6 @@ impl Interpreter<'_, '_> {
     ///
     /// For `JsonAccessKind::Json` (`.` or `->`): returns `Payload::Json` (null for missing).
     /// For `JsonAccessKind::Scalar` (`..` or `->>`): returns `Option[scalar]`.
-    #[async_recursion]
     async fn json_access(
         &mut self,
         base: ExprId,

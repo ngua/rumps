@@ -1373,7 +1373,6 @@ impl BTree {
     }
 
     /// Helper for `collects_prefix_internal`: handle the first entry (exact prefix).
-    #[async_recursion]
     async fn collects_prefix_first<F, T>(
         &self,
         root: NodeId,
@@ -2736,7 +2735,6 @@ impl BTree {
     /// Inserts a key-value pair into a non-full node.
     ///
     /// Delegates to `insert_non_full_with_data()` with appropriate `NodeData`.
-    #[async_recursion]
     async fn insert_non_full(
         &self,
         node_id: NodeId,

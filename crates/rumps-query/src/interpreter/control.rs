@@ -86,7 +86,6 @@ impl Interpreter<'_, '_> {
     /// - `Result.Err(_)` -> evaluate and return rhs (error discarded)
     ///
     /// Type checker guarantees operand is `Option` or `Result`.
-    #[async_recursion]
     pub(super) async fn coalesce(
         &mut self,
         left: Value,
@@ -133,7 +132,6 @@ impl Interpreter<'_, '_> {
     ///
     /// Executes statements, then evaluates the trailing expression (if any).
     /// Returns `Unit` if no trailing expression.
-    #[async_recursion]
     pub(super) async fn block(
         &mut self,
         stmts: &[StmtId],
@@ -178,7 +176,6 @@ impl Interpreter<'_, '_> {
     /// Special handling for `is` conditions with bindings: if the condition is
     /// `expr is Pattern(bindings)`, the bindings are only visible in the then
     /// branch, not in the else branch.
-    #[async_recursion]
     pub(super) async fn r#if(
         &mut self,
         cond: ExprId,
@@ -233,7 +230,6 @@ impl Interpreter<'_, '_> {
     ///
     /// Bindings are only visible in the then branch.
     /// Type checking: same rules as regular `if`.
-    #[async_recursion]
     async fn if_with_bindings(
         &mut self,
         expr: ExprId,
@@ -284,7 +280,6 @@ impl Interpreter<'_, '_> {
     ///
     /// Extracts payloads from `val`, validates arity against `names`,
     /// binds them in a new scope, evaluates `body`, then pops the scope.
-    #[async_recursion]
     async fn eval_with_variant_bindings(
         &mut self,
         val: &Payload,
@@ -313,7 +308,6 @@ impl Interpreter<'_, '_> {
     /// Evaluates the scrutinee once, then tries each arm in order. The first
     /// arm whose pattern matches (and whose guard, if any, is `true`) has its
     /// body evaluated. Returns error if no arm matches.
-    #[async_recursion]
     pub(super) async fn r#match(
         &mut self,
         scrutinee: ExprId,
@@ -393,7 +387,6 @@ impl Interpreter<'_, '_> {
     /// Creates a lazy `Payload::Range` from start and end expressions.
     ///
     /// Type checker guarantees both bounds are `Int`.
-    #[async_recursion]
     pub(super) async fn range(
         &mut self,
         start_id: ExprId,
@@ -425,7 +418,6 @@ impl Interpreter<'_, '_> {
     /// `expr catch e => handler` evaluates `expr`; if it raises a catchable
     /// runtime error, invokes `handler` with the `Error` value. Non-catchable
     /// errors (lex, parse, type) propagate.
-    #[async_recursion]
     pub(super) async fn catch(
         &mut self,
         expr: ExprId,

@@ -2,7 +2,6 @@
 
 use std::cmp::Ordering;
 
-use async_recursion::async_recursion;
 use smallvec::SmallVec;
 
 use super::{class, Interpreter};
@@ -393,7 +392,6 @@ impl Interpreter<'_, '_> {
     ///
     /// Maps the operator to its class and method, then dispatches through
     /// class method dispatch.
-    #[async_recursion]
     pub(super) async fn dispatch_binop_user(
         &mut self,
         id: ExprId,

@@ -20,7 +20,6 @@ impl Interpreter<'_, '_> {
     /// Evaluate an object literal with potential spread entries.
     ///
     /// Type checker guarantees spreads are on object types.
-    #[async_recursion]
     pub(super) async fn object(
         &mut self,
         entries: &[ObjectEntry],
@@ -73,7 +72,6 @@ impl Interpreter<'_, '_> {
     /// Arrays containing `Json` values (including `null`) immediately become
     /// JSON arrays, since `Json` is not a native RUMPS type.
     /// Type checker guarantees spreads are on array types.
-    #[async_recursion]
     pub(super) async fn array(
         &mut self,
         id: ExprId,
@@ -281,7 +279,6 @@ impl Interpreter<'_, '_> {
     /// Unlike `array()`, this does NOT fall back to JSON for heterogeneous elements;
     /// instead, it validates each element is a member of the union and constructs
     /// `Payload::Array` with the union element type.
-    #[async_recursion]
     pub(super) async fn array_with_union_elem(
         &mut self,
         elems: &[ArrayElem],
@@ -328,7 +325,6 @@ impl Interpreter<'_, '_> {
     /// Evaluate a tuple literal.
     ///
     /// Unlike arrays, tuples are heterogeneous; each element can have a different type.
-    #[async_recursion]
     pub(super) async fn tuple(
         &mut self,
         elems: &[ExprId],
@@ -360,7 +356,6 @@ impl Interpreter<'_, '_> {
     /// Evaluate a map literal: `{ k1 => v1, k2 => v2, ... }`.
     ///
     /// Type checker guarantees key/value type homogeneity.
-    #[async_recursion]
     pub(super) async fn map_lit(
         &mut self,
         entries: &[(ExprId, ExprId)],
@@ -421,7 +416,6 @@ impl Interpreter<'_, '_> {
     /// Evaluate tuple index access: `tuple.0`, `tuple.1`, etc.
     ///
     /// Type checker guarantees base is a tuple and index is in bounds.
-    #[async_recursion]
     pub(super) async fn tuple_index(
         &mut self,
         base: ExprId,
@@ -442,7 +436,6 @@ impl Interpreter<'_, '_> {
     ///
     /// Type checker guarantees base/index types are compatible.
     /// Index out of bounds and key not found remain runtime errors.
-    #[async_recursion]
     pub(super) async fn index(
         &mut self,
         expr_id: ExprId,
@@ -548,7 +541,6 @@ impl Interpreter<'_, '_> {
     ///
     /// Returns `Option.Some(value)` on success, `Option.None` on out-of-bounds.
     /// Unlike `index`, this never raises a runtime error for bounds issues.
-    #[async_recursion]
     pub(super) async fn optional_index(
         &mut self,
         expr_id: ExprId,
@@ -684,7 +676,6 @@ impl Interpreter<'_, '_> {
     ///
     /// For user-defined types registered at runtime, this also handles type
     /// paths that weren't resolved during the parse-time resolution pass.
-    #[async_recursion]
     pub(super) async fn field(
         &mut self,
         expr_id: ExprId,
@@ -740,7 +731,6 @@ impl Interpreter<'_, '_> {
     /// - If base is `Option.None`, returns `Option.None`
     /// - If base is `Option.Some(v)`, accesses field on `v`, wraps in `Some`
     /// - If base is any other value, accesses field normally, wraps in `Some`
-    #[async_recursion]
     pub(super) async fn optional_field(
         &mut self,
         base: ExprId,

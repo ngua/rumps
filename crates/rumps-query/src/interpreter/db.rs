@@ -15,7 +15,6 @@ impl Interpreter<'_, '_> {
     /// Evaluate a `DbRef` literal to a `Payload::Ref`.
     ///
     /// Evaluates all subscript expressions and creates a first-class `Ref` value.
-    #[async_recursion]
     pub(super) async fn ref_lit(
         &mut self,
         dbref: &DbRef,
@@ -34,7 +33,6 @@ impl Interpreter<'_, '_> {
     }
 
     /// Dispatcher for all DB intrinsics (`@get`, `@set`, `@kill`, `@data`, `@order`, `@query`).
-    #[async_recursion]
     pub(super) async fn intrinsic(
         &mut self,
         op: Intrinsic,
@@ -57,7 +55,6 @@ impl Interpreter<'_, '_> {
     }
 
     /// Evaluate subscript elements and return a `SmallVec` of `ValueId`s.
-    #[async_recursion]
     async fn eval_subscripts(
         &mut self,
         subs: &[SubscriptElem],
@@ -107,7 +104,6 @@ impl Interpreter<'_, '_> {
     ///
     /// - `Inline(DbRef)`: extracts name and evaluates subscript expressions
     /// - `Expr(ExprId)`: evaluates to `Payload::Ref` with pre-evaluated subscripts
-    #[async_recursion]
     async fn resolve_ref_target(
         &mut self,
         rt: &RefTarget,
@@ -154,7 +150,6 @@ impl Interpreter<'_, '_> {
     ///
     /// Uses the specified transaction if `txn_id` is `Some`, otherwise reads
     /// directly from the database.
-    #[async_recursion]
     pub(super) async fn get(
         &mut self,
         rt: &RefTarget,
@@ -186,7 +181,6 @@ impl Interpreter<'_, '_> {
     ///
     /// Returns `Result[Unit, String]`. Globals require an active transaction
     /// (enforced by typechecker). Locals can be set outside transactions.
-    #[async_recursion]
     pub(super) async fn set(
         &mut self,
         rt: &RefTarget,
@@ -225,7 +219,6 @@ impl Interpreter<'_, '_> {
     ///
     /// Returns `Result[Unit, String]`. Globals require an active transaction
     /// (enforced by typechecker). Locals can be killed outside transactions.
-    #[async_recursion]
     pub(super) async fn kill(
         &mut self,
         rt: &RefTarget,
@@ -258,7 +251,6 @@ impl Interpreter<'_, '_> {
     ///
     /// Uses the specified transaction if `txn_id` is `Some`, otherwise reads
     /// directly from the database. Returns a `DataStatus` enum value.
-    #[async_recursion]
     pub(super) async fn data(
         &mut self,
         rt: &RefTarget,
@@ -289,7 +281,6 @@ impl Interpreter<'_, '_> {
     ///
     /// Uses the specified transaction if `txn_id` is `Some`, otherwise reads
     /// directly from the database. Returns `Option[Subscript]`.
-    #[async_recursion]
     pub(super) async fn order(
         &mut self,
         rt: &RefTarget,
@@ -341,7 +332,6 @@ impl Interpreter<'_, '_> {
     ///
     /// Uses the specified transaction if `txn_id` is `Some`, otherwise reads
     /// directly from the database. Returns `Option[Array[Subscript]]`.
-    #[async_recursion]
     pub(super) async fn query(
         &mut self,
         rt: &RefTarget,
@@ -386,7 +376,6 @@ impl Interpreter<'_, '_> {
     ///
     /// Handles both regular subscripts (`Elem`) and spread syntax (`Spread`).
     /// Spreads flatten an `Array[Subscript]` into the key.
-    #[async_recursion]
     pub(super) async fn build_key(
         &mut self,
         subs: &[SubscriptElem],
