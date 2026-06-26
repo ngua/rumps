@@ -13,5 +13,5 @@ fun get-abc(x: Int) -> ABC {
 
 fun main() {
   let v: Int | String = get-abc(1)
-  write v
+  write :display(v)
 }

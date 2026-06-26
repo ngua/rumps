@@ -3,6 +3,6 @@
 fun main() {
   write Iterable:length([1, 2, 3])
   write Iterable:length(1 .. 10)
-  write Iterable:reverse([1, 2, 3])
-  write Iterable:reverse(1 .. 10)
+  write :display(Iterable:reverse([1, 2, 3]))
+  write :display(Iterable:reverse(1 .. 10))
 }

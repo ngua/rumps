@@ -45,8 +45,8 @@ fun main() {
   let empty-str: String = Foldable:fold-map(x => "{x}", empty)
   write empty-str
 
-  write Foldable:fold-map(x => [x, x * 10], [1, 2, 3])
-  write [1, 2, 3] |> Foldable:fold-map(x => [x])
+  write :display(Foldable:fold-map(x => [x, x * 10], [1, 2, 3]))
+  write :display([1, 2, 3] |> Foldable:fold-map(x => [x]))
   write :fold-map(x => "{x}", [4, 5])
 
   write Foldable:fold-map(x => "{x}", Box.Full(42))

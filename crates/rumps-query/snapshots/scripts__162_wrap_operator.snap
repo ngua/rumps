@@ -1,25 +1,25 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Prefix `?` operator (wrap) for Option and Result types\n\nfun main() {\n  ; Basic Option wrapping (default when unconstrained)\n  let opt1 = ?42\n  let opt2 = ?\"hello\"\n  let opt3 = ?true\n  write \"opt1 = {opt1}\"\n  write \"opt2 = {opt2}\"\n  write \"opt3 = {opt3}\"\n\n  ; Explicit Option annotation\n  let opt4: Option[Int] = ?100\n  let opt5: Option[String] = ?\"world\"\n  write \"opt4 = {opt4}\"\n  write \"opt5 = {opt5}\"\n\n  write \"needs-result(?42) = {needs-result(?42)}\"\n  write \"needs-result(?0) = {needs-result(?0)}\"\n\n  ; Explicit Result annotation\n  let res1: Result[Int, String] = ?123\n  let res2: Result[Bool, Int] = ?true\n  write \"res1 = {res1}\"\n  write \"res2 = {res2}\"\n\n  write \"make-opt(5) = {make-opt(5)}\"\n  write \"make-result(10) = {make-result(10)}\"\n\n  ; Wrap with expressions\n  let opt-expr = ?(1 + 2 * 3)\n  write \"opt-expr = {opt-expr}\"\n\n  ; Chained with coalesce\n  let val = ?42 ?? 0\n  write \"?42 ?? 0 = {val}\"\n\n  ; Wrap in array context\n  let opts: Array[Option[Int]] = [?1, ?2, ?3]\n  write \"opts = {opts}\"\n\n  ; Nested wrap\n  let nested: Option[Option[Int]] = ?(?5)\n  write \"nested = {nested}\"\n\n  ; Wrap None/Err values explicitly\n  let none-in-some: Option[Option[Int]] = ?Option.None\n  write \"none-in-some = {none-in-some}\"\n\n  write \"err-string(?1) = {err-string(?1)}\"\n  write \"err-int(?2) = {err-int(?2)}\"\n\n  ; Inline annotation (no parens required)\n  let inline-opt = ?42 : Option[Int]\n  let inline-res = ?42 : Result[Int, String]\n  write \"inline-opt = {inline-opt}\"\n  write \"inline-res = {inline-res}\"\n\n  ; Negation with annotation\n  let neg-anno = -5 : Int\n  write \"neg-anno = {neg-anno}\"\n}\n\n; Result wrapping when context expects Result\nfun needs-result(x: Result[Int, String]) -> Int {\n  x ?? -1\n}\n\n; Wrap in function return position\nfun make-opt(x: Int) -> Option[Int] {\n  ?x\n}\n\nfun make-result(x: Int) -> Result[Int, String] {\n  ?x\n}\n\n; Result with different error types\nfun err-string(x: Result[Int, String]) -> Result[Int, String] { x }\nfun err-int(x: Result[Int, Int]) -> Result[Int, Int] { x }\n"
+description: "; Prefix `?` operator (wrap) for Option and Result types\n\nfun main() {\n  ; Basic Option wrapping (default when unconstrained)\n  let opt1 = ?42\n  let opt2 = ?\"hello\"\n  let opt3 = ?true\n  write \"opt1 = {:display(opt1)}\"\n  write \"opt2 = {:display(opt2)}\"\n  write \"opt3 = {:display(opt3)}\"\n\n  ; Explicit Option annotation\n  let opt4: Option[Int] = ?100\n  let opt5: Option[String] = ?\"world\"\n  write \"opt4 = {:display(opt4)}\"\n  write \"opt5 = {:display(opt5)}\"\n\n  write \"needs-result(?42) = {needs-result(?42)}\"\n  write \"needs-result(?0) = {needs-result(?0)}\"\n\n  ; Explicit Result annotation\n  let res1: Result[Int, String] = ?123\n  let res2: Result[Bool, Int] = ?true\n  write \"res1 = {:display(res1)}\"\n  write \"res2 = {:display(res2)}\"\n\n  write \"make-opt(5) = {:display(make-opt(5))}\"\n  write \"make-result(10) = {:display(make-result(10))}\"\n\n  ; Wrap with expressions\n  let opt-expr = ?(1 + 2 * 3)\n  write \"opt-expr = {:display(opt-expr)}\"\n\n  ; Chained with coalesce\n  let val = ?42 ?? 0\n  write \"?42 ?? 0 = {val}\"\n\n  ; Wrap in array context\n  let opts: Array[Option[Int]] = [?1, ?2, ?3]\n  write \"opts = {:display(opts)}\"\n\n  ; Nested wrap\n  let nested: Option[Option[Int]] = ?(?5)\n  write \"nested = {:display(nested)}\"\n\n  ; Wrap None/Err values explicitly\n  let none-in-some: Option[Option[Int]] = ?Option.None\n  write \"none-in-some = {:display(none-in-some)}\"\n\n  write \"err-string(?1) = {:display(err-string(?1))}\"\n  write \"err-int(?2) = {:display(err-int(?2))}\"\n\n  ; Inline annotation (no parens required)\n  let inline-opt = ?42 : Option[Int]\n  let inline-res = ?42 : Result[Int, String]\n  write \"inline-opt = {:display(inline-opt)}\"\n  write \"inline-res = {:display(inline-res)}\"\n\n  ; Negation with annotation\n  let neg-anno = -5 : Int\n  write \"neg-anno = {neg-anno}\"\n}\n\n; Result wrapping when context expects Result\nfun needs-result(x: Result[Int, String]) -> Int {\n  x ?? -1\n}\n\n; Wrap in function return position\nfun make-opt(x: Int) -> Option[Int] {\n  ?x\n}\n\nfun make-result(x: Int) -> Result[Int, String] {\n  ?x\n}\n\n; Result with different error types\nfun err-string(x: Result[Int, String]) -> Result[Int, String] { x }\nfun err-int(x: Result[Int, Int]) -> Result[Int, Int] { x }\n"
 ---
-"opt1 = Option.Some(42)"
-"opt2 = Option.Some("hello")"
-"opt3 = Option.Some(true)"
-"opt4 = Option.Some(100)"
-"opt5 = Option.Some("world")"
-"needs-result(?42) = 42"
-"needs-result(?0) = 0"
-"res1 = Result.Ok(123)"
-"res2 = Result.Ok(true)"
-"make-opt(5) = Option.Some(5)"
-"make-result(10) = Result.Ok(10)"
-"opt-expr = Option.Some(7)"
-"?42 ?? 0 = 42"
-"opts = [ Option.Some(1), Option.Some(2), Option.Some(3) ]"
-"nested = Option.Some(Option.Some(5))"
-"none-in-some = Option.Some(Option.None)"
-"err-string(?1) = Result.Ok(1)"
-"err-int(?2) = Result.Ok(2)"
-"inline-opt = Option.Some(42)"
-"inline-res = Result.Ok(42)"
-"neg-anno = -5"
+opt1 = Option.Some(42)
+opt2 = Option.Some("hello")
+opt3 = Option.Some(true)
+opt4 = Option.Some(100)
+opt5 = Option.Some("world")
+needs-result(?42) = 42
+needs-result(?0) = 0
+res1 = Result.Ok(123)
+res2 = Result.Ok(true)
+make-opt(5) = Option.Some(5)
+make-result(10) = Result.Ok(10)
+opt-expr = Option.Some(7)
+?42 ?? 0 = 42
+opts = [ Option.Some(1), Option.Some(2), Option.Some(3) ]
+nested = Option.Some(Option.Some(5))
+none-in-some = Option.Some(Option.None)
+err-string(?1) = Result.Ok(1)
+err-int(?2) = Result.Ok(2)
+inline-opt = Option.Some(42)
+inline-res = Result.Ok(42)
+neg-anno = -5

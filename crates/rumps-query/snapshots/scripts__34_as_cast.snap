@@ -1,24 +1,24 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: Type cast operator (as)\n; Tests infallible type conversions with the `as` keyword\n\nfun main() {\n  ; === Int -> Float (widen) ===\n\n  let i = 42\n  let f = i as Float\n  write f\n  ; Expected: 42\n\n  ; === Float -> Int (truncate) ===\n\n  let pi = 3.7\n  let truncated = pi as Int\n  write truncated\n  ; Expected: 3\n\n  let neg = -2.9\n  let neg-trunc = neg as Int\n  write neg-trunc\n  ; Expected: -2\n\n  ; === Bool -> Int ===\n\n  let t = true as Int\n  write t\n  ; Expected: 1\n\n  let f = false as Int\n  write f\n  ; Expected: 0\n\n  ; === T -> String (stringify anything) ===\n\n  ; Int to String\n  let n = 123\n  let n-str = n as String\n  write n-str\n  ; Expected: 123\n\n  ; Float to String\n  let pi-str = 3.14 as String\n  write pi-str\n  ; Expected: 3.14\n\n  ; Bool to String\n  let b-str = true as String\n  write b-str\n  ; Expected: true\n\n  let b-str2 = false as String\n  write b-str2\n  ; Expected: false\n\n  ; Array to String\n  let arr = [1, 2, 3]\n  let arr-str = arr as String\n  write arr-str\n  ; Expected: [ 1, 2, 3 ]\n\n  ; Object to String\n  let obj = { name: \"Alice\", age: 30 }\n  let obj-str = obj as String\n  write obj-str\n  ; Expected: { name: Alice, age: 30 }\n\n  ; Option to String\n  let some = Option.Some(42)\n  let some-str = some as String\n  write some-str\n  ; Expected: Option.Some(42)\n\n  let none = Option.None\n  let none-str = none as String\n  write none-str\n  ; Expected: Option.None\n\n  ; === Identity casts ===\n\n  let x = 42 as Int\n  write x\n  ; Expected: 42\n\n  let s = \"hello\" as String\n  write s\n  ; Expected: hello\n\n  ; Tuple identity cast\n  let tup = (1, 2)\n  write tup as (Int, Int)\n  ; Expected: (1, 2)\n\n  ; Object identity cast\n  let obj2 = { a: 1, b: 2 }\n  write obj2 as { a: Int, b: Int }\n  ; Expected: { a: 1, b: 2 }\n\n  ; === Chained casts ===\n\n  ; Note: Chained casts like `3.7 as Int as Float` require parentheses\n  let chain = (3.7 as Int) as Float\n  write chain\n  ; Expected: 3\n\n  ; === Cast with expressions ===\n\n  let result = (10 + 5) as Float\n  write result\n  ; Expected: 15\n\n  write \"Type cast test complete\"\n}\n"
+description: "; Test: Type cast operator (as)\n; Tests infallible type conversions with the `as` keyword\n\nfun main() {\n  ; === Int -> Float (widen) ===\n\n  let i = 42\n  let f = i as Float\n  write f\n  ; Expected: 42\n\n  ; === Float -> Int (truncate) ===\n\n  let pi = 3.7\n  let truncated = pi as Int\n  write truncated\n  ; Expected: 3\n\n  let neg = -2.9\n  let neg-trunc = neg as Int\n  write neg-trunc\n  ; Expected: -2\n\n  ; === Bool -> Int ===\n\n  let t = true as Int\n  write t\n  ; Expected: 1\n\n  let f = false as Int\n  write f\n  ; Expected: 0\n\n  ; === `T` -> `String` ===\n\n  ; Int to String\n  let n = 123\n  let n-str = n as String\n  write n-str\n  ; Expected: 123\n\n  ; Float to String\n  let pi-str = 3.14 as String\n  write pi-str\n  ; Expected: 3.14\n\n  ; Bool to String\n  let b-str = true as String\n  write b-str\n  ; Expected: true\n\n  let b-str2 = false as String\n  write b-str2\n  ; Expected: false\n\n  ; Array display\n  let arr = [1, 2, 3]\n  let arr-str = :display(arr)\n  write arr-str\n  ; Expected: [ 1, 2, 3 ]\n\n  ; Object display\n  let obj = { name: \"Alice\", age: 30 }\n  let obj-str = :display(obj)\n  write obj-str\n  ; Expected: { name: Alice, age: 30 }\n\n  ; Option display\n  let some = Option.Some(42)\n  let some-str = :display(some)\n  write some-str\n  ; Expected: Option.Some(42)\n\n  let none = Option.None\n  let none-str = :display(none)\n  write none-str\n  ; Expected: Option.None\n\n  ; === Identity casts ===\n\n  let x = 42 as Int\n  write x\n  ; Expected: 42\n\n  let s = \"hello\" as String\n  write s\n  ; Expected: hello\n\n  ; Tuple identity cast\n  let tup = (1, 2)\n  write :display(tup as (Int, Int))\n  ; Expected: (1, 2)\n\n  ; Object identity cast\n  let obj2 = { a: 1, b: 2 }\n  write :display(obj2 as { a: Int, b: Int })\n  ; Expected: { a: 1, b: 2 }\n\n  ; === Chained casts ===\n\n  ; Note: Chained casts like `3.7 as Int as Float` require parentheses\n  let chain = (3.7 as Int) as Float\n  write chain\n  ; Expected: 3\n\n  ; === Cast with expressions ===\n\n  let result = (10 + 5) as Float\n  write result\n  ; Expected: 15\n\n  write \"Type cast test complete\"\n}\n"
 ---
 42.0
 3
 -2
 1
 0
-"123"
-"3.14"
-"true"
-"false"
-"[ 1, 2, 3 ]"
-"{ name: "Alice", age: 30 }"
-"Option.Some(42)"
-"Option.None"
+123
+3.14
+true
+false
+[ 1, 2, 3 ]
+{ name: "Alice", age: 30 }
+Option.Some(42)
+Option.None
 42
-"hello"
+hello
 (1, 2)
 { a: 1, b: 2 }
 3.0
 15.0
-"Type cast test complete"
+Type cast test complete

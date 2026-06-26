@@ -1,6 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: arrays and objects\n; Tests array and object literals, indexing, and field access\n\nfun main() {\n  ; Array literal\n  let arr = [1, 2, 3, 4, 5]\n  write arr\n  ; Expected: [1, 2, 3, 4, 5]\n\n  ; Empty array\n  let empty = []\n  write empty\n  ; Expected: []\n\n  ; Array indexing\n  let nums = [10, 20, 30]\n  write nums[0]\n  ; Expected: 10\n\n  write nums[1]\n  ; Expected: 20\n\n  write nums[2]\n  ; Expected: 30\n\n  ; Object literal\n  let obj = { name: \"Alice\", age: 30 }\n  write obj\n  ; Expected: { name: \"Alice\", age: 30 }\n\n  ; Empty object\n  let empty-obj = {}\n  write empty-obj\n  ; Expected: {}\n\n  ; Field access with dot notation\n  let person = { name: \"Bob\", age: 25, active: true }\n  write person.name\n  ; Expected: Bob\n\n  write person.age\n  ; Expected: 25\n\n  write person.active\n  ; Expected: true\n\n  ; Nested objects\n  let nested = {\n    user: {\n      name: \"Charlie\",\n      address: {\n        city: \"NYC\",\n        zip: \"10001\"\n      }\n    }\n  }\n  write nested.user.name\n  ; Expected: Charlie\n\n  write nested.user.address.city\n  ; Expected: NYC\n\n  ; Object with array value\n  let rec = {\n    items: [1, 2, 3],\n    count: 3\n  }\n  write rec.items\n  ; Expected: [1, 2, 3]\n\n  write rec.items[0]\n  ; Expected: 1\n\n  ; Array of objects\n  let users = [\n    { name: \"Alice\", score: 100 },\n    { name: \"Bob\", score: 85 }\n  ]\n  write users[0].name\n  ; Expected: Alice\n\n  write users[1].score\n  ; Expected: 85\n\n  write \"Arrays/Objects test complete\"\n}\n"
+description: "; Test: arrays and objects\n; Tests array and object literals, indexing, and field access\n\nfun main() {\n  ; Array literal\n  let arr = [1, 2, 3, 4, 5]\n  write :display(arr)\n  ; Expected: [1, 2, 3, 4, 5]\n\n  ; Empty array\n  let empty = []\n  write :display(empty)\n  ; Expected: []\n\n  ; Array indexing\n  let nums = [10, 20, 30]\n  write nums[0]\n  ; Expected: 10\n\n  write nums[1]\n  ; Expected: 20\n\n  write nums[2]\n  ; Expected: 30\n\n  ; Object literal\n  let obj = { name: \"Alice\", age: 30 }\n  write :display(obj)\n  ; Expected: { name: \"Alice\", age: 30 }\n\n  ; Empty object\n  let empty-obj = {}\n  write :display(empty-obj)\n  ; Expected: {}\n\n  ; Field access with dot notation\n  let person = { name: \"Bob\", age: 25, active: true }\n  write person.name\n  ; Expected: Bob\n\n  write person.age\n  ; Expected: 25\n\n  write person.active\n  ; Expected: true\n\n  ; Nested objects\n  let nested = {\n    user: {\n      name: \"Charlie\",\n      address: {\n        city: \"NYC\",\n        zip: \"10001\"\n      }\n    }\n  }\n  write nested.user.name\n  ; Expected: Charlie\n\n  write nested.user.address.city\n  ; Expected: NYC\n\n  ; Object with array value\n  let rec = {\n    items: [1, 2, 3],\n    count: 3\n  }\n  write :display(rec.items)\n  ; Expected: [1, 2, 3]\n\n  write rec.items[0]\n  ; Expected: 1\n\n  ; Array of objects\n  let users = [\n    { name: \"Alice\", score: 100 },\n    { name: \"Bob\", score: 85 }\n  ]\n  write users[0].name\n  ; Expected: Alice\n\n  write users[1].score\n  ; Expected: 85\n\n  write \"Arrays/Objects test complete\"\n}\n"
 ---
 [ 1, 2, 3, 4, 5 ]
 [  ]
@@ -9,13 +9,13 @@ description: "; Test: arrays and objects\n; Tests array and object literals, ind
 30
 { name: "Alice", age: 30 }
 {  }
-"Bob"
+Bob
 25
 true
-"Charlie"
-"NYC"
+Charlie
+NYC
 [ 1, 2, 3 ]
 1
-"Alice"
+Alice
 85
-"Arrays/Objects test complete"
+Arrays/Objects test complete

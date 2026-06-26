@@ -1,6 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: @get locals\n; Tests retrieving values from local B-tree variables\n\nfun main() {\n  ; Set up test data\n  @set x{} 42\n  @set items{1} \"first\"\n  @set items{2} \"second\"\n  @set patient{123, \"name\"} \"John\"\n  @set patient{123, \"age\"} 30\n\n  ; @get simple local (use {} for root ref)\n  let val = @get x{}\n  write val\n  ; Expected: 42 (or Option.Some(42))\n\n  ; @get with subscript\n  let d1 = @get items{1}\n  write d1\n  ; Expected: first\n\n  let d2 = @get items{2}\n  write d2\n  ; Expected: second\n\n  ; @get with multiple subscripts\n  let name = @get patient{123, \"name\"}\n  write name\n  ; Expected: John\n\n  let age = @get patient{123, \"age\"}\n  write age\n  ; Expected: 30\n\n  ; @get non-existent key (should return Option.None)\n  let missing = @get items{999}\n  write missing\n  ; Expected: Option.None (or similar)\n\n  let missing2 = @get nonexistent{}\n  write missing2\n  ; Expected: Option.None\n\n  ; @get after overwrite\n  @set x{} 100\n  let newval = @get x{}\n  write newval\n  ; Expected: 100\n\n  write \"@get locals test complete\"\n}\n"
+description: "; Test: @get locals\n; Tests retrieving values from local B-tree variables\n\nfun main() {\n  ; Set up test data\n  @set x{} 42\n  @set items{1} \"first\"\n  @set items{2} \"second\"\n  @set patient{123, \"name\"} \"John\"\n  @set patient{123, \"age\"} 30\n\n  ; @get simple local (use {} for root ref)\n  let val = @get x{}\n  write :display(val)\n  ; Expected: 42 (or Option.Some(42))\n\n  ; @get with subscript\n  let d1 = @get items{1}\n  write :display(d1)\n  ; Expected: first\n\n  let d2 = @get items{2}\n  write :display(d2)\n  ; Expected: second\n\n  ; @get with multiple subscripts\n  let name = @get patient{123, \"name\"}\n  write :display(name)\n  ; Expected: John\n\n  let age = @get patient{123, \"age\"}\n  write :display(age)\n  ; Expected: 30\n\n  ; @get non-existent key (should return Option.None)\n  let missing = @get items{999}\n  write :display(missing)\n  ; Expected: Option.None (or similar)\n\n  let missing2 = @get nonexistent{}\n  write :display(missing2)\n  ; Expected: Option.None\n\n  ; @get after overwrite\n  @set x{} 100\n  let newval = @get x{}\n  write :display(newval)\n  ; Expected: 100\n\n  write \"@get locals test complete\"\n}\n"
 ---
 Option.Some(42)
 Option.Some("first")
@@ -10,4 +10,4 @@ Option.Some(30)
 Option.None
 Option.None
 Option.Some(100)
-"@get locals test complete"
+@get locals test complete

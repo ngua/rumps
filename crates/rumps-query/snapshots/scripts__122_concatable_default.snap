@@ -1,15 +1,15 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: Concatable concatenation and Default shorthand\n; Tests polymorphic `++` on String, Array, Map, and Option\n\nfun main() {\n  ; === String concatenation ===\n  let s1 = \"Hello\"\n  let s2 = \"World\"\n  write s1 ++ \", \" ++ s2\n\n  ; === Array concatenation ===\n  let a1 = [1, 2, 3]\n  let a2 = [4, 5, 6]\n  write a1 ++ a2\n\n  ; Nested arrays\n  let nested1 = [[1, 2], [3, 4]]\n  let nested2 = [[5, 6]]\n  write nested1 ++ nested2\n\n  ; === Map concatenation (RHS bias) ===\n  let m1 = { \"a\" => 1, \"b\" => 2 }\n  let m2 = { \"c\" => 3, \"d\" => 4 }\n  write m1 ++ m2\n\n  ; RHS bias: right value wins for duplicate keys\n  let left = { \"x\" => 10, \"y\" => 20 }\n  let right = { \"y\" => 999, \"z\" => 30 }\n  let merged = left ++ right\n  write Map.lookup(merged, \"x\")  ; Some(10)\n  write Map.lookup(merged, \"y\")  ; Some(999) - right wins\n  write Map.lookup(merged, \"z\")  ; Some(30)\n\n  ; === Type constraint: Concatable ===\n  write concat3(\"a\", \"b\", \"c\")\n  write concat3([1], [2], [3])\n  write concat3({ 1 => \"x\" }, { 2 => \"y\" }, { 3 => \"z\" })\n\n  ; === Option alternative (`<|>` semantics) ===\n  ; First `Some` wins; `None` acts as the empty alternative\n\n  let some10 = Option.Some(10)\n  let some9 = Option.Some(9)\n  let none: Option[Int] = Option.None\n\n  ; Some ++ None = Some (left wins)\n  write some10 ++ none\n\n  ; None ++ Some = Some (right wins)\n  write none ++ some9\n\n  ; None ++ None = None\n  write none ++ none\n\n  ; Some ++ Some = first Some (left-biased, like Haskell `<|>`)\n  write some10 ++ some9\n\n  ; Chaining: first Some in chain wins\n  write none ++ none ++ some10 ++ some9\n\n  ; With generic Concatable function\n  write concat3(none, some10, some9)  ; first non-None wins\n  write concat3(none, none, some9)    ; last Some wins\n  write concat3(none, none, none)     ; all None\n\n  ; === Default: `_` shorthand ===\n  ; `_` produces the default value for any `Default` type, inferred from context\n\n  ; String Default\n  write _ ++ \"hello\"      ; \"\" ++ \"hello\" = \"hello\"\n  write \"world\" ++ _      ; \"world\" ++ \"\" = \"world\"\n\n  ; Array Default\n  write _ ++ [1, 2, 3]    ; [] ++ [1, 2, 3] = [1, 2, 3]\n  write [4, 5] ++ _       ; [4, 5] ++ [] = [4, 5]\n\n  ; Map Default\n  let m = { \"x\" => 10 }\n  write _ ++ m            ; {} ++ m = m\n  write m ++ _            ; m ++ {} = m\n\n  ; Option Default (`None`)\n  write _ ++ Option.Some(99)   ; None ++ Some(99) = Some(99)\n  write Option.Some(77) ++ _   ; Some(77) ++ None = Some(77)\n  write Option.None ++ _       ; None ++ None = None\n  write _ ++ Option.None       ; None ++ None = None\n\n  ; Default with generic Concatable function\n  write concat3(_, \"a\", \"b\")   ; \"\" ++ \"a\" ++ \"b\" = \"ab\"\n  write concat3([0], _, [2])   ; [0] ++ [] ++ [2] = [0, 2]\n\n  ; Default as loop seed (common pattern for accumulating)\n  ; Collect squares of 1..5 into an array starting from `_` (empty array)\n  let squares = loop { i: 1, acc: _ } (state, cont) => {\n    if state.i > 5 {\n      state.acc\n    } else {\n      cont({ i: state.i + 1, acc: state.acc ++ [state.i * state.i] })\n    }\n  }\n  write squares\n\n  ; Build a string using `_` as initial accumulator\n  let words = loop { i: 0, s: _ } (state, cont) => {\n    let items = [\"hello\", \"world\", \"!\"]\n    if state.i >= 3 {\n      state.s\n    } else {\n      ; Note that `?? _` works fine since `_ == \"\"` for `String`\n      let word = items?[state.i] ?? _\n      let sep = if state.i == 0 { _ } else { \" \" }\n      cont({ i: state.i + 1, s: state.s ++ sep ++ word })\n    }\n  }\n  write words\n\n  ; Focused `Default` checks\n  let b: Bool = _\n  write b\n  let u: Unit = _\n  write u\n  let ord: Ordering = _\n  write ord\n  let fp: FilePath = _\n  write fp as String\n\n  write \"Concatable and Default complete\"\n}\n\n; This function works on any `Concatable` type\nfun concat3[T: Concatable](a: T, b: T, c: T) -> T { a ++ b ++ c }\n"
+description: "; Test: Concatable concatenation and Default shorthand\n; Tests polymorphic `++` on String, Array, Map, and Option\n\nfun main() {\n  ; === String concatenation ===\n  let s1 = \"Hello\"\n  let s2 = \"World\"\n  write s1 ++ \", \" ++ s2\n\n  ; === Array concatenation ===\n  let a1 = [1, 2, 3]\n  let a2 = [4, 5, 6]\n  write :display(a1 ++ a2)\n\n  ; Nested arrays\n  let nested1 = [[1, 2], [3, 4]]\n  let nested2 = [[5, 6]]\n  write :display(nested1 ++ nested2)\n\n  ; === Map concatenation (RHS bias) ===\n  let m1 = { \"a\" => 1, \"b\" => 2 }\n  let m2 = { \"c\" => 3, \"d\" => 4 }\n  write :display(m1 ++ m2)\n\n  ; RHS bias: right value wins for duplicate keys\n  let left = { \"x\" => 10, \"y\" => 20 }\n  let right = { \"y\" => 999, \"z\" => 30 }\n  let merged = left ++ right\n  write :display(Map.lookup(merged, \"x\"))  ; Some(10)\n  write :display(Map.lookup(merged, \"y\"))  ; Some(999) - right wins\n  write :display(Map.lookup(merged, \"z\"))  ; Some(30)\n\n  ; === Type constraint: Concatable ===\n  write concat3(\"a\", \"b\", \"c\")\n  write :display(concat3([1], [2], [3]))\n  write :display(concat3({ 1 => \"x\" }, { 2 => \"y\" }, { 3 => \"z\" }))\n\n  ; === Option alternative (`<|>` semantics) ===\n  ; First `Some` wins; `None` acts as the empty alternative\n\n  let some10 = Option.Some(10)\n  let some9 = Option.Some(9)\n  let none: Option[Int] = Option.None\n\n  ; Some ++ None = Some (left wins)\n  write :display(some10 ++ none)\n\n  ; None ++ Some = Some (right wins)\n  write :display(none ++ some9)\n\n  ; None ++ None = None\n  write :display(none ++ none)\n\n  ; Some ++ Some = first Some (left-biased, like Haskell `<|>`)\n  write :display(some10 ++ some9)\n\n  ; Chaining: first Some in chain wins\n  write :display(none ++ none ++ some10 ++ some9)\n\n  ; With generic Concatable function\n  write :display(concat3(none, some10, some9))  ; first non-None wins\n  write :display(concat3(none, none, some9))    ; last Some wins\n  write :display(concat3(none, none, none))     ; all None\n\n  ; === Default: `_` shorthand ===\n  ; `_` produces the default value for any `Default` type, inferred from context\n\n  ; String Default\n  write _ ++ \"hello\"      ; \"\" ++ \"hello\" = \"hello\"\n  write \"world\" ++ _      ; \"world\" ++ \"\" = \"world\"\n\n  ; Array Default\n  write :display(_ ++ [1, 2, 3])    ; [] ++ [1, 2, 3] = [1, 2, 3]\n  write :display([4, 5] ++ _)       ; [4, 5] ++ [] = [4, 5]\n\n  ; Map Default\n  let m = { \"x\" => 10 }\n  write :display(_ ++ m)            ; {} ++ m = m\n  write :display(m ++ _)            ; m ++ {} = m\n\n  ; Option Default (`None`)\n  write :display(_ ++ Option.Some(99))   ; None ++ Some(99) = Some(99)\n  write :display(Option.Some(77) ++ _)   ; Some(77) ++ None = Some(77)\n  write :display(Option.None ++ _)       ; None ++ None = None\n  write :display(_ ++ Option.None)       ; None ++ None = None\n\n  ; Default with generic Concatable function\n  write concat3(_, \"a\", \"b\")   ; \"\" ++ \"a\" ++ \"b\" = \"ab\"\n  write :display(concat3([0], _, [2]))   ; [0] ++ [] ++ [2] = [0, 2]\n\n  ; Default as loop seed (common pattern for accumulating)\n  ; Collect squares of 1..5 into an array starting from `_` (empty array)\n  let squares = loop { i: 1, acc: _ } (state, cont) => {\n    if state.i > 5 {\n      state.acc\n    } else {\n      cont({ i: state.i + 1, acc: state.acc ++ [state.i * state.i] })\n    }\n  }\n  write :display(squares)\n\n  ; Build a string using `_` as initial accumulator\n  let words = loop { i: 0, s: _ } (state, cont) => {\n    let items = [\"hello\", \"world\", \"!\"]\n    if state.i >= 3 {\n      state.s\n    } else {\n      ; Note that `?? _` works fine since `_ == \"\"` for `String`\n      let word = items?[state.i] ?? _\n      let sep = if state.i == 0 { _ } else { \" \" }\n      cont({ i: state.i + 1, s: state.s ++ sep ++ word })\n    }\n  }\n  write words\n\n  ; Focused `Default` checks\n  let b: Bool = _\n  write b\n  let u: Unit = _\n  write :display(u)\n  let ord: Ordering = _\n  write :display(ord)\n  let fp: FilePath = _\n  write fp as String\n\n  write \"Concatable and Default complete\"\n}\n\n; This function works on any `Concatable` type\nfun concat3[T: Concatable](a: T, b: T, c: T) -> T { a ++ b ++ c }\n"
 ---
-"Hello, World"
+Hello, World
 [ 1, 2, 3, 4, 5, 6 ]
 [ [ 1, 2 ], [ 3, 4 ], [ 5, 6 ] ]
 { "a" => 1, "b" => 2, "c" => 3, "d" => 4 }
 Option.Some(10)
 Option.Some(999)
 Option.Some(30)
-"abc"
+abc
 [ 1, 2, 3 ]
 { 1 => "x", 2 => "y", 3 => "z" }
 Option.Some(10)
@@ -20,8 +20,8 @@ Option.Some(10)
 Option.Some(10)
 Option.Some(9)
 Option.None
-"hello"
-"world"
+hello
+world
 [ 1, 2, 3 ]
 [ 4, 5 ]
 { "x" => 10 }
@@ -30,12 +30,12 @@ Option.Some(99)
 Option.Some(77)
 Option.None
 Option.None
-"ab"
+ab
 [ 0, 2 ]
 [ 1, 4, 9, 16, 25 ]
-"hello world !"
+hello world !
 false
 Unit
 Ordering.Eq
-""
-"Concatable and Default complete"
+
+Concatable and Default complete

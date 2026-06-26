@@ -7,20 +7,20 @@ use super::Interpreter;
 use crate::ast::{Expr, ExprId, MatchArm, PostfixOp, StmtId, TypePattern};
 use crate::intern::{QualifiedName, StringId};
 use crate::value::{Payload, TypeId, Value, ValueId};
-use crate::{Error, Result, Span};
+use crate::{ClassId, Error, Result, Span};
 
 impl Interpreter<'_, '_> {
     /// Postfix operator implementation.
     ///
     /// Type checker guarantees operand satisfies the operator's constraints.
-    pub(super) fn postfix(
+    pub(super) async fn postfix(
         &mut self,
         op: PostfixOp,
         val: Value,
         span: Span,
     ) -> Result<Value> {
         match op {
-            PostfixOp::Unwrap => self.unwrap(val, span),
+            PostfixOp::Unwrap => self.unwrap(val, span).await,
         }
     }
 
@@ -31,7 +31,7 @@ impl Interpreter<'_, '_> {
     ///
     /// Type checker guarantees operand is `Option` or `Result`.
     /// `None`/`Err` remain runtime errors (value-level, not type-level).
-    fn unwrap(&mut self, val: Value, span: Span) -> Result<Value> {
+    async fn unwrap(&mut self, val: Value, span: Span) -> Result<Value> {
         let base = self
             .checked
             .types
@@ -60,17 +60,45 @@ impl Interpreter<'_, '_> {
                         typechecked!("!", "Result.Ok has payload")
                     }))
             }
-            // Result.Err(e) -> runtime error with stringified e
+            // Result.Err(e) -> runtime error.
             (Some(TypeId::RESULT), Payload::Variant { tag: 1, vals }) => {
-                let err_val =
-                    vals.first().and_then(|id| self.arena.value(*id).cloned());
-                let err_msg = err_val
-                    .map(|v| self.stringify_value(&v))
-                    .unwrap_or_else(|| "unknown error".into());
-                Err(Error::runtime(
-                    span,
-                    format!("cannot unwrap Result.Err: {err_msg}"),
-                ))
+                let base = "cannot unwrap Result.Err";
+                let method = self.arena.intern("display");
+                let msg = match vals.first().copied() {
+                    Some(vid)
+                        if self.arena.value(vid).is_some_and(|v| {
+                            self.has_class_instance(
+                                ClassId::DISPLAY,
+                                method,
+                                v.ty,
+                            )
+                        }) =>
+                    {
+                        let val = self
+                            .dispatch_class_method_value(
+                                super::class::Dispatch::internal(
+                                    ClassId::DISPLAY,
+                                    method,
+                                    SmallVec::from_slice(&[vid]),
+                                    None,
+                                    span,
+                                ),
+                            )
+                            .await?;
+                        match val.payload {
+                            Payload::String(sid) => {
+                                let s = self.arena.get_str(sid).unwrap_or("");
+                                format!("{base}: {s}")
+                            }
+                            _ => typechecked!(
+                                "Result.Err display",
+                                "Display:display returned String"
+                            ),
+                        }
+                    }
+                    Some(_) | None => base.to_owned(),
+                };
+                Err(Error::runtime(span, msg))
             }
             // Type checker guarantees Option or Result
             _ => typechecked!("!", "Fallible"),

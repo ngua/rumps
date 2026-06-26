@@ -28,7 +28,7 @@ fun main() {
 
   ; Option[Int] with Some
   let opt: Option[Int] = Option.Some(10)
-  write opt
+  write :display(opt)
   ; Expected: Option.Some(10)
 
   ; Option[Int] with None (this tests type compatibility)
@@ -38,17 +38,17 @@ fun main() {
 
   ; Array[Int]
   let arr: Array[Int] = [1, 2, 3]
-  write arr
+  write :display(arr)
   ; Expected: [1, 2, 3]
 
   ; Array[Option[Int]] - nested parameterized type
   let arr-opt: Array[Option[Int]] = [Option.Some(1), Option.Some(2)]
-  write arr-opt
+  write :display(arr-opt)
   ; Expected: [Option.Some(1), Option.Some(2)]
 
   ; Result[Int, String] - two type parameters
   let res: Result[Int, String] = Result.Ok(42)
-  write res
+  write :display(res)
   ; Expected: Result.Ok(42)
 
   ; === Without annotations (still works) ===

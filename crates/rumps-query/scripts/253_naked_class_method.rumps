@@ -5,7 +5,7 @@ fun main() {
   write "add: {:add(3, 4)}"
   write "sub: {:sub(10, 3)}"
   write "neg: {:neg(-5)}"
-  write "compare: {:compare(1, 2)}"
+  write "compare: {:display(:compare(1, 2))}"
   write "eq: {:eq(3, 3)}"
   write "display: {:display(42)}"
   write "concat: {:concat("hello", " world")}"
@@ -18,15 +18,15 @@ fun main() {
   write "ref neg: {g(-42)}"
 
   let h = :compare
-  write "ref compare: {h(5, 5)}"
+  write "ref compare: {:display(h(5, 5))}"
 
   ; HoF with naked syntax
   let nums = [1, 2, 3, 4, 5]
   let doubled = :map(x => x * 2, nums)
-  write "map: {doubled}"
+  write "map: {:display(doubled)}"
 
   let evens = :filter(x => x % 2 == 0, nums)
-  write "filter: {evens}"
+  write "filter: {:display(evens)}"
 
   let sum = :fold((acc, x) => acc + x, 0, nums)
   write "fold: {sum}"
@@ -41,10 +41,10 @@ fun main() {
   ; Method ref passed to HOF
   let arrs = [[1, 2], [3], [4, 5, 6]]
   let flat = :fold(:concat, [], arrs)
-  write "flatten: {flat}"
+  write "flatten: {:display(flat)}"
 
   let fm = :fold-map
-  write "fold-map ref: {fm(x => [x], [6, 7])}"
+  write "fold-map ref: {:display(fm(x => [x], [6, 7]))}"
 
   ; Stored ref used later
   let len = :length

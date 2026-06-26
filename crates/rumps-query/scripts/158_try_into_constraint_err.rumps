@@ -2,7 +2,7 @@
 
 fun main() {
   let f = (x: Int) -> Int => x + 1
-  write bad-read(f)
+  write :display(bad-read(f))
 }
 
 ; Function types cannot satisfy TryInto

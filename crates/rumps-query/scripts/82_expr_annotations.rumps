@@ -40,24 +40,24 @@ fun main() {
 
   ; Option[Int] with Some
   let opt = (Option.Some(10)) : Option[Int]
-  write opt
+  write :display(opt)
   ; Expected: Option.Some(10)
 
   ; Option[String] with None
   let none = (Option.None) : Option[String]
-  write none
+  write :display(none)
   ; Expected: Option.None
 
   ; Result[Int, String] with Ok
   let res = (Result.Ok(42)) : Result[Int, String]
-  write res
+  write :display(res)
   ; Expected: Result.Ok(42)
 
   ; === Nested type annotations ===
 
   ; Array[Int]
   let arr = ([1, 2, 3]) : Array[Int]
-  write arr
+  write :display(arr)
   ; Expected: [ 1, 2, 3 ]
 
   ; === Chained usage ===
@@ -76,7 +76,7 @@ fun main() {
 
   ; Annotate a tuple with double parentheses
   let tup = ((1, 2)) : (Int, Int)
-  write tup
+  write :display(tup)
   ; Expected: ( 1, 2 )
 
   ; Tuple in arithmetic context

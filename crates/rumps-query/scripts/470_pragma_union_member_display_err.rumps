@@ -3,5 +3,5 @@ union Showable = Int | Token
 
 fun main() {
   let x: Showable = 1
-  write Display:display(x)
+  write :display(x)
 }

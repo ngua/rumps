@@ -3,7 +3,7 @@
 fun main() {
   ; No import; should error
   let c = Shapes.Circle.Circle(3.14)
-  write Display:display(c)
+  write :display(c)
 }
 
 module Shapes {

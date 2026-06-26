@@ -1,19 +1,19 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: Block and IF expressions in expression contexts\n; Tests that blocks and IF can appear anywhere an expression is expected\n\n; === Single-arm IF returns Unit ===\n; Single-arm IF always evaluates to Unit (for side effects only)\nLET res = IF TRUE { OUTPUT \"side effect\" }\nOUTPUT res\n; Expected: Unit\n\n; === IF/ELSE expression in LET binding ===\nLET a = IF TRUE { \"yes\" } ELSE { \"no\" }\nOUTPUT a\n\nLET b = IF FALSE { \"yes\" } ELSE { \"no\" }\nOUTPUT b\n\n; Nested IF/ELSE expressions\nLET nested = IF TRUE {\n  IF FALSE { 1 } ELSE { 2 }\n} ELSE {\n  3\n}\nOUTPUT nested\n\n; IF/ELSE in arithmetic\nLET sum = 10 + IF TRUE { 5 } ELSE { 0 }\nOUTPUT sum\n\n; IF/ELSE as argument\nOUTPUT IF TRUE { \"direct if\" } ELSE { \"nope\" }\n\n; === Block expressions ===\n\n; Block expression in LET binding\nLET blk = { 1 + 2 }\nOUTPUT blk\n\n; Block with statements and tail\nLET computed = {\n  LET tmp = 10\n  tmp * 2\n}\nOUTPUT computed\n\n; Block in arithmetic\nLET expr = { 5 } + { 3 }\nOUTPUT expr\n\n; IF/ELSE with block that has statements\nLET complex = IF TRUE {\n  LET inner = 100\n  inner + 1\n} ELSE {\n  0\n}\nOUTPUT complex\n\n; Chained conditionals (all IF/ELSE)\nLET grade = 85\nLET letter = IF grade >= 90 { \"A\" } ELSE {\n  IF grade >= 80 { \"B\" } ELSE {\n    IF grade >= 70 { \"C\" } ELSE { \"F\" }\n  }\n}\nOUTPUT letter\n\n; === Blocks without tail return Unit ===\nLET no-tail = {\n  LET tmp = 42\n  OUTPUT tmp\n}\nOUTPUT no-tail\n; Expected: Unit\n\nOUTPUT \"Block expressions test complete\"\n"
+description: "; Test: Block and if expressions in expression contexts\n; Tests that blocks and if can appear anywhere an expression is expected\n\nfun main() {\n  ; === Single-arm if returns Unit ===\n  ; Single-arm if always evaluates to Unit (for side effects only)\n  let res = if true { write \"side effect\" }\n  write :display(res)\n  ; Expected: Unit\n\n  ; === if/else expression in let binding ===\n  let a = if true { \"yes\" } else { \"no\" }\n  write a\n\n  let b = if false { \"yes\" } else { \"no\" }\n  write b\n\n  ; Nested if/else expressions\n  let nested = if true {\n    if false { 1 } else { 2 }\n  } else {\n    3\n  }\n  write nested\n\n  ; if/else in arithmetic\n  let sum = 10 + if true { 5 } else { 0 }\n  write sum\n\n  ; if/else as argument\n  write if true { \"direct if\" } else { \"nope\" }\n\n  ; === Block expressions ===\n\n  ; Block expression in let binding\n  let blk = { 1 + 2 }\n  write blk\n\n  ; Block with statements and tail\n  let computed = {\n    let tmp = 10\n    tmp * 2\n  }\n  write computed\n\n  ; Block in arithmetic\n  let expr = { 5 } + { 3 }\n  write expr\n\n  ; if/else with block that has statements\n  let complex = if true {\n    let inner = 100\n    inner + 1\n  } else {\n    0\n  }\n  write complex\n\n  ; Chained conditionals (all if/else)\n  let grade = 85\n  let letter = if grade >= 90 { \"A\" } else {\n    if grade >= 80 { \"B\" } else {\n      if grade >= 70 { \"C\" } else { \"F\" }\n    }\n  }\n  write letter\n\n  ; === Blocks without tail return Unit ===\n  let no-tail = {\n    let tmp = 42\n    write tmp\n  }\n  write :display(no-tail)\n  ; Expected: Unit\n\n  write \"Block expressions test complete\"\n}\n"
 ---
-"side effect"
+side effect
 Unit
-"yes"
-"no"
+yes
+no
 2
 15
-"direct if"
+direct if
 3
 20
 8
 101
-"B"
+B
 42
 Unit
-"Block expressions test complete"
+Block expressions test complete

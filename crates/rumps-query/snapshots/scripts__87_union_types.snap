@@ -22,22 +22,22 @@ true
 true
 true
 false
-"ID#123"
-"ID:xyz"
-"int: 42"
-"str: hello"
-"bool: true"
+ID#123
+ID:xyz
+int: 42
+str: hello
+bool: true
 true
 false
 false
 true
-"large int"
-"positive int"
-"non-positive int"
-"long string"
-"short string"
-"boolean"
-"other storable"
+large int
+positive int
+non-positive int
+long string
+short string
+boolean
+other storable
 true
 true
 true
@@ -49,11 +49,11 @@ true
 true
 true
 true
-"string: Alice"
-"int: 30"
-"bool: true"
-"float: 3.14"
-"missing"
+string: Alice
+int: 30
+bool: true
+float: 3.14
+missing
 true
 true
 true

@@ -1,0 +1,9 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Bare `write` uses `Into[String]`; explicit `:display` uses `Display`.\n\n#(deriving: Display)\nvariant Password = Password(String)\n\nvariant Report = Report\n\nclass Into[String] for Password {\n  fun into(p: Password) -> String {\n    match p {\n      Password.Password(_) => { \"<redacted>\\nsecret\" }\n    }\n  }\n}\n\nclass Into[Json] for Report {\n  fun into(r: Report) -> Json {\n    match r {\n      Report.Report => {\n        { \"kind\": \"report\", \"from\": \"instance\" }\n      }\n    }\n  }\n}\n\nfun main() {\n  let p = Password.Password(\"secret\")\n  write p\n  write :display(p)\n  write p raw\n  write Report.Report json\n}\n"
+---
+<redacted>
+secret
+Password.Password("secret")
+<redacted>\nsecret
+{"from":"instance","kind":"report"}

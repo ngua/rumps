@@ -4,6 +4,6 @@ description: "; Multiple module file imports\n\nmodule MyMath from \"../modules/
 ---
 16
 true
-"25"
-"1.0"
+25
+1.0
 true

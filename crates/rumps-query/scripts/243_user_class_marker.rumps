@@ -16,5 +16,5 @@ fun needs-marker[T: Marker](x: T) -> T {
 
 fun main() {
   let p = Point.Point(1, 2)
-  write needs-marker(p)
+  write :display(needs-marker(p))
 }

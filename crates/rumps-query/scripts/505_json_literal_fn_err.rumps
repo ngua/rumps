@@ -1,0 +1,5 @@
+; JSON literals cannot serialize debug-only values through helpers.
+
+fun main() {
+  write { "f": (x: Int) => x } as String
+}

@@ -113,7 +113,7 @@ fun main() {
 
   ; Single-element tuple in closure annotations
   let f = (x: (Int,)) -> (Int,) => x
-  write f((1,))
+  write :display(f((1,)))
   ; (1,)
 
   ; Empty tuple

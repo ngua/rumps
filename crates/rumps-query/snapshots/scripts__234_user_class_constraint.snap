@@ -2,7 +2,7 @@
 source: crates/rumps-query/tests/scripts.rs
 description: "; User-defined class used as a constraint on a function.\n;\n; The `Printable` class is used in `[T: Printable]` to constrain\n; the type parameter at call sites.\n\nvariant Color = Red | Green | Blue\nvariant Wrapper = Wrap(String)\n\nclass Printable C {\n  fun to-str(x: C) -> String\n}\n\nclass Printable for Color {\n  fun to-str(x: Color) -> String {\n    match x {\n      Color.Red => { \"red\" }\n      Color.Green => { \"green\" }\n      Color.Blue => { \"blue\" }\n    }\n  }\n}\n\nclass Printable for Wrapper {\n  fun to-str(x: Wrapper) -> String {\n    match x {\n      Wrapper.Wrap(s) => { \"wrapped({s})\" }\n    }\n  }\n}\n\nfun show[T: Printable](x: T) -> String {\n  Printable:to-str(x)\n}\n\nfun main() {\n  write show(Color.Red)\n  write show(Color.Green)\n  write show(Color.Blue)\n  write show(Wrapper.Wrap(\"hello\"))\n}\n"
 ---
-"red"
-"green"
-"blue"
-"wrapped(hello)"
+red
+green
+blue
+wrapped(hello)

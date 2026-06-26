@@ -1,10 +1,10 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test catch without parens\nWRITE RAISE \"x\" CATCH e => \"caught\"\n\n; Catch with success (no error)\nWRITE 42 CATCH e => 0\n\n; Catch division by zero\nWRITE (1 // 0) CATCH e => -1\n\n; Pattern match on error type (Raise)\nWRITE RAISE \"error msg\" CATCH e => {\n  MATCH e {\n    Error.Raise(msg) => { \"raised: {msg}\" }\n    Error.Runtime(msg) => { \"runtime: {msg}\" }\n    _ => { \"other\" }\n  }\n}\n\n; Division by zero is Runtime; must return Int to match\nWRITE (1 // 0) CATCH e => {\n  MATCH e {\n    Error.Runtime(msg) => { -1 }\n    _ => { -2 }\n  }\n}\n\n; String expression with Runtime error match\nWRITE \"{\"test\"}{RAISE \"oops\"}\" CATCH e => {\n  MATCH e {\n    Error.Raise(msg) => { \"caught raise: {msg}\" }\n    _ => { \"other error\" }\n  }\n}\n"
+description: "; Test catch without parens\n\nfun main() {\n  write raise \"x\" catch e => \"caught\"\n\n  ; Catch with success (no error)\n  write 42 catch e => 0\n\n  ; Catch division by zero\n  write (1 // 0) catch e => -1\n\n  ; Pattern match on error type (Raise)\n  write raise \"error msg\" catch e => {\n    match e {\n      Error.Raise(msg) => { \"raised: {msg}\" }\n      Error.Runtime(msg) => { \"runtime: {msg}\" }\n      _ => { \"other\" }\n    }\n  }\n\n  ; Division by zero is Runtime; must return Int to match\n  write (1 // 0) catch e => {\n    match e {\n      Error.Runtime(msg) => { -1 }\n      _ => { -2 }\n    }\n  }\n\n  ; String expression with Runtime error match\n  write \"{\"test\"}{raise \"oops\"}\" catch e => {\n    match e {\n      Error.Raise(msg) => { \"caught raise: {msg}\" }\n      _ => { \"other error\" }\n    }\n  }\n}\n"
 ---
-"caught"
+caught
 42
 -1
-"raised: error msg"
+raised: "error msg"
 -1
-"caught raise: oops"
+caught raise: "oops"

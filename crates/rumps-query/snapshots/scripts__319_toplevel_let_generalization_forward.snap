@@ -3,7 +3,7 @@ source: crates/rumps-query/tests/scripts.rs
 description: "; Top-level `let` groups infer final schemes before function bodies.\n\nfun main() {\n  write use-id-int()\n  write use-id-string()\n\n  let ints: Array[Int] = empty\n  let strs: Array[String] = empty\n\n  write Iterable:length(ints)\n  write Iterable:length(strs)\n  write id(true)\n}\n\nfun use-id-int() -> Int {\n  id(42)\n}\n\nfun use-id-string() -> String {\n  id(\"forward\")\n}\n\nlet id = x => x\nlet empty = []\n"
 ---
 42
-"forward"
+forward
 0
 0
 true

@@ -18,38 +18,38 @@ fun main() {
 
   let base-arr = [1, 2, 3]
   let pushed = Array.push(base-arr, 4)
-  write pushed  ; [1, 2, 3, 4]
+  write :display(pushed)  ; [1, 2, 3, 4]
 
   ; Original unchanged (immutable)
-  write base-arr  ; [1, 2, 3]
+  write :display(base-arr)  ; [1, 2, 3]
 
   ; Push to empty array
   let pushed-empty = Array.push([], 1)
-  write pushed-empty  ; [1]
+  write :display(pushed-empty)  ; [1]
 
   ; ============ Array.pop ============
 
   let to-pop = [1, 2, 3]
   let popped = Array.pop(to-pop)
-  write popped  ; [1, 2]
+  write :display(popped)  ; [1, 2]
 
   ; Pop from single element
   let pop-single = Array.pop([42])
-  write pop-single  ; []
+  write :display(pop-single)  ; []
 
   ; Pop from empty (returns empty)
   let pop-empty = Array.pop([])
-  write pop-empty  ; []
+  write :display(pop-empty)  ; []
 
   ; ============ Array.head ============
 
   let head-arr = [10, 20, 30]
   let first = Array.head(head-arr)
-  write first  ; Option.Some(10)
+  write :display(first)  ; Option.Some(10)
 
   ; Head of empty array
   let head-empty = Array.head([])
-  write head-empty  ; Option.None
+  write :display(head-empty)  ; Option.None
 
   ; Head with unwrap
   let head-val = Array.head([100, 200])!
@@ -59,87 +59,87 @@ fun main() {
 
   let tail-arr = [1, 2, 3, 4]
   let rest = Array.tail(tail-arr)
-  write rest  ; [2, 3, 4]
+  write :display(rest)  ; [2, 3, 4]
 
   ; Tail of single element
   let tail-single = Array.tail([42])
-  write tail-single  ; []
+  write :display(tail-single)  ; []
 
   ; Tail of empty array
   let tail-empty = Array.tail([])
-  write tail-empty  ; []
+  write :display(tail-empty)  ; []
 
   ; ============ `Iterable:reverse` ============
 
   let to-reverse = [1, 2, 3, 4, 5]
   let reversed = Iterable:reverse(to-reverse)
-  write reversed  ; [5, 4, 3, 2, 1]
+  write :display(reversed)  ; [5, 4, 3, 2, 1]
 
   ; Reverse single element
   let rev-single = Iterable:reverse([42])
-  write rev-single  ; [42]
+  write :display(rev-single)  ; [42]
 
   ; Reverse empty
   let rev-empty = Iterable:reverse([])
-  write rev-empty  ; []
+  write :display(rev-empty)  ; []
 
   ; ============ Array.sort ============
 
   let unsorted = [3, 1, 4, 1, 5, 9, 2, 6]
   let sorted = Array.sort(unsorted)
-  write sorted  ; [1, 1, 2, 3, 4, 5, 6, 9]
+  write :display(sorted)  ; [1, 1, 2, 3, 4, 5, 6, 9]
 
   ; Sort already sorted
   let already-sorted = Array.sort([1, 2, 3])
-  write already-sorted  ; [1, 2, 3]
+  write :display(already-sorted)  ; [1, 2, 3]
 
   ; Sort reverse order
   let sort-reverse = Array.sort([3, 2, 1])
-  write sort-reverse  ; [1, 2, 3]
+  write :display(sort-reverse)  ; [1, 2, 3]
 
   ; Sort strings
   let unsorted-strs = ["banana", "apple", "cherry"]
   let sorted-strs = Array.sort(unsorted-strs)
-  write sorted-strs  ; ["apple", "banana", "cherry"]
+  write :display(sorted-strs)  ; ["apple", "banana", "cherry"]
 
   ; Sort booleans
   let unsorted-bools = [true, false, true, false]
   let sorted-bools = Array.sort(unsorted-bools)
-  write sorted-bools  ; [false, false, true, true]
+  write :display(sorted-bools)  ; [false, false, true, true]
 
   ; Sort empty
   let sort-empty = Array.sort([])
-  write sort-empty  ; []
+  write :display(sort-empty)  ; []
 
   ; ============ Array.slice ============
 
   let slice-arr = [0, 1, 2, 3, 4, 5]
   let sliced = Array.slice(slice-arr, 1, 4)
-  write sliced  ; [1, 2, 3]
+  write :display(sliced)  ; [1, 2, 3]
 
   ; Slice from start
   let slice-start = Array.slice(slice-arr, 0, 3)
-  write slice-start  ; [0, 1, 2]
+  write :display(slice-start)  ; [0, 1, 2]
 
   ; Slice to end
   let slice-end = Array.slice(slice-arr, 3, 6)
-  write slice-end  ; [3, 4, 5]
+  write :display(slice-end)  ; [3, 4, 5]
 
   ; Slice full array
   let slice-full = Array.slice(slice-arr, 0, 6)
-  write slice-full  ; [0, 1, 2, 3, 4, 5]
+  write :display(slice-full)  ; [0, 1, 2, 3, 4, 5]
 
   ; Slice empty range
   let slice-none = Array.slice(slice-arr, 2, 2)
-  write slice-none  ; []
+  write :display(slice-none)  ; []
 
   ; Slice with clamped bounds
   let slice-clamp = Array.slice([1, 2, 3], 0, 100)
-  write slice-clamp  ; [1, 2, 3]
+  write :display(slice-clamp)  ; [1, 2, 3]
 
   ; Slice with negative start (clamped to 0)
   let slice-neg = Array.slice([1, 2, 3], -5, 2)
-  write slice-neg  ; [1, 2]
+  write :display(slice-neg)  ; [1, 2]
 
   ; ============ Array.contains ============
 
@@ -164,23 +164,23 @@ fun main() {
   let arr-a = [1, 2, 3]
   let arr-b = [4, 5, 6]
   let combined = Array.concat(arr-a, arr-b)
-  write combined  ; [1, 2, 3, 4, 5, 6]
+  write :display(combined)  ; [1, 2, 3, 4, 5, 6]
 
   ; Concat with empty first
   let concat-empty-a = Array.concat([], [1, 2, 3])
-  write concat-empty-a  ; [1, 2, 3]
+  write :display(concat-empty-a)  ; [1, 2, 3]
 
   ; Concat with empty second
   let concat-empty-b = Array.concat([1, 2, 3], [])
-  write concat-empty-b  ; [1, 2, 3]
+  write :display(concat-empty-b)  ; [1, 2, 3]
 
   ; Concat two empty
   let concat-both-empty = Array.concat([], [])
-  write concat-both-empty  ; []
+  write :display(concat-both-empty)  ; []
 
   ; Concat strings
   let concat-strs = Array.concat(["a", "b"], ["c", "d"])
-  write concat-strs  ; ["a", "b", "c", "d"]
+  write :display(concat-strs)  ; ["a", "b", "c", "d"]
 
   ; ============ Chaining operations ============
 
@@ -191,7 +191,7 @@ fun main() {
 
   ; Slice then reverse
   let slice-rev = Iterable:reverse(Array.slice([0, 1, 2, 3, 4], 1, 4))
-  write slice-rev  ; [3, 2, 1]
+  write :display(slice-rev)  ; [3, 2, 1]
 
   ; Push then length
   let push-len = Iterable:length(Array.push([1, 2], 3))
@@ -204,5 +204,5 @@ fun main() {
     |> Array.sort
     |> Iterable:reverse
     |> (arr => Array.slice(arr, 0, 3))
-  write pipeline-result  ; [9, 8, 5]
+  write :display(pipeline-result)  ; [9, 8, 5]
 }

@@ -12,5 +12,5 @@ class Display for Item {
 }
 
 fun main() {
-  write Box.Box(Item.Item("a"))
+  write :display(Box.Box(Item.Item("a")))
 }

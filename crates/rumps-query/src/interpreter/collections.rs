@@ -132,11 +132,13 @@ impl Interpreter<'_, '_> {
     }
 
     fn array_ids_to_json(&mut self, ids: &[ValueId]) -> Vec<serde_json::Value> {
-        let vals: Vec<Value> = ids
-            .iter()
-            .filter_map(|vid| self.arena.value(*vid).cloned())
-            .collect();
-        vals.iter().map(|v| self.jsonify_value(v)).collect()
+        ids.iter()
+            .filter_map(|vid| self.arena.value(*vid))
+            .map(|v| match &v.payload {
+                Payload::Json(j) => j.as_ref().clone(),
+                _ => typechecked!("Json array", "Into[Json] returned Json"),
+            })
+            .collect()
     }
 
     /// Recursively evaluate array elements with spread support.
@@ -156,7 +158,17 @@ impl Interpreter<'_, '_> {
                     let v = self.eval(*id).await?;
                     if matches!(v.payload, Payload::Json(_)) {
                         let mut json_arr = self.array_ids_to_json(&acc);
-                        json_arr.push(self.jsonify_value(&v));
+                        match v.payload {
+                            Payload::Json(j) => {
+                                json_arr.push(j.as_ref().clone())
+                            }
+                            _ => {
+                                typechecked!(
+                                    "Json array",
+                                    "Into[Json] returned Json"
+                                )
+                            }
+                        }
                         self.array_elems_json_tail_spread(tail, json_arr, span)
                             .await
                     } else {
@@ -183,8 +195,16 @@ impl Interpreter<'_, '_> {
                                 .any(|v| matches!(v.payload, Payload::Json(_)));
                             if has_json {
                                 let mut json_arr = self.array_ids_to_json(&acc);
-                                vals.iter().for_each(|v| {
-                                    json_arr.push(self.jsonify_value(v));
+                                vals.iter().for_each(|v| match &v.payload {
+                                    Payload::Json(j) => {
+                                        json_arr.push(j.as_ref().clone());
+                                    }
+                                    _ => {
+                                        typechecked!(
+                                            "Json array spread",
+                                            "Json elements"
+                                        )
+                                    }
                                 });
                                 self.array_elems_json_tail_spread(
                                     tail, json_arr, span,
@@ -213,6 +233,17 @@ impl Interpreter<'_, '_> {
                                 .await
                             }
                         }
+                        Payload::Json(j) => match j.as_ref() {
+                            serde_json::Value::Array(arr) => {
+                                let mut json_arr = self.array_ids_to_json(&acc);
+                                json_arr.extend(arr.iter().cloned());
+                                self.array_elems_json_tail_spread(
+                                    tail, json_arr, span,
+                                )
+                                .await
+                            }
+                            _ => typechecked!("...spread", "Json Array"),
+                        },
                         _ => typechecked!("...spread", "Array"),
                     }
                 }
@@ -235,21 +266,34 @@ impl Interpreter<'_, '_> {
                 match elem {
                     ArrayElem::Elem(id) => {
                         let val = self.eval(*id).await?;
-                        acc.push(self.jsonify_value(&val));
+                        match val.payload {
+                            Payload::Json(j) => acc.push(j.as_ref().clone()),
+                            _ => {
+                                typechecked!(
+                                    "Json array",
+                                    "Into[Json] returned Json"
+                                )
+                            }
+                        }
                     }
                     ArrayElem::Spread(id) => {
                         let val = self.eval(*id).await?;
                         match &val.payload {
                             Payload::Array(elems) => {
-                                let spread_vals: Vec<Value> = elems
+                                elems
                                     .iter()
-                                    .filter_map(|vid| {
-                                        self.arena.value(*vid).cloned()
-                                    })
-                                    .collect();
-                                spread_vals.iter().for_each(|v| {
-                                    acc.push(self.jsonify_value(v));
-                                });
+                                    .filter_map(|vid| self.arena.value(*vid))
+                                    .for_each(|v| match &v.payload {
+                                        Payload::Json(j) => {
+                                            acc.push(j.as_ref().clone());
+                                        }
+                                        _ => {
+                                            typechecked!(
+                                                "Json array spread",
+                                                "Json elements"
+                                            )
+                                        }
+                                    });
                             }
                             Payload::Json(j)
                                 if matches!(

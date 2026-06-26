@@ -910,7 +910,7 @@ pub(crate) struct MatchArm {
 /// Output format modifier.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum OutputFormat {
-    /// Default: stringify the value.
+    /// Default: write the `Into[String]` result.
     #[default]
     Default,
     /// Convert to JSON before output.

@@ -89,31 +89,31 @@ fun main() {
 
   ; Positive Int -> Word (success)
   let res1 = 42 read Word
-  write res1
+  write :display(res1)
   ; Expected: Result.Ok(42)
 
   ; Zero -> Word (success)
   let res2 = 0 read Word
-  write res2
+  write :display(res2)
   ; Expected: Result.Ok(0)
 
   ; Negative Int -> Word (failure)
   let res3 = (-5) read Word
-  write res3
+  write :display(res3)
   ; Expected: Result.Err("expected non-negative Int for Word, got -5")
 
   ; === String read Word ===
 
   let res4 = "123" read Word
-  write res4
+  write :display(res4)
   ; Expected: Result.Ok(123)
 
   let res5 = "abc" read Word
-  write res5
+  write :display(res5)
   ; Expected: Result.Err("invalid unsigned integer: abc")
 
   let res6 = "-42" read Word
-  write res6
+  write :display(res6)
   ; Expected: Result.Err("invalid unsigned integer: -42")
 
   ; === Division (Float operands required) ===

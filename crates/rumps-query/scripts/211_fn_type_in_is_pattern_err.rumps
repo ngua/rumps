@@ -7,7 +7,7 @@
 fun main() {
   let v: Int | String = 1
   match v {
-    f is ((Int, Int) -> Int) => write "got fn: {f}"
+    f is ((Int, Int) -> Int) => write "got fn: {:display(f)}"
     _ => write "other"
   }
 }

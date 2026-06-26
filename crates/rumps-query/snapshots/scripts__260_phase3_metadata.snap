@@ -1,12 +1,12 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Phase 3 typed runtime metadata guard rails\n\nmodule Phase3Meta {\n  +let module-item: Int | String | Bool = 7\n}\n\nnewtype Phase3Id = Int\n\nfun classify(v: Int | String | Bool) -> String {\n  match v {\n    n is Int => { \"int: {n}\" }\n    s is String => { \"str: {s}\" }\n    b is Bool => { \"bool: {b}\" }\n    _ => { \"other\" }\n  }\n}\n\nfun main() {\n  let stmt-item: Int | String | Bool = 1\n  write classify(stmt-item)\n\n  let new-id: Phase3Id = 11\n  write if new-id is Int { \"newtype-int: {new-id}\" } else { \"newtype-miss\" }\n\n  let xs: Array[Int | String | Bool] = [1, \"two\"]\n  write classify(xs[0])\n  write classify(xs[1])\n\n  let ints = [1]\n  let strs: Array[String] = [\"two\"]\n  let ys: Array[Int | String | Bool] = [...ints, ...strs, true]\n  write classify(ys[0])\n  write classify(ys[2])\n\n  write classify(Phase3Meta.module-item)\n\n  let obj = { item: 9 }\n  let maybe-item = obj?.item\n  write classify(maybe-item!)\n}\n"
+description: "; Phase 3 typed runtime metadata guard rails\n\nmodule Phase3Meta {\n  +let module-item: Int | String | Bool = 7\n}\n\n#(deriving: Display, Into[String])\nnewtype Phase3Id = Int\n\nfun classify(v: Int | String | Bool) -> String {\n  match v {\n    n is Int => { \"int: {n}\" }\n    s is String => { \"str: {s}\" }\n    b is Bool => { \"bool: {b}\" }\n    _ => { \"other\" }\n  }\n}\n\nfun main() {\n  let stmt-item: Int | String | Bool = 1\n  write classify(stmt-item)\n\n  let new-id: Phase3Id = 11\n  write if new-id is Int { \"newtype-int: {new-id}\" } else { \"newtype-miss\" }\n\n  let xs: Array[Int | String | Bool] = [1, \"two\"]\n  write classify(xs[0])\n  write classify(xs[1])\n\n  let ints = [1]\n  let strs: Array[String] = [\"two\"]\n  let ys: Array[Int | String | Bool] = [...ints, ...strs, true]\n  write classify(ys[0])\n  write classify(ys[2])\n\n  write classify(Phase3Meta.module-item)\n\n  let obj = { item: 9 }\n  let maybe-item = obj?.item\n  write classify(maybe-item!)\n}\n"
 ---
-"int: 1"
-"newtype-int: 11"
-"int: 1"
-"str: two"
-"int: 1"
-"bool: true"
-"int: 7"
-"int: 9"
+int: 1
+newtype-int: 11
+int: 1
+str: two
+int: 1
+bool: true
+int: 7
+int: 9

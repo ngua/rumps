@@ -29,5 +29,5 @@ fun main() {
   let s: String = w[0]
   write s
   let os: Option[String] = w?[0]
-  write os
+  write :display(os)
 }

@@ -1,28 +1,17 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: Extended write statement\n; Tests write with json format and to error/file targets\n\nfun main() {\n  ; === Basic write (unchanged behavior) ===\n  write \"Hello, World!\"\n  ; Expected: Hello, World!\n\n  let my-x = 42\n  write my-x\n  ; Expected: 42\n\n  let my-obj = { name: \"Alice\", age: 30 }\n  write my-obj\n  ; Expected: { name: Alice, age: 30 }\n\n  ; === write json (format modifier) ===\n  write \"Test json format\" json\n  ; Expected: \"Test json format\"\n\n  write 42 json\n  ; Expected: 42\n\n  write true json\n  ; Expected: true\n\n  let my-arr = [1, 2, 3]\n  write my-arr json\n  ; Expected: [1, 2, 3] (or pretty-printed)\n\n  let my-data = { name: \"Bob\", scores: [90, 85, 95] }\n  write my-data json\n  ; Expected: pretty-printed json object\n\n  ; === write to error (target modifier) ===\n  write \"This goes to stderr\" to error\n  ; Expected: (on stderr) This goes to stderr\n\n  write 123 to error\n  ; Expected: (on stderr) 123\n\n  ; === write json to error (format + target) ===\n  write { status: \"error\", code: 500 } json to error\n  ; Expected: (on stderr) pretty-printed json\n\n  ; === Contextual identifiers as variable names ===\n  ; These must work as regular identifiers\n  let json = \"my json var\"\n  write json\n  ; Expected: my json var\n\n  let to = 10\n  write to\n  ; Expected: 10\n\n  let error = \"an error message\"\n  write error\n  ; Expected: an error message\n\n  let file = \"/path/to/file\"\n  write file\n  ; Expected: /path/to/file\n\n  write \"Complete!\"\n}\n"
+description: "; Test: Extended write statement\n; Tests write with json format and to error/file targets\n\nfun main() {\n  ; === Basic write (unchanged behavior) ===\n  write \"Hello, World!\"\n  ; Expected: Hello, World!\n\n  let my-x = 42\n  write my-x\n  ; Expected: 42\n\n  let my-obj = { name: \"Alice\", age: 30 }\n  write :display(my-obj)\n  ; Expected: { name: Alice, age: 30 }\n\n  ; === write json (format modifier) ===\n  write \"Test json format\" json\n  ; Expected: \"Test json format\"\n\n  write 42 json\n  ; Expected: 42\n\n  write true json\n  ; Expected: true\n\n  let my-arr = [1, 2, 3]\n  write my-arr json\n  ; Expected: [1, 2, 3] (or pretty-printed)\n\n  let my-data = { name: \"Bob\", scores: [90, 85, 95] }\n  write my-data json\n  ; Expected: pretty-printed json object\n\n  ; === write to error (target modifier) ===\n  write \"This goes to stderr\" to error\n  ; Expected: (on stderr) This goes to stderr\n\n  write 123 to error\n  ; Expected: (on stderr) 123\n\n  ; === write json to error (format + target) ===\n  write { status: \"error\", code: 500 } json to error\n  ; Expected: (on stderr) pretty-printed json\n\n  ; === Contextual identifiers as variable names ===\n  ; These must work as regular identifiers\n  let json = \"my json var\"\n  write json\n  ; Expected: my json var\n\n  let to = 10\n  write to\n  ; Expected: 10\n\n  let error = \"an error message\"\n  write error\n  ; Expected: an error message\n\n  let file = \"/path/to/file\"\n  write file\n  ; Expected: /path/to/file\n\n  write \"Complete!\"\n}\n"
 ---
-"Hello, World!"
+Hello, World!
 42
 { name: "Alice", age: 30 }
 "Test json format"
 42
 true
-[
-  1,
-  2,
-  3
-]
-{
-  "name": "Bob",
-  "scores": [
-    90,
-    85,
-    95
-  ]
-}
-"my json var"
+[1,2,3]
+{"name":"Bob","scores":[90,85,95]}
+my json var
 10
-"an error message"
-"/path/to/file"
-"Complete!"
+an error message
+/path/to/file
+Complete!

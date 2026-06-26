@@ -11,25 +11,25 @@ fun main() {
   ; === @data on non-existent key ===
 
   let status0 = @data vars{999}
-  write status0
+  write :display(status0)
 
   ; === @data on key with value only ===
 
   ; Key {1, "A"} has value but no descendants
   let status1 = @data vars{1, "A"}
-  write status1
+  write :display(status1)
 
   ; === @data on key with descendants only ===
 
   ; Key {2} has no value but has descendants at {2, "B", ...}
   let status2 = @data vars{2}
-  write status2
+  write :display(status2)
 
   ; === @data on key with both value and descendants ===
 
   ; Key {1} has value and descendants at {1, "A"}
   let status3 = @data vars{1}
-  write status3
+  write :display(status3)
 
   ; === Pattern matching on DataStatus ===
 
@@ -53,7 +53,7 @@ fun main() {
   ; === Type annotation ===
 
   let typed: DataStatus = @data vars{1}
-  write typed
+  write :display(typed)
 
   ; === DataStatus in arrays ===
 
@@ -64,7 +64,7 @@ fun main() {
     @data vars{1}
   ]
   write Iterable:length(statuses)
-  write Mappable:map(describe, statuses)
+  write :display(Mappable:map(describe, statuses))
 
   ; === read DataStatus from Int ===
 
@@ -74,11 +74,11 @@ fun main() {
   let from11 = 11 read DataStatus
   let invalid = 5 read DataStatus
 
-  write from0
-  write from1
-  write from10
-  write from11
-  write invalid
+  write :display(from0)
+  write :display(from1)
+  write :display(from10)
+  write :display(from11)
+  write :display(invalid)
 }
 
 fun describe(s: DataStatus) -> String {

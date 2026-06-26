@@ -190,7 +190,7 @@ impl Interpreter<'_, '_> {
     ) -> Result<Payload> {
         let (name, key) = self.resolve_ref_target(rt).await?;
         let val = self.eval(expr_id).await?;
-        let storage_val = self.store_value(&val);
+        let storage_val = self.store(&val.payload);
 
         // Global writes require transaction (typechecked); locals go direct
         let res = if name.is_global() {

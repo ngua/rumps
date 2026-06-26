@@ -3,5 +3,5 @@ newtype Bad = Int -> Int
 
 fun main() {
   let f: Bad = x => x + 1
-  write Display:display(f)
+  write :display(f)
 }

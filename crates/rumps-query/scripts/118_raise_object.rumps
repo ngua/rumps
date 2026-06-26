@@ -1,6 +1,6 @@
 ; Test raise with an object (stringified)
 
 fun main() {
-  raise { error: "not found", code: 404 }
+  raise :display({ error: "not found", code: 404 })
   Unit
 }

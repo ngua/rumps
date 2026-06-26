@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; `Result.Err` unwrap only displays payloads with `Display`.\n\nvariant Secret = Secret\n\nfun main() {\n  let err: Result[Int, Secret] = Result.Err(Secret.Secret)\n  write err!\n}\n"
+---
+ERROR: runtime error at 167..171: cannot unwrap Result.Err

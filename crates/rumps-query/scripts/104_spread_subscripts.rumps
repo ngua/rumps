@@ -11,45 +11,45 @@ fun main() {
 
   ; Regular subscripts (existing behavior)
   let v1 = @get data{1, "a"}
-  write v1
+  write :display(v1)
 
   ; Spread an empty array: equivalent to data{}
   let empty: Array[Subscript] = []
   let root = @get data{...empty}
-  write root
+  write :display(root)
 
   ; Spread a single-element array
   let k1: Array[Subscript] = [1]
   let partial = @get data{...k1, "a"}
-  write partial
+  write :display(partial)
 
   ; Spread a full key path
   let key: Array[Subscript] = [1, "b"]
   let v2 = @get data{...key}
-  write v2
+  write :display(v2)
 
   ; Mix regular and spread subscripts
   let suffix: Array[Subscript] = ["x"]
   let v3 = @get data{2, ...suffix}
-  write v3
+  write :display(v3)
 
   ; Spread with @set
   let set-key: Array[Subscript] = [3, "z"]
   @set data{...set-key} "spread-set"
   let v4 = @get data{3, "z"}
-  write v4
+  write :display(v4)
 
   ; Spread with @kill
   @set data{99, "del"} "to-delete"
   let kill-key: Array[Subscript] = [99, "del"]
   @kill data{...kill-key}
   let deleted = @get data{99, "del"}
-  write deleted
+  write :display(deleted)
 
   ; Spread with @data
   let data-key: Array[Subscript] = [1, "a"]
   let status = @data data{...data-key}
-  write status
+  write :display(status)
 
   ; Spread with @order
   @set items{1} "one"
@@ -57,20 +57,20 @@ fun main() {
   @set items{10} "ten"
   let prefix: Array[Subscript] = [1]
   let next = @order items{...prefix}
-  write next
+  write :display(next)
 
   ; Multiple spreads (concatenation)
   let part1: Array[Subscript] = [1]
   let part2: Array[Subscript] = ["a"]
   let combined = @get data{...part1, ...part2}
-  write combined
+  write :display(combined)
 
   ; Spread with dynamic subscript values
   let n = 2
   let s = "y"
   let dyn-key: Array[Subscript] = [n, s]
   let v5 = @get data{...dyn-key}
-  write v5
+  write :display(v5)
 
   write "spread subscript test complete"
 }

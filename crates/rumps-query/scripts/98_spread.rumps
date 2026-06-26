@@ -8,28 +8,28 @@ fun main() {
   let arr1 = [1, 2, 3]
   let arr2 = [4, 5, 6]
   let combined = [...arr1, ...arr2]
-  write combined
+  write :display(combined)
 
   ; Prepend/append with spread
   let with-zero = [0, ...arr1]
-  write with-zero
+  write :display(with-zero)
 
   let with-four = [...arr1, 4]
-  write with-four
+  write :display(with-four)
 
   ; Mixed elements and spreads
   let mixed = [0, ...arr1, 4, 5]
-  write mixed
+  write :display(mixed)
 
   ; Empty array spread
   let empty: Array[Int] = []
   let spread-empty = [...empty, 1, 2]
-  write spread-empty
+  write :display(spread-empty)
 
   ; Spread with single element array
   let single = [42]
   let spread-single = [...single, ...single]
-  write spread-single
+  write :display(spread-single)
 
   ; ====== Object Spread ======
 
@@ -75,7 +75,7 @@ fun main() {
   let b = [3, 4]
   let c = [5, 6]
   let all = [...a, ...b, ...c]
-  write all
+  write :display(all)
 
   ; Nested object spreads
   let o1 = { x: 1 }

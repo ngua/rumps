@@ -1,4 +1,4 @@
 fun main() {
   let xs: Array[Int] = (1 .. 10) as Array[Int]
-  write xs
+  write :display(xs)
 }

@@ -5,5 +5,5 @@ newtype Label = Token
 
 fun main() {
   let x: Label = Token.Token
-  write x
+  write :display(x)
 }

@@ -1,6 +1,12 @@
-newtype UserId = Int
+module HiddenUser {
+  +newtype UserId = Int
+
+  +fun make(n: Int) -> HiddenUser.UserId {
+    n as HiddenUser.UserId
+  }
+}
 
 fun main() {
-  let x: UserId = 7
+  let x = HiddenUser.make(7)
   write x as String
 }

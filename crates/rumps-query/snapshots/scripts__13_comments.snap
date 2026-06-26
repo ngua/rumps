@@ -1,7 +1,7 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: comments\n; This entire line is a comment\n\n; Comments should be ignored by the lexer\nLET x = 42 ; inline comment after code\nOUTPUT x\n; Expected: 42\n\n; Multiple comment lines\n; Line 1\n; Line 2\n; Line 3\n\nLET y = 10 ; first inline\nLET z = 20 ; second inline\n\n; Comment with special characters: !@#$%^&*()\n; Comment with \"quotes\" and 'apostrophes'\n; Comment with numbers 12345\n\nOUTPUT y + z ; should output 30\n; Expected: 30\n\n; Empty comment\n;\n;; Double semicolon\n;;; Triple semicolon\n\n; Comment at end of file\nOUTPUT \"Comment test complete\"\n; final comment\n"
+description: "; Test: comments\n; This entire line is a comment\n\nfun main() {\n  ; Comments should be ignored by the lexer\n  let x = 42 ; inline comment after code\n  write x\n  ; Expected: 42\n\n  ; Multiple comment lines\n  ; Line 1\n  ; Line 2\n  ; Line 3\n\n  let y = 10 ; first inline\n  let z = 20 ; second inline\n\n  ; Comment with special characters: !@#$%^&*()\n  ; Comment with \"quotes\" and 'apostrophes'\n  ; Comment with numbers 12345\n\n  write y + z ; should output 30\n  ; Expected: 30\n\n  ; Empty comment\n  ;\n  ;; Double semicolon\n  ;;; Triple semicolon\n\n  ; Comment at end of file\n  write \"Comment test complete\"\n  ; final comment\n}\n"
 ---
 42
 30
-"Comment test complete"
+Comment test complete

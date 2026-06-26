@@ -5,7 +5,7 @@ fun main() {
   ; === Single-arm if returns Unit ===
   ; Single-arm if always evaluates to Unit (for side effects only)
   let res = if true { write "side effect" }
-  write res
+  write :display(res)
   ; Expected: Unit
 
   ; === if/else expression in let binding ===
@@ -70,7 +70,7 @@ fun main() {
     let tmp = 42
     write tmp
   }
-  write no-tail
+  write :display(no-tail)
   ; Expected: Unit
 
   write "Block expressions test complete"

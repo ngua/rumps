@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Inferred instance method implementations inherit class method constraints\n\nvariant Box[T] = Box(T)\n\nclass ShowBox F {\n  fun show[T: Display](x: F[T]) -> String\n}\n\nclass ShowBox for Box {\n  fun show(x: Box[T]) -> String {\n    match x {\n      Box.Box(v) => { Display:display(v) }\n    }\n  }\n}\n\nfun main() {\n  write ShowBox:show(Box.Box(42))\n}\n"
+description: "; Inferred instance method implementations inherit class method constraints\n\nvariant Box[T] = Box(T)\n\nclass ShowBox F {\n  fun show[T: Display](x: F[T]) -> String\n}\n\nclass ShowBox for Box {\n  fun show(x: Box[T]) -> String {\n    match x {\n      Box.Box(v) => { :display(v) }\n    }\n  }\n}\n\nfun main() {\n  write ShowBox:show(Box.Box(42))\n}\n"
 ---
-"42"
+42

@@ -65,29 +65,29 @@ fun main() {
 
   let csv = "a,b,c"
   let parts = String.split(csv, ",")
-  write parts  ; ["a", "b", "c"]
+  write :display(parts)  ; ["a", "b", "c"]
 
   ; Split on space
   let sentence = "hello world foo"
   let words = String.split(sentence, " ")
-  write words  ; ["hello", "world", "foo"]
+  write :display(words)  ; ["hello", "world", "foo"]
 
   ; Split on multi-char delimiter
   let multi-delim = "foo::bar::baz"
   let multi-parts = String.split(multi-delim, "::")
-  write multi-parts  ; ["foo", "bar", "baz"]
+  write :display(multi-parts)  ; ["foo", "bar", "baz"]
 
   ; Split with no delimiter found
   let no-match = String.split("hello", ",")
-  write no-match  ; ["hello"]
+  write :display(no-match)  ; ["hello"]
 
   ; Split empty string
   let split-empty = String.split("", ",")
-  write split-empty  ; [""]
+  write :display(split-empty)  ; [""]
 
   ; Split on empty delimiter (splits every char)
   let split-chars = String.split("abc", "")
-  write split-chars  ; ["", "a", "b", "c", ""]
+  write :display(split-chars)  ; ["", "a", "b", "c", ""]
 
   ; ============ String.join ============
 
@@ -179,7 +179,7 @@ fun main() {
   ; Trim then split
   let messy = "  a,b,c  "
   let clean-parts = String.split(String.trim(messy), ",")
-  write clean-parts  ; ["a", "b", "c"]
+  write :display(clean-parts)  ; ["a", "b", "c"]
 
   ; Split then join with different separator
   let csv-to-tabs = String.join(String.split("a,b,c", ","), "\t")

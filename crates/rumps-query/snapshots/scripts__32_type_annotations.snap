@@ -1,9 +1,9 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: Type annotations on let bindings\n; Tests `let x: Type = expr` syntax with type checking\n\nfun main() {\n  ; === Basic type annotations ===\n\n  ; Int annotation\n  let x: Int = 42\n  write x\n  ; Expected: 42\n\n  ; String annotation\n  let s: String = \"hello\"\n  write s\n  ; Expected: hello\n\n  ; Bool annotation\n  let b: Bool = true\n  write b\n  ; Expected: true\n\n  ; Float annotation\n  let f: Float = 3.14\n  write f\n  ; Expected: 3.14\n\n  ; === Parameterized type annotations ===\n\n  ; Option[Int] with Some\n  let opt: Option[Int] = Option.Some(10)\n  write opt\n  ; Expected: Option.Some(10)\n\n  ; Option[Int] with None (this tests type compatibility)\n  ; Note: None is Option[unknown] which should be compatible with Option[Int]\n\n  ; === Nested type annotations ===\n\n  ; Array[Int]\n  let arr: Array[Int] = [1, 2, 3]\n  write arr\n  ; Expected: [1, 2, 3]\n\n  ; Array[Option[Int]] - nested parameterized type\n  let arr-opt: Array[Option[Int]] = [Option.Some(1), Option.Some(2)]\n  write arr-opt\n  ; Expected: [Option.Some(1), Option.Some(2)]\n\n  ; Result[Int, String] - two type parameters\n  let res: Result[Int, String] = Result.Ok(42)\n  write res\n  ; Expected: Result.Ok(42)\n\n  ; === Without annotations (still works) ===\n\n  let no-ann = 123\n  write no-ann\n  ; Expected: 123\n\n  write \"Type annotation test complete\"\n}\n"
+description: "; Test: Type annotations on let bindings\n; Tests `let x: Type = expr` syntax with type checking\n\nfun main() {\n  ; === Basic type annotations ===\n\n  ; Int annotation\n  let x: Int = 42\n  write x\n  ; Expected: 42\n\n  ; String annotation\n  let s: String = \"hello\"\n  write s\n  ; Expected: hello\n\n  ; Bool annotation\n  let b: Bool = true\n  write b\n  ; Expected: true\n\n  ; Float annotation\n  let f: Float = 3.14\n  write f\n  ; Expected: 3.14\n\n  ; === Parameterized type annotations ===\n\n  ; Option[Int] with Some\n  let opt: Option[Int] = Option.Some(10)\n  write :display(opt)\n  ; Expected: Option.Some(10)\n\n  ; Option[Int] with None (this tests type compatibility)\n  ; Note: None is Option[unknown] which should be compatible with Option[Int]\n\n  ; === Nested type annotations ===\n\n  ; Array[Int]\n  let arr: Array[Int] = [1, 2, 3]\n  write :display(arr)\n  ; Expected: [1, 2, 3]\n\n  ; Array[Option[Int]] - nested parameterized type\n  let arr-opt: Array[Option[Int]] = [Option.Some(1), Option.Some(2)]\n  write :display(arr-opt)\n  ; Expected: [Option.Some(1), Option.Some(2)]\n\n  ; Result[Int, String] - two type parameters\n  let res: Result[Int, String] = Result.Ok(42)\n  write :display(res)\n  ; Expected: Result.Ok(42)\n\n  ; === Without annotations (still works) ===\n\n  let no-ann = 123\n  write no-ann\n  ; Expected: 123\n\n  write \"Type annotation test complete\"\n}\n"
 ---
 42
-"hello"
+hello
 true
 3.14
 Option.Some(10)
@@ -11,4 +11,4 @@ Option.Some(10)
 [ Option.Some(1), Option.Some(2) ]
 Result.Ok(42)
 123
-"Type annotation test complete"
+Type annotation test complete

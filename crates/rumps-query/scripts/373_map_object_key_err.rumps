@@ -2,5 +2,5 @@
 
 fun main() {
   let m: Map[{ a: Int }, String] = Map.empty()
-  write m
+  write :display(m)
 }

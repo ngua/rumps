@@ -10,27 +10,27 @@ fun main() {
 
   ; First key path (no after position, use {} for root)
   let first = @query items{}
-  write first
+  write :display(first)
 
   ; Next key path after {1}
   let after-1 = @query items{1}
-  write after-1
+  write :display(after-1)
 
   ; Next key path after {2}
   let after-2 = @query items{2}
-  write after-2
+  write :display(after-2)
 
   ; Past the last key
   let after-10 = @query items{10}
-  write after-10
+  write :display(after-10)
 
   ; @query on non-existent variable (use {} for root)
   let no-keys = @query empty{}
-  write no-keys
+  write :display(no-keys)
 
   ; Type annotation
   let typed: Option[Array[Subscript]] = @query items{}
-  write typed
+  write :display(typed)
 
   ; Use with match
   let msg = match @query items{} {
@@ -41,11 +41,11 @@ fun main() {
 
   ; Use with coalesce
   let path = @query items{} ?? []
-  write path
+  write :display(path)
 
   ; Using unwrap on result
   let path2 = (@query items{1})!
-  write path2
+  write :display(path2)
 
   ; Spread syntax to continue iteration
   @set data{1} "a"
@@ -53,13 +53,13 @@ fun main() {
   @set data{3} "c"
 
   let k1 = @query data{} ?? []
-  write k1
+  write :display(k1)
   let k2 = @query data{...k1} ?? []
-  write k2
+  write :display(k2)
   let k3 = @query data{...k2} ?? []
-  write k3
+  write :display(k3)
   let k4 = @query data{...k3}
-  write k4
+  write :display(k4)
 
   ; === Nested data tests ===
   ; @query should skip intermediate nodes (ancestors with no value)
@@ -70,26 +70,26 @@ fun main() {
 
   ; First key should be [1, "age"], not [1]
   let p1 = @query patients{} ?? []
-  write p1
+  write :display(p1)
 
   ; After [1, "age"] should be [1, "name"], not [1] or [2]
   let p2 = @query patients{1, "age"} ?? []
-  write p2
+  write :display(p2)
 
   ; After [1, "name"] should be [2, "name"], skipping intermediate [2]
   let p3 = @query patients{1, "name"} ?? []
-  write p3
+  write :display(p3)
 
   ; After [2, "name"] should be None
   let p4 = @query patients{2, "name"}
-  write p4
+  write :display(p4)
 
   ; Deep nesting test
   @set deep{1, 2, 3, "leaf"} "value"
 
   ; Should return [1, 2, 3, "leaf"], skipping [1], [1, 2], [1, 2, 3]
   let d1 = @query deep{} ?? []
-  write d1
+  write :display(d1)
 
   write "@query test complete"
 }

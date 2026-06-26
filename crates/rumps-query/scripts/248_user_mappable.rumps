@@ -28,30 +28,30 @@ class Mappable for Pack {
 
 fun main() {
   ; inferred type with user instance
-  write Mappable:map(x => x * 2, Box.Full(21))
-  write Mappable:map(x => x + 10, Box.Empty)
+  write :display(Mappable:map(x => x * 2, Box.Full(21)))
+  write :display(Mappable:map(x => x + 10, Box.Empty))
 
   ; partial application
   let double = Mappable:map(x => x * 2)
-  write double(Box.Full(5))
-  write double(Box.Empty)
+  write :display(double(Box.Full(5)))
+  write :display(double(Box.Empty))
 
   ; type-changing map
-  write Mappable:map(x => "{x}!", Box.Full(99))
+  write :display(Mappable:map(x => "{x}!", Box.Full(99)))
 
   ; explicit type params with user instance
-  write Mappable:map(x => x * 2, Pack.Full(21))
-  write Mappable:map(x => x + 10, Pack.Empty)
-  write Mappable:map(x => "{x}!", Pack.Full(99))
+  write :display(Mappable:map(x => x * 2, Pack.Full(21)))
+  write :display(Mappable:map(x => x + 10, Pack.Empty))
+  write :display(Mappable:map(x => "{x}!", Pack.Full(99)))
 
   ; newtype deriving
   let b: Bag[Int] = [1, 2, 3]
-  write Mappable:map(x => x * 10, b)
+  write :display(Mappable:map(x => x * 10, b))
 
   ; union member-intersection
   let o: Flex = Option.Some(5)
-  write Mappable:map(x => x * 2, o)
+  write :display(Mappable:map(x => x * 2, o))
 
   let a: Flex = [1, 2, 3]
-  write Mappable:map(x => x + 10, a)
+  write :display(Mappable:map(x => x + 10, a))
 }

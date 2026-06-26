@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; `as String` cannot use debug rendering for containers.\n\nfun main() {\n  write [1, 2] as String\n}\n"
+---
+ERROR: cannot cast `Array[Int]` to `String`

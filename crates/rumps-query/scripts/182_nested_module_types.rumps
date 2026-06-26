@@ -45,7 +45,7 @@ fun main() {
   write Container.Ops.is-full(box1)
   write Container.Ops.is-full(box2)
   let mapped = Container.Ops.map(box1, (x: Int) => x * 2)
-  write mapped
+  write :display(mapped)
 
   ; ============ Multiple types at different levels ============
 

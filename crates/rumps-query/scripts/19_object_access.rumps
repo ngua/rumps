@@ -50,33 +50,33 @@ fun main() {
 
   let person = { name: "Carol", age: 25 }
 
-  write person?.name
+  write :display(person?.name)
   ; Expected: Option.Some("Carol")
 
-  write person?.age
+  write :display(person?.age)
   ; Expected: Option.Some(25)
 
-  write person?.email
+  write :display(person?.email)
   ; Expected: Option.None
 
-  write person?.address
+  write :display(person?.address)
   ; Expected: Option.None
 
   ; Chained optional access
   let nested = { user: { name: "Dan" } }
-  write nested?.user?.name
+  write :display(nested?.user?.name)
   ; Expected: Option.Some("Dan")
 
-  write nested?.user?.missing
+  write :display(nested?.user?.missing)
   ; Expected: Option.None
 
-  write nested?.missing?.anything
+  write :display(nested?.missing?.anything)
   ; Expected: Option.None
 
-  write get-b({ a: 1 })
+  write :display(get-b({ a: 1 }))
   ; Expected: Option.None
 
-  write get-b({ a: 1, b: 2 })
+  write :display(get-b({ a: 1, b: 2 }))
   ; Expected: Option.Some(2)
 
   write "Object access test complete"

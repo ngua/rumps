@@ -13,7 +13,7 @@ fun main() {
     @set counter{} 100
     true
   }
-  write @get counter{}
+  write :display(@get counter{})
   ; Expected: 0 (block not evaluated)
 
   ; === Non-short-circuit and (true and ...) ===
@@ -24,7 +24,7 @@ fun main() {
     @set counter{} 200
     true
   }
-  write @get counter{}
+  write :display(@get counter{})
   ; Expected: 200 (block was evaluated)
 
   ; === Short-circuit or (true or ...) ===
@@ -35,7 +35,7 @@ fun main() {
     @set counter{} 300
     false
   }
-  write @get counter{}
+  write :display(@get counter{})
   ; Expected: 0 (block not evaluated)
 
   ; === Non-short-circuit or (false or ...) ===
@@ -46,7 +46,7 @@ fun main() {
     @set counter{} 400
     true
   }
-  write @get counter{}
+  write :display(@get counter{})
   ; Expected: 400 (block was evaluated)
 
   ; === Chained short-circuit ===
@@ -59,7 +59,7 @@ fun main() {
     @set counter{} 2
     true
   }
-  write @get counter{}
+  write :display(@get counter{})
   ; Expected: 0 (first false short-circuits entire chain)
 
   @set counter{} 0
@@ -70,7 +70,7 @@ fun main() {
     @set counter{} 2
     false
   }
-  write @get counter{}
+  write :display(@get counter{})
   ; Expected: 0 (first true short-circuits entire chain)
 
   ; === Mixed and/or ===
@@ -83,7 +83,7 @@ fun main() {
     @set counter{} 20
     true
   }
-  write @get counter{}
+  write :display(@get counter{})
   ; Expected: 20 (and short-circuits, or evaluates RHS)
 
   @set counter{} 0
@@ -94,7 +94,7 @@ fun main() {
     @set counter{} 30
     true
   }
-  write @get counter{}
+  write :display(@get counter{})
   ; Expected: 30 (or short-circuits, and evaluates RHS)
 
   write "done"

@@ -181,11 +181,12 @@ impl SolveCtx<'_> {
             (ClassId::EQ, Ty::Object(fields)) => {
                 Some(Satisfaction::Recurse(fields.values().copied().collect()))
             }
-            // `Display` must NOT wildcard these shapes; they need to fall
-            // through to the dispatcher (instance lookup for `Named`/`Union`,
-            // silent for `Var`/`Error`/`Unknown`, error for `Fn`).
+            // `Display` and `Formattable` must NOT wildcard these shapes; they
+            // need to fall through to the dispatcher; instance lookup for
+            // `Named`/`Union`, silent for `Var`/`Error`/`Unknown`, error for
+            // `Fn`.
             (
-                ClassId::DISPLAY,
+                ClassId::DISPLAY | ClassId::FORMATTABLE,
                 Ty::Fn(_, _)
                 | Ty::Var(_)
                 | Ty::Error
@@ -193,13 +194,16 @@ impl SolveCtx<'_> {
                 | Ty::Union(_, _)
                 | Ty::Named(_, _),
             ) => None,
-            (ClassId::DISPLAY, _) => Some(Satisfaction::Direct),
+            (ClassId::DISPLAY | ClassId::FORMATTABLE, _) => {
+                Some(Satisfaction::Direct)
+            }
             _ => None,
         }
     }
 
     /// Check a "simple" class (`Numeric`, numeric capabilities, `BitLike`,
-    /// `Negatable`, `Default`, `Concatable`, `Ord`, `Eq`, `Display`) against `ty`.
+    /// `Negatable`, `Default`, `Concatable`, `Ord`, `Eq`, `Display`,
+    /// `Formattable`) against `ty`.
     ///
     /// Per-class dispatch rules: Numeric capabilities on a `Union` succeed if
     /// any one member directly satisfies using the "any" strategy; on a

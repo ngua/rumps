@@ -6,6 +6,6 @@ newtype Label = String
 
 class Display for Label {
   fun display(x: Label) -> String {
-    Display:display(x)
+    :display(x)
   }
 }

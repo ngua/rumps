@@ -6,68 +6,68 @@ fun main() {
   let arr = [10, 20, 30]
 
   ; Valid indices return Some
-  write arr?[0]
+  write :display(arr?[0])
   ; Expected: Option.Some(10)
 
-  write arr?[1]
+  write :display(arr?[1])
   ; Expected: Option.Some(20)
 
-  write arr?[2]
+  write :display(arr?[2])
   ; Expected: Option.Some(30)
 
   ; Negative indices
-  write arr?[-1]
+  write :display(arr?[-1])
   ; Expected: Option.Some(30)
 
-  write arr?[-2]
+  write :display(arr?[-2])
   ; Expected: Option.Some(20)
 
   ; Out of bounds returns None
-  write arr?[3]
+  write :display(arr?[3])
   ; Expected: Option.None
 
-  write arr?[100]
+  write :display(arr?[100])
   ; Expected: Option.None
 
-  write arr?[-4]
+  write :display(arr?[-4])
   ; Expected: Option.None
 
-  write arr?[-100]
+  write :display(arr?[-100])
   ; Expected: Option.None
 
   ; String safe indexing
   let s = "hello"
 
-  write s?[0]
+  write :display(s?[0])
   ; Expected: Option.Some('h')
 
-  write s?[4]
+  write :display(s?[4])
   ; Expected: Option.Some('o')
 
-  write s?[-1]
+  write :display(s?[-1])
   ; Expected: Option.Some('o')
 
-  write s?[5]
+  write :display(s?[5])
   ; Expected: Option.None
 
-  write s?[-6]
+  write :display(s?[-6])
   ; Expected: Option.None
 
   ; Empty collections
   let empty: Array[Int] = []
-  write empty?[0]
+  write :display(empty?[0])
   ; Expected: Option.None
 
   let empty-str = ""
-  write empty-str?[0]
+  write :display(empty-str?[0])
   ; Expected: Option.None
 
   ; Map safe indexing (same as regular indexing since maps already return Option)
   let m = { "a" => 1, "b" => 2 }
-  write m?["a"]
+  write :display(m?["a"])
   ; Expected: Option.Some(1)
 
-  write m?["z"]
+  write :display(m?["z"])
   ; Expected: Option.None
 
   ; Chain with unwrap or coalesce

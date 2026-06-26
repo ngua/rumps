@@ -16,16 +16,16 @@ fun main() {
 
   ; Use at Array[Int]
   let arr-result = identity([1, 2, 3])
-  write arr-result  ; [1, 2, 3]
+  write :display(arr-result)  ; [1, 2, 3]
 
   write const(1, "ignored")  ; 1
   write const("kept", 999)   ; kept
 
   let flipped-int-str = flip((1, "hello"))
-  write flipped-int-str  ; ("hello", 1)
+  write :display(flipped-int-str)  ; ("hello", 1)
 
   let flipped-bool-float = flip((true, 3.14))
-  write flipped-bool-float  ; (3.14, true)
+  write :display(flipped-bool-float)  ; (3.14, true)
 
   write apply-twice(inc, 0)           ; 2
   write apply-twice(double-str, "a")  ; aaaa
@@ -33,9 +33,9 @@ fun main() {
   let neg-triple = compose(negate, triple)
   write neg-triple(5)  ; -15
 
-  write wrap-some(42)       ; Option.Some(42)
-  write wrap-some("hello")  ; Option.Some("hello")
-  write wrap-some(true)     ; Option.Some(true)
+  write :display(wrap-some(42))       ; Option.Some(42)
+  write :display(wrap-some("hello"))  ; Option.Some("hello")
+  write :display(wrap-some(true))     ; Option.Some(true)
 
   ; === Polymorphic with Mappable:map ===
 
@@ -44,29 +44,29 @@ fun main() {
   let strs = ["a", "b", "c"]
 
   let mapped-nums = Mappable:map(x => identity(x), nums)
-  write mapped-nums  ; [1, 2, 3]
+  write :display(mapped-nums)  ; [1, 2, 3]
 
   let mapped-strs = Mappable:map(x => identity(x), strs)
-  write mapped-strs  ; [a, b, c]
+  write :display(mapped-strs)  ; [a, b, c]
 
-  write pair-with-zero("hello")  ; ("hello", 0)
-  write pair-with-zero(true)     ; (true, 0)
+  write :display(pair-with-zero("hello"))  ; ("hello", 0)
+  write :display(pair-with-zero(true))     ; (true, 0)
 
   ; === Polymorphic empty array ===
 
   let empty-int: Array[Int] = []
   let empty-str: Array[String] = []
 
-  write empty-int   ; []
-  write empty-str   ; []
+  write :display(empty-int)   ; []
+  write :display(empty-str)   ; []
 
   let p1 = make-pair(1, 2)
   let p2 = make-pair("x", "y")
   let p3 = make-pair(true, 3.14)
 
-  write p1  ; (1, 2)
-  write p2  ; ("x", "y")
-  write p3  ; (true, 3.14)
+  write :display(p1)  ; (1, 2)
+  write :display(p2)  ; ("x", "y")
+  write :display(p3)  ; (true, 3.14)
 
   write "Polymorphic inference test complete"
 }

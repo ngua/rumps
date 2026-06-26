@@ -8,17 +8,17 @@ fun main() {
     @set ^TEST{1, "age"} 30
     @get ^TEST{1, "name"}
   }
-  write write-result
+  write :display(write-result)
 
   ; Verify write persisted
-  write @get ^TEST{1, "age"}
+  write :display(@get ^TEST{1, "age"})
 
   ; Transaction returning unit (write-only)
   let unit-result = transaction {
     let _ = @set ^TEST{2, "status"} "active"
   }
-  write unit-result
-  write @get ^TEST{2, "status"}
+  write :display(unit-result)
+  write :display(@get ^TEST{2, "status"})
 
   ; Transaction with multiple statements and computation
   let multi = transaction {
@@ -27,8 +27,8 @@ fun main() {
     @set ^TEST{4, "sum"} a + b
     a + b
   }
-  write multi
-  write @get ^TEST{4, "sum"}
+  write :display(multi)
+  write :display(@get ^TEST{4, "sum"})
 
   ; Accessing outer scope from transaction
   let x = 100
@@ -36,7 +36,7 @@ fun main() {
     @set ^TEST{5, "val"} x + 1
     x + 1
   }
-  write access-outer
+  write :display(access-outer)
 
   ; Transaction result matching
   let txn-result = transaction {
@@ -55,8 +55,8 @@ fun main() {
     let x = Option.None!
     "unreachable"
   }
-  write rollback-test
-  write @get ^ROLLBACK{"key"}
+  write :display(rollback-test)
+  write :display(@get ^ROLLBACK{"key"})
 
   ; Bulk write/read test using loop inside transaction
   let bulk-result = transaction {
@@ -85,7 +85,7 @@ fun main() {
     }
     count
   }
-  write bulk-result
+  write :display(bulk-result)
 
   write "transaction test complete"
 }

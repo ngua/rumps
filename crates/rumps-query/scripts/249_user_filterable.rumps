@@ -19,18 +19,18 @@ class Filterable for Box {
 
 fun main() {
   ; type with user instance
-  write Filterable:filter(x => x > 10, Box.Full(42))
-  write Filterable:filter(x => x > 10, Box.Full(5))
-  write Filterable:filter(x => x > 10, Box.Empty)
+  write :display(Filterable:filter(x => x > 10, Box.Full(42)))
+  write :display(Filterable:filter(x => x > 10, Box.Full(5)))
+  write :display(Filterable:filter(x => x > 10, Box.Empty))
 
   ; newtype deriving
   let b: Bag[Int] = [1, 2, 3, 4, 5]
-  write Filterable:filter(x => x > 3, b)
+  write :display(Filterable:filter(x => x > 3, b))
 
   ; union member-intersection
   let a: Lists = [1, 2, 3, 4, 5]
-  write Filterable:filter(x => x > 3, a)
+  write :display(Filterable:filter(x => x > 3, a))
 
   let s: Lists = ["hello", "hi", "hey", "howdy"]
-  write Filterable:filter(w => String.length(w) > 2, s)
+  write :display(Filterable:filter(w => String.length(w) > 2, s))
 }

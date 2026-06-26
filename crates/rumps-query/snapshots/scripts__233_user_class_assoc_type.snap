@@ -2,5 +2,5 @@
 source: crates/rumps-query/tests/scripts.rs
 description: "; User-defined class with associated variant declarations.\n;\n; Defines a `HasUnit` class with `newtype Unit` associated type\n; and implements it for two types.\n\nvariant Meters = Meters(Float)\nvariant Seconds = Seconds(Float)\n\nclass HasUnit C {\n  newtype Unit\n  fun value(x: C) -> Float\n  fun unit-name(x: C) -> String\n}\n\nclass HasUnit for Meters {\n  newtype Unit = String\n  fun value(x: Meters) -> Float {\n    match x {\n      Meters.Meters(v) => { v }\n    }\n  }\n  fun unit-name(x: Meters) -> String {\n    \"meters\"\n  }\n}\n\nclass HasUnit for Seconds {\n  newtype Unit = String\n  fun value(x: Seconds) -> Float {\n    match x {\n      Seconds.Seconds(v) => { v }\n    }\n  }\n  fun unit-name(x: Seconds) -> String {\n    \"seconds\"\n  }\n}\n\nfun main() {\n  let m = Meters.Meters(3.14)\n  let s = Seconds.Seconds(9.81)\n  write \"{HasUnit:value(m)} {HasUnit:unit-name(m)}\"\n  write \"{HasUnit:value(s)} {HasUnit:unit-name(s)}\"\n}\n"
 ---
-"3.14 meters"
-"9.81 seconds"
+3.14 meters
+9.81 seconds

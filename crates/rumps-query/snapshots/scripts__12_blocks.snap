@@ -1,14 +1,14 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: block expressions\n; Tests block syntax with multiple statements and tail expressions\n\n; Simple block with tail expression\nLET x = {\n  LET a = 10\n  LET b = 20\n  a + b\n}\nOUTPUT x\n; Expected: 30\n\n; Block with no tail (returns None)\nLET y = {\n  OUTPUT \"Side effect\"\n}\n; y should be Option.None or unit\n\n; Nested blocks\nLET z = {\n  LET outer = 5\n  {\n    LET inner = 10\n    outer + inner\n  }\n}\nOUTPUT z\n; Expected: 15\n\n; Block with SET (side effect, no return)\n{\n  SET counter = 0\n  SET counter = 1\n  SET counter = 2\n}\nLET c = GET counter\nOUTPUT c\n; Expected: 2\n\n; Block scope isolation\nLET val = 100\n{\n  LET val = 200\n  OUTPUT val\n  ; Expected: 200\n}\nOUTPUT val\n; Expected: 100 (outer val unchanged due to LET shadowing)\n\n; Block with conditional\nLET result = {\n  LET score = 75\n  IF score >= 70 {\n    \"pass\"\n  } ELSE {\n    \"fail\"\n  }\n}\nOUTPUT result\n; Expected: pass\n\n; Multiple statements before tail\nLET multi = {\n  LET a = 1\n  LET b = 2\n  LET c = 3\n  OUTPUT \"Computing...\"\n  a + b + c\n}\nOUTPUT multi\n; Expected: Computing... then 6\n\nOUTPUT \"Block test complete\"\n"
+description: "; Test: block expressions\n; Tests block syntax with multiple statements and tail expressions\n\nfun main() {\n  ; Simple block with tail expression\n  let x = {\n    let a = 10\n    let b = 20\n    a + b\n  }\n  write x\n  ; Expected: 30\n\n  ; Block with no tail (returns None)\n  let y = {\n    write \"Side effect\"\n  }\n  ; y should be Option.None or unit\n\n  ; Nested blocks\n  let z = {\n    let outer = 5\n    {\n      let inner = 10\n      outer + inner\n    }\n  }\n  write z\n  ; Expected: 15\n\n  ; Block with @set (side effect, no return)\n  {\n    @set counter{} 0\n    @set counter{} 1\n    @set counter{} 2\n  }\n  let c = @get counter{}\n  write c\n  ; Expected: 2\n\n  ; Block scope isolation\n  let val = 100\n  {\n    let val = 200\n    write val\n    ; Expected: 200\n  }\n  write val\n  ; Expected: 100 (outer val unchanged due to let shadowing)\n\n  ; Block with conditional\n  let result = {\n    let score = 75\n    if score >= 70 {\n      \"pass\"\n    } else {\n      \"fail\"\n    }\n  }\n  write result\n  ; Expected: pass\n\n  ; Multiple statements before tail\n  let multi = {\n    let a = 1\n    let b = 2\n    let c = 3\n    write \"Computing...\"\n    a + b + c\n  }\n  write multi\n  ; Expected: Computing... then 6\n\n  write \"Block test complete\"\n}\n"
 ---
 30
-"Side effect"
+Side effect
 15
 Option.Some(2)
 200
 100
-"pass"
-"Computing..."
+pass
+Computing...
 6
-"Block test complete"
+Block test complete

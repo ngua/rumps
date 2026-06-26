@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; JSON literals cannot serialize debug-only values through helpers.\n\nfun main() {\n  write { \"f\": (x: Int) => x } as String\n}\n"
+---
+ERROR: cannot cast `(Int) -> Int` to `Json`

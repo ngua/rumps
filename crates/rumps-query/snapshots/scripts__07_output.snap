@@ -4,17 +4,17 @@ description: "; Test: write statement\n; Tests various write scenarios\n\nfun ma
 ---
 42
 3.14159
-"Hello, World!"
+Hello, World!
 true
 false
 123
 70
-"Hello RUMPS"
+Hello RUMPS
 true
 false
 true
 15
-"Line 1"
-"Line 2"
-"Line 3"
-"write test complete"
+Line 1
+Line 2
+Line 3
+write test complete

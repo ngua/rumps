@@ -1,9 +1,9 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Top-level LET hoisting: forward references from functions to\n; top-level LET bindings defined later in the source.\n\nfun main() {\n  ; Forward reference to top-level LET (the original bug).\n  write ys\n\n  ; Forward reference via helper.\n  write add-one-to-x()\n\n  ; Reference to an annotated top-level LET via helper.\n  write get-greeting()\n\n  ; Direct forward reference.\n  write greeting\n\n  ; Generic helper forward-referencing a hoisted LET.\n  write len-of(ys)\n}\n\nfun add-one-to-x() -> Int {\n  x + 1\n}\n\nfun get-greeting() -> String {\n  annotated\n}\n\nfun len-of[T](arr: Array[T]) -> Int {\n  Iterable:length(arr)\n}\n\nlet ys = [1, 2, 3]\nlet x = 41\nlet greeting = \"hello\"\nlet annotated: String = \"world\"\n"
+description: "; Top-level LET hoisting: forward references from functions to\n; top-level LET bindings defined later in the source.\n\nfun main() {\n  ; Forward reference to top-level LET (the original bug).\n  write :display(ys)\n\n  ; Forward reference via helper.\n  write add-one-to-x()\n\n  ; Reference to an annotated top-level LET via helper.\n  write get-greeting()\n\n  ; Direct forward reference.\n  write greeting\n\n  ; Generic helper forward-referencing a hoisted LET.\n  write len-of(ys)\n}\n\nfun add-one-to-x() -> Int {\n  x + 1\n}\n\nfun get-greeting() -> String {\n  annotated\n}\n\nfun len-of[T](arr: Array[T]) -> Int {\n  Iterable:length(arr)\n}\n\nlet ys = [1, 2, 3]\nlet x = 41\nlet greeting = \"hello\"\nlet annotated: String = \"world\"\n"
 ---
 [ 1, 2, 3 ]
 42
-"world"
-"hello"
+world
+hello
 3

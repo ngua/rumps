@@ -572,7 +572,7 @@ impl Interpreter<'_, '_> {
 
     /// Evaluate a `MATCHES` expression.
     ///
-    /// Stringifies the LHS and tests it against the RHS regex pattern.
+    /// Tests a string LHS against the RHS regex pattern.
     /// Type checker guarantees RHS is a `Regex` value.
     pub(super) async fn matches(
         &mut self,
@@ -582,8 +582,12 @@ impl Interpreter<'_, '_> {
         let lhs_val = self.eval_payload(lhs).await?;
         let rhs_val = self.eval_payload(rhs).await?;
 
-        // Coerce LHS to raw string (Stringable constraint verified by typechecker)
-        let text = self.coerce_to_str(&lhs_val);
+        let text = match lhs_val {
+            Payload::String(id) => {
+                self.arena.get_str(id).unwrap_or_default().to_owned()
+            }
+            _ => typechecked!("MATCHES", "Into[String] returned String"),
+        };
 
         // Get the regex cache index from RHS (typechecker guarantees Regex)
         let idx = match rhs_val {

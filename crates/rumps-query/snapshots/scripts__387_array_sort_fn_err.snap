@@ -1,5 +1,7 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "fun main() {\n  write Array.sort([x => x, y => y])\n}\n"
+description: "fun main() {\n  write :display(Array.sort([x => x, y => y]))\n}\n"
 ---
 ERROR: type mismatch: expected `Array[T]`, got `Json`
+cannot cast `(T) -> T` to `Json`
+cannot cast `(T) -> T` to `Json`

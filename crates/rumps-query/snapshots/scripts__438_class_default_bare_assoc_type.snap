@@ -3,5 +3,5 @@ source: crates/rumps-query/tests/scripts.rs
 description: "; Class defaults can use bare associated types in annotations and bodies.\n\nimport Scoped.{ ... }\n\nvariant Cell = Cell(Int)\n\n#(required: get)\nclass HasElem C {\n  newtype Element\n  fun get(x: C) -> :Element\n  fun get-or-default(x: C, fallback: :Element) -> :Element\n\n  #(default)\n  fun get-or-default(x, fallback: :Element) -> :Element {\n    let v: :Element = HasElem:get(x)\n    v\n  }\n}\n\nclass HasElem for Cell {\n  newtype Element = Int\n\n  fun get(x: Cell) -> Int {\n    match x {\n      Cell.Cell(n) => { n }\n    }\n  }\n}\n\nfun main() {\n  write HasElem:get-or-default(Cell.Cell(7), 0)\n\n  let b = Scoped.Box.Box(\"module\")\n  write ScopedElem:get-or-default(b, \"fallback\")\n  write shown\n}\n\nmodule Scoped {\n  +variant Box = Box(String)\n\n  #(required: get)\n  class ScopedElem C {\n    newtype Element\n    fun get(x: C) -> :Element\n    fun get-or-default(x: C, fallback: :Element) -> :Element\n\n    #(default)\n    fun get-or-default(x, fallback: :Element) -> :Element {\n      let v: :Element = ScopedElem:get(x)\n      v\n    }\n  }\n\n  class ScopedElem for Box {\n    newtype Element = String\n\n    fun get(x: Box) -> String {\n      match x {\n        Box.Box(s) => { s }\n      }\n    }\n  }\n\n  +let shown = ScopedElem:get-or-default(Box.Box(\"constant\"), \"fallback\")\n}\n"
 ---
 7
-"module"
-"constant"
+module
+constant

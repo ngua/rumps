@@ -2,7 +2,7 @@
 
 fun main() {
   let x: Labels.Label = "name"
-  write Display:display(x)
+  write :display(x)
 }
 
 module Labels {

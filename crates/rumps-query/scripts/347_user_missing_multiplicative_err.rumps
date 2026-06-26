@@ -4,8 +4,8 @@ fun main() {
   let a = AddOnly.AddOnly(10)
   let b = AddOnly.AddOnly(3)
   let good = a + b
-  write good
-  write a * b
+  write :display(good)
+  write :display(a * b)
 }
 
 #(deriving: Display)

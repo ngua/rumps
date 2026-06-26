@@ -32,23 +32,23 @@ class Chainable for Box {
 
 fun main() {
   ; type with user instance
-  write Chainable:chain(Box.Full(21), x => Box.Full(x * 2))
-  write Chainable:chain(Box.Empty, x => Box.Full(x * 2))
+  write :display(Chainable:chain(Box.Full(21), x => Box.Full(x * 2)))
+  write :display(Chainable:chain(Box.Empty, x => Box.Full(x * 2)))
 
   ; chained operations
   let r = Chainable:chain(Box.Full(10), x => {
     Chainable:chain(Box.Full(x + 5), y => Box.Full(y * 2))
   })
-  write r
+  write :display(r)
 
   ; newtype deriving
   let m: Maybe[Int] = Option.Some(5)
-  write Chainable:chain(m, x => Option.Some(x * 10))
+  write :display(Chainable:chain(m, x => Option.Some(x * 10)))
 
   ; union member-intersection
   let a: Opt = Option.Some(5)
-  write Chainable:chain(a, x => Option.Some(x * 10))
+  write :display(Chainable:chain(a, x => Option.Some(x * 10)))
 
   let b: Opt = Option.None: Option[Int]
-  write Chainable:chain(b, x => Option.Some(x + 1))
+  write :display(Chainable:chain(b, x => Option.Some(x + 1)))
 }

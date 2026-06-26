@@ -420,11 +420,14 @@ impl TypePragmaPolicy {
         span: Span,
     ) -> Option<TypePragmaError> {
         match class {
-            ClassId::EQ | ClassId::ORD | ClassId::DISPLAY => None,
+            ClassId::EQ
+            | ClassId::ORD
+            | ClassId::DISPLAY
+            | ClassId::FORMATTABLE => None,
             _ => Some(TypePragmaError {
                 msg: format!(
-                    "`variant` declarations can only derive `Eq`, `Ord`, or \
-                     `Display`, not `{}`",
+                    "`variant` declarations can only derive `Eq`, `Ord`, \
+                     `Display`, or `Formattable`, not `{}`",
                     class.name()
                 ),
                 span,

@@ -34,10 +34,10 @@ fun main() {
   let s3 = Status.Completed
   let s4 = Status.Failed
 
-  write s1
-  write s2
-  write s3
-  write s4
+  write :display(s1)
+  write :display(s2)
+  write :display(s3)
+  write :display(s4)
 
   ; Test with is operator
   if s1 is Status.Pending {
@@ -52,9 +52,9 @@ fun main() {
   let key = Event.KeyPress("Enter")
   let resize = Event.Resize(1920, 1080)
 
-  write click
-  write key
-  write resize
+  write :display(click)
+  write :display(key)
+  write :display(resize)
 
   ; Test is with bindings
   if click is Event.Click(x, y) {
@@ -68,8 +68,8 @@ fun main() {
   let left = Either.Left("error message")
   let right = Either.Right(42)
 
-  write left
-  write right
+  write :display(left)
+  write :display(right)
 
   ; Test is with generic variants
   if left is Either.Left(msg) {
@@ -83,8 +83,8 @@ fun main() {
   let ok = Outcome.Success(100)
   let err = Outcome.Failure("failed")
 
-  write ok
-  write err
+  write :display(ok)
+  write :display(err)
 
   ; Test wildcard patterns
   if ok is Outcome.Success(_) {
@@ -94,18 +94,18 @@ fun main() {
   let just = Maybe.Just("hello")
   let nothing = Maybe.Nothing
 
-  write just
-  write nothing
+  write :display(just)
+  write :display(nothing)
 
   let a1 = Action.Raise("raising")
   let a2 = Action.Catch("catching")
   let a3 = Action.Write("writing")
   let a4 = Action.Read("reading")
 
-  write a1
-  write a2
-  write a3
-  write a4
+  write :display(a1)
+  write :display(a2)
+  write :display(a3)
+  write :display(a4)
 
   if a1 is Action.Raise(msg) {
     write "Action.Raise: {msg}"

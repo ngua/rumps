@@ -1,45 +1,45 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; String module primitives\n; Tests String.length, String.upper, String.lower, String.trim,\n; String.split, String.join, String.slice, String.contains, String.replace\n\nfun main() {\n  ; ============ String.length ============\n\n  write String.length(\"hello\")  ; 5\n\n  let empty-str = \"\"\n  write String.length(empty-str)  ; 0\n\n  let single-char = \"x\"\n  write String.length(single-char)  ; 1\n\n  let with-spaces = \"hello world\"\n  write String.length(with-spaces)  ; 11\n\n  ; ============ String.upper ============\n\n  write String.upper(\"hello\")  ; \"HELLO\"\n\n  let mixed-case = \"Hello World\"\n  write String.upper(mixed-case)  ; \"HELLO WORLD\"\n\n  write String.upper(\"ALREADY UPPER\")  ; \"ALREADY UPPER\"\n\n  write String.upper(\"\")  ; \"\"\n\n  let with-nums = \"abc123\"\n  write String.upper(with-nums)  ; \"ABC123\"\n\n  ; ============ String.lower ============\n\n  write String.lower(\"HELLO\")  ; \"hello\"\n\n  let upper-mixed = \"Hello World\"\n  write String.lower(upper-mixed)  ; \"hello world\"\n\n  write String.lower(\"already lower\")  ; \"already lower\"\n\n  write String.lower(\"\")  ; \"\"\n\n  let lower-nums = \"ABC123\"\n  write String.lower(lower-nums)  ; \"abc123\"\n\n  ; ============ String.trim ============\n\n  write String.trim(\"  hello  \")  ; \"hello\"\n\n  let leading-space = \"   world\"\n  write String.trim(leading-space)  ; \"world\"\n\n  let trailing-space = \"hello   \"\n  write String.trim(trailing-space)  ; \"hello\"\n\n  write String.trim(\"no spaces\")  ; \"no spaces\"\n\n  write String.trim(\"\")  ; \"\"\n\n  let only-spaces = \"     \"\n  write String.trim(only-spaces)  ; \"\"\n\n  ; ============ String.split ============\n\n  let csv = \"a,b,c\"\n  let parts = String.split(csv, \",\")\n  write parts  ; [\"a\", \"b\", \"c\"]\n\n  ; Split on space\n  let sentence = \"hello world foo\"\n  let words = String.split(sentence, \" \")\n  write words  ; [\"hello\", \"world\", \"foo\"]\n\n  ; Split on multi-char delimiter\n  let multi-delim = \"foo::bar::baz\"\n  let multi-parts = String.split(multi-delim, \"::\")\n  write multi-parts  ; [\"foo\", \"bar\", \"baz\"]\n\n  ; Split with no delimiter found\n  let no-match = String.split(\"hello\", \",\")\n  write no-match  ; [\"hello\"]\n\n  ; Split empty string\n  let split-empty = String.split(\"\", \",\")\n  write split-empty  ; [\"\"]\n\n  ; Split on empty delimiter (splits every char)\n  let split-chars = String.split(\"abc\", \"\")\n  write split-chars  ; [\"\", \"a\", \"b\", \"c\", \"\"]\n\n  ; ============ String.join ============\n\n  let join-arr = [\"a\", \"b\", \"c\"]\n  let joined = String.join(join-arr, \",\")\n  write joined  ; \"a,b,c\"\n\n  ; Join with space\n  let join-words = [\"hello\", \"world\"]\n  let joined-words = String.join(join-words, \" \")\n  write joined-words  ; \"hello world\"\n\n  ; Join with empty delimiter\n  let join-no-sep = String.join([\"a\", \"b\", \"c\"], \"\")\n  write join-no-sep  ; \"abc\"\n\n  ; Join single element\n  let join-single = String.join([\"alone\"], \",\")\n  write join-single  ; \"alone\"\n\n  ; Join empty array\n  let join-empty = String.join([], \",\")\n  write join-empty  ; \"\"\n\n  ; ============ String.slice ============\n\n  let slice-str = \"hello world\"\n  write String.slice(slice-str, 0, 5)  ; \"hello\"\n  write String.slice(slice-str, 6, 11)  ; \"world\"\n\n  ; Slice middle\n  write String.slice(slice-str, 3, 8)  ; \"lo wo\"\n\n  ; Slice empty range\n  write String.slice(slice-str, 5, 5)  ; \"\"\n\n  ; Slice with clamped bounds\n  write String.slice(\"abc\", 0, 100)  ; \"abc\"\n  write String.slice(\"abc\", -5, 2)  ; \"ab\"\n\n  ; Slice from start\n  write String.slice(\"hello\", 0, 3)  ; \"hel\"\n\n  ; ============ String.contains ============\n\n  let haystack = \"hello world\"\n  write String.contains(haystack, \"wor\")  ; true\n  write String.contains(haystack, \"xyz\")  ; false\n  write String.contains(haystack, \"hello\")  ; true\n  write String.contains(haystack, \"world\")  ; true\n\n  ; Contains empty string (always true)\n  write String.contains(\"hello\", \"\")  ; true\n\n  ; Contains itself\n  write String.contains(\"abc\", \"abc\")  ; true\n\n  ; Contains in empty string\n  write String.contains(\"\", \"x\")  ; false\n  write String.contains(\"\", \"\")  ; true\n\n  ; ============ String.replace ============\n\n  write String.replace(\"foo\", \"o\", \"a\")  ; \"faa\"\n\n  let banana = \"banana\"\n  write String.replace(banana, \"a\", \"o\")  ; \"bonono\"\n\n  ; Replace substring\n  let greeting = \"hello world\"\n  write String.replace(greeting, \"world\", \"there\")  ; \"hello there\"\n\n  ; Replace not found\n  write String.replace(\"hello\", \"x\", \"y\")  ; \"hello\"\n\n  ; Replace with empty\n  write String.replace(\"hello\", \"l\", \"\")  ; \"heo\"\n\n  ; Replace empty pattern (inserts between chars)\n  write String.replace(\"ab\", \"\", \"-\")  ; \"-a-b-\"\n\n  ; ============ Chaining operations ============\n\n  ; Upper then slice\n  let chain-str = \"hello world\"\n  let chain-upper = String.slice(String.upper(chain-str), 0, 5)\n  write chain-upper  ; \"HELLO\"\n\n  ; Trim then split\n  let messy = \"  a,b,c  \"\n  let clean-parts = String.split(String.trim(messy), \",\")\n  write clean-parts  ; [\"a\", \"b\", \"c\"]\n\n  ; Split then join with different separator\n  let csv-to-tabs = String.join(String.split(\"a,b,c\", \",\"), \"\\t\")\n  write csv-to-tabs  ; \"a\tb\tc\"\n\n  ; ============ Pipeline usage ============\n\n  let pipeline-str = \"  HELLO WORLD  \"\n  let pipeline-result = pipeline-str\n    |> String.trim\n    |> String.lower\n  write pipeline-result  ; \"hello world\"\n\n  let pipeline-words = \"apple,banana,cherry\"\n    |> (s => String.split(s, \",\"))\n    |> (arr => String.join(arr, \" - \"))\n  write pipeline-words  ; \"apple - banana - cherry\"\n}\n"
+description: "; String module primitives\n; Tests String.length, String.upper, String.lower, String.trim,\n; String.split, String.join, String.slice, String.contains, String.replace\n\nfun main() {\n  ; ============ String.length ============\n\n  write String.length(\"hello\")  ; 5\n\n  let empty-str = \"\"\n  write String.length(empty-str)  ; 0\n\n  let single-char = \"x\"\n  write String.length(single-char)  ; 1\n\n  let with-spaces = \"hello world\"\n  write String.length(with-spaces)  ; 11\n\n  ; ============ String.upper ============\n\n  write String.upper(\"hello\")  ; \"HELLO\"\n\n  let mixed-case = \"Hello World\"\n  write String.upper(mixed-case)  ; \"HELLO WORLD\"\n\n  write String.upper(\"ALREADY UPPER\")  ; \"ALREADY UPPER\"\n\n  write String.upper(\"\")  ; \"\"\n\n  let with-nums = \"abc123\"\n  write String.upper(with-nums)  ; \"ABC123\"\n\n  ; ============ String.lower ============\n\n  write String.lower(\"HELLO\")  ; \"hello\"\n\n  let upper-mixed = \"Hello World\"\n  write String.lower(upper-mixed)  ; \"hello world\"\n\n  write String.lower(\"already lower\")  ; \"already lower\"\n\n  write String.lower(\"\")  ; \"\"\n\n  let lower-nums = \"ABC123\"\n  write String.lower(lower-nums)  ; \"abc123\"\n\n  ; ============ String.trim ============\n\n  write String.trim(\"  hello  \")  ; \"hello\"\n\n  let leading-space = \"   world\"\n  write String.trim(leading-space)  ; \"world\"\n\n  let trailing-space = \"hello   \"\n  write String.trim(trailing-space)  ; \"hello\"\n\n  write String.trim(\"no spaces\")  ; \"no spaces\"\n\n  write String.trim(\"\")  ; \"\"\n\n  let only-spaces = \"     \"\n  write String.trim(only-spaces)  ; \"\"\n\n  ; ============ String.split ============\n\n  let csv = \"a,b,c\"\n  let parts = String.split(csv, \",\")\n  write :display(parts)  ; [\"a\", \"b\", \"c\"]\n\n  ; Split on space\n  let sentence = \"hello world foo\"\n  let words = String.split(sentence, \" \")\n  write :display(words)  ; [\"hello\", \"world\", \"foo\"]\n\n  ; Split on multi-char delimiter\n  let multi-delim = \"foo::bar::baz\"\n  let multi-parts = String.split(multi-delim, \"::\")\n  write :display(multi-parts)  ; [\"foo\", \"bar\", \"baz\"]\n\n  ; Split with no delimiter found\n  let no-match = String.split(\"hello\", \",\")\n  write :display(no-match)  ; [\"hello\"]\n\n  ; Split empty string\n  let split-empty = String.split(\"\", \",\")\n  write :display(split-empty)  ; [\"\"]\n\n  ; Split on empty delimiter (splits every char)\n  let split-chars = String.split(\"abc\", \"\")\n  write :display(split-chars)  ; [\"\", \"a\", \"b\", \"c\", \"\"]\n\n  ; ============ String.join ============\n\n  let join-arr = [\"a\", \"b\", \"c\"]\n  let joined = String.join(join-arr, \",\")\n  write joined  ; \"a,b,c\"\n\n  ; Join with space\n  let join-words = [\"hello\", \"world\"]\n  let joined-words = String.join(join-words, \" \")\n  write joined-words  ; \"hello world\"\n\n  ; Join with empty delimiter\n  let join-no-sep = String.join([\"a\", \"b\", \"c\"], \"\")\n  write join-no-sep  ; \"abc\"\n\n  ; Join single element\n  let join-single = String.join([\"alone\"], \",\")\n  write join-single  ; \"alone\"\n\n  ; Join empty array\n  let join-empty = String.join([], \",\")\n  write join-empty  ; \"\"\n\n  ; ============ String.slice ============\n\n  let slice-str = \"hello world\"\n  write String.slice(slice-str, 0, 5)  ; \"hello\"\n  write String.slice(slice-str, 6, 11)  ; \"world\"\n\n  ; Slice middle\n  write String.slice(slice-str, 3, 8)  ; \"lo wo\"\n\n  ; Slice empty range\n  write String.slice(slice-str, 5, 5)  ; \"\"\n\n  ; Slice with clamped bounds\n  write String.slice(\"abc\", 0, 100)  ; \"abc\"\n  write String.slice(\"abc\", -5, 2)  ; \"ab\"\n\n  ; Slice from start\n  write String.slice(\"hello\", 0, 3)  ; \"hel\"\n\n  ; ============ String.contains ============\n\n  let haystack = \"hello world\"\n  write String.contains(haystack, \"wor\")  ; true\n  write String.contains(haystack, \"xyz\")  ; false\n  write String.contains(haystack, \"hello\")  ; true\n  write String.contains(haystack, \"world\")  ; true\n\n  ; Contains empty string (always true)\n  write String.contains(\"hello\", \"\")  ; true\n\n  ; Contains itself\n  write String.contains(\"abc\", \"abc\")  ; true\n\n  ; Contains in empty string\n  write String.contains(\"\", \"x\")  ; false\n  write String.contains(\"\", \"\")  ; true\n\n  ; ============ String.replace ============\n\n  write String.replace(\"foo\", \"o\", \"a\")  ; \"faa\"\n\n  let banana = \"banana\"\n  write String.replace(banana, \"a\", \"o\")  ; \"bonono\"\n\n  ; Replace substring\n  let greeting = \"hello world\"\n  write String.replace(greeting, \"world\", \"there\")  ; \"hello there\"\n\n  ; Replace not found\n  write String.replace(\"hello\", \"x\", \"y\")  ; \"hello\"\n\n  ; Replace with empty\n  write String.replace(\"hello\", \"l\", \"\")  ; \"heo\"\n\n  ; Replace empty pattern (inserts between chars)\n  write String.replace(\"ab\", \"\", \"-\")  ; \"-a-b-\"\n\n  ; ============ Chaining operations ============\n\n  ; Upper then slice\n  let chain-str = \"hello world\"\n  let chain-upper = String.slice(String.upper(chain-str), 0, 5)\n  write chain-upper  ; \"HELLO\"\n\n  ; Trim then split\n  let messy = \"  a,b,c  \"\n  let clean-parts = String.split(String.trim(messy), \",\")\n  write :display(clean-parts)  ; [\"a\", \"b\", \"c\"]\n\n  ; Split then join with different separator\n  let csv-to-tabs = String.join(String.split(\"a,b,c\", \",\"), \"\\t\")\n  write csv-to-tabs  ; \"a\tb\tc\"\n\n  ; ============ Pipeline usage ============\n\n  let pipeline-str = \"  HELLO WORLD  \"\n  let pipeline-result = pipeline-str\n    |> String.trim\n    |> String.lower\n  write pipeline-result  ; \"hello world\"\n\n  let pipeline-words = \"apple,banana,cherry\"\n    |> (s => String.split(s, \",\"))\n    |> (arr => String.join(arr, \" - \"))\n  write pipeline-words  ; \"apple - banana - cherry\"\n}\n"
 ---
 5
 0
 1
 11
-"HELLO"
-"HELLO WORLD"
-"ALREADY UPPER"
-""
-"ABC123"
-"hello"
-"hello world"
-"already lower"
-""
-"abc123"
-"hello"
-"world"
-"hello"
-"no spaces"
-""
-""
+HELLO
+HELLO WORLD
+ALREADY UPPER
+
+ABC123
+hello
+hello world
+already lower
+
+abc123
+hello
+world
+hello
+no spaces
+
+
 [ "a", "b", "c" ]
 [ "hello", "world", "foo" ]
 [ "foo", "bar", "baz" ]
 [ "hello" ]
 [ "" ]
 [ "", "a", "b", "c", "" ]
-"a,b,c"
-"hello world"
-"abc"
-"alone"
-""
-"hello"
-"world"
-"lo wo"
-""
-"abc"
-"ab"
-"hel"
+a,b,c
+hello world
+abc
+alone
+
+hello
+world
+lo wo
+
+abc
+ab
+hel
 true
 false
 true
@@ -48,14 +48,14 @@ true
 true
 false
 true
-"faa"
-"bonono"
-"hello there"
-"hello"
-"heo"
-"-a-b-"
-"HELLO"
+faa
+bonono
+hello there
+hello
+heo
+-a-b-
+HELLO
 [ "a", "b", "c" ]
-"a	b	c"
-"hello world"
-"apple - banana - cherry"
+a	b	c
+hello world
+apple - banana - cherry

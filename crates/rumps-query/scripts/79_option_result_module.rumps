@@ -50,10 +50,10 @@ fun main() {
 
   let add-prefix = e => "Error: {e}"
 
-  write Result.map-err(Result.Err("failed"), add-prefix)  ; Err("Error: failed")
-  write Result.map-err(Result.Ok(42), add-prefix)  ; Ok(42)
-  write Result.map-err(Result.Err("oops"), e => String.upper(e))  ; Err("OOPS")
-  write Result.map-err(Result.Ok("ok"), e => String.upper(e))  ; Ok("ok")
+  write :display(Result.map-err(Result.Err("failed"), add-prefix))  ; Err("Error: failed")
+  write :display(Result.map-err(Result.Ok(42), add-prefix))  ; Ok(42)
+  write :display(Result.map-err(Result.Err("oops"), e => String.upper(e)))  ; Err("OOPS")
+  write :display(Result.map-err(Result.Ok("ok"), e => String.upper(e)))  ; Ok("ok")
 
   ; ============ Type variants still work ============
 
@@ -71,86 +71,86 @@ fun main() {
   ; ============ Chainable:chain (Option) ============
 
   ; Returns the inner Option when Some
-  write Chainable:chain(Option.Some(10), x => safe-div(x, 2))  ; Some(5)
-  write Chainable:chain(Option.Some(10), x => safe-div(x, 0))  ; None
-  write Chainable:chain(Option.None, x => safe-div(x, 2))  ; None
+  write :display(Chainable:chain(Option.Some(10), x => safe-div(x, 2)))  ; Some(5)
+  write :display(Chainable:chain(Option.Some(10), x => safe-div(x, 0)))  ; None
+  write :display(Chainable:chain(Option.None, x => safe-div(x, 2)))  ; None
 
   ; Chaining chain
-  write Chainable:chain(Chainable:chain(Option.Some(8), parse-positive), halve)  ; Some(4)
-  write Chainable:chain(Chainable:chain(Option.Some(-1), parse-positive), halve)  ; None
-  write Chainable:chain(Chainable:chain(Option.Some(7), parse-positive), halve)  ; None (7 is odd)
+  write :display(Chainable:chain(Chainable:chain(Option.Some(8), parse-positive), halve))  ; Some(4)
+  write :display(Chainable:chain(Chainable:chain(Option.Some(-1), parse-positive), halve))  ; None
+  write :display(Chainable:chain(Chainable:chain(Option.Some(7), parse-positive), halve))  ; None (7 is odd)
 
   ; ============ Chainable:chain (Result) ============
 
   ; Returns the inner Result when Ok
-  write Chainable:chain(Result.Ok(10), x => safe-div-res(x, 2))  ; Ok(5)
-  write Chainable:chain(Result.Ok(10), x => safe-div-res(x, 0))  ; Err("div by zero")
-  write Chainable:chain(Result.Err("bad input"), x => safe-div-res(x, 2))  ; Err("bad input")
+  write :display(Chainable:chain(Result.Ok(10), x => safe-div-res(x, 2)))  ; Ok(5)
+  write :display(Chainable:chain(Result.Ok(10), x => safe-div-res(x, 0)))  ; Err("div by zero")
+  write :display(Chainable:chain(Result.Err("bad input"), x => safe-div-res(x, 2)))  ; Err("bad input")
 
   ; Chaining chain
-  write Chainable:chain(Chainable:chain(Result.Ok(8), validate), halve-res)  ; Ok(4)
-  write Chainable:chain(Chainable:chain(Result.Ok(-1), validate), halve-res)  ; Err("negative")
-  write Chainable:chain(Chainable:chain(Result.Ok(7), validate), halve-res)  ; Err("odd")
+  write :display(Chainable:chain(Chainable:chain(Result.Ok(8), validate), halve-res))  ; Ok(4)
+  write :display(Chainable:chain(Chainable:chain(Result.Ok(-1), validate), halve-res))  ; Err("negative")
+  write :display(Chainable:chain(Chainable:chain(Result.Ok(7), validate), halve-res))  ; Err("odd")
 
   ; ============ Option.flatten ============
 
   ; Some(Some(v)) -> Some(v)
-  write Option.flatten(Option.Some(Option.Some(42)))  ; Some(42)
-  write Option.flatten(Option.Some(Option.Some("hello")))  ; Some("hello")
+  write :display(Option.flatten(Option.Some(Option.Some(42))))  ; Some(42)
+  write :display(Option.flatten(Option.Some(Option.Some("hello"))))  ; Some("hello")
 
   ; Some(None) -> None
-  write Option.flatten(Option.Some(Option.None))  ; None
+  write :display(Option.flatten(Option.Some(Option.None)))  ; None
 
   ; None -> None
-  write Option.flatten(Option.None)  ; None
+  write :display(Option.flatten(Option.None))  ; None
 
   ; ============ Result.flatten ============
 
   ; Ok(Ok(v)) -> Ok(v)
-  write Result.flatten(Result.Ok(Result.Ok(42)))  ; Ok(42)
-  write Result.flatten(Result.Ok(Result.Ok("success")))  ; Ok("success")
+  write :display(Result.flatten(Result.Ok(Result.Ok(42))))  ; Ok(42)
+  write :display(Result.flatten(Result.Ok(Result.Ok("success"))))  ; Ok("success")
 
   ; Ok(Err(e)) -> Err(e)
-  write Result.flatten(Result.Ok(Result.Err("inner error")))  ; Err("inner error")
+  write :display(Result.flatten(Result.Ok(Result.Err("inner error"))))  ; Err("inner error")
 
   ; Err(e) -> Err(e)
-  write Result.flatten(Result.Err("outer error"))  ; Err("outer error")
+  write :display(Result.flatten(Result.Err("outer error")))  ; Err("outer error")
 
   ; ============ Result.hush ============
 
   ; Ok(v) -> Some(v)
-  write Result.hush(Result.Ok(42))  ; Some(42)
-  write Result.hush(Result.Ok("hello"))  ; Some("hello")
+  write :display(Result.hush(Result.Ok(42)))  ; Some(42)
+  write :display(Result.hush(Result.Ok("hello")))  ; Some("hello")
 
   ; Err(e) -> None (discards error)
-  write Result.hush(Result.Err("oops"))  ; None
-  write Result.hush(Result.Err(123))  ; None
+  write :display(Result.hush(Result.Err("oops")))  ; None
+  write :display(Result.hush(Result.Err(123)))  ; None
 
   ; Practical: convert fallible operation to optional
   let res: Result[Int, String] = Result.Ok(100)
   let opt2 = Result.hush(res)
-  write opt2  ; Some(100)
+  write :display(opt2)  ; Some(100)
 
   let bad-res: Result[Int, String] = Result.Err("failed")
-  write Result.hush(bad-res)  ; None
+  write :display(Result.hush(bad-res))  ; None
 
   ; ============ Option.note ============
 
   ; Some(v) -> Ok(v)
-  write Option.note("not found", Option.Some(42))  ; Ok(42)
-  write Option.note("missing", Option.Some("hello"))  ; Ok("hello")
+  write :display(Option.note("not found", Option.Some(42)))  ; Ok(42)
+  write :display(Option.note("missing", Option.Some("hello")))  ; Ok("hello")
 
   ; None -> Err(e) (using provided error)
-  write Option.note("not found", Option.None)  ; Err("not found")
-  write Option.note(404, Option.None)  ; Err(404)
+  write :display(Option.note("not found", Option.None))  ; Err("not found")
+  write :display(Option.note(404, Option.None))  ; Err(404)
 
   ; Practical: convert optional lookup to result
   let maybe: Option[Int] = Option.Some(999)
   let noted: Result[Int, String] = Option.note("value missing", maybe)
-  write noted  ; Ok(999)
+  write :display(noted)  ; Ok(999)
 
   let empty: Option[Int] = Option.None
-  write Option.note("value missing", empty)  ; Err("value missing")
+  write :display(Option.note("value missing", empty))  ; Err("value missing")
 
   ; ============ hush/note roundtrips ============
 
@@ -158,21 +158,21 @@ fun main() {
   let start = Result.Ok(123)
   let hushed = Result.hush(start)
   let back: Result[Int, String] = Option.note("lost", hushed)
-  write back  ; Ok(123)
+  write :display(back)  ; Ok(123)
 
   ; Some -> note -> hush (preserves value)
   let s = Option.Some(456)
   let noted2: Result[Int, String] = Option.note("err", s)
   let h = Result.hush(noted2)
-  write h  ; Some(456)
+  write :display(h)  ; Some(456)
 
   ; Err -> hush loses information
   let e = Result.Err("important error")
   let lost = Result.hush(e)
-  write lost  ; None
+  write :display(lost)  ; None
 
   ; None -> note adds error
   let n = Option.None
   let gained: Result[Int, String] = Option.note("added error", n)
-  write gained  ; Err("added error")
+  write :display(gained)  ; Err("added error")
 }

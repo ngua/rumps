@@ -11,10 +11,10 @@ fun main() {
   write @get d{2}! as String
 
   ; @order with postfix ! (returns Option[Subscript])
-  write @order d{0}!
+  write :display(@order d{0}!)
 
   ; @query with postfix ! (returns Option[Array[Subscript]])
-  write @query d{0}!
+  write :display(@query d{0}!)
 
   ; Combined with other operations
   let val = "{@get d{1}! as String} appended"

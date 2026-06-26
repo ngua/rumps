@@ -6,7 +6,7 @@ fun main() {
       Unit => Unit
     }
 
-  write x
+  write :display(x)
 
   ; Also test with other expressions
   let y =

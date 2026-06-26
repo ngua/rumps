@@ -3,14 +3,14 @@
 fun main() {
   let a: Full = 10
   let b: Full = 3
-  write "numeric marker: {needs-numeric(a)}"
-  write "add: {a + b}"
-  write "sub: {a - b}"
-  write "mul: {a * b}"
-  write "div: {a / b}"
-  write "floor-div: {a // b}"
-  write "mod: {a % b}"
-  write "pow: {a ** b}"
+  write "numeric marker: {:display(needs-numeric(a))}"
+  write "add: {:display(a + b)}"
+  write "sub: {:display(a - b)}"
+  write "mul: {:display(a * b)}"
+  write "div: {:display(a / b)}"
+  write "floor-div: {:display(a // b)}"
+  write "mod: {:display(a % b)}"
+  write "pow: {:display(a ** b)}"
 }
 
 fun needs-numeric[T: Numeric](x: T) -> T {

@@ -4,11 +4,11 @@
 fun main() {
   ; Simple @set without subscripts (use {} for root ref)
   @set x{} 100
-  write @get x{}
+  write :display(@get x{})
   ; Expected: 100
 
   @set x{} 200
-  write @get x{}
+  write :display(@get x{})
   ; Expected: 200
 
   ; @set with single subscript

@@ -94,7 +94,7 @@ fun main() {
     @set ^data{11} "{on}{conflict}"
   } with timeout timeout
   write r11 is Result.Ok(_)
-  write @get ^data{11}
+  write :display(@get ^data{11})
 
   ; === Timeout actually triggers ===
   ; This tests that with timeout actually cancels long-running transactions
@@ -112,7 +112,7 @@ fun main() {
     }
   } with timeout 1
 
-  write timed-out
+  write :display(timed-out)
 
   write "Transaction modifiers test complete"
 }

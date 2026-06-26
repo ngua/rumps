@@ -12,7 +12,7 @@ fun main() {
   let result = {
     write "Side effect only"
   }
-  write result
+  write :display(result)
   ; Expected: Unit
 
   let result-2 = {
@@ -20,7 +20,7 @@ fun main() {
     write x
     ; No tail expression
   }
-  write result-2
+  write :display(result-2)
   ; Expected: Unit
 
   ; === Block with tail returns value ===
@@ -38,20 +38,20 @@ fun main() {
   let cond-1 = if false {
     write "never reached"
   }
-  write cond-1
+  write :display(cond-1)
   ; Expected: Unit
 
   ; Single-arm if with true condition (body evaluated, must be Unit)
   let cond-2 = if true {
     write "side effect"
   }
-  write cond-2
+  write :display(cond-2)
   ; Expected: Unit
 
   ; === Option values ===
 
   ; Option.None
-  write Option.None
+  write :display(Option.None)
   ; Expected: Option.None
 
   ; Option.Some unwrapping with coalesce
@@ -66,7 +66,7 @@ fun main() {
 
   ; Basic usage: wrap a value in Some
   let wrapped = ?42
-  write wrapped
+  write :display(wrapped)
   ; Expected: Option.Some(42)
 
   ; Unwrap with coalesce
@@ -74,17 +74,17 @@ fun main() {
   ; Expected: 100
 
   ; Wrap a string
-  write ?"hello"
+  write :display(?"hello")
   ; Expected: Option.Some(hello)
 
   ; Nested `?` produces Option.Some(Option.Some(v))
   ; Note: `??` is the coalesce operator, so use `?(?x)` for nesting
   let nested = ?(?10)
-  write nested
+  write :display(nested)
   ; Expected: Option.Some(Option.Some(10))
 
   ; Unwrap outer layer
-  write nested!
+  write :display(nested!)
   ; Expected: Option.Some(10)
 
   ; Fully unwrap nested
@@ -105,7 +105,7 @@ fun main() {
 
   ; Wrap an expression
   let expr-result = ?(3 + 4)
-  write expr-result
+  write :display(expr-result)
   ; Expected: Option.Some(7)
 
   write "Unit and Option test complete"

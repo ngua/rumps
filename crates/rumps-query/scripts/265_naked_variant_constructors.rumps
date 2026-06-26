@@ -13,17 +13,17 @@ fun describe-box(b: Box[Int]) -> String {
 
 fun main() {
   let some = .Some(42)
-  write some
+  write :display(some)
 
   let none: Option[Int] = .None
-  write none
+  write :display(none)
 
   if some is .Some(v) {
     write "some {v}"
   }
 
-  write .Ok("done")
-  write .Err("bad")
+  write :display(.Ok("done"))
+  write :display(.Err("bad"))
 
   let box1 = .Full(7)
   let box2: Box[Int] = .Empty

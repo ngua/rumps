@@ -3,6 +3,6 @@ source: crates/rumps-query/tests/scripts.rs
 description: "; Module `let` members expose final schemes after dependency ordering.\n\nfun main() {\n  write Forward.id(7)\n  write Forward.id(\"seven\")\n\n  let ints: Array[Int] = Forward.empty\n  let strs: Array[String] = Forward.empty\n\n  write Iterable:length(ints)\n  write Iterable:length(strs)\n}\n\nmodule Forward {\n  +let id = x => x\n  +let empty = []\n}\n"
 ---
 7
-"seven"
+seven
 0
 0

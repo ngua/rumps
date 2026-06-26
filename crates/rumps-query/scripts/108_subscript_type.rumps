@@ -12,7 +12,7 @@ fun main() {
 
   ; Use @order result directly as subscript (no read coercion needed)
   let first : Subscript = @order data{}!
-  write first
+  write :display(first)
   write @get data{first}!
 
   ; Chain through all keys using loop
@@ -29,15 +29,15 @@ fun main() {
       }
     }
   }
-  write vals
+  write :display(vals)
 
   ; Explicit Subscript annotation works
   let sub : Subscript = 42
   @set x{sub} "works"
   write @get x{sub}!
 
-  write lookup(1)
-  write lookup("a")
+  write :display(lookup(1))
+  write :display(lookup("a"))
 
   write "Subscript type test complete"
 }

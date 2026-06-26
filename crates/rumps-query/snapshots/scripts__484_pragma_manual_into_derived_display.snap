@@ -2,4 +2,4 @@
 source: crates/rumps-query/tests/scripts.rs
 description: "; Manual `Into[String]` and derived `Display` are different classes.\n\n#(deriving: Display)\nnewtype Label = Int\n\nclass Into[String] for Label {\n  fun into(x: Label) -> String {\n    \"label:{x}\"\n  }\n}\n\nfun main() {\n  let x: Label = 7\n  write Into:into(x)\n}\n"
 ---
-"label:7"
+label:7

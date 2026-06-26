@@ -1,5 +1,5 @@
 ; HKT `Mappable` support for tuple
 
 fun main() {
-  write Mappable:map(x => x + 1, ("label", 41))
+  write :display(Mappable:map(x => x + 1, ("label", 41)))
 }

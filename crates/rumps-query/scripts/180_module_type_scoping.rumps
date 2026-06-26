@@ -10,7 +10,7 @@ fun main() {
   ; ============ type variants with unqualified type names ============
 
   let c = Shapes.Circle.Circle(2.0)
-  write Display:display(c)
+  write :display(c)
   write Shapes.area(c)
 
   ; ============ newtype with unqualified type names ============

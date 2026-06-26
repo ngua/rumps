@@ -1,16 +1,16 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Class method references with type arguments (turbofish syntax)\n\nfun main() {\n  ; Default:default with type parameter\n  let def-opt = Default[Option[Int]]:default\n  write \"def-opt() = {def-opt()}\"\n  write \"direct call = {Default[Option[Int]]:default()}\"\n\n  ; Default:default reference without type arg (inferred from context)\n  let def-inferred = Default:default\n  write \"inferred = {def-inferred() : Option[Int]}\"\n\n  ; Numeric with type parameter\n  let add-int = Numeric[Int]:add\n  write \"add-int(1, 2) = {add-int(1, 2)}\"\n  write \"direct = {Numeric[Float]:add(1.5, 2.5)}\"\n\n  ; Wrappable:wrap with type parameter\n  let wrap-opt = Wrappable[Option[Int]]:wrap\n  write \"wrap-opt(42) = {wrap-opt(42)}\"\n\n  let wrap-res = Wrappable[Result[Int, String]]:wrap\n  write \"wrap-res(99) = {wrap-res(99)}\"\n\n  ; Use in higher-order functions\n  let nums = [1, 2, 3]\n  let opts = Mappable:map(wrap-opt, nums)\n  write \"mapped: {opts}\"\n\n  ; Into:into with type parameter\n  let to-string = Into[String]:into\n  write \"to-string(123) = {to-string(123)}\"\n  write \"to-string(3.14) = {to-string(3.14)}\"\n\n  ; TryInto:try-into with type parameter\n  let try-int = TryInto[Int]:try-into\n  let good = \"42\"\n  let bad = \"bad\"\n  write \"try-int(good) = {try-int(good)}\"\n  write \"try-int(bad) = {try-int(bad)}\"\n}\n"
+description: "; Class method references with type arguments (turbofish syntax)\n\nfun main() {\n  ; Default:default with type parameter\n  let def-opt = Default[Option[Int]]:default\n  write \"def-opt() = {:display(def-opt())}\"\n  write \"direct call = {:display(Default[Option[Int]]:default())}\"\n\n  ; Default:default reference without type arg (inferred from context)\n  let def-inferred = Default:default\n  write \"inferred = {:display((def-inferred() : Option[Int]))}\"\n\n  ; Numeric with type parameter\n  let add-int = Additive[Int]:add\n  write \"add-int(1, 2) = {add-int(1, 2)}\"\n  write \"direct = {Additive[Float]:add(1.5, 2.5)}\"\n\n  ; Wrappable:wrap with type parameter\n  let wrap-opt = Wrappable[Option[Int]]:wrap\n  write \"wrap-opt(42) = {:display(wrap-opt(42))}\"\n\n  let wrap-res = Wrappable[Result[Int, String]]:wrap\n  write \"wrap-res(99) = {:display(wrap-res(99))}\"\n\n  ; Use in higher-order functions\n  let nums = [1, 2, 3]\n  let opts = Mappable:map(wrap-opt, nums)\n  write \"mapped: {:display(opts)}\"\n\n  ; Into:into with type parameter\n  let to-string = Into[String]:into\n  write \"to-string(123) = {to-string(123)}\"\n  write \"to-string(3.14) = {to-string(3.14)}\"\n\n  ; TryInto:try-into with type parameter\n  let try-int = TryInto[Int]:try-into\n  let good = \"42\"\n  let bad = \"bad\"\n  write \"try-int(good) = {:display(try-int(good))}\"\n  write \"try-int(bad) = {:display(try-int(bad))}\"\n}\n"
 ---
-"def-opt() = Option.None"
-"direct call = Option.None"
-"inferred = Option.None"
-"add-int(1, 2) = 3"
-"direct = 4.0"
-"wrap-opt(42) = Option.Some(42)"
-"wrap-res(99) = Result.Ok(99)"
-"mapped: [ Option.Some(1), Option.Some(2), Option.Some(3) ]"
-"to-string(123) = 123"
-"to-string(3.14) = 3.14"
-"try-int(good) = Result.Ok(42)"
-"try-int(bad) = Result.Err("invalid integer: bad")"
+def-opt() = Option.None
+direct call = Option.None
+inferred = Option.None
+add-int(1, 2) = 3
+direct = 4.0
+wrap-opt(42) = Option.Some(42)
+wrap-res(99) = Result.Ok(99)
+mapped: [ Option.Some(1), Option.Some(2), Option.Some(3) ]
+to-string(123) = 123
+to-string(3.14) = 3.14
+try-int(good) = Result.Ok(42)
+try-int(bad) = Result.Err("invalid integer: bad")

@@ -55,7 +55,7 @@ fun main() {
 
   ; Parse a date string back
   let parsed = Time.parse("%Y-%m-%d %H:%M:%S %z", "2024-06-15 14:30:45 +0000")
-  write parsed  ; Result[Time, String]
+  write :display(parsed)  ; Result[Time, String]
 
   ; Check that parsed is Ok
   write parsed is Result.Ok(_)  ; true

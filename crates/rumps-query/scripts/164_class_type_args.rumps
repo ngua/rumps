@@ -3,12 +3,12 @@
 fun main() {
   ; Default:default with type parameter
   let def-opt = Default[Option[Int]]:default
-  write "def-opt() = {def-opt()}"
-  write "direct call = {Default[Option[Int]]:default()}"
+  write "def-opt() = {:display(def-opt())}"
+  write "direct call = {:display(Default[Option[Int]]:default())}"
 
   ; Default:default reference without type arg (inferred from context)
   let def-inferred = Default:default
-  write "inferred = {def-inferred() : Option[Int]}"
+  write "inferred = {:display((def-inferred() : Option[Int]))}"
 
   ; Numeric with type parameter
   let add-int = Additive[Int]:add
@@ -17,15 +17,15 @@ fun main() {
 
   ; Wrappable:wrap with type parameter
   let wrap-opt = Wrappable[Option[Int]]:wrap
-  write "wrap-opt(42) = {wrap-opt(42)}"
+  write "wrap-opt(42) = {:display(wrap-opt(42))}"
 
   let wrap-res = Wrappable[Result[Int, String]]:wrap
-  write "wrap-res(99) = {wrap-res(99)}"
+  write "wrap-res(99) = {:display(wrap-res(99))}"
 
   ; Use in higher-order functions
   let nums = [1, 2, 3]
   let opts = Mappable:map(wrap-opt, nums)
-  write "mapped: {opts}"
+  write "mapped: {:display(opts)}"
 
   ; Into:into with type parameter
   let to-string = Into[String]:into
@@ -36,6 +36,6 @@ fun main() {
   let try-int = TryInto[Int]:try-into
   let good = "42"
   let bad = "bad"
-  write "try-int(good) = {try-int(good)}"
-  write "try-int(bad) = {try-int(bad)}"
+  write "try-int(good) = {:display(try-int(good))}"
+  write "try-int(bad) = {:display(try-int(bad))}"
 }

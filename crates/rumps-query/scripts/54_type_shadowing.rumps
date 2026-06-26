@@ -11,5 +11,5 @@ variant Status = Open | Closed
 fun main() {
   ; Use the shadowed type (should have Open and Closed variants)
   let s: Status = Status.Open
-  write s
+  write :display(s)
 }

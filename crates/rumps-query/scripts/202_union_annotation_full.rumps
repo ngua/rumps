@@ -3,5 +3,5 @@
 fun main() {
   let r = 1 ..= 10
   let revd: Array[Int] | Range = Iterable:reverse(r)
-  write revd
+  write :display(revd)
 }

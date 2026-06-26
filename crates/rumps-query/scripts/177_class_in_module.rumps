@@ -16,15 +16,15 @@ fun main() {
   ; ============ Display class in module ============
 
   let c = Shapes.Circle.Circle(3.14)
-  write Display:display(c)
+  write :display(c)
 
   ; ============ Ord class in module ============
 
   let low: Prio.Priority = 10
   let high: Prio.Priority = 1
-  write Ord:compare(low, high)
-  write Ord:compare(high, low)
-  write Ord:compare(low, low)
+  write :display(Ord:compare(low, high))
+  write :display(Ord:compare(high, low))
+  write :display(Ord:compare(low, low))
 
   ; ============ `Numeric` stack in module ============
 
@@ -37,19 +37,19 @@ fun main() {
 
   let p1 = Container.Pair.Pair(1, 2)
   let p2 = Container.Pair.Pair("hello", "world")
-  write Display:display(p1)
-  write Display:display(p2)
+  write :display(p1)
+  write :display(p2)
 
   ; ============ Indexable with associated type in module ============
 
   let arr = Collections.IntArray.IntArray([10, 20, 30])
-  write Indexable:get(arr, 1)
+  write :display(Indexable:get(arr, 1))
   write Indexable:index(arr, 2)
 
   ; ============ Empty import brings instance into scope ============
 
   let thing = EmptyImport.Thing.Thing(42)
-  write Display:display(thing)
+  write :display(thing)
 }
 
 module Shapes {

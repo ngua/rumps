@@ -18,7 +18,7 @@ fun main() {
 
   ; Use imported type name in annotation
   let c1: Circle = Shapes.Circle.Circle(1.5)
-  write Display:display(c1)
+  write :display(c1)
 
   ; ============ Named import of newtype ============
 
@@ -32,21 +32,21 @@ fun main() {
   ; Use imported union in annotation
   let d1: Data = 42
   let d2: Data = "hello"
-  write d1
-  write d2
+  write :display(d1)
+  write :display(d2)
 
   ; ============ Aliased import ============
 
   ; Use alias in annotation
   let shape: S = Geometry.Shape.Rect(10.0, 20.0)
-  write shape
+  write :display(shape)
 
   ; ============ Wildcard import brings types ============
 
   ; Types from wildcard import
   let rgb: RGB = (255, 128, 0)
   let color: Color = Colors.Color.Custom(rgb)
-  write color
+  write :display(color)
 
   ; ============ Multiple types from same module ============
 
@@ -62,8 +62,8 @@ fun main() {
   ; Use imported parameterized type
   let box1: Box[Int] = Generic.Box.Full(42)
   let box2: Box[String] = Generic.Box.Empty
-  write box1
-  write box2
+  write :display(box1)
+  write :display(box2)
 }
 
 module Shapes {

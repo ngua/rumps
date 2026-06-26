@@ -2,5 +2,5 @@
 
 fun main() {
   let xs = Bimappable:bimap(x => x + 1, x => x + 1, [1, 2])
-  write xs
+  write :display(xs)
 }

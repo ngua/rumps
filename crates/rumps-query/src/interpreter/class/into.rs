@@ -104,7 +104,7 @@ impl Into {
         }
     }
 
-    pub(crate) fn conv_value(
+    fn conv_value(
         vals: &mut Values<'_, '_, '_, '_>,
         val: &Value,
         target: &Ty,
@@ -112,12 +112,12 @@ impl Into {
     ) -> Result<Payload> {
         match (&val.payload, target) {
             (_, Ty::String) => {
-                let s = Self::str_value(vals, val)?;
+                let s = Self::string(vals, &val.payload, span)?;
                 let id = vals.intern(&s);
                 Ok(Payload::String(id))
             }
             (_, Ty::Json) => {
-                Ok(Payload::Json(Arc::new(Self::json_value(vals, val)?)))
+                Ok(Payload::Json(Arc::new(Self::json(vals, val)?)))
             }
             (Payload::Variant { tag: idx, .. }, Ty::Int)
                 if vals
@@ -179,12 +179,12 @@ impl Into {
                 Ok(Payload::Int(if *b { 1 } else { 0 }))
             }
             (_, Ty::String) => {
-                let s = Self::str_payload(vals, val)?;
+                let s = Self::string(vals, val, span)?;
                 let id = vals.intern(&s);
                 Ok(Payload::String(id))
             }
             (_, Ty::Json) => {
-                Ok(Payload::Json(Arc::new(Self::json(vals, val)?)))
+                Ok(Payload::Json(Arc::new(Self::json_payload(vals, val)?)))
             }
             (Payload::String(sid), Ty::FilePath) => Ok(Payload::FilePath(*sid)),
             (
@@ -260,46 +260,213 @@ impl Into {
         }
     }
 
-    fn str_payload(
+    fn string(
         vals: &mut Values<'_, '_, '_, '_>,
         v: &Payload,
+        span: Span,
     ) -> Result<String> {
         match v {
             Payload::String(id) | Payload::FilePath(id) => {
                 vals.str(*id).map(ToOwned::to_owned)
             }
-            _ => Display::fmt(vals, v),
-        }
-    }
-
-    fn str_value(
-        vals: &mut Values<'_, '_, '_, '_>,
-        v: &Value,
-    ) -> Result<String> {
-        match &v.payload {
-            Payload::String(id) | Payload::FilePath(id) => {
-                vals.str(*id).map(ToOwned::to_owned)
+            Payload::Bool(b) => Ok(b.to_string()),
+            Payload::Int(n) => Ok(n.to_string()),
+            Payload::Word(n) => Ok(n.to_string()),
+            Payload::Float(f) => {
+                let s = f.to_string();
+                Ok(if s.contains('.') || s.contains('e') || s.contains('E') {
+                    s
+                } else {
+                    format!("{s}.0")
+                })
             }
-            _ => Display::fmt_value(vals, v),
+            Payload::Char(c) => Ok(c.to_string()),
+            Payload::Time(t) => Ok(t.to_rfc3339()),
+            Payload::Json(j) => Ok(j.to_string()),
+            val => {
+                let src_name = Self::payload_name(val);
+                Err(Error::runtime_type(
+                    span,
+                    format!("cannot cast {src_name} as String"),
+                ))
+            }
         }
     }
 
-    pub(crate) fn json_value(
+    fn json(
         vals: &mut Values<'_, '_, '_, '_>,
         v: &Value,
     ) -> Result<serde_json::Value> {
         match &v.payload {
-            Payload::Variant { tag, vals: ids } => Self::json_variant(
-                vals,
-                vals.value_variant_base_type(v),
-                *tag,
-                ids,
-            ),
-            payload => Self::json(vals, payload),
+            Payload::Variant { tag: 0, vals: ids }
+                if vals.value_variant_base_type(v) == Some(TypeId::OPTION) =>
+            {
+                if ids.is_empty() {
+                    Ok(serde_json::Value::Null)
+                } else {
+                    typechecked!("Option AS Json", "Option.None arity")
+                }
+            }
+            Payload::Variant { tag: 1, vals: ids }
+                if vals.value_variant_base_type(v) == Some(TypeId::OPTION) =>
+            {
+                match ids.as_slice() {
+                    [id] => {
+                        let v = vals.value(*id)?.clone();
+                        Self::json(vals, &v)
+                    }
+                    _ => typechecked!("Option AS Json", "Option.Some arity"),
+                }
+            }
+            Payload::Variant { tag: 0, vals: ids }
+                if vals.value_variant_base_type(v) == Some(TypeId::RESULT) =>
+            {
+                match ids.as_slice() {
+                    [id] => {
+                        let v = vals.value(*id)?.clone();
+                        Ok(serde_json::json!({
+                            "Ok": Self::json(vals, &v)?
+                        }))
+                    }
+                    _ => typechecked!("Result AS Json", "Result.Ok arity"),
+                }
+            }
+            Payload::Variant { tag: 1, vals: ids }
+                if vals.value_variant_base_type(v) == Some(TypeId::RESULT) =>
+            {
+                match ids.as_slice() {
+                    [id] => {
+                        let v = vals.value(*id)?.clone();
+                        Ok(serde_json::json!({
+                            "Err": Self::json(vals, &v)?
+                        }))
+                    }
+                    _ => typechecked!("Result AS Json", "Result.Err arity"),
+                }
+            }
+            Payload::Variant { tag, vals: ids }
+                if vals.value_variant_base_type(v) == Some(TypeId::RESULT) =>
+            {
+                if ids.is_empty() {
+                    typechecked!("Result AS Json", "valid variant")
+                } else {
+                    typechecked!("Result AS Json", "valid variant arity")
+                }
+            }
+            Payload::Variant { tag: 0, vals: ids }
+                if vals.value_variant_base_type(v)
+                    == Some(TypeId::ORDERING) =>
+            {
+                if ids.is_empty() {
+                    Ok(serde_json::Value::String("Lt".to_owned()))
+                } else {
+                    typechecked!("Ordering AS Json", "Ordering.Lt arity")
+                }
+            }
+            Payload::Variant { tag: 1, vals: ids }
+                if vals.value_variant_base_type(v)
+                    == Some(TypeId::ORDERING) =>
+            {
+                if ids.is_empty() {
+                    Ok(serde_json::Value::String("Eq".to_owned()))
+                } else {
+                    typechecked!("Ordering AS Json", "Ordering.Eq arity")
+                }
+            }
+            Payload::Variant { tag: 2, vals: ids }
+                if vals.value_variant_base_type(v)
+                    == Some(TypeId::ORDERING) =>
+            {
+                if ids.is_empty() {
+                    Ok(serde_json::Value::String("Gt".to_owned()))
+                } else {
+                    typechecked!("Ordering AS Json", "Ordering.Gt arity")
+                }
+            }
+            Payload::Variant { tag, vals: ids }
+                if vals.value_variant_base_type(v)
+                    == Some(TypeId::ORDERING) =>
+            {
+                if ids.is_empty() {
+                    typechecked!("Ordering AS Json", "valid variant")
+                } else {
+                    typechecked!("Ordering AS Json", "valid variant arity")
+                }
+            }
+            Payload::Variant { tag: 0, vals: ids }
+                if vals.value_variant_base_type(v)
+                    == Some(TypeId::DATA_STATUS) =>
+            {
+                if ids.is_empty() {
+                    Ok(serde_json::Value::String("NoData".to_owned()))
+                } else {
+                    typechecked!(
+                        "DataStatus AS Json",
+                        "DataStatus.NoData arity"
+                    )
+                }
+            }
+            Payload::Variant { tag: 1, vals: ids }
+                if vals.value_variant_base_type(v)
+                    == Some(TypeId::DATA_STATUS) =>
+            {
+                if ids.is_empty() {
+                    Ok(serde_json::Value::String("HasValue".to_owned()))
+                } else {
+                    typechecked!(
+                        "DataStatus AS Json",
+                        "DataStatus.HasValue arity"
+                    )
+                }
+            }
+            Payload::Variant { tag: 2, vals: ids }
+                if vals.value_variant_base_type(v)
+                    == Some(TypeId::DATA_STATUS) =>
+            {
+                if ids.is_empty() {
+                    Ok(serde_json::Value::String("HasDescendants".to_owned()))
+                } else {
+                    typechecked!(
+                        "DataStatus AS Json",
+                        "DataStatus.HasDescendants arity"
+                    )
+                }
+            }
+            Payload::Variant { tag: 3, vals: ids }
+                if vals.value_variant_base_type(v)
+                    == Some(TypeId::DATA_STATUS) =>
+            {
+                if ids.is_empty() {
+                    Ok(serde_json::Value::String("Both".to_owned()))
+                } else {
+                    typechecked!("DataStatus AS Json", "DataStatus.Both arity")
+                }
+            }
+            Payload::Variant { tag, vals: ids }
+                if vals.value_variant_base_type(v)
+                    == Some(TypeId::DATA_STATUS) =>
+            {
+                if ids.is_empty() {
+                    typechecked!("DataStatus AS Json", "valid variant")
+                } else {
+                    typechecked!("DataStatus AS Json", "valid variant arity")
+                }
+            }
+            Payload::Variant { .. } => {
+                let src = vals
+                    .value_variant_base_type(v)
+                    .and_then(|id| vals.type_name(id))
+                    .unwrap_or("Variant");
+                Err(Error::runtime_type(
+                    Span::default(),
+                    format!("cannot cast {src} as Json"),
+                ))
+            }
+            payload => Self::json_payload(vals, payload),
         }
     }
 
-    pub(crate) fn json(
+    fn json_payload(
         vals: &mut Values<'_, '_, '_, '_>,
         v: &Payload,
     ) -> Result<serde_json::Value> {
@@ -317,7 +484,7 @@ impl Into {
                 let elems =
                     arr.iter().try_fold(Vec::new(), |mut acc, id| {
                         let v = vals.value(*id)?.clone();
-                        acc.push(Self::json_value(vals, &v)?);
+                        acc.push(Self::json(vals, &v)?);
                         Ok::<Vec<serde_json::Value>, Error>(acc)
                     })?;
                 serde_json::Value::Array(elems)
@@ -328,14 +495,15 @@ impl Into {
                     .map(|(k, vid)| {
                         let key = vals.str(*k)?.to_owned();
                         let val = vals.value(*vid)?.clone();
-                        Self::json_value(vals, &val).map(|val| (key, val))
+                        Self::json(vals, &val).map(|val| (key, val))
                     })
                     .process_results(|iter| iter.collect())?;
                 serde_json::Value::Object(map)
             }
-            Payload::Variant { tag, vals: ids } => {
-                Self::json_variant(vals, None, *tag, ids)?
-            }
+            Payload::Variant { .. } => Err(Error::runtime_type(
+                Span::default(),
+                "cannot cast Variant as Json",
+            ))?,
             Payload::Map(entries) => {
                 let map = entries
                     .entries()
@@ -343,8 +511,8 @@ impl Into {
                     .map(|(k, vid)| {
                         let key = vals.value(k)?.clone();
                         let val = vals.value(vid)?.clone();
-                        let key = Self::json_value(vals, &key)?.to_string();
-                        Self::json_value(vals, &val).map(|val| (key, val))
+                        let key = Self::json(vals, &key)?.to_string();
+                        Self::json(vals, &val).map(|val| (key, val))
                     })
                     .process_results(|iter| iter.collect())?;
                 serde_json::Value::Object(map)
@@ -379,7 +547,7 @@ impl Into {
                 let subs =
                     sub_ids.iter().try_fold(Vec::new(), |mut acc, id| {
                         let v = vals.value(*id)?.clone();
-                        acc.push(Self::json_value(vals, &v)?);
+                        acc.push(Self::json(vals, &v)?);
                         Ok::<Vec<serde_json::Value>, Error>(acc)
                     })?;
                 serde_json::json!({
@@ -388,50 +556,5 @@ impl Into {
                 })
             }
         })
-    }
-
-    fn json_variant(
-        vals: &mut Values<'_, '_, '_, '_>,
-        type_id: Option<TypeId>,
-        tag: u8,
-        ids: &[ValueId],
-    ) -> Result<serde_json::Value> {
-        if type_id == Some(TypeId::OPTION) && tag == 0 {
-            Ok(serde_json::Value::Null)
-        } else if type_id == Some(TypeId::OPTION) && tag == 1 {
-            ids.first().map_or(Ok(serde_json::Value::Null), |id| {
-                let v = vals.value(*id)?.clone();
-                Self::json_value(vals, &v)
-            })
-        } else {
-            let payload_json = if ids.is_empty() {
-                serde_json::Value::Null
-            } else if ids.len() == 1 {
-                ids.first().map_or(Ok(serde_json::Value::Null), |id| {
-                    let v = vals.value(*id)?.clone();
-                    Self::json_value(vals, &v)
-                })?
-            } else {
-                let items =
-                    ids.iter().try_fold(Vec::new(), |mut acc, id| {
-                        let v = vals.value(*id)?.clone();
-                        acc.push(Self::json_value(vals, &v)?);
-                        Ok::<Vec<serde_json::Value>, Error>(acc)
-                    })?;
-                serde_json::Value::Array(items)
-            };
-            let ty_name = type_id
-                .and_then(|type_id| vals.type_name(type_id))
-                .unwrap_or("Variant")
-                .to_owned();
-            let variant = type_id
-                .and_then(|type_id| vals.variant_name(type_id, tag))
-                .map_or_else(|| tag.to_string(), ToOwned::to_owned);
-            Ok(serde_json::json!({
-                "type": ty_name,
-                "variant": variant,
-                "payload": payload_json
-            }))
-        }
     }
 }

@@ -1,12 +1,12 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test postfix operators on intrinsic expressions (@GET, @DATA, @ORDER, @QUERY)\n\n; Setup test data\n@SET d(1) = \"one\"\n@SET d(2) = \"two\"\n@SET d(3) = \"three\"\n\n; @GET with postfix ! (no parens needed)\n@OUTPUT @GET d(1)! AS String\n@OUTPUT @GET d(2)! AS String\n\n; @ORDER with postfix ! (returns Option[Subscript])\n@OUTPUT @ORDER d(0)!\n\n; @QUERY with postfix ! (returns Option[Array[Subscript]])\n@OUTPUT @QUERY d(0)!\n\n; Combined with other operations\nLET val = (@GET d(1)! AS String) ++ \" appended\"\n@OUTPUT val\n\n; Nested in expression context\n@OUTPUT ((@GET d(3)! AS String) ++ \" suffix\")\n\n; Works with subscript expressions too\nLET key = 2\n@OUTPUT @GET d(key)! AS String\n\n; Multiple postfix ops chained on @GET\n@SET arr(1) = 42\n@OUTPUT (@GET arr(1)! AS Int) + 8\n"
+description: "; Test postfix operators on intrinsic expressions (@get, @data, @order, @query)\n\nfun main() {\n  ; Setup test data\n  @set d{1} \"one\"\n  @set d{2} \"two\"\n  @set d{3} \"three\"\n\n  ; @get with postfix ! (no parens needed)\n  write @get d{1}! as String\n  write @get d{2}! as String\n\n  ; @order with postfix ! (returns Option[Subscript])\n  write :display(@order d{0}!)\n\n  ; @query with postfix ! (returns Option[Array[Subscript]])\n  write :display(@query d{0}!)\n\n  ; Combined with other operations\n  let val = \"{@get d{1}! as String} appended\"\n  write val\n\n  ; Nested in expression context\n  write \"{@get d{3}! as String} suffix\"\n\n  ; Works with subscript expressions too\n  let key = 2\n  write @get d{key}! as String\n\n  ; Multiple postfix ops chained on @get\n  @set arr{1} 42\n  write (@get arr{1}! as Int) + 8\n}\n"
 ---
-"one"
-"two"
+one
+two
 1
 [ 1 ]
-"one appended"
-"three suffix"
-"two"
+one appended
+three suffix
+two
 50

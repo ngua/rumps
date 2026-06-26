@@ -1,3 +1,3 @@
 fun main() {
-  write Array.sort([x => x, y => y])
+  write :display(Array.sort([x => x, y => y]))
 }

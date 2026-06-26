@@ -5,18 +5,18 @@ fun main() {
   ; Basic TryInto usage
   ; ============================================================================
 
-  write read-int("42")
-  write read-int("abc")
+  write :display(read-int("42"))
+  write :display(read-int("abc"))
 
-  write read-bool("true")
-  write read-bool(1)
+  write :display(read-bool("true"))
+  write :display(read-bool(1))
 
   ; ============================================================================
   ; Multiple constraints including TryInto
   ; ============================================================================
 
-  write numeric-to-bool(0)
-  write numeric-to-bool(1)
+  write :display(numeric-to-bool(0))
+  write :display(numeric-to-bool(1))
 
   ; ============================================================================
   ; Closure with TryInto constraint
@@ -24,8 +24,8 @@ fun main() {
 
   let parse-int = [T: TryInto[Int]](x: T) -> Result[Int, String] => x read Int
 
-  write parse-int("100")
-  write parse-int("not a number")
+  write :display(parse-int("100"))
+  write :display(parse-int("not a number"))
 }
 
 ; Function that reads any type into Int

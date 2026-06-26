@@ -33,14 +33,14 @@ module PhantomPriv {
 fun main() {
   let user-id: Tagged[String] = 100
   let post-id: Tagged[Bool] = 200
-  write user-id
-  write post-id
+  write :display(user-id)
+  write :display(post-id)
 
   let ps: Partial[Int, String] = [1, 2, 3]
   write Iterable:length(ps)
 
   let dw: DoubleWrap[String, Bool] = 42
-  write dw
+  write :display(dw)
 
   write PhantomPriv.user-id(300)
   write PhantomPriv.len([4, 5, 6, 7])

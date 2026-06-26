@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "newtype UserId = Int\n\nfun main() {\n  let x: UserId = 7\n  write x as String\n}\n"
+description: "module HiddenUser {\n  +newtype UserId = Int\n\n  +fun make(n: Int) -> HiddenUser.UserId {\n    n as HiddenUser.UserId\n  }\n}\n\nfun main() {\n  let x = HiddenUser.make(7)\n  write x as String\n}\n"
 ---
-ERROR: cannot cast `UserId` to `String`
+ERROR: cannot cast `HiddenUser.UserId` to `String`

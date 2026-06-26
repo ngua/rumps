@@ -23,7 +23,7 @@ fun main() {
 
   ; Empty tuple (unit)
   let unit = ()
-  write unit
+  write :display(unit)
 
   ; Single-element tuple (trailing comma required)
   let single = (42,)

@@ -8,7 +8,7 @@ fun main() {
   let ok = Result.Ok
   let full = Box.Full
 
-  write some(42)
-  write ok("done")
-  write full(true)
+  write :display(some(42))
+  write :display(ok("done"))
+  write :display(full(true))
 }

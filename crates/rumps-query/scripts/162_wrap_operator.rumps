@@ -5,15 +5,15 @@ fun main() {
   let opt1 = ?42
   let opt2 = ?"hello"
   let opt3 = ?true
-  write "opt1 = {opt1}"
-  write "opt2 = {opt2}"
-  write "opt3 = {opt3}"
+  write "opt1 = {:display(opt1)}"
+  write "opt2 = {:display(opt2)}"
+  write "opt3 = {:display(opt3)}"
 
   ; Explicit Option annotation
   let opt4: Option[Int] = ?100
   let opt5: Option[String] = ?"world"
-  write "opt4 = {opt4}"
-  write "opt5 = {opt5}"
+  write "opt4 = {:display(opt4)}"
+  write "opt5 = {:display(opt5)}"
 
   write "needs-result(?42) = {needs-result(?42)}"
   write "needs-result(?0) = {needs-result(?0)}"
@@ -21,15 +21,15 @@ fun main() {
   ; Explicit Result annotation
   let res1: Result[Int, String] = ?123
   let res2: Result[Bool, Int] = ?true
-  write "res1 = {res1}"
-  write "res2 = {res2}"
+  write "res1 = {:display(res1)}"
+  write "res2 = {:display(res2)}"
 
-  write "make-opt(5) = {make-opt(5)}"
-  write "make-result(10) = {make-result(10)}"
+  write "make-opt(5) = {:display(make-opt(5))}"
+  write "make-result(10) = {:display(make-result(10))}"
 
   ; Wrap with expressions
   let opt-expr = ?(1 + 2 * 3)
-  write "opt-expr = {opt-expr}"
+  write "opt-expr = {:display(opt-expr)}"
 
   ; Chained with coalesce
   let val = ?42 ?? 0
@@ -37,24 +37,24 @@ fun main() {
 
   ; Wrap in array context
   let opts: Array[Option[Int]] = [?1, ?2, ?3]
-  write "opts = {opts}"
+  write "opts = {:display(opts)}"
 
   ; Nested wrap
   let nested: Option[Option[Int]] = ?(?5)
-  write "nested = {nested}"
+  write "nested = {:display(nested)}"
 
   ; Wrap None/Err values explicitly
   let none-in-some: Option[Option[Int]] = ?Option.None
-  write "none-in-some = {none-in-some}"
+  write "none-in-some = {:display(none-in-some)}"
 
-  write "err-string(?1) = {err-string(?1)}"
-  write "err-int(?2) = {err-int(?2)}"
+  write "err-string(?1) = {:display(err-string(?1))}"
+  write "err-int(?2) = {:display(err-int(?2))}"
 
   ; Inline annotation (no parens required)
   let inline-opt = ?42 : Option[Int]
   let inline-res = ?42 : Result[Int, String]
-  write "inline-opt = {inline-opt}"
-  write "inline-res = {inline-res}"
+  write "inline-opt = {:display(inline-opt)}"
+  write "inline-res = {:display(inline-res)}"
 
   ; Negation with annotation
   let neg-anno = -5 : Int

@@ -1,12 +1,12 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Tuple literals and access\n\nfun main() {\n  ; Basic tuple construction\n  let pair = (1, \"hello\")\n  write pair.0\n  write pair.1\n\n  ; Triple\n  let triple = (true, 42, \"world\")\n  write triple.0\n  write triple.1\n  write triple.2\n\n  ; Nested tuples\n  let nested = ((1, 2), (3, 4))\n  let inner1 = nested.0\n  let inner2 = nested.1\n  write inner1.0\n  write inner1.1\n  write inner2.0\n  write inner2.1\n\n  ; Empty tuple (unit)\n  let unit = ()\n  write unit\n\n  ; Single-element tuple (trailing comma required)\n  let single = (42,)\n  write single.0\n\n  ; Tuple in expression\n  let first = (1, 2).0\n  let second = (1, 2).1\n  let sum = first + second\n  write sum\n\n  ; Tuple with function results\n  let expr-tuple = (1 + 2, 3 * 4, \"test\")\n  write expr-tuple.0\n  write expr-tuple.1\n  write expr-tuple.2\n\n  ; Tuple passed to closure\n  let get-first = t => t.0\n  let get-second = t => t.1\n  write get-first((10, 20))\n  write get-second((10, 20))\n}\n"
+description: "; Tuple literals and access\n\nfun main() {\n  ; Basic tuple construction\n  let pair = (1, \"hello\")\n  write pair.0\n  write pair.1\n\n  ; Triple\n  let triple = (true, 42, \"world\")\n  write triple.0\n  write triple.1\n  write triple.2\n\n  ; Nested tuples\n  let nested = ((1, 2), (3, 4))\n  let inner1 = nested.0\n  let inner2 = nested.1\n  write inner1.0\n  write inner1.1\n  write inner2.0\n  write inner2.1\n\n  ; Empty tuple (unit)\n  let unit = ()\n  write :display(unit)\n\n  ; Single-element tuple (trailing comma required)\n  let single = (42,)\n  write single.0\n\n  ; Tuple in expression\n  let first = (1, 2).0\n  let second = (1, 2).1\n  let sum = first + second\n  write sum\n\n  ; Tuple with function results\n  let expr-tuple = (1 + 2, 3 * 4, \"test\")\n  write expr-tuple.0\n  write expr-tuple.1\n  write expr-tuple.2\n\n  ; Tuple passed to closure\n  let get-first = t => t.0\n  let get-second = t => t.1\n  write get-first((10, 20))\n  write get-second((10, 20))\n}\n"
 ---
 1
-"hello"
+hello
 true
 42
-"world"
+world
 1
 2
 3
@@ -16,6 +16,6 @@ true
 3
 3
 12
-"test"
+test
 10
 20

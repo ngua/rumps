@@ -1,20 +1,20 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Ordering type tests\n\n; === Ordering variant construction ===\n\nLET lt = Ordering.Lt\nLET eq = Ordering.Eq\nLET gt = Ordering.Gt\n\nOUTPUT lt\nOUTPUT eq\nOUTPUT gt\n\n; === Pattern matching on Ordering ===\n\nFUN describe(ord: Ordering) -> String {\n  MATCH ord {\n    Ordering.Lt => { \"less than\" }\n    Ordering.Eq => { \"equal\" }\n    Ordering.Gt => { \"greater than\" }\n  }\n}\n\nOUTPUT describe(Ordering.Lt)\nOUTPUT describe(Ordering.Eq)\nOUTPUT describe(Ordering.Gt)\n\n; === Using Ordering as function result ===\n\nFUN compare-int(a: Int, b: Int) -> Ordering {\n  IF a < b { Ordering.Lt } ELSE {\n    IF a == b { Ordering.Eq } ELSE { Ordering.Gt }\n  }\n}\n\nOUTPUT describe(compare-int(1, 2))\nOUTPUT describe(compare-int(2, 2))\nOUTPUT describe(compare-int(3, 2))\n\n; === Ordering in data structures ===\n\nLET orderings: Array[Ordering] = [Ordering.Lt, Ordering.Eq, Ordering.Gt]\nOUTPUT Array.length(orderings)\n\nLET mapped = Mappable:map(describe, orderings)\nOUTPUT mapped\n\n; === Ordering in match with guards ===\n\nFUN classify(ord: Ordering) -> Int {\n  MATCH ord {\n    Ordering.Lt => { -1 }\n    Ordering.Eq => { 0 }\n    Ordering.Gt => { 1 }\n  }\n}\n\nOUTPUT classify(Ordering.Lt)\nOUTPUT classify(Ordering.Eq)\nOUTPUT classify(Ordering.Gt)\n\n; === Type annotation with Ordering ===\n\nLET typed: Ordering = Ordering.Gt\nOUTPUT describe(typed)\n\nFUN identity(ord: Ordering) -> Ordering {\n  ord\n}\n\nOUTPUT describe(identity(Ordering.Eq))\n"
+description: "; Ordering type tests\n\nfun main() {\n  ; === Ordering variant construction ===\n\n  let lt = Ordering.Lt\n  let eq = Ordering.Eq\n  let gt = Ordering.Gt\n\n  write :display(lt)\n  write :display(eq)\n  write :display(gt)\n\n  ; === Pattern matching on Ordering ===\n\n  write describe(Ordering.Lt)\n  write describe(Ordering.Eq)\n  write describe(Ordering.Gt)\n\n  ; === Using Ordering as function result ===\n\n  write describe(compare-int(1, 2))\n  write describe(compare-int(2, 2))\n  write describe(compare-int(3, 2))\n\n  ; === Ordering in data structures ===\n\n  let orderings: Array[Ordering] = [Ordering.Lt, Ordering.Eq, Ordering.Gt]\n  write Iterable:length(orderings)\n\n  let mapped = Mappable:map(describe, orderings)\n  write :display(mapped)\n\n  ; === Ordering in match with guards ===\n\n  write classify(Ordering.Lt)\n  write classify(Ordering.Eq)\n  write classify(Ordering.Gt)\n\n  ; === Type annotation with Ordering ===\n\n  let typed: Ordering = Ordering.Gt\n  write describe(typed)\n\n  write describe(identity(Ordering.Eq))\n}\n\nfun describe(ord: Ordering) -> String {\n  match ord {\n    Ordering.Lt => { \"less than\" }\n    Ordering.Eq => { \"equal\" }\n    Ordering.Gt => { \"greater than\" }\n  }\n}\n\nfun compare-int(a: Int, b: Int) -> Ordering {\n  if a < b { Ordering.Lt } else {\n    if a == b { Ordering.Eq } else { Ordering.Gt }\n  }\n}\n\nfun classify(ord: Ordering) -> Int {\n  match ord {\n    Ordering.Lt => { -1 }\n    Ordering.Eq => { 0 }\n    Ordering.Gt => { 1 }\n  }\n}\n\nfun identity(ord: Ordering) -> Ordering {\n  ord\n}\n"
 ---
 Ordering.Lt
 Ordering.Eq
 Ordering.Gt
-"less than"
-"equal"
-"greater than"
-"less than"
-"equal"
-"greater than"
+less than
+equal
+greater than
+less than
+equal
+greater than
 3
 [ "less than", "equal", "greater than" ]
 -1
 0
 1
-"greater than"
-"equal"
+greater than
+equal

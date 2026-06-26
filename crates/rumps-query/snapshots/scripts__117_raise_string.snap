@@ -2,4 +2,4 @@
 source: crates/rumps-query/tests/scripts.rs
 description: "; Test raise with a string message\n\nfun main() {\n  raise \"something went wrong\"\n  Unit\n}\n"
 ---
-ERROR: raise at 51..79: something went wrong
+ERROR: raise at 51..79: "something went wrong"

@@ -1496,28 +1496,57 @@ impl InferCtx<'_> {
 
     /// Infer types for a `write` statement or expression.
     ///
-    /// Type-checks the expression and adds constraints based on format and target:
-    /// - `Display` for default format
-    /// - `Into[Json]` for JSON format
-    /// - `FilePath | String` for file target path
-    pub(super) fn write(&mut self, output: &WriteExpr, span: Span) {
-        let expr_ty = self.expr(output.expr);
-
-        // Format constraint: must be convertible to target format
-        match output.format {
-            OutputFormat::Default | OutputFormat::Raw => {
-                // Must be displayable.
-                self.constrain(Constraint::Class {
-                    ty: expr_ty,
-                    class: TypeClass::simple(ClassId::DISPLAY),
+    /// Type-checks the expression and rewrites it to synthetic `Into` calls.
+    ///
+    /// The rewritten expression evaluates to `String`; the format only controls
+    /// final output escaping.
+    pub(super) fn write(&mut self, id: ExprId, output: &WriteExpr, span: Span) {
+        let class = self.env.class_registry().name(ClassId::INTO);
+        let method = self.env.intern("into");
+        let synth = match output.format {
+            OutputFormat::Default | OutputFormat::Raw => self
+                .ast
+                .add_expr(
+                    Expr::ClassMethod(class, method, smallvec![output.expr]),
                     span,
-                });
+                )
+                .map(|expr| (expr, None)),
+            OutputFormat::Json => self
+                .ast
+                .add_expr(
+                    Expr::ClassMethod(class, method, smallvec![output.expr]),
+                    span,
+                )
+                .and_then(|inner| {
+                    self.ast
+                        .add_expr(
+                            Expr::ClassMethod(class, method, smallvec![inner]),
+                            span,
+                        )
+                        .map(|expr| (expr, Some(inner)))
+                }),
+        };
+
+        match synth {
+            Ok((expr, inner)) => {
+                let expr_ty = self.expr(expr);
+                self.unify(expr_ty, TyArena::STRING, span);
+                inner
+                    .and_then(|inner| self.expr_types.get(&inner).copied())
+                    .into_iter()
+                    .for_each(|ty| self.unify(ty, TyArena::JSON, span));
+                self.ast.set_expr(
+                    id,
+                    Expr::Write(WriteExpr {
+                        expr,
+                        format: output.format,
+                        target: output.target,
+                    }),
+                );
             }
-            OutputFormat::Json => {
-                // Must be convertible to Json
-                self.constrain(Constraint::Class {
-                    ty: expr_ty,
-                    class: TypeClass::param(ClassId::INTO, TyArena::JSON),
+            Err(e) => {
+                self.error(TypeError::Custom {
+                    msg: e.to_string(),
                     span,
                 });
             }

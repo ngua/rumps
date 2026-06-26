@@ -9,6 +9,6 @@ fun main() {
 
   let pair = x => (x, x)
 
-  write pair(7)
-  write pair("a")
+  write :display(pair(7))
+  write :display(pair("a"))
 }

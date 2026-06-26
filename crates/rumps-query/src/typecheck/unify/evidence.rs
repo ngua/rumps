@@ -310,204 +310,169 @@ impl SolveCtx<'_> {
                         span,
                     });
                 }
-                NewtypeEdgeStatus::Missing => {
-                    self.satisfy_into_without_repr_edge(
-                        ty, to, &ty_shape, &to_shape, span,
-                    );
-                }
-            }
-        }
-    }
-
-    fn satisfy_into_without_repr_edge(
-        &mut self,
-        ty: TyId,
-        to: TyId,
-        ty_shape: &Ty,
-        to_shape: &Ty,
-        span: Span,
-    ) {
-        match (ty_shape, to_shape) {
-            (Ty::Fn(_, _), Ty::String) => {
-                self.errors
-                    .push(TypeError::InvalidCast { from: ty, to, span });
-            }
-            (Ty::Union(_, members), Ty::String) => {
-                let class = TypeClass::param(ClassId::INTO, to);
-                self.satisfy_param_union(&class, members, ty, span);
-            }
-            (
-                Ty::Bool
-                | Ty::Int
-                | Ty::Word
-                | Ty::Float
-                | Ty::Char
-                | Ty::String
-                | Ty::Unit
-                | Ty::Time
-                | Ty::Range
-                | Ty::Json
-                | Ty::Ordering
-                | Ty::DataStatus
-                | Ty::FilePath
-                | Ty::Path
-                | Ty::Regex
-                | Ty::Local
-                | Ty::Global
-                | Ty::Array(_)
-                | Ty::Option(_)
-                | Ty::Result(_, _)
-                | Ty::Map(_, _)
-                | Ty::Tuple(_)
-                | Ty::Object(_),
-                Ty::String,
-            ) => {}
-            (Ty::Fn(_, _), Ty::Json)
-            | (Ty::Regex, Ty::Json)
-            | (Ty::Local, Ty::Json)
-            | (Ty::Global, Ty::Json) => {
-                self.errors
-                    .push(TypeError::InvalidCast { from: ty, to, span });
-            }
-            (Ty::Array(elem), Ty::Json) => self.satisfies_class(
-                &TypeClass::param(ClassId::INTO, TyArena::JSON),
-                *elem,
-                span,
-            ),
-            (Ty::Option(inner), Ty::Json) => self.satisfies_class(
-                &TypeClass::param(ClassId::INTO, TyArena::JSON),
-                *inner,
-                span,
-            ),
-            (Ty::Result(ok, err), Ty::Json) => {
-                let (ok, err) = (*ok, *err);
-                self.satisfies_class(
-                    &TypeClass::param(ClassId::INTO, TyArena::JSON),
-                    ok,
-                    span,
-                );
-                self.satisfies_class(
-                    &TypeClass::param(ClassId::INTO, TyArena::JSON),
-                    err,
-                    span,
-                );
-            }
-            (Ty::Map(k, v), Ty::Json) => {
-                let (k, v) = (*k, *v);
-                self.satisfies_class(
-                    &TypeClass::param(ClassId::INTO, TyArena::JSON),
-                    k,
-                    span,
-                );
-                self.satisfies_class(
-                    &TypeClass::param(ClassId::INTO, TyArena::JSON),
-                    v,
-                    span,
-                );
-            }
-            (Ty::Tuple(elems), Ty::Json) => {
-                let es: SmallVec<[TyId; 4]> = elems.clone();
-                es.iter().for_each(|e| {
-                    self.satisfies_class(
+                NewtypeEdgeStatus::Missing => match (&ty_shape, &to_shape) {
+                    (Ty::Fn(_, _), Ty::String) => {
+                        self.errors.push(TypeError::InvalidCast {
+                            from: ty,
+                            to,
+                            span,
+                        });
+                    }
+                    (Ty::Union(_, members), Ty::String) => {
+                        let class = TypeClass::param(ClassId::INTO, to);
+                        self.satisfy_param_union(&class, members, ty, span);
+                    }
+                    // The `Into[String]` set is intentionally narrow. This
+                    // is separate from `Display`, which is debugging/user-facing
+                    // stringification. These are compact string serializations.
+                    (
+                        Ty::Bool
+                        | Ty::Int
+                        | Ty::Word
+                        | Ty::Float
+                        | Ty::Char
+                        | Ty::String
+                        | Ty::Time
+                        | Ty::Json
+                        | Ty::FilePath,
+                        Ty::String,
+                    ) => {}
+                    (Ty::Fn(_, _), Ty::Json)
+                    | (Ty::Regex, Ty::Json)
+                    | (Ty::Local, Ty::Json)
+                    | (Ty::Global, Ty::Json) => {
+                        self.errors.push(TypeError::InvalidCast {
+                            from: ty,
+                            to,
+                            span,
+                        });
+                    }
+                    (Ty::Array(elem), Ty::Json) => self.satisfies_class(
                         &TypeClass::param(ClassId::INTO, TyArena::JSON),
-                        *e,
+                        *elem,
                         span,
-                    )
-                });
-            }
-            (Ty::Object(fields), Ty::Json) => {
-                let vals: SmallVec<[TyId; 4]> =
-                    fields.values().copied().collect();
-                vals.iter().for_each(|t| {
-                    self.satisfies_class(
+                    ),
+                    (Ty::Option(inner), Ty::Json) => self.satisfies_class(
                         &TypeClass::param(ClassId::INTO, TyArena::JSON),
-                        *t,
+                        *inner,
                         span,
-                    )
-                });
-            }
-            (Ty::Union(_, members), Ty::Json) => {
-                let class = TypeClass::param(ClassId::INTO, to);
-                self.satisfy_param_union(&class, members, ty, span);
-            }
-            (
-                Ty::Bool
-                | Ty::Int
-                | Ty::Word
-                | Ty::Float
-                | Ty::Char
-                | Ty::String
-                | Ty::Unit
-                | Ty::Time
-                | Ty::Range
-                | Ty::Json
-                | Ty::Ordering
-                | Ty::DataStatus
-                | Ty::FilePath
-                | Ty::Path,
-                Ty::Json,
-            ) => {}
-            (Ty::Int, Ty::Float) | (Ty::Float, Ty::Int) => {}
-            (Ty::Word, Ty::Int) | (Ty::Word, Ty::Float) => {}
-            (Ty::Bool, Ty::Int) | (Ty::Int, Ty::Bool) => {}
-            (Ty::DataStatus, Ty::Int) => {}
-            (Ty::String, Ty::FilePath) => {}
-            (Ty::Path, Ty::FilePath) => {}
-            (Ty::Named(id, _), Ty::FilePath) if *id == TypeId::PATH => {}
-            (Ty::Range, Ty::Array(elem)) if *elem == TyArena::INT => {}
-            (Ty::Union(Some(id), _), _) if *id == TypeId::STORABLE => {
-                if !TyArena::STORABLE_MEMBERS.contains(&to) {
-                    self.errors.push(TypeError::InvalidCast {
-                        from: ty,
-                        to,
-                        span,
-                    });
-                }
-            }
-            (_, Ty::Union(Some(id), _))
-                if *id == TypeId::STORABLE
-                    || *id == TypeId::SCALAR
-                    || *id == TypeId::SUBSCRIPT =>
-            {
-                let uid = *id;
-                let is_mem = if uid == TypeId::STORABLE {
-                    TyArena::STORABLE_MEMBERS.contains(&ty)
-                } else if uid == TypeId::SCALAR {
-                    TyArena::SCALAR_MEMBERS.contains(&ty)
-                } else {
-                    TyArena::SUBSCRIPT_MEMBERS.contains(&ty)
-                };
-                if !is_mem {
-                    self.errors.push(TypeError::InvalidCast {
-                        from: ty,
-                        to,
-                        span,
-                    });
-                }
-            }
-            (Ty::Union(_, members), _) => {
-                let class = TypeClass::param(ClassId::INTO, to);
-                self.satisfy_param_union(&class, members, ty, span);
-            }
-            (Ty::Named(_, _), _) => {
-                let class = TypeClass::param(ClassId::INTO, to);
-                let q = EvidenceQuery {
-                    class: &class,
-                    ty,
-                    span,
-                };
-                let ev = self.evidence(q);
-                if !self.apply_param_evidence(ev, &class, span) {
-                    self.errors.push(TypeError::InvalidCast {
-                        from: ty,
-                        to,
-                        span,
-                    });
-                }
-            }
-            _ => {
-                let handled =
-                    self.ty_to_type_id_and_args(ty).is_some_and(|_| {
+                    ),
+                    (Ty::Result(ok, err), Ty::Json) => {
+                        let (ok, err) = (*ok, *err);
+                        self.satisfies_class(
+                            &TypeClass::param(ClassId::INTO, TyArena::JSON),
+                            ok,
+                            span,
+                        );
+                        self.satisfies_class(
+                            &TypeClass::param(ClassId::INTO, TyArena::JSON),
+                            err,
+                            span,
+                        );
+                    }
+                    (Ty::Map(k, v), Ty::Json) => {
+                        let (k, v) = (*k, *v);
+                        self.satisfies_class(
+                            &TypeClass::param(ClassId::INTO, TyArena::JSON),
+                            k,
+                            span,
+                        );
+                        self.satisfies_class(
+                            &TypeClass::param(ClassId::INTO, TyArena::JSON),
+                            v,
+                            span,
+                        );
+                    }
+                    (Ty::Tuple(elems), Ty::Json) => {
+                        let es: SmallVec<[TyId; 4]> = elems.clone();
+                        es.iter().for_each(|e| {
+                            self.satisfies_class(
+                                &TypeClass::param(ClassId::INTO, TyArena::JSON),
+                                *e,
+                                span,
+                            )
+                        });
+                    }
+                    (Ty::Object(fields), Ty::Json) => {
+                        let vals: SmallVec<[TyId; 4]> =
+                            fields.values().copied().collect();
+                        vals.iter().for_each(|t| {
+                            self.satisfies_class(
+                                &TypeClass::param(ClassId::INTO, TyArena::JSON),
+                                *t,
+                                span,
+                            )
+                        });
+                    }
+                    (Ty::Union(_, members), Ty::Json) => {
+                        let class = TypeClass::param(ClassId::INTO, to);
+                        self.satisfy_param_union(&class, members, ty, span);
+                    }
+                    // Note that `Into[Json]` is fairly broad because we want
+                    // specific types (e.g. `Ordering`, `DataStatus`) to be
+                    // storable as JSON in DB nodes with (de)serialization.
+                    // This unlike the more restrictive `Into[String]` above
+                    (
+                        Ty::Bool
+                        | Ty::Int
+                        | Ty::Word
+                        | Ty::Float
+                        | Ty::Char
+                        | Ty::String
+                        | Ty::Unit
+                        | Ty::Time
+                        | Ty::Range
+                        | Ty::Json
+                        | Ty::Ordering
+                        | Ty::DataStatus
+                        | Ty::FilePath
+                        | Ty::Path,
+                        Ty::Json,
+                    ) => {}
+                    (Ty::Int, Ty::Float) | (Ty::Float, Ty::Int) => {}
+                    (Ty::Word, Ty::Int) | (Ty::Word, Ty::Float) => {}
+                    (Ty::Bool, Ty::Int) | (Ty::Int, Ty::Bool) => {}
+                    (Ty::DataStatus, Ty::Int) => {}
+                    (Ty::String, Ty::FilePath) => {}
+                    (Ty::Path, Ty::FilePath) => {}
+                    (Ty::Named(id, _), Ty::FilePath) if *id == TypeId::PATH => {
+                    }
+                    (Ty::Range, Ty::Array(elem)) if *elem == TyArena::INT => {}
+                    (Ty::Union(Some(id), _), _) if *id == TypeId::STORABLE => {
+                        if !TyArena::STORABLE_MEMBERS.contains(&to) {
+                            self.errors.push(TypeError::InvalidCast {
+                                from: ty,
+                                to,
+                                span,
+                            });
+                        }
+                    }
+                    (_, Ty::Union(Some(id), _))
+                        if *id == TypeId::STORABLE
+                            || *id == TypeId::SCALAR
+                            || *id == TypeId::SUBSCRIPT =>
+                    {
+                        let uid = *id;
+                        let is_mem = if uid == TypeId::STORABLE {
+                            TyArena::STORABLE_MEMBERS.contains(&ty)
+                        } else if uid == TypeId::SCALAR {
+                            TyArena::SCALAR_MEMBERS.contains(&ty)
+                        } else {
+                            TyArena::SUBSCRIPT_MEMBERS.contains(&ty)
+                        };
+                        if !is_mem {
+                            self.errors.push(TypeError::InvalidCast {
+                                from: ty,
+                                to,
+                                span,
+                            });
+                        }
+                    }
+                    (Ty::Union(_, members), _) => {
+                        let class = TypeClass::param(ClassId::INTO, to);
+                        self.satisfy_param_union(&class, members, ty, span);
+                    }
+                    (Ty::Named(_, _), _) => {
                         let class = TypeClass::param(ClassId::INTO, to);
                         let q = EvidenceQuery {
                             class: &class,
@@ -515,15 +480,35 @@ impl SolveCtx<'_> {
                             span,
                         };
                         let ev = self.evidence(q);
-                        self.apply_param_evidence(ev, &class, span)
-                    });
-                if !handled {
-                    self.errors.push(TypeError::InvalidCast {
-                        from: ty,
-                        to,
-                        span,
-                    });
-                }
+                        if !self.apply_param_evidence(ev, &class, span) {
+                            self.errors.push(TypeError::InvalidCast {
+                                from: ty,
+                                to,
+                                span,
+                            });
+                        }
+                    }
+                    _ => {
+                        let handled =
+                            self.ty_to_type_id_and_args(ty).is_some_and(|_| {
+                                let class = TypeClass::param(ClassId::INTO, to);
+                                let q = EvidenceQuery {
+                                    class: &class,
+                                    ty,
+                                    span,
+                                };
+                                let ev = self.evidence(q);
+                                self.apply_param_evidence(ev, &class, span)
+                            });
+                        if !handled {
+                            self.errors.push(TypeError::InvalidCast {
+                                from: ty,
+                                to,
+                                span,
+                            });
+                        }
+                    }
+                },
             }
         }
     }
@@ -566,146 +551,77 @@ impl SolveCtx<'_> {
                         }
                     }
                 }
-                NewtypeEdgeStatus::Missing => {
-                    self.satisfy_try_into_without_repr_edge(
-                        ty, to, &ty_shape, &to_shape, span,
-                    );
-                }
-            },
-        };
-    }
-
-    fn satisfy_try_into_without_repr_edge(
-        &mut self,
-        ty: TyId,
-        to: TyId,
-        ty_shape: &Ty,
-        to_shape: &Ty,
-        span: Span,
-    ) {
-        match (ty_shape, to_shape) {
-            (Ty::Fn(_, _), _) => {
-                self.errors
-                    .push(TypeError::InvalidRead { from: ty, to, span });
-            }
-            (_, Ty::Fn(_, _))
-            | (_, Ty::Regex)
-            | (_, Ty::Local)
-            | (_, Ty::Global) => {
-                self.errors
-                    .push(TypeError::InvalidRead { from: ty, to, span });
-            }
-            (Ty::Regex, Ty::Json)
-            | (Ty::Local, Ty::Json)
-            | (Ty::Global, Ty::Json) => {
-                self.errors
-                    .push(TypeError::InvalidRead { from: ty, to, span });
-            }
-            _ => {
-                let class = TypeClass::param(ClassId::TRY_INTO, to);
-                let q = EvidenceQuery {
-                    class: &class,
-                    ty,
-                    span,
-                };
-                let ev = self.evidence(q);
-                if self.apply_param_evidence(ev, &class, span) {
-                } else {
-                    match (ty_shape, to_shape) {
-                        (Ty::Array(elem), Ty::Range)
-                            if *elem == TyArena::INT => {}
-                        (Ty::Array(elem), Ty::Json) => self.satisfies_class(
-                            &TypeClass::param(ClassId::TRY_INTO, TyArena::JSON),
-                            *elem,
+                NewtypeEdgeStatus::Missing => match (&ty_shape, &to_shape) {
+                    (Ty::Fn(_, _), _) => {
+                        self.errors.push(TypeError::InvalidRead {
+                            from: ty,
+                            to,
                             span,
-                        ),
-                        (Ty::Option(inner), Ty::Json) => self.satisfies_class(
-                            &TypeClass::param(ClassId::TRY_INTO, TyArena::JSON),
-                            *inner,
+                        });
+                    }
+                    (_, Ty::Fn(_, _))
+                    | (_, Ty::Regex)
+                    | (_, Ty::Local)
+                    | (_, Ty::Global) => {
+                        self.errors.push(TypeError::InvalidRead {
+                            from: ty,
+                            to,
                             span,
-                        ),
-                        (Ty::Result(ok, err), Ty::Json) => {
-                            let (ok, err) = (*ok, *err);
-                            self.satisfies_class(
-                                &TypeClass::param(
-                                    ClassId::TRY_INTO,
-                                    TyArena::JSON,
-                                ),
-                                ok,
-                                span,
-                            );
-                            self.satisfies_class(
-                                &TypeClass::param(
-                                    ClassId::TRY_INTO,
-                                    TyArena::JSON,
-                                ),
-                                err,
-                                span,
-                            );
-                        }
-                        (Ty::Map(k, v), Ty::Json) => {
-                            let (k, v) = (*k, *v);
-                            self.satisfies_class(
-                                &TypeClass::param(
-                                    ClassId::TRY_INTO,
-                                    TyArena::JSON,
-                                ),
-                                k,
-                                span,
-                            );
-                            self.satisfies_class(
-                                &TypeClass::param(
-                                    ClassId::TRY_INTO,
-                                    TyArena::JSON,
-                                ),
-                                v,
-                                span,
-                            );
-                        }
-                        (Ty::Tuple(elems), Ty::Json) => {
-                            let es: SmallVec<[TyId; 4]> = elems.clone();
-                            es.iter().for_each(|e| {
-                                self.satisfies_class(
-                                    &TypeClass::param(
-                                        ClassId::TRY_INTO,
-                                        TyArena::JSON,
-                                    ),
-                                    *e,
-                                    span,
-                                )
-                            });
-                        }
-                        (Ty::Object(fields), Ty::Json) => {
-                            let vals: SmallVec<[TyId; 4]> =
-                                fields.values().copied().collect();
-                            vals.iter().for_each(|t| {
-                                self.satisfies_class(
-                                    &TypeClass::param(
-                                        ClassId::TRY_INTO,
-                                        TyArena::JSON,
-                                    ),
-                                    *t,
-                                    span,
-                                )
-                            });
-                        }
-                        (Ty::Named(_, _), _) => {
-                            match self.repr_evidence(&class, ty, span) {
-                                Some(Evidence::Repr { ty: repr, .. }) => {
-                                    self.satisfies_class(&class, repr, span)
+                        });
+                    }
+                    (Ty::Regex, Ty::Json)
+                    | (Ty::Local, Ty::Json)
+                    | (Ty::Global, Ty::Json) => {
+                        self.errors.push(TypeError::InvalidRead {
+                            from: ty,
+                            to,
+                            span,
+                        });
+                    }
+                    _ => {
+                        let class = TypeClass::param(ClassId::TRY_INTO, to);
+                        let q = EvidenceQuery {
+                            class: &class,
+                            ty,
+                            span,
+                        };
+                        let ev = self.evidence(q);
+                        if self.apply_param_evidence(ev, &class, span) {
+                        } else {
+                            match (&ty_shape, &to_shape) {
+                                (Ty::Array(elem), Ty::Range)
+                                    if *elem == TyArena::INT => {}
+                                (_, Ty::Json) => {
+                                    self.errors.push(TypeError::InvalidRead {
+                                        from: ty,
+                                        to,
+                                        span,
+                                    });
                                 }
-                                _ => self.errors.push(TypeError::InvalidRead {
-                                    from: ty,
-                                    to,
-                                    span,
-                                }),
+                                (Ty::Named(_, _), _) => {
+                                    match self.repr_evidence(&class, ty, span) {
+                                        Some(Evidence::Repr {
+                                            ty: repr,
+                                            ..
+                                        }) => self.satisfies_class(
+                                            &class, repr, span,
+                                        ),
+                                        _ => self.errors.push(
+                                            TypeError::InvalidRead {
+                                                from: ty,
+                                                to,
+                                                span,
+                                            },
+                                        ),
+                                    }
+                                }
+                                _ => {}
                             }
                         }
-                        _ => {}
                     }
-                }
-            }
-        }
+                },
+            },
+        };
     }
 
     fn satisfy_indexable(&mut self, q: EvidenceQuery<'_>) {
@@ -921,7 +837,13 @@ impl SolveCtx<'_> {
             .is_some_and(|def| matches!(def, TypeDef::Sum { .. }));
         if is_variant
             && self.decls.derives_simple(id, class_id)
-            && matches!(class_id, ClassId::EQ | ClassId::ORD | ClassId::DISPLAY)
+            && matches!(
+                class_id,
+                ClassId::EQ
+                    | ClassId::ORD
+                    | ClassId::DISPLAY
+                    | ClassId::FORMATTABLE
+            )
         {
             let subst: IndexMap<StringId, TyId> = self
                 .registry

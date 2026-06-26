@@ -5,5 +5,5 @@ fun main() {
   let r = 1 ..= 10
   ; `Iterable:reverse` on `Range` returns `Range`
   let revd: Array[Char] = Iterable:reverse(r)
-  write revd
+  write :display(revd)
 }

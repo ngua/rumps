@@ -7,11 +7,11 @@ fun gt (a: Int, b: Int) -> Bool { b > a }
 
 fun main() {
   ; `add(5)` is `(Int) -> Int`; pass directly to `Mappable:map`
-  write Mappable:map(add(5), [1, 2, 3])
+  write :display(Mappable:map(add(5), [1, 2, 3]))
   ; Expected: [6, 7, 8]
 
   ; `gt(2)` is `(Int) -> Bool`; pass directly to `Filterable:filter`
-  write Filterable:filter(gt(2), [1, 2, 3, 4, 5])
+  write :display(Filterable:filter(gt(2), [1, 2, 3, 4, 5]))
   ; Expected: [3, 4, 5]
 
   ; Binary named function passed directly to `fold`; no partial app
@@ -21,7 +21,7 @@ fun main() {
 
   ; Stored partial passed through pipe into a HoF
   let add10 = add(10)
-  write [1, 2, 3] |> Mappable:map(add10)
+  write :display([1, 2, 3] |> Mappable:map(add10))
   ; Expected: [11, 12, 13]
 
   ; Partial passed to `fold`; `add` is already binary, so no partial,

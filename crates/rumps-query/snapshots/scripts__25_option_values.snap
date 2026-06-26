@@ -1,18 +1,18 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: Unit type and Option values\n; Tests blocks returning Unit, single-arm IF returning Unit, and Option behavior\n\n; === Block without tail returns Unit ===\n\nLET result = {\n  OUTPUT \"Side effect only\"\n}\nOUTPUT result\n; Expected: Unit\n\nLET result-2 = {\n  LET x = 42\n  OUTPUT x\n  ; No tail expression\n}\nOUTPUT result-2\n; Expected: Unit\n\n; === Block with tail returns value ===\n\nLET result-3 = {\n  LET x = 42\n  x\n}\nOUTPUT result-3\n; Expected: 42\n\n; === Single-arm IF returns Unit ===\n\n; Single-arm IF with false condition (body not evaluated)\nLET cond-1 = IF FALSE {\n  OUTPUT \"never reached\"\n}\nOUTPUT cond-1\n; Expected: Unit\n\n; Single-arm IF with true condition (body evaluated, must be Unit)\nLET cond-2 = IF TRUE {\n  OUTPUT \"side effect\"\n}\nOUTPUT cond-2\n; Expected: Unit\n\n; === Option values ===\n\n; Option.None\nOUTPUT Option.None\n; Expected: Option.None\n\n; Option.Some unwrapping with coalesce\nOUTPUT Option.Some(42) ?? 0\n; Expected: 42\n\n; Option.None fallback with coalesce\nOUTPUT Option.None ?? \"fallback\"\n; Expected: fallback\n\n; === Prefix `?` for Some wrapping ===\n\n; Basic usage: wrap a value in Some\nLET wrapped = ?42\nOUTPUT wrapped\n; Expected: Option.Some(42)\n\n; Unwrap with coalesce\nOUTPUT ?100 ?? 0\n; Expected: 100\n\n; Wrap a string\nOUTPUT ?\"hello\"\n; Expected: Option.Some(hello)\n\n; Nested `?` produces Option.Some(Option.Some(v))\n; Note: `??` is the coalesce operator, so use `?(?x)` for nesting\nLET nested = ?(?10)\nOUTPUT nested\n; Expected: Option.Some(Option.Some(10))\n\n; Unwrap outer layer\nOUTPUT nested!\n; Expected: Option.Some(10)\n\n; Fully unwrap nested\nOUTPUT nested!!\n; Expected: 10\n\n; Function that expects an Option argument\nFUN maybe-double(x: Option[Int]) -> Int {\n  (x ?? 0) * 2\n}\n\n; Call with explicit Some\nOUTPUT maybe-double(Option.Some(5))\n; Expected: 10\n\n; Call with `?` wrap syntax\nOUTPUT maybe-double(?7)\n; Expected: 14\n\n; Call with None\nOUTPUT maybe-double(Option.None)\n; Expected: 0\n\n; Wrap an expression\nLET expr-result = ?(3 + 4)\nOUTPUT expr-result\n; Expected: Option.Some(7)\n\nOUTPUT \"Unit and Option test complete\"\n"
+description: "; Test: Unit type and Option values\n; Tests blocks returning Unit, single-arm if returning Unit, and Option behavior\n\n; Function that expects an Option argument\nfun maybe-double(x: Option[Int]) -> Int {\n  (x ?? 0) * 2\n}\n\nfun main() {\n  ; === Block without tail returns Unit ===\n\n  let result = {\n    write \"Side effect only\"\n  }\n  write :display(result)\n  ; Expected: Unit\n\n  let result-2 = {\n    let x = 42\n    write x\n    ; No tail expression\n  }\n  write :display(result-2)\n  ; Expected: Unit\n\n  ; === Block with tail returns value ===\n\n  let result-3 = {\n    let x = 42\n    x\n  }\n  write result-3\n  ; Expected: 42\n\n  ; === Single-arm if returns Unit ===\n\n  ; Single-arm if with false condition (body not evaluated)\n  let cond-1 = if false {\n    write \"never reached\"\n  }\n  write :display(cond-1)\n  ; Expected: Unit\n\n  ; Single-arm if with true condition (body evaluated, must be Unit)\n  let cond-2 = if true {\n    write \"side effect\"\n  }\n  write :display(cond-2)\n  ; Expected: Unit\n\n  ; === Option values ===\n\n  ; Option.None\n  write :display(Option.None)\n  ; Expected: Option.None\n\n  ; Option.Some unwrapping with coalesce\n  write Option.Some(42) ?? 0\n  ; Expected: 42\n\n  ; Option.None fallback with coalesce\n  write Option.None ?? \"fallback\"\n  ; Expected: fallback\n\n  ; === Prefix `?` for Some wrapping ===\n\n  ; Basic usage: wrap a value in Some\n  let wrapped = ?42\n  write :display(wrapped)\n  ; Expected: Option.Some(42)\n\n  ; Unwrap with coalesce\n  write ?100 ?? 0\n  ; Expected: 100\n\n  ; Wrap a string\n  write :display(?\"hello\")\n  ; Expected: Option.Some(hello)\n\n  ; Nested `?` produces Option.Some(Option.Some(v))\n  ; Note: `??` is the coalesce operator, so use `?(?x)` for nesting\n  let nested = ?(?10)\n  write :display(nested)\n  ; Expected: Option.Some(Option.Some(10))\n\n  ; Unwrap outer layer\n  write :display(nested!)\n  ; Expected: Option.Some(10)\n\n  ; Fully unwrap nested\n  write nested!!\n  ; Expected: 10\n\n  ; Call with explicit Some\n  write maybe-double(Option.Some(5))\n  ; Expected: 10\n\n  ; Call with `?` wrap syntax\n  write maybe-double(?7)\n  ; Expected: 14\n\n  ; Call with None\n  write maybe-double(Option.None)\n  ; Expected: 0\n\n  ; Wrap an expression\n  let expr-result = ?(3 + 4)\n  write :display(expr-result)\n  ; Expected: Option.Some(7)\n\n  write \"Unit and Option test complete\"\n}\n"
 ---
-"Side effect only"
+Side effect only
 Unit
 42
 Unit
 42
 Unit
-"side effect"
+side effect
 Unit
 Option.None
 42
-"fallback"
+fallback
 Option.Some(42)
 100
 Option.Some("hello")
@@ -23,4 +23,4 @@ Option.Some(10)
 14
 0
 Option.Some(7)
-"Unit and Option test complete"
+Unit and Option test complete

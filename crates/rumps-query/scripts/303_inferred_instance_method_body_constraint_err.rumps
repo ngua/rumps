@@ -16,5 +16,5 @@ class Bad for Box {
 }
 
 fun main() {
-  write Bad:f(Box.Box(1))
+  write :display(Bad:f(Box.Box(1)))
 }

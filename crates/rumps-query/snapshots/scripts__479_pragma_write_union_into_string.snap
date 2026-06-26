@@ -3,4 +3,4 @@ source: crates/rumps-query/tests/scripts.rs
 description: "union Text = Int | String\n\nfun main() {\n  let n: Text = 42\n  let s: Text = \"ok\"\n  write n\n  write s\n}\n"
 ---
 42
-"ok"
+ok

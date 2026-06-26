@@ -67,19 +67,19 @@ fun main() {
 
   ; @get with annotation
   let val = @get d{"key"}: Option[Storable]
-  write val
+  write :display(val)
 
   ; @get with unwrap then annotation
   let unwrapped = @get d{"key"}!: Storable
-  write unwrapped
+  write :display(unwrapped)
 
   ; @data with annotation
   let status = @data d{"key"}: DataStatus
-  write status
+  write :display(status)
 
   ; @order with annotation
   let ord = @order d{""}: Option[Subscript]
-  write ord
+  write :display(ord)
 
   ; === write with annotated operand ===
 
@@ -91,11 +91,11 @@ fun main() {
 
   ; Tuple with annotation (parens around tuple + annotation)
   let tup = (1, 2): (Int, Int)
-  write tup
+  write :display(tup)
 
   ; Tuple annotation inside parens
   let tup2 = ((3, 4): (Int, Int))
-  write tup2
+  write :display(tup2)
 
   ; Access tuple element with annotation
   write tup.0: Int
@@ -103,21 +103,21 @@ fun main() {
   ; === Parameterized type annotations ===
 
   let some = Option.Some(10): Option[Int]
-  write some
+  write :display(some)
 
   let none = Option.None: Option[String]
-  write none
+  write :display(none)
 
   let ok = Result.Ok(42): Result[Int, String]
-  write ok
+  write :display(ok)
 
   let err = Result.Err("oops"): Result[Int, String]
-  write err
+  write :display(err)
 
   ; === Array annotations ===
 
   let nums = [1, 2, 3]: Array[Int]
-  write nums
+  write :display(nums)
 
   ; === Complex expressions ===
 

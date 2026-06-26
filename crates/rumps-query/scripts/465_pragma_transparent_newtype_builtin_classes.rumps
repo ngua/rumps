@@ -10,15 +10,15 @@ newtype Maybe[T] = Option[T]
 fun main() {
   let x: Label = "42"
   write x == x
-  write Display:display(x)
+  write :display(x)
   write x as String
   write (x read Int)!
 
   let b: Bag = [1, 2, 3]
   write Indexable:index(b, 1)
-  write Mappable:map(x => x * 2, b)
+  write :display(Mappable:map(x => x * 2, b))
   write Foldable:fold((acc, x) => acc + x, 0, b)
 
   let m: Maybe[Int] = Option.Some(5)
-  write Chainable:chain(m, x => Option.Some(x * 10))
+  write :display(Chainable:chain(m, x => Option.Some(x * 10)))
 }

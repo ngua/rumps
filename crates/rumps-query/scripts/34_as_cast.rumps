@@ -31,7 +31,7 @@ fun main() {
   write f
   ; Expected: 0
 
-  ; === T -> String (stringify anything) ===
+  ; === `T` -> `String` ===
 
   ; Int to String
   let n = 123
@@ -53,26 +53,26 @@ fun main() {
   write b-str2
   ; Expected: false
 
-  ; Array to String
+  ; Array display
   let arr = [1, 2, 3]
-  let arr-str = arr as String
+  let arr-str = :display(arr)
   write arr-str
   ; Expected: [ 1, 2, 3 ]
 
-  ; Object to String
+  ; Object display
   let obj = { name: "Alice", age: 30 }
-  let obj-str = obj as String
+  let obj-str = :display(obj)
   write obj-str
   ; Expected: { name: Alice, age: 30 }
 
-  ; Option to String
+  ; Option display
   let some = Option.Some(42)
-  let some-str = some as String
+  let some-str = :display(some)
   write some-str
   ; Expected: Option.Some(42)
 
   let none = Option.None
-  let none-str = none as String
+  let none-str = :display(none)
   write none-str
   ; Expected: Option.None
 
@@ -88,12 +88,12 @@ fun main() {
 
   ; Tuple identity cast
   let tup = (1, 2)
-  write tup as (Int, Int)
+  write :display(tup as (Int, Int))
   ; Expected: (1, 2)
 
   ; Object identity cast
   let obj2 = { a: 1, b: 2 }
-  write obj2 as { a: Int, b: Int }
+  write :display(obj2 as { a: Int, b: Int })
   ; Expected: { a: 1, b: 2 }
 
   ; === Chained casts ===

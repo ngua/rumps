@@ -5,8 +5,8 @@ fun main() {
   let local-ref = data{1, 2}
   let global-ref = ^info{"key"}
 
-  write local-ref
-  write global-ref
+  write :display(local-ref)
+  write :display(global-ref)
 
   ; Set up some data
   @set data{1, 2} "nested"
@@ -16,47 +16,47 @@ fun main() {
   }
 
   ; Use refs with functions
-  write get-or-default(local-ref, "missing")
-  write get-or-default(global-ref, "missing")
-  write get-or-default(data{999}, "not found")
+  write :display(get-or-default(local-ref, "missing"))
+  write :display(get-or-default(global-ref, "missing"))
+  write :display(get-or-default(data{999}, "not found"))
 
   ; Direct ref usage
   let r = data{42}
-  write r
-  write @get r
+  write :display(r)
+  write :display(@get r)
 
   ; Refs in collections
   let refs = [data{1}, data{2}, data{3}]
-  write refs
+  write :display(refs)
 
   ; Ref with spread subscripts
   let keys = [1, 2]
   let spread-ref = data{...keys}
-  write spread-ref
+  write :display(spread-ref)
   @set data{1, 2} "via spread"
-  write @get spread-ref
+  write :display(@get spread-ref)
 
   let returned = make-ref(42)
-  write returned
-  write @get returned
+  write :display(returned)
+  write :display(@get returned)
 
   ; @set and @kill with local Ref variable (no transaction needed)
   let set-ref = data{100}
   @set set-ref "via ref"
-  write @get set-ref
+  write :display(@get set-ref)
 
   ; KILL local ref via variable (no transaction needed)
   let kill-ref = data{100}
   @kill kill-ref
-  write @get kill-ref ?? "killed"
+  write :display(@get kill-ref ?? "killed")
 
   ; Global ref via variable (requires transaction)
   transaction {
     let g-ref = ^info{"txn-key"}
     @set g-ref "set via ref"
-    write @get g-ref
+    write :display(@get g-ref)
     @kill g-ref
-    write @get g-ref ?? "global killed"
+    write :display(@get g-ref ?? "global killed")
   }
 
   ; Ref equality comparison

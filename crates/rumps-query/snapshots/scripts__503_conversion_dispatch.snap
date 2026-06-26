@@ -1,0 +1,9 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Conversion surfaces use normal class dispatch.\n\n#(deriving: Display)\nvariant Secret = Secret(String)\n\nvariant Token = Token\n\nvariant Blob = Blob(Int)\n\nclass Into[String] for Secret {\n  fun into(s: Secret) -> String {\n    match s {\n      Secret.Secret(_) => { \"<secret>\" }\n    }\n  }\n}\n\nclass Into[String] for Token {\n  fun into(t: Token) -> String {\n    match t {\n      Token.Token => { \"abc123\" }\n    }\n  }\n}\n\nclass Into[Json] for Blob {\n  fun into(b: Blob) -> Json {\n    match b {\n      Blob.Blob(n) => {\n        { \"blob\": n }\n      }\n    }\n  }\n}\n\nfun main() {\n  let s = Secret.Secret(\"boom\")\n  let b = Blob.Blob(7)\n  write s as String\n  write (b as Json) as String\n  write Token.Token matches /\\d+/\n  write { \"one\": b, \"many\": [Blob.Blob(1), \"two\"] } as String\n  write raise s catch e => {\n    match e {\n      Error.Raise(msg) => { msg }\n      _ => { \"wrong error\" }\n    }\n  }\n}\n"
+---
+<secret>
+{"blob":7}
+true
+{"many":[{"blob":1},"two"],"one":{"blob":7}}
+Secret.Secret("boom")

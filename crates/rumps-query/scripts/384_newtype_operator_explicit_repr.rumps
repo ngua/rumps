@@ -17,5 +17,5 @@ class Additive for Count {
 fun main() {
   let a: Count = 10
   let b: Count = 3
-  write a + b
+  write :display(a + b)
 }

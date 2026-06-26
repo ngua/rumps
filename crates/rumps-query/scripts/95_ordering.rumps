@@ -7,9 +7,9 @@ fun main() {
   let eq = Ordering.Eq
   let gt = Ordering.Gt
 
-  write lt
-  write eq
-  write gt
+  write :display(lt)
+  write :display(eq)
+  write :display(gt)
 
   ; === Pattern matching on Ordering ===
 
@@ -29,7 +29,7 @@ fun main() {
   write Iterable:length(orderings)
 
   let mapped = Mappable:map(describe, orderings)
-  write mapped
+  write :display(mapped)
 
   ; === Ordering in match with guards ===
 

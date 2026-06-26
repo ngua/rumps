@@ -14,54 +14,54 @@ class Ord for Priority {
 
 fun main() {
   ; --- Scalars ---
-  write Array.sort([3, 1, 4, 1, 5, 9, 2, 6])
+  write :display(Array.sort([3, 1, 4, 1, 5, 9, 2, 6]))
   let words: Array[Word] = [3, 1, 2]
-  write Array.sort(words)
-  write Array.sort(["banana", "apple", "cherry"])
-  write Array.sort([true, false, true, false])
-  write Array.sort([3.14, 1.0, 2.71])
-  write Array.sort(['b', 'a', 'c'])
-  write Array.sort([Ordering.Gt, Ordering.Lt, Ordering.Eq])
+  write :display(Array.sort(words))
+  write :display(Array.sort(["banana", "apple", "cherry"]))
+  write :display(Array.sort([true, false, true, false]))
+  write :display(Array.sort([3.14, 1.0, 2.71]))
+  write :display(Array.sort(['b', 'a', 'c']))
+  write :display(Array.sort([Ordering.Gt, Ordering.Lt, Ordering.Eq]))
 
   ; --- Option ---
   ; None < Some, then by payload
-  write Array.sort([Option.Some(3), Option.None, Option.Some(1), Option.None, Option.Some(2)])
+  write :display(Array.sort([Option.Some(3), Option.None, Option.Some(1), Option.None, Option.Some(2)]))
 
   ; --- Result ---
   ; Err < Ok, then by payload
-  write Array.sort([Result.Ok(2), Result.Err("b"), Result.Ok(1), Result.Err("a")])
+  write :display(Array.sort([Result.Ok(2), Result.Err("b"), Result.Ok(1), Result.Err("a")]))
 
   ; --- Tuples ---
   ; Lexicographic ordering
-  write Array.sort([(2, "b"), (1, "z"), (2, "a"), (1, "a")])
-  write Array.sort([(1, 2, 3), (1, 1, 9), (1, 2, 1)])
+  write :display(Array.sort([(2, "b"), (1, "z"), (2, "a"), (1, "a")]))
+  write :display(Array.sort([(1, 2, 3), (1, 1, 9), (1, 2, 1)]))
 
   ; --- Nested Options ---
-  write Array.sort([Option.Some(Option.Some(2)), Option.Some(Option.None), Option.None, Option.Some(Option.Some(1))])
+  write :display(Array.sort([Option.Some(Option.Some(2)), Option.Some(Option.None), Option.None, Option.Some(Option.Some(1))]))
 
   ; --- User-defined Ord instance ---
   let low: Priority = 1
   let med: Priority = 2
   let high: Priority = 3
   let tasks = [low, high, med, low, high]
-  write Array.sort(tasks)
+  write :display(Array.sort(tasks))
 
   ; --- Time ---
   let epoch = Time.epoch()
   let t1 = Time.add-seconds(epoch, 1)
   let t2 = Time.add-seconds(epoch, 2)
-  write Array.sort([t2, t1])
+  write :display(Array.sort([t2, t1]))
 
   ; --- Arrays of arrays ---
-  write Array.sort([[3, 1], [1, 2], [1, 1], [2, 0]])
+  write :display(Array.sort([[3, 1], [1, 2], [1, 1], [2, 0]]))
 
   ; --- Maps ---
   let m1: Map[String, Int] = Map.from-entries([("a", 1), ("b", 2)])
   let m2: Map[String, Int] = Map.from-entries([("a", 1), ("b", 3)])
   let m3: Map[String, Int] = Map.from-entries([("a", 1), ("c", 2)])
-  write Array.sort([m3, m2, m1])
+  write :display(Array.sort([m3, m2, m1]))
 
   ; --- Mixed with pipeline ---
   let sorted-options = [Option.Some(5), Option.None, Option.Some(3)] |> Array.sort
-  write sorted-options
+  write :display(sorted-options)
 }

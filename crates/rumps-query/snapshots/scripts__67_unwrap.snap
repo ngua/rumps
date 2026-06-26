@@ -1,13 +1,13 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test postfix `!` unwrap operator\n\n; Unwrap Option.Some\nLET some-val = Option.Some(42)\nOUTPUT some-val!\n\n; Unwrap Result.Ok\nLET ok-val = Result.Ok(\"success\")\nOUTPUT ok-val!\n\n; Chained with field access\nLET obj = { x: Option.Some(99) }\nOUTPUT obj.x!\n\n; Chained with function call\nFUN make-some (n) { Option.Some(n * 2) }\nOUTPUT make-some(25)!\n\n; Unwrap result from Map.entries (which returns Array)\nLET map = Map.from-entries([(\"a\", 1), (\"b\", 2)])\nLET entries = Map.entries(map)\nOUTPUT entries\n\n; Double unwrap (nested Option)\nLET nested = Option.Some(Option.Some(\"deep\"))\nOUTPUT nested!!\n\n; Combining with other postfix ops\nLET arr = [Option.Some(10), Option.Some(20)]\nOUTPUT arr[0]!\nOUTPUT arr[1]!\n\n; In arithmetic expression\nLET num = Option.Some(5)\nOUTPUT num! * 10\n\n; With pipeline\nLET doubled = { val: 3 } |> (o => Option.Some(o.val * 2))\nOUTPUT doubled!\n"
+description: "; Test postfix `!` unwrap operator\n\nfun make-some(n) { Option.Some(n * 2) }\n\nfun main() {\n  ; Unwrap Option.Some\n  let some-val = Option.Some(42)\n  write some-val!\n\n  ; Unwrap Result.Ok\n  let ok-val = Result.Ok(\"success\")\n  write ok-val!\n\n  ; Chained with field access\n  let obj = { x: Option.Some(99) }\n  write obj.x!\n\n  ; Chained with function call\n  write make-some(25)!\n\n  ; Unwrap result from Map.entries (which returns Array)\n  let map = Map.from-entries([(\"a\", 1), (\"b\", 2)])\n  let entries = Map.entries(map)\n  write entries\n\n  ; Double unwrap (nested Option)\n  let nested = Option.Some(Option.Some(\"deep\"))\n  write nested!!\n\n  ; Combining with other postfix ops\n  let arr = [Option.Some(10), Option.Some(20)]\n  write arr[0]!\n  write arr[1]!\n\n  ; In arithmetic expression\n  let num = Option.Some(5)\n  write num! * 10\n\n  ; With pipeline\n  let doubled = { val: 3 } |> (o => Option.Some(o.val * 2))\n  write doubled!\n}\n"
 ---
 42
-"success"
+success
 99
 50
 [ ("a", 1), ("b", 2) ]
-"deep"
+deep
 10
 20
 50

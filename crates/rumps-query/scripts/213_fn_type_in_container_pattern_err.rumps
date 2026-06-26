@@ -9,7 +9,7 @@
 fun main() {
   let v: Int | String = 1
   match v {
-    fs is Array[((Int) -> Int)] => write "got array of fns: {fs}"
+    fs is Array[((Int) -> Int)] => write "got array of fns: {:display(fs)}"
     _ => write "other"
   }
 }

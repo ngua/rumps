@@ -4,7 +4,7 @@
 fun main() {
   write M.greeting
   write M.count
-  write M.items
+  write :display(M.items)
 }
 
 module M {

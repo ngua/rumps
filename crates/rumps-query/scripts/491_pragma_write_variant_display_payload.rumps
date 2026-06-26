@@ -2,6 +2,6 @@
 variant Box = Box(Int, String) | Empty
 
 fun main() {
-  write Box.Box(1, "a")
-  write Box.Empty
+  write :display(Box.Box(1, "a"))
+  write :display(Box.Empty)
 }

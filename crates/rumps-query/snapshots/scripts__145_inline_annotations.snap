@@ -1,13 +1,13 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: Inline type annotations\n; Tests `expr: Type` syntax for inline type annotations without requiring parens\n\nfun main() {\n  ; === Basic scalar annotations (no parens required) ===\n\n  write 42: Int\n  write \"hello\": String\n  write true: Bool\n  write 3.14: Float\n\n  ; With let bindings\n  let x = 10: Int\n  write x\n\n  let s = \"world\": String\n  write s\n\n  ; === Annotation with various whitespace ===\n\n  ; No space\n  let a = 1:Int\n  write a\n\n  ; Spaces around colon\n  let b = 2 : Int\n  write b\n\n  ; Space only before\n  let c = 3 :Int\n  write c\n\n  ; === Annotation inside parentheses ===\n\n  ; Single expression with annotation inside parens\n  let y = (100: Int)\n  write y\n\n  ; Nested parens\n  let z = ((200: Int))\n  write z\n\n  ; === Old syntax still works: `(expr): Type` ===\n\n  let old = (300): Int\n  write old\n\n  ; === Postfix operators then annotation ===\n\n  ; Field access then annotation\n  let obj = { a: { b: 10 } }\n  write obj.a.b: Int\n\n  ; Index then annotation\n  let arr = [1, 2, 3]\n  write arr[0]: Int\n\n  ; Unwrap then annotation\n  let opt = Option.Some(42)\n  write opt!: Int\n\n  ; === DB intrinsics with annotation ===\n\n  ; Setup a local db\n  let d = {}\n  @set d{\"key\"} 123\n\n  ; @get with annotation\n  let val = @get d{\"key\"}: Option[Storable]\n  write val\n\n  ; @get with unwrap then annotation\n  let unwrapped = @get d{\"key\"}!: Storable\n  write unwrapped\n\n  ; @data with annotation\n  let status = @data d{\"key\"}: DataStatus\n  write status\n\n  ; @order with annotation\n  let ord = @order d{\"\"}: Option[Subscript]\n  write ord\n\n  ; === write with annotated operand ===\n\n  write 999: Int\n  write \"test\": String\n  write obj.a.b: Int\n\n  ; === Tuple annotation ===\n\n  ; Tuple with annotation (parens around tuple + annotation)\n  let tup = (1, 2): (Int, Int)\n  write tup\n\n  ; Tuple annotation inside parens\n  let tup2 = ((3, 4): (Int, Int))\n  write tup2\n\n  ; Access tuple element with annotation\n  write tup.0: Int\n\n  ; === Parameterized type annotations ===\n\n  let some = Option.Some(10): Option[Int]\n  write some\n\n  let none = Option.None: Option[String]\n  write none\n\n  let ok = Result.Ok(42): Result[Int, String]\n  write ok\n\n  let err = Result.Err(\"oops\"): Result[Int, String]\n  write err\n\n  ; === Array annotations ===\n\n  let nums = [1, 2, 3]: Array[Int]\n  write nums\n\n  ; === Complex expressions ===\n\n  ; Arithmetic then annotation (annotation binds to `2` not to `1 + 2`)\n  ; So we need parens for the whole thing\n  let sum = (1 + 2: Int)\n  write sum\n\n  ; Chained postfix then annotation\n  let nested = { x: Option.Some({ y: 5 }) }\n  write nested.x!.y: Int\n\n  ; === Function return type inference with annotation ===\n\n  write double(5): Int\n\n  write \"Inline annotation test complete\"\n}\n\nfun double(n: Int) -> Int { n * 2 }\n"
+description: "; Test: Inline type annotations\n; Tests `expr: Type` syntax for inline type annotations without requiring parens\n\nfun main() {\n  ; === Basic scalar annotations (no parens required) ===\n\n  write 42: Int\n  write \"hello\": String\n  write true: Bool\n  write 3.14: Float\n\n  ; With let bindings\n  let x = 10: Int\n  write x\n\n  let s = \"world\": String\n  write s\n\n  ; === Annotation with various whitespace ===\n\n  ; No space\n  let a = 1:Int\n  write a\n\n  ; Spaces around colon\n  let b = 2 : Int\n  write b\n\n  ; Space only before\n  let c = 3 :Int\n  write c\n\n  ; === Annotation inside parentheses ===\n\n  ; Single expression with annotation inside parens\n  let y = (100: Int)\n  write y\n\n  ; Nested parens\n  let z = ((200: Int))\n  write z\n\n  ; === Old syntax still works: `(expr): Type` ===\n\n  let old = (300): Int\n  write old\n\n  ; === Postfix operators then annotation ===\n\n  ; Field access then annotation\n  let obj = { a: { b: 10 } }\n  write obj.a.b: Int\n\n  ; Index then annotation\n  let arr = [1, 2, 3]\n  write arr[0]: Int\n\n  ; Unwrap then annotation\n  let opt = Option.Some(42)\n  write opt!: Int\n\n  ; === DB intrinsics with annotation ===\n\n  ; Setup a local db\n  let d = {}\n  @set d{\"key\"} 123\n\n  ; @get with annotation\n  let val = @get d{\"key\"}: Option[Storable]\n  write :display(val)\n\n  ; @get with unwrap then annotation\n  let unwrapped = @get d{\"key\"}!: Storable\n  write :display(unwrapped)\n\n  ; @data with annotation\n  let status = @data d{\"key\"}: DataStatus\n  write :display(status)\n\n  ; @order with annotation\n  let ord = @order d{\"\"}: Option[Subscript]\n  write :display(ord)\n\n  ; === write with annotated operand ===\n\n  write 999: Int\n  write \"test\": String\n  write obj.a.b: Int\n\n  ; === Tuple annotation ===\n\n  ; Tuple with annotation (parens around tuple + annotation)\n  let tup = (1, 2): (Int, Int)\n  write :display(tup)\n\n  ; Tuple annotation inside parens\n  let tup2 = ((3, 4): (Int, Int))\n  write :display(tup2)\n\n  ; Access tuple element with annotation\n  write tup.0: Int\n\n  ; === Parameterized type annotations ===\n\n  let some = Option.Some(10): Option[Int]\n  write :display(some)\n\n  let none = Option.None: Option[String]\n  write :display(none)\n\n  let ok = Result.Ok(42): Result[Int, String]\n  write :display(ok)\n\n  let err = Result.Err(\"oops\"): Result[Int, String]\n  write :display(err)\n\n  ; === Array annotations ===\n\n  let nums = [1, 2, 3]: Array[Int]\n  write :display(nums)\n\n  ; === Complex expressions ===\n\n  ; Arithmetic then annotation (annotation binds to `2` not to `1 + 2`)\n  ; So we need parens for the whole thing\n  let sum = (1 + 2: Int)\n  write sum\n\n  ; Chained postfix then annotation\n  let nested = { x: Option.Some({ y: 5 }) }\n  write nested.x!.y: Int\n\n  ; === Function return type inference with annotation ===\n\n  write double(5): Int\n\n  write \"Inline annotation test complete\"\n}\n\nfun double(n: Int) -> Int { n * 2 }\n"
 ---
 42
-"hello"
+hello
 true
 3.14
 10
-"world"
+world
 1
 2
 3
@@ -22,7 +22,7 @@ Option.Some(123)
 DataStatus.HasValue
 Option.Some("key")
 999
-"test"
+test
 10
 (1, 2)
 (3, 4)
@@ -35,4 +35,4 @@ Result.Err("oops")
 3
 5
 10
-"Inline annotation test complete"
+Inline annotation test complete

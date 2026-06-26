@@ -2,4 +2,4 @@
 source: crates/rumps-query/tests/scripts.rs
 description: "#(deriving: Numeric)\nvariant Mood = Happy | Sad\n\nfun main() {\n  write \"bad\"\n}\n"
 ---
-ERROR: `variant` declarations can only derive `Eq`, `Ord`, or `Display`, not `Numeric`
+ERROR: `variant` declarations can only derive `Eq`, `Ord`, `Display`, or `Formattable`, not `Numeric`

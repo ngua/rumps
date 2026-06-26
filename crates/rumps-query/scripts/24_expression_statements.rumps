@@ -60,10 +60,10 @@ fun main() {
     @set items{2} "second"
   }
 
-  write @get items{1}
+  write :display(@get items{1})
   ; Expected: first
 
-  write @get items{2}
+  write :display(@get items{2})
   ; Expected: second
 
   write "Expression statements test complete"

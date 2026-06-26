@@ -16,47 +16,47 @@ fun main() {
 
   ; First subscript at root (no after value, use {} for root)
   let first = @order items{}
-  write first
+  write :display(first)
 
   ; Next subscript after 1
   let after-1 = @order items{1}
-  write after-1
+  write :display(after-1)
 
   ; Next subscript after 2
   let after-2 = @order items{2}
-  write after-2
+  write :display(after-2)
 
   ; Next subscript after 10
   let after-10 = @order items{10}
-  write after-10
+  write :display(after-10)
 
   ; Past the last numeric key
   let after-a = @order items{"A"}
-  write after-a
+  write :display(after-a)
 
   ; Past the last key entirely
   let after-b = @order items{"B"}
-  write after-b
+  write :display(after-b)
 
   ; Next subscript at root after 1 (which is 2)
   let nested-after-1 = @order nested{1}
-  write nested-after-1
+  write :display(nested-after-1)
 
   ; Next subscript under nested{1} after "A"
   let nested-1-after-a = @order nested{1, "A"}
-  write nested-1-after-a
+  write :display(nested-1-after-a)
 
   ; Past last key under nested{1}
   let nested-1-after-b = @order nested{1, "B"}
-  write nested-1-after-b
+  write :display(nested-1-after-b)
 
   ; Next subscript at root after 2 (none)
   let nested-after-2 = @order nested{2}
-  write nested-after-2
+  write :display(nested-after-2)
 
   ; @order on non-existent variable (use {} for root)
   let no-keys = @order empty{}
-  write no-keys
+  write :display(no-keys)
 
   ; @order with different subscript types
   @set mixed{true} "bool key"
@@ -66,14 +66,14 @@ fun main() {
 
   ; Bool comes first, then numbers, then strings
   let mixed-first = @order mixed{}
-  write mixed-first
+  write :display(mixed-first)
 
   let mixed-after-true = @order mixed{true}
-  write mixed-after-true
+  write :display(mixed-after-true)
 
   ; Type annotation
   let typed: Option[Subscript] = @order items{}
-  write typed
+  write :display(typed)
 
   write "@order test complete"
 }

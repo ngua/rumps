@@ -128,7 +128,7 @@ fun main() {
   ; === Pipeline placeholder with built-in functions ===
 
   let arr = [1, 2, 3, 4, 5]
-  write arr |> Array.slice(., 1, 3)
+  write :display(arr |> Array.slice(., 1, 3))
   ; Expected: [2, 3]
 
   write "Pipeline test complete"

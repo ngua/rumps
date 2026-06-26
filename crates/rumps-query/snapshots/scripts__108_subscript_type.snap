@@ -1,11 +1,11 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: Subscript type as subscript key\n; The `Subscript` union type can be used directly as a subscript key,\n; enabling seamless piping of `@ORDER` results into `@GET` without coercions.\n\n; Set up test data with mixed subscript types\n@SET data(1) = \"one\"\n@SET data(2) = \"two\"\n@SET data(3) = \"three\"\n@SET data(\"a\") = \"alpha\"\n@SET data(\"b\") = \"beta\"\n\n; Use @ORDER result directly as subscript (no READ coercion needed)\nLET first : Subscript = (@ORDER data)!\n@OUTPUT first\n@OUTPUT (@GET data(first))!\n\n; Chain through all keys using loop\nLET vals = loop { key: @ORDER data, acc: [] } (st, cont) => {\n    MATCH st.key {\n        Option.None => st.acc\n        Option.Some(k) => {\n            ; k is Subscript; use directly in @GET and @ORDER\n            LET v = (@GET data(k))!\n            cont({\n                key: @ORDER data(k),\n                acc: Array.concat(st.acc, [v])\n            })\n        }\n    }\n}\n@OUTPUT vals\n\n; Explicit Subscript annotation works\nLET sub : Subscript = 42\n@SET x(sub) = \"works\"\n@OUTPUT (@GET x(sub))!\n\n; Function that takes Subscript parameter\nFUN lookup (key: Subscript) -> Option[Storable] {\n    @GET data(key)\n}\n\n@OUTPUT lookup(1)\n@OUTPUT lookup(\"a\")\n\n@OUTPUT \"Subscript type test complete\"\n"
+description: "; Test: Subscript type as subscript key\n; The `Subscript` union type can be used directly as a subscript key,\n; enabling seamless piping of `@order` results into `@get` without coercions.\n\nfun main() {\n  ; Set up test data with mixed subscript types\n  @set data{1} \"one\"\n  @set data{2} \"two\"\n  @set data{3} \"three\"\n  @set data{\"a\"} \"alpha\"\n  @set data{\"b\"} \"beta\"\n\n  ; Use @order result directly as subscript (no read coercion needed)\n  let first : Subscript = @order data{}!\n  write :display(first)\n  write @get data{first}!\n\n  ; Chain through all keys using loop\n  let vals = loop { key: @order data{}, acc: [] } (st, cont) => {\n    match st.key {\n      Option.None => st.acc\n      Option.Some(k) => {\n        ; k is Subscript; use directly in @get and @order\n        let v = @get data{k}!\n        cont({\n          key: @order data{k},\n          acc: Array.concat(st.acc, [v])\n        })\n      }\n    }\n  }\n  write :display(vals)\n\n  ; Explicit Subscript annotation works\n  let sub : Subscript = 42\n  @set x{sub} \"works\"\n  write @get x{sub}!\n\n  write :display(lookup(1))\n  write :display(lookup(\"a\"))\n\n  write \"Subscript type test complete\"\n}\n\n; Function that takes Subscript parameter\nfun lookup (key: Subscript) -> Option[Storable] {\n  @get data{key}\n}\n"
 ---
 1
-"one"
+one
 [ "one", "two", "three", "alpha", "beta" ]
-"works"
+works
 Option.Some("one")
 Option.Some("alpha")
-"Subscript type test complete"
+Subscript type test complete

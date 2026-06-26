@@ -929,7 +929,7 @@ pub(crate) enum Expr {
     /// Explicit infallible type conversion. Supported conversions:
     /// - `Int -> Float` (widen)
     /// - `Float -> Int` (truncate)
-    /// - `T -> String` (stringify)
+    /// - `T -> String` via `Into[String]`
     /// - `Bool -> Int` (`false` -> `0`, `true` -> `1`)
     As(ExprId, AstTypeExprId),
 
@@ -1106,7 +1106,7 @@ pub(crate) enum JsonAccessKey {
 /// Output format modifier.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum OutputFormat {
-    /// Default: stringify the value.
+    /// Default: write the `Into[String]` result.
     #[default]
     Default,
     /// Convert to JSON before output.

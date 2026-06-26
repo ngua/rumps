@@ -4,5 +4,5 @@ fun main() {
   let f = (x: Int) -> Int => x + 1
   let entries = [(f, "bad")]
   let m = Map.from-entries(entries)
-  write m
+  write :display(m)
 }

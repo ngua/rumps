@@ -10,30 +10,30 @@ fun main() {
   ; === Array concatenation ===
   let a1 = [1, 2, 3]
   let a2 = [4, 5, 6]
-  write a1 ++ a2
+  write :display(a1 ++ a2)
 
   ; Nested arrays
   let nested1 = [[1, 2], [3, 4]]
   let nested2 = [[5, 6]]
-  write nested1 ++ nested2
+  write :display(nested1 ++ nested2)
 
   ; === Map concatenation (RHS bias) ===
   let m1 = { "a" => 1, "b" => 2 }
   let m2 = { "c" => 3, "d" => 4 }
-  write m1 ++ m2
+  write :display(m1 ++ m2)
 
   ; RHS bias: right value wins for duplicate keys
   let left = { "x" => 10, "y" => 20 }
   let right = { "y" => 999, "z" => 30 }
   let merged = left ++ right
-  write Map.lookup(merged, "x")  ; Some(10)
-  write Map.lookup(merged, "y")  ; Some(999) - right wins
-  write Map.lookup(merged, "z")  ; Some(30)
+  write :display(Map.lookup(merged, "x"))  ; Some(10)
+  write :display(Map.lookup(merged, "y"))  ; Some(999) - right wins
+  write :display(Map.lookup(merged, "z"))  ; Some(30)
 
   ; === Type constraint: Concatable ===
   write concat3("a", "b", "c")
-  write concat3([1], [2], [3])
-  write concat3({ 1 => "x" }, { 2 => "y" }, { 3 => "z" })
+  write :display(concat3([1], [2], [3]))
+  write :display(concat3({ 1 => "x" }, { 2 => "y" }, { 3 => "z" }))
 
   ; === Option alternative (`<|>` semantics) ===
   ; First `Some` wins; `None` acts as the empty alternative
@@ -43,24 +43,24 @@ fun main() {
   let none: Option[Int] = Option.None
 
   ; Some ++ None = Some (left wins)
-  write some10 ++ none
+  write :display(some10 ++ none)
 
   ; None ++ Some = Some (right wins)
-  write none ++ some9
+  write :display(none ++ some9)
 
   ; None ++ None = None
-  write none ++ none
+  write :display(none ++ none)
 
   ; Some ++ Some = first Some (left-biased, like Haskell `<|>`)
-  write some10 ++ some9
+  write :display(some10 ++ some9)
 
   ; Chaining: first Some in chain wins
-  write none ++ none ++ some10 ++ some9
+  write :display(none ++ none ++ some10 ++ some9)
 
   ; With generic Concatable function
-  write concat3(none, some10, some9)  ; first non-None wins
-  write concat3(none, none, some9)    ; last Some wins
-  write concat3(none, none, none)     ; all None
+  write :display(concat3(none, some10, some9))  ; first non-None wins
+  write :display(concat3(none, none, some9))    ; last Some wins
+  write :display(concat3(none, none, none))     ; all None
 
   ; === Default: `_` shorthand ===
   ; `_` produces the default value for any `Default` type, inferred from context
@@ -70,23 +70,23 @@ fun main() {
   write "world" ++ _      ; "world" ++ "" = "world"
 
   ; Array Default
-  write _ ++ [1, 2, 3]    ; [] ++ [1, 2, 3] = [1, 2, 3]
-  write [4, 5] ++ _       ; [4, 5] ++ [] = [4, 5]
+  write :display(_ ++ [1, 2, 3])    ; [] ++ [1, 2, 3] = [1, 2, 3]
+  write :display([4, 5] ++ _)       ; [4, 5] ++ [] = [4, 5]
 
   ; Map Default
   let m = { "x" => 10 }
-  write _ ++ m            ; {} ++ m = m
-  write m ++ _            ; m ++ {} = m
+  write :display(_ ++ m)            ; {} ++ m = m
+  write :display(m ++ _)            ; m ++ {} = m
 
   ; Option Default (`None`)
-  write _ ++ Option.Some(99)   ; None ++ Some(99) = Some(99)
-  write Option.Some(77) ++ _   ; Some(77) ++ None = Some(77)
-  write Option.None ++ _       ; None ++ None = None
-  write _ ++ Option.None       ; None ++ None = None
+  write :display(_ ++ Option.Some(99))   ; None ++ Some(99) = Some(99)
+  write :display(Option.Some(77) ++ _)   ; Some(77) ++ None = Some(77)
+  write :display(Option.None ++ _)       ; None ++ None = None
+  write :display(_ ++ Option.None)       ; None ++ None = None
 
   ; Default with generic Concatable function
   write concat3(_, "a", "b")   ; "" ++ "a" ++ "b" = "ab"
-  write concat3([0], _, [2])   ; [0] ++ [] ++ [2] = [0, 2]
+  write :display(concat3([0], _, [2]))   ; [0] ++ [] ++ [2] = [0, 2]
 
   ; Default as loop seed (common pattern for accumulating)
   ; Collect squares of 1..5 into an array starting from `_` (empty array)
@@ -97,7 +97,7 @@ fun main() {
       cont({ i: state.i + 1, acc: state.acc ++ [state.i * state.i] })
     }
   }
-  write squares
+  write :display(squares)
 
   ; Build a string using `_` as initial accumulator
   let words = loop { i: 0, s: _ } (state, cont) => {
@@ -117,9 +117,9 @@ fun main() {
   let b: Bool = _
   write b
   let u: Unit = _
-  write u
+  write :display(u)
   let ord: Ordering = _
-  write ord
+  write :display(ord)
   let fp: FilePath = _
   write fp as String
 

@@ -5,63 +5,63 @@ fun main() {
   ; === Option.Some ===
 
   let some1 = Option.Some(42)
-  write some1
+  write :display(some1)
   ; Expected: Option.Some(42)
 
   let some2 = Option.Some("hello")
-  write some2
+  write :display(some2)
   ; Expected: Option.Some(hello)
 
   ; === Option.None ===
 
   let none = Option.None
-  write none
+  write :display(none)
   ; Expected: Option.None
 
   ; === Result.Ok ===
 
   let ok1 = Result.Ok(100)
-  write ok1
+  write :display(ok1)
   ; Expected: Result.Ok(100)
 
   let ok2 = Result.Ok("success")
-  write ok2
+  write :display(ok2)
   ; Expected: Result.Ok(success)
 
   ; === Result.Err ===
 
   let err1 = Result.Err("failed")
-  write err1
+  write :display(err1)
   ; Expected: Result.Err(failed)
 
   let err2 = Result.Err(404)
-  write err2
+  write :display(err2)
   ; Expected: Result.Err(404)
 
   ; === Nested variants ===
 
   let nested1 = Option.Some(Result.Ok(1))
-  write nested1
+  write :display(nested1)
   ; Expected: Option.Some(Result.Ok(1))
 
   let nested2 = Result.Ok(Option.Some("inner"))
-  write nested2
+  write :display(nested2)
   ; Expected: Result.Ok(Option.Some(inner))
 
   let nested3 = Option.Some(Option.None)
-  write nested3
+  write :display(nested3)
   ; Expected: Option.Some(Option.None)
 
   ; === Variants with expressions ===
 
   let x = 10
   let computed = Option.Some(x * 2)
-  write computed
+  write :display(computed)
   ; Expected: Option.Some(20)
 
   let cond = true
   let conditional = Result.Ok(if cond { "yes" } else { "no" })
-  write conditional
+  write :display(conditional)
   ; Expected: Result.Ok(yes)
 
   ; === Coalesce with explicit variants ===
@@ -88,19 +88,19 @@ fun main() {
     status: Result.Ok("active"),
     value: Option.Some(123)
   }
-  write obj.status
+  write :display(obj.status)
   ; Expected: Result.Ok(active)
-  write obj.value
+  write :display(obj.value)
   ; Expected: Option.Some(123)
 
   ; === Variant in array ===
 
   let arr = [Option.Some(1), Option.None, Option.Some(3)]
-  write arr[0]
+  write :display(arr[0])
   ; Expected: Option.Some(1)
-  write arr[1]
+  write :display(arr[1])
   ; Expected: Option.None
-  write arr[2]
+  write :display(arr[2])
   ; Expected: Option.Some(3)
 
   write "Variant constructor tests complete"

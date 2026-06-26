@@ -14,5 +14,5 @@ class Swappable for Box {
 }
 
 fun main() {
-  write Swappable:swap(Box.Box(1), "x")
+  write :display(Swappable:swap(Box.Box(1), "x"))
 }

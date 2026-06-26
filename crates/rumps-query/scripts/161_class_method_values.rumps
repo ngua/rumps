@@ -9,7 +9,7 @@ fun main() {
   ; Invoke method references directly
   write "add-fn(3, 4) = {add-fn(3, 4)}"
   write "neg-fn(-5) = {neg-fn(-5)}"
-  write "cmp-fn(1, 2) = {cmp-fn(1, 2)}"
+  write "cmp-fn(1, 2) = {:display(cmp-fn(1, 2))}"
 
   ; Pass method references to higher-order functions
   let nums = [1, 2, 3, 4, 5]
@@ -42,15 +42,15 @@ fun main() {
   let piped-map = nums |> (a => Mappable:map(x => x * 2, a))
   let piped-filter = nums |> (a => Filterable:filter(x => x > 2, a))
   let piped-fold = nums |> (a => Foldable:fold((acc, x) => acc + x, 0, a))
-  write "Piped map: {piped-map}"
-  write "Piped filter: {piped-filter}"
+  write "Piped map: {:display(piped-map)}"
+  write "Piped filter: {:display(piped-filter)}"
   write "Piped fold: {piped-fold}"
 
   ; Iterable:length with pipe (unary; no wrapper needed)
   write "Piped length: {nums |> Iterable:length}"
 
   ; Prelude functions and class methods with pipes
-  write "Piped reverse: {nums |> Iterable:reverse}"
+  write "Piped reverse: {:display(nums |> Iterable:reverse)}"
   let piped-contains = nums |> (a => Array.contains(a, 3))
   write "Piped contains: {piped-contains}"
 
@@ -59,7 +59,7 @@ fun main() {
   let hello = "hello"
   let world = " world"
   let piped-str-concat = hello |> (s => Concatable:concat(s, world))
-  write "Piped concat: {piped-concat}"
+  write "Piped concat: {:display(piped-concat)}"
   write "Piped string concat: {piped-str-concat}"
 
   ; Fallible methods with pipes (unary; no wrapper)
@@ -70,7 +70,7 @@ fun main() {
   let piped-index = nums |> (a => Indexable:index(a, 2))
   let piped-get = nums |> (a => Indexable:get(a, 1))
   write "Piped index: {piped-index}"
-  write "Piped get: {piped-get}"
+  write "Piped get: {:display(piped-get)}"
 
   ; Complex pipeline combining multiple class methods
   let result = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
@@ -88,15 +88,15 @@ fun main() {
   let cmp1 = 5 |> (x => Ord:compare(x, 3))
   let cmp2 = 5 |> (x => Ord:compare(x, 5))
   let cmp3 = 3 |> (x => Ord:compare(x, 5))
-  write "Compare gt: {cmp1}"
-  write "Compare eq: {cmp2}"
-  write "Compare lt: {cmp3}"
+  write "Compare gt: {:display(cmp1)}"
+  write "Compare eq: {:display(cmp2)}"
+  write "Compare lt: {:display(cmp3)}"
 
   ; Store method reference and use in higher-order context
   let arr-concat-fn = Concatable:concat
   let arrs = [[1], [2, 3], [4, 5, 6]]
   let flattened = Foldable:fold(arr-concat-fn, [], arrs)
-  write "Flattened arrays: {flattened}"
+  write "Flattened arrays: {:display(flattened)}"
 
   ; Same with strings
   let str-concat-fn = Concatable:concat

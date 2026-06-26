@@ -585,6 +585,21 @@ impl ClassRegistry {
                     )),
                 )],
             },
+            // `25`: `Formattable`
+            ClassDef {
+                name: s("Formattable"),
+                shape: ClassShape::Concrete { params: 0 },
+                assoc_types: smallvec![],
+                required_methods: vec![],
+                supers: smallvec![],
+                methods: vec![(
+                    s("format"),
+                    MethodSpec::Standard(scheme!(
+                        arena,
+                        forall T: Formattable. (T) -> String
+                    )),
+                )],
+            },
         ];
 
         defs.iter_mut().for_each(|def| {

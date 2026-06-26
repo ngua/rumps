@@ -74,7 +74,7 @@ fun main() {
 
   ; Single element shuffle
   let shuffle-single = Random.shuffle([42])
-  write shuffle-single  ; [42]
+  write :display(shuffle-single)  ; [42]
 
   ; ============ Random.sample ============
 

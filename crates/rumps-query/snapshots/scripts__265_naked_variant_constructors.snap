@@ -1,12 +1,12 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Naked variant constructor shorthand.\n;\n; `.Ctor` resolves when exactly one visible type defines `Ctor`.\n\nvariant Box[T] = Full(T) | Empty\n\nfun describe-box(b: Box[Int]) -> String {\n  match b {\n    .Full(v) => { \"full {v}\" }\n    .Empty => { \"empty\" }\n  }\n}\n\nfun main() {\n  let some = .Some(42)\n  write some\n\n  let none: Option[Int] = .None\n  write none\n\n  if some is .Some(v) {\n    write \"some {v}\"\n  }\n\n  write .Ok(\"done\")\n  write .Err(\"bad\")\n\n  let box1 = .Full(7)\n  let box2: Box[Int] = .Empty\n  write describe-box(box1)\n  write describe-box(box2)\n\n  write match .Some(5) {\n    .Some(v) => { v + 1 }\n    .None => { 0 }\n  }\n}\n"
+description: "; Naked variant constructor shorthand.\n;\n; `.Ctor` resolves when exactly one visible type defines `Ctor`.\n\nvariant Box[T] = Full(T) | Empty\n\nfun describe-box(b: Box[Int]) -> String {\n  match b {\n    .Full(v) => { \"full {v}\" }\n    .Empty => { \"empty\" }\n  }\n}\n\nfun main() {\n  let some = .Some(42)\n  write :display(some)\n\n  let none: Option[Int] = .None\n  write :display(none)\n\n  if some is .Some(v) {\n    write \"some {v}\"\n  }\n\n  write :display(.Ok(\"done\"))\n  write :display(.Err(\"bad\"))\n\n  let box1 = .Full(7)\n  let box2: Box[Int] = .Empty\n  write describe-box(box1)\n  write describe-box(box2)\n\n  write match .Some(5) {\n    .Some(v) => { v + 1 }\n    .None => { 0 }\n  }\n}\n"
 ---
 Option.Some(42)
 Option.None
-"some 42"
+some 42
 Result.Ok("done")
 Result.Err("bad")
-"full 7"
-"empty"
+full 7
+empty
 6

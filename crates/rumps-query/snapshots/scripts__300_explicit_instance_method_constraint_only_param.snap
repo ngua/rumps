@@ -2,4 +2,4 @@
 source: crates/rumps-query/tests/scripts.rs
 description: "; Explicit instance method type params may appear only in constraints\n\nvariant Box = Box\n\nclass Weird C {\n  fun f[T: Display](x: C) -> String\n}\n\nclass Weird for Box {\n  fun f[T: Display](x: Box) -> String {\n    \"ok\"\n  }\n}\n\nfun main() {\n  write Weird:f(Box.Box)\n}\n"
 ---
-"ok"
+ok

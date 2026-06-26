@@ -2,6 +2,6 @@
 source: crates/rumps-query/tests/scripts.rs
 description: "; Top-level `let` shadowing is allowed.\n\nfun foo() -> Int { 1 }\n\nlet foo = \"bar\"\n\nlet dup = 1\nlet dup = dup + 1\n\nlet empty = []\nlet empty = 3\n\nfun main() {\n  write foo\n  write dup\n  write empty\n}\n"
 ---
-"bar"
+bar
 2
 3

@@ -1,7 +1,13 @@
-#(deriving: Display)
-newtype Label = Int
+module HiddenLabel {
+  #(deriving: Display)
+  +newtype Label = Int
+
+  +fun make(n: Int) -> HiddenLabel.Label {
+    n as HiddenLabel.Label
+  }
+}
 
 fun main() {
-  let x: Label = 7
+  let x = HiddenLabel.make(7)
   write x as String
 }

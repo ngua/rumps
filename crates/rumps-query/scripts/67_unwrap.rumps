@@ -21,7 +21,7 @@ fun main() {
   ; Unwrap result from Map.entries (which returns Array)
   let map = Map.from-entries([("a", 1), ("b", 2)])
   let entries = Map.entries(map)
-  write entries
+  write :display(entries)
 
   ; Double unwrap (nested Option)
   let nested = Option.Some(Option.Some("deep"))

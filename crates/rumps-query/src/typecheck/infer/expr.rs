@@ -59,8 +59,9 @@ impl InferCtx<'_> {
             // Literals
             Expr::Literal(lit) => self.literal(id, lit, span),
 
-            // String interpolation: all parts must be Into[String]
-            Expr::Interpolation(parts) => self.interpolation(parts, span),
+            // String interpolation: expression parts become `Formattable:format`
+            // calls.
+            Expr::Interpolation(parts) => self.interpolation(id, parts, span),
 
             // Unit: empty tuple
             Expr::Tuple(elems) if elems.is_empty() => TyArena::UNIT,
@@ -86,7 +87,7 @@ impl InferCtx<'_> {
             }
 
             // Arrays
-            Expr::Array(elems) => self.array(elems, span),
+            Expr::Array(elems) => self.array(id, elems, span),
 
             // Non-empty tuples (empty handled above as Unit)
             Expr::Tuple(elems) => self.tuple(elems),
@@ -126,12 +127,7 @@ impl InferCtx<'_> {
             }
 
             // JSON literals
-            Expr::Json(fields) => {
-                fields.iter().for_each(|(_, expr)| {
-                    self.expr(*expr);
-                });
-                TyArena::JSON
-            }
+            Expr::Json(fields) => self.json(id, fields, span),
 
             // Closures: (x, y) => body or [T](x: T) -> T => body
             Expr::Closure {
@@ -282,15 +278,47 @@ impl InferCtx<'_> {
 
             // Regex match: `expr MATCHES regex`
             Expr::Matches(lhs, rhs) => {
-                let lhs_ty = self.expr(*lhs);
+                let class = self.env.class_registry().name(ClassId::INTO);
+                let method = self.env.intern("into");
+                let target = self.env.intern("String");
+                let lhs_span = self.ast.expr_span(*lhs).unwrap_or(span);
+                let lhs = self
+                    .ast
+                    .add_type_expr(
+                        AstTypeExpr::Named(QualifiedName::local(target)),
+                        lhs_span,
+                    )
+                    .and_then(|target| {
+                        self.ast.add_expr(
+                            Expr::ClassMethodRef(
+                                class,
+                                smallvec![target],
+                                method,
+                            ),
+                            lhs_span,
+                        )
+                    })
+                    .and_then(|callee| {
+                        self.ast.add_expr(
+                            Expr::Call(callee, smallvec![*lhs]),
+                            lhs_span,
+                        )
+                    });
                 let rhs_ty = self.expr(*rhs);
 
-                // LHS must be convertible to String
-                self.constrain(Constraint::Class {
-                    ty: lhs_ty,
-                    class: TypeClass::param(ClassId::INTO, TyArena::STRING),
-                    span,
-                });
+                match lhs {
+                    Ok(lhs) => {
+                        let lhs_ty = self.expr(lhs);
+                        self.unify(lhs_ty, TyArena::STRING, lhs_span);
+                        self.ast.set_expr(id, Expr::Matches(lhs, *rhs));
+                    }
+                    Err(e) => {
+                        self.error(TypeError::Custom {
+                            msg: e.to_string(),
+                            span,
+                        });
+                    }
+                }
 
                 // RHS must be Regex
                 self.unify(rhs_ty, TyArena::REGEX, span);
@@ -315,20 +343,32 @@ impl InferCtx<'_> {
             // Write expression: `write expr [JSON] [TO target]`
             // Same typing as statement version, but returns `Unit`
             Expr::Write(output) => {
-                self.write(output, span);
+                self.write(id, output, span);
                 TyArena::UNIT
             }
 
             // Raise expression: `raise expr`
             // Never returns; can unify with any expected type.
             Expr::Raise(inner) => {
-                let ty = self.expr(*inner);
-                // Error message must be convertible to String
-                self.constrain(Constraint::Class {
-                    ty,
-                    class: TypeClass::param(ClassId::INTO, TyArena::STRING),
-                    span,
-                });
+                let class = self.env.class_registry().name(ClassId::DISPLAY);
+                let method = self.env.intern("display");
+                let inner_span = self.ast.expr_span(*inner).unwrap_or(span);
+                match self.ast.add_expr(
+                    Expr::ClassMethod(class, method, smallvec![*inner]),
+                    inner_span,
+                ) {
+                    Ok(inner) => {
+                        let ty = self.expr(inner);
+                        self.unify(ty, TyArena::STRING, inner_span);
+                        self.ast.set_expr(id, Expr::Raise(inner));
+                    }
+                    Err(e) => {
+                        self.error(TypeError::Custom {
+                            msg: e.to_string(),
+                            span,
+                        });
+                    }
+                }
                 self.fresh()
             }
 
@@ -1106,23 +1146,52 @@ impl InferCtx<'_> {
         }
     }
 
-    /// Infer type of string interpolation.
+    /// Infer type of string interpolation and rewrite holes.
     ///
-    /// All expression parts (odd indices) must be convertible to `String`.
-    /// Literal parts (even indices) are already strings. Returns `String`.
-    fn interpolation(&mut self, parts: &[ExprId], span: Span) -> TyId {
-        parts.iter().enumerate().for_each(|(i, &part_id)| {
-            let part_ty = self.expr(part_id);
-            // Odd indices are expressions; they must be convertible to String
-            // Even indices are string literals; no constraint needed
-            if i % 2 == 1 {
-                self.constrain(Constraint::Class {
-                    ty: part_ty,
-                    class: TypeClass::param(ClassId::INTO, TyArena::STRING),
+    /// Odd-index expression parts become synthetic `Formattable:format` calls.
+    /// Literal parts are already strings. Returns `String`.
+    fn interpolation(
+        &mut self,
+        id: ExprId,
+        parts: &[ExprId],
+        span: Span,
+    ) -> TyId {
+        let class = self.env.class_registry().name(ClassId::FORMATTABLE);
+        let method = self.env.intern("format");
+        let rewritten = parts.iter().enumerate().try_fold(
+            SmallVec::new(),
+            |mut acc, (i, &part)| {
+                if i % 2 == 0 {
+                    self.expr(part);
+                    acc.push(part);
+                    Ok(acc)
+                } else {
+                    let part_span = self.ast.expr_span(part).unwrap_or(span);
+                    self.ast
+                        .add_expr(
+                            Expr::ClassMethod(class, method, smallvec![part]),
+                            part_span,
+                        )
+                        .map(|fmt| {
+                            let ty = self.expr(fmt);
+                            self.unify(ty, TyArena::STRING, part_span);
+                            acc.push(fmt);
+                            acc
+                        })
+                }
+            },
+        );
+
+        match rewritten {
+            Ok(parts) => self.ast.set_expr(id, Expr::Interpolation(parts)),
+            Err(e) => {
+                self.error(TypeError::Custom {
+                    msg: e.to_string(),
                     span,
                 });
             }
-        });
+        }
+
         TyArena::STRING
     }
 
@@ -1365,7 +1434,7 @@ impl InferCtx<'_> {
     /// Empty arrays get a fresh element type. Homogeneous arrays get
     /// `Array[T]`. Heterogeneous arrays (mixed types) become `Json`.
     /// Spreads contribute their element type to the overall array type.
-    fn array(&mut self, elems: &[ArrayElem], span: Span) -> TyId {
+    fn array(&mut self, id: ExprId, elems: &[ArrayElem], span: Span) -> TyId {
         // Collect element types (for regular elements) and array element types (for spreads)
         let elem_tys: SmallVec<[TyId; 8]> = elems
             .iter()
@@ -1450,6 +1519,89 @@ impl InferCtx<'_> {
                     concrete_incompatible || var_with_non_numeric;
 
                 if heterogeneous {
+                    let class = self.env.class_registry().name(ClassId::INTO);
+                    let method = self.env.intern("into");
+                    let target = self.env.intern("Json");
+                    let target = self.ast.add_type_expr(
+                        AstTypeExpr::Named(QualifiedName::local(target)),
+                        span,
+                    );
+                    let rewritten = target.and_then(|target| {
+                        elems.iter().try_fold(
+                            Vec::with_capacity(elems.len()),
+                            |mut acc, elem| match elem {
+                                ArrayElem::Elem(expr) => {
+                                    let s = self
+                                        .ast
+                                        .expr_span(*expr)
+                                        .unwrap_or(span);
+                                    self.ast
+                                        .add_expr(
+                                            Expr::ClassMethodRef(
+                                                class,
+                                                smallvec![target],
+                                                method,
+                                            ),
+                                            s,
+                                        )
+                                        .and_then(|callee| {
+                                            self.ast.add_expr(
+                                                Expr::Call(
+                                                    callee,
+                                                    smallvec![*expr],
+                                                ),
+                                                s,
+                                            )
+                                        })
+                                        .map(|expr| {
+                                            let ty = self.expr(expr);
+                                            self.unify(ty, TyArena::JSON, s);
+                                            acc.push(ArrayElem::Elem(expr));
+                                            acc
+                                        })
+                                }
+                                ArrayElem::Spread(expr) => {
+                                    let s = self
+                                        .ast
+                                        .expr_span(*expr)
+                                        .unwrap_or(span);
+                                    self.ast
+                                        .add_expr(
+                                            Expr::ClassMethodRef(
+                                                class,
+                                                smallvec![target],
+                                                method,
+                                            ),
+                                            s,
+                                        )
+                                        .and_then(|callee| {
+                                            self.ast.add_expr(
+                                                Expr::Call(
+                                                    callee,
+                                                    smallvec![*expr],
+                                                ),
+                                                s,
+                                            )
+                                        })
+                                        .map(|expr| {
+                                            let ty = self.expr(expr);
+                                            self.unify(ty, TyArena::JSON, s);
+                                            acc.push(ArrayElem::Spread(expr));
+                                            acc
+                                        })
+                                }
+                            },
+                        )
+                    });
+                    match rewritten {
+                        Ok(elems) => self.ast.set_expr(id, Expr::Array(elems)),
+                        Err(e) => {
+                            self.error(TypeError::Custom {
+                                msg: e.to_string(),
+                                span,
+                            });
+                        }
+                    }
                     TyArena::JSON
                 } else {
                     // Homogeneous: unify all elements
@@ -1467,6 +1619,61 @@ impl InferCtx<'_> {
         }
     }
 
+    fn json(
+        &mut self,
+        id: ExprId,
+        fields: &[(StringId, ExprId)],
+        span: Span,
+    ) -> TyId {
+        let class = self.env.class_registry().name(ClassId::INTO);
+        let method = self.env.intern("into");
+        let target = self.env.intern("Json");
+        let target = self.ast.add_type_expr(
+            AstTypeExpr::Named(QualifiedName::local(target)),
+            span,
+        );
+        let rewritten = target.and_then(|target| {
+            fields.iter().try_fold(
+                Vec::with_capacity(fields.len()),
+                |mut acc, (name, expr)| {
+                    let s = self.ast.expr_span(*expr).unwrap_or(span);
+                    self.ast
+                        .add_expr(
+                            Expr::ClassMethodRef(
+                                class,
+                                smallvec![target],
+                                method,
+                            ),
+                            s,
+                        )
+                        .and_then(|callee| {
+                            self.ast.add_expr(
+                                Expr::Call(callee, smallvec![*expr]),
+                                s,
+                            )
+                        })
+                        .map(|expr| {
+                            let ty = self.expr(expr);
+                            self.unify(ty, TyArena::JSON, s);
+                            acc.push((*name, expr));
+                            acc
+                        })
+                },
+            )
+        });
+
+        match rewritten {
+            Ok(fields) => self.ast.set_expr(id, Expr::Json(fields)),
+            Err(e) => {
+                self.error(TypeError::Custom {
+                    msg: e.to_string(),
+                    span,
+                });
+            }
+        }
+
+        TyArena::JSON
+    }
     /// Infer type of a tuple literal.
     ///
     /// Infers each element independently; the tuple type contains all element
@@ -3598,44 +3805,77 @@ impl InferCtx<'_> {
         ty_id: AstTypeExprId,
         span: Span,
     ) -> TyId {
-        let inner_ty = self.expr(inner_id);
         let target_ty = self.ast_ty(ty_id);
         let tspan = self.ast.type_expr_span(ty_id).unwrap_or(span);
-        self.interp.expr_targets.insert(id, target_ty);
-        self.newtype_edge_checks.push((
-            id,
-            inner_ty,
-            target_ty,
-            tspan,
-            self.current_module.clone(),
-        ));
+        if matches!(self.ty_arena.get(target_ty), Ty::String | Ty::Json) {
+            let class = self.env.class_registry().name(ClassId::INTO);
+            let method = self.env.intern("into");
+            let args = smallvec![inner_id];
+            match self
+                .ast
+                .add_expr(
+                    Expr::ClassMethodRef(class, smallvec![ty_id], method),
+                    tspan,
+                )
+                .inspect(|&callee| {
+                    self.ast.set_expr(id, Expr::Call(callee, args.clone()));
+                }) {
+                Ok(callee) => {
+                    let ty = self.call_or_variant(id, callee, &args, span);
+                    self.unify(ty, target_ty, tspan);
+                }
+                Err(e) => {
+                    self.error(TypeError::Custom {
+                        msg: e.to_string(),
+                        span,
+                    });
+                }
+            }
+        } else {
+            let inner_ty = self.expr(inner_id);
+            self.interp.expr_targets.insert(id, target_ty);
+            self.newtype_edge_checks.push((
+                id,
+                inner_ty,
+                target_ty,
+                tspan,
+                self.current_module.clone(),
+            ));
 
-        // Emit Into constraint for validation
-        self.constrain(Constraint::Class {
-            ty: inner_ty,
-            class: TypeClass::param(ClassId::INTO, target_ty),
-            span: tspan,
-        });
-
-        // Special case: type variable cast to numeric requires Numeric constraint
-        // This allows `(-2.9) as Int` where `-2.9` has polymorphic Numeric type
-        let inner_is_var = matches!(self.ty_arena.get(inner_ty), Ty::Var(_));
-        let target_is_numeric = matches!(
-            self.ty_arena.get(target_ty),
-            Ty::Int | Ty::Float | Ty::Word
-        );
-        if inner_is_var && target_is_numeric {
+            // Emit Into constraint for validation
             self.constrain(Constraint::Class {
                 ty: inner_ty,
-                class: TypeClass::simple(ClassId::NUMERIC),
-                span,
+                class: TypeClass::param(ClassId::INTO, target_ty),
+                span: tspan,
             });
+
+            // Special case: type variable cast to numeric requires Numeric
+            // constraint. This allows `(-2.9) as Int` where `-2.9` has
+            // polymorphic Numeric type.
+            let inner_is_var =
+                matches!(self.ty_arena.get(inner_ty), Ty::Var(_));
+            let target_is_numeric = matches!(
+                self.ty_arena.get(target_ty),
+                Ty::Int | Ty::Float | Ty::Word
+            );
+            if inner_is_var && target_is_numeric {
+                self.constrain(Constraint::Class {
+                    ty: inner_ty,
+                    class: TypeClass::simple(ClassId::NUMERIC),
+                    span,
+                });
+            }
         }
 
         // Error recovery: return Error type if either side is Error
-        if inner_ty == TyArena::ERROR || target_ty == TyArena::ERROR {
+        if target_ty == TyArena::ERROR {
             TyArena::ERROR
         } else if matches!(self.ty_arena.get(target_ty), Ty::Union(..)) {
+            let inner_ty = self
+                .expr_types
+                .get(&inner_id)
+                .copied()
+                .unwrap_or(TyArena::ERROR);
             self.interp.union_value_reprs.insert(id, inner_ty);
             target_ty
         } else {

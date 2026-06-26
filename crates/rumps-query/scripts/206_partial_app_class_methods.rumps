@@ -7,19 +7,19 @@ fun dbl (x: Int) -> Int { x * 2 }
 fun main() {
   ; Class method partially applied with a callback
   let map-inc = Mappable:map(inc)
-  write map-inc([1, 2, 3])
+  write :display(map-inc([1, 2, 3]))
   ; Expected: [2, 3, 4]
 
   ; Piping into partially applied class method
-  write [1, 2, 3] |> Mappable:map(inc)
+  write :display([1, 2, 3] |> Mappable:map(inc))
   ; Expected: [2, 3, 4]
 
   ; Chain two class method partials via pipe
-  write [1, 2, 3] |> Mappable:map(inc) |> Mappable:map(dbl)
+  write :display([1, 2, 3] |> Mappable:map(inc) |> Mappable:map(dbl))
   ; Expected: [4, 6, 8]
 
   ; Filterable:filter with partial app + pipe
-  write [1, 2, 3, 4, 5] |> Filterable:filter(x => x > 2)
+  write :display([1, 2, 3, 4, 5] |> Filterable:filter(x => x > 2))
   ; Expected: [3, 4, 5]
 
   ; Foldable:fold is 3-arg; partial app with first two args
@@ -32,7 +32,7 @@ fun main() {
 
   ; Store class method partial, apply later
   let only-evens = Filterable:filter(x => x % 2 == 0)
-  write only-evens([1, 2, 3, 4, 5, 6])
+  write :display(only-evens([1, 2, 3, 4, 5, 6]))
   ; Expected: [2, 4, 6]
 
   ; Complex pipeline using only partial apps (no wrapper closures)

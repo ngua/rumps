@@ -3,7 +3,7 @@
 
 fun main() {
   ; Forward reference to top-level LET (the original bug).
-  write ys
+  write :display(ys)
 
   ; Forward reference via helper.
   write add-one-to-x()

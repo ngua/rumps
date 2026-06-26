@@ -1,6 +1,6 @@
 use super::*;
 
-/// Display formatting: produces valid RUMPS syntax (for `write`).
+/// Display formatting for inspection.
 pub(crate) struct Display;
 
 impl Class for Display {
@@ -48,9 +48,8 @@ impl Display {
                 })
             }
             Payload::Char(c) => Ok(format!("'{c}'")),
-            Payload::String(id) | Payload::FilePath(id) => {
-                Ok(format!("\"{}\"", vals.str(*id)?))
-            }
+            Payload::String(id) => Ok(format!("\"{}\"", vals.str(*id)?)),
+            Payload::FilePath(id) => Ok(format!("\"{}\"", vals.str(*id)?)),
             Payload::Regex(idx) => {
                 let re = vals.regex_pattern(*idx).unwrap_or_else(|| {
                     typechecked!("Display", "valid Regex cache index")

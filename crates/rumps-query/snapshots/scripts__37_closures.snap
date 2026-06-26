@@ -1,6 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: Closures\n; Tests closure definition, binding, and calling\n\n; === Single parameter closure ===\n\nLET double = x => x * 2\nWRITE double(21)\n; Expected: 42\n\nLET identity = x => x\nWRITE identity(42)\n; Expected: 42\n\n; === Multi-parameter closure ===\n\nLET add = (a, b) => a + b\nWRITE add(10, 32)\n; Expected: 42\n\nLET triple = (a, b, c) => a + b + c\nWRITE triple(1, 2, 3)\n; Expected: 6\n\n; === Nullary closure ===\n\nLET const = () => 42\nWRITE const()\n; Expected: 42\n\n; === Typed parameter closure ===\n\nLET typed = (x: Int) => x + 1\nWRITE typed(41)\n; Expected: 42\n\nLET multi-typed = (x: Int, y: String) => y\nWRITE multi-typed(1, \"hello\")\n; Expected: \"hello\"\n\n; === Closure with return type ===\n\nLET with-ret = (x: Int) -> Int => x * x\nWRITE with-ret(6)\n; Expected: 36\n\n; === Nested closure in expression ===\n\nLET nested = (x => x + 1)\nWRITE nested(41)\n; Expected: 42\n\n; === Closure with complex body ===\n\nLET complex = (a, b) => { a * b + 1 }\nWRITE complex(5, 8)\n; Expected: 41\n\nWRITE \"Closure test complete\"\n"
+description: "; Test: Closures\n; Tests closure definition, binding, and calling\n\nfun main() {\n  ; === Single parameter closure ===\n\n  let double = x => x * 2\n  write double(21)\n  ; Expected: 42\n\n  let identity = x => x\n  write identity(42)\n  ; Expected: 42\n\n  ; === Multi-parameter closure ===\n\n  let add = (a, b) => a + b\n  write add(10, 32)\n  ; Expected: 42\n\n  let triple = (a, b, c) => a + b + c\n  write triple(1, 2, 3)\n  ; Expected: 6\n\n  ; === Nullary closure ===\n\n  let const = () => 42\n  write const()\n  ; Expected: 42\n\n  ; === Typed parameter closure ===\n\n  let typed = (x: Int) => x + 1\n  write typed(41)\n  ; Expected: 42\n\n  let multi-typed = (x: Int, y: String) => y\n  write multi-typed(1, \"hello\")\n  ; Expected: \"hello\"\n\n  ; === Closure with return type ===\n\n  let with-ret = (x: Int) -> Int => x * x\n  write with-ret(6)\n  ; Expected: 36\n\n  ; === Nested closure in expression ===\n\n  let nested = (x => x + 1)\n  write nested(41)\n  ; Expected: 42\n\n  ; === Closure with complex body ===\n\n  let complex = (a, b) => { a * b + 1 }\n  write complex(5, 8)\n  ; Expected: 41\n\n  write \"Closure test complete\"\n}\n"
 ---
 42
 42
@@ -8,8 +8,8 @@ description: "; Test: Closures\n; Tests closure definition, binding, and calling
 6
 42
 42
-"hello"
+hello
 36
 42
 41
-"Closure test complete"
+Closure test complete

@@ -7,6 +7,6 @@ fun main() {
   let some = .Some
   let full = .Full
 
-  write some(42)
-  write full("ok")
+  write :display(some(42))
+  write :display(full("ok"))
 }

@@ -1,27 +1,19 @@
-//! Value conversion methods.
-//!
-//! These live on Interpreter rather than Value because they need context
-//! (arena, registry) that the interpreter owns.
-//!
-//! Conversion methods dispatch to `Into[T]` class methods internally; the
-//! helpers here provide a convenient API for the interpreter to use.
+//! Storage, subscript, and path conversion methods.
 
 use std::sync::Arc;
 
-use itertools::Itertools;
 use ordered_float::OrderedFloat;
 use rumps_types::Subscript;
 use smallvec::SmallVec;
 
-use super::{class, Interpreter};
-use crate::builtins::{BuiltinCtx, OutputMeta};
-use crate::value::{Payload, Value, ValueId};
+use super::Interpreter;
+use crate::value::Payload;
 use crate::Span;
 
 impl Interpreter<'_, '_> {
     /// Convert a runtime value to a storage value.
     ///
-    /// Scalars convert directly; complex values serialize to JSON.
+    /// Scalars convert directly. Complex values must already be `Json`.
     pub(crate) fn store(&mut self, v: &Payload) -> rumps_types::Value {
         match v {
             Payload::Unit => typechecked!("store", "Storable (not Unit)"),
@@ -47,8 +39,6 @@ impl Interpreter<'_, '_> {
                 rumps_types::Value::String(s.to_owned())
             }
             Payload::Regex(_) => typechecked!("store", "Storable (not Regex)"),
-            // Serialize to JSON for complex values (closures, module fns,
-            // ranges, and continuations will panic in jsonify via typechecked!)
             Payload::Array(_)
             | Payload::Object(_)
             | Payload::Tuple(_)
@@ -64,33 +54,10 @@ impl Interpreter<'_, '_> {
             | Payload::LoopContinue(_)
             | Payload::ClassMethodFn { .. }
             | Payload::PartialApp { .. } => {
-                rumps_types::Value::Json(self.jsonify(v))
+                typechecked!("store", "Storable")
             }
             Payload::Time(t) => rumps_types::Value::String(t.to_rfc3339()),
             Payload::Ref(..) => typechecked!("store", "Storable (not Ref)"),
-        }
-    }
-
-    pub(crate) fn store_value(&mut self, v: &Value) -> rumps_types::Value {
-        match &v.payload {
-            Payload::Object(_)
-            | Payload::Array(_)
-            | Payload::Tuple(_)
-            | Payload::Map(_)
-            | Payload::Variant { .. }
-            | Payload::VariantCtor { .. }
-            | Payload::Closure { .. }
-            | Payload::Function { .. }
-            | Payload::ModuleFn { .. }
-            | Payload::ModuleConst { .. }
-            | Payload::Range { .. }
-            | Payload::LoopContinuation
-            | Payload::LoopContinue(_)
-            | Payload::ClassMethodFn { .. }
-            | Payload::PartialApp { .. } => {
-                rumps_types::Value::Json(self.jsonify_value(v))
-            }
-            payload => self.store(payload),
         }
     }
 
@@ -108,263 +75,6 @@ impl Interpreter<'_, '_> {
             }
             rumps_types::Value::Json(j) => Payload::Json(Arc::new(j)),
         }
-    }
-
-    /// Convert a value to a human-readable display string.
-    ///
-    /// Used for `write` statements. Quotes strings and file paths so output
-    /// is valid RUMPS syntax.
-    pub(crate) fn display(&mut self, v: &Payload) -> String {
-        self.stringify(v)
-    }
-
-    pub(crate) fn display_value(&mut self, v: &Value) -> String {
-        self.stringify_value(v)
-    }
-
-    /// Convert a value to display string with escape sequences preserved.
-    ///
-    /// Used for `write expr raw`. Strings are quoted and special characters
-    /// (`\n`, `\t`, etc.) are shown as escape sequences rather than rendered.
-    pub(crate) fn display_raw(&mut self, v: &Payload) -> String {
-        match v {
-            Payload::Char(c) => Self::escape_char(*c),
-            Payload::String(id) | Payload::FilePath(id) => {
-                let s = self.arena.get_str(*id).unwrap_or("");
-                format!("\"{}\"", RawDisplay::escape_str(s))
-            }
-            Payload::Array(elems) => {
-                let vals: Vec<_> = elems
-                    .iter()
-                    .filter_map(|id| self.arena.value(*id).cloned())
-                    .collect();
-                let items =
-                    vals.iter().map(|v| self.display_raw_value(v)).join(", ");
-                format!("[ {items} ]")
-            }
-            Payload::Tuple(elems) => {
-                let len = elems.len();
-                let vals: Vec<_> = elems
-                    .iter()
-                    .filter_map(|id| self.arena.value(*id).cloned())
-                    .collect();
-                let items =
-                    vals.iter().map(|v| self.display_raw_value(v)).join(", ");
-                let trail = if len == 1 { "," } else { "" };
-                format!("({items}{trail})")
-            }
-            Payload::Object(obj) => {
-                // Collect keys and values first to avoid borrow conflicts
-                let data: Vec<_> = obj
-                    .iter()
-                    .map(|(k, vid)| {
-                        let key =
-                            self.arena.get_str(*k).unwrap_or("?").to_owned();
-                        let val = self.arena.value(*vid).cloned();
-                        (key, val)
-                    })
-                    .collect();
-                let fields = data
-                    .into_iter()
-                    .map(|(k, v)| {
-                        let vs = v
-                            .map(|v| self.display_raw_value(&v))
-                            .unwrap_or_else(|| "?".to_owned());
-                        format!("{k}: {vs}")
-                    })
-                    .join(", ");
-                format!("{{ {fields} }}")
-            }
-            Payload::Map(entries) => {
-                let data: Vec<_> = entries
-                    .entries()
-                    .into_iter()
-                    .map(|(k, vid)| {
-                        let key = self.arena.value(k).cloned();
-                        let val = self.arena.value(vid).cloned();
-                        (key, val)
-                    })
-                    .collect();
-                let items = data
-                    .into_iter()
-                    .map(|(k, v)| {
-                        let ks = k
-                            .map(|v| self.display_raw_value(&v))
-                            .unwrap_or_else(|| "?".to_owned());
-                        let vs = v
-                            .map(|v| self.display_raw_value(&v))
-                            .unwrap_or_else(|| "?".to_owned());
-                        format!("{ks} => {vs}")
-                    })
-                    .join(", ");
-                format!("{{ {items} }}")
-            }
-            Payload::Variant { tag, vals } => {
-                if vals.is_empty() {
-                    format!("Variant.{tag}")
-                } else {
-                    let args: Vec<_> = vals
-                        .iter()
-                        .filter_map(|id| self.arena.value(*id).cloned())
-                        .collect();
-                    let args_str = args
-                        .iter()
-                        .map(|v| self.display_raw_value(v))
-                        .join(", ");
-                    format!("Variant.{tag}({args_str})")
-                }
-            }
-            Payload::Ref(is_global, name_id, sub_ids) => {
-                let prefix = if *is_global { "^" } else { "" };
-                let name =
-                    self.arena.get_str(*name_id).unwrap_or("?").to_owned();
-                if sub_ids.is_empty() {
-                    format!("{prefix}{name}")
-                } else {
-                    let subs: Vec<_> = sub_ids
-                        .iter()
-                        .filter_map(|id| self.arena.value(*id).cloned())
-                        .collect();
-                    let subs_str = subs
-                        .iter()
-                        .map(|v| self.display_raw_value(v))
-                        .join(", ");
-                    format!("{prefix}{name}{{ {subs_str} }}")
-                }
-            }
-            // Non-string types delegate to normal stringify
-            _ => self.stringify(v),
-        }
-    }
-
-    pub(crate) fn display_raw_value(&mut self, v: &Value) -> String {
-        match &v.payload {
-            Payload::Variant { tag, vals } => {
-                self.display_raw_variant(v, *tag, vals)
-            }
-            payload => self.display_raw(payload),
-        }
-    }
-
-    fn display_raw_variant(
-        &mut self,
-        v: &Value,
-        tag: u8,
-        vals: &[ValueId],
-    ) -> String {
-        let type_id = self
-            .checked
-            .types
-            .to_type_id(v.repr)
-            .or_else(|| self.checked.types.to_type_id(v.ty));
-        let ty_name = type_id
-            .and_then(|type_id| self.registry.type_name(type_id, &self.arena))
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| "Variant".to_owned());
-        let var_name = type_id
-            .and_then(|type_id| {
-                self.registry.variant_name(type_id, tag, &self.arena)
-            })
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| tag.to_string());
-
-        if vals.is_empty() {
-            format!("{ty_name}.{var_name}")
-        } else {
-            let values: Vec<_> = vals
-                .iter()
-                .filter_map(|id| self.arena.value(*id).cloned())
-                .collect();
-            let args =
-                values.iter().map(|v| self.display_raw_value(v)).join(", ");
-            format!("{ty_name}.{var_name}({args})")
-        }
-    }
-
-    /// Coerce a value to a raw string for concatenation.
-    ///
-    /// Unlike `stringify`, this does not quote strings.
-    pub(crate) fn coerce_to_str(&mut self, v: &Payload) -> String {
-        match v {
-            Payload::String(id) | Payload::FilePath(id) => {
-                self.arena.get_str(*id).unwrap_or("").to_owned()
-            }
-            _ => self.stringify(v),
-        }
-    }
-
-    pub(crate) fn coerce_value_to_str(&mut self, v: &Value) -> String {
-        match &v.payload {
-            Payload::String(id) | Payload::FilePath(id) => {
-                self.arena.get_str(*id).unwrap_or("").to_owned()
-            }
-            _ => self.stringify_value(v),
-        }
-    }
-
-    /// Stringify a value for display via `Display:display`.
-    ///
-    /// Produces valid RUMPS syntax; strings and file paths are quoted.
-    /// This is distinct from `Into[String]` which produces raw strings.
-    ///
-    /// This is a convenience wrapper around `Display::fmt`.
-    pub(crate) fn stringify(&mut self, v: &Payload) -> String {
-        let v = self.value_from_payload(v.clone());
-        let id = self.add_value(v, Span::default());
-        let mut ctx =
-            BuiltinCtx::new(self, Span::default(), OutputMeta::Payload, None);
-        let mut vals = ctx.vals();
-        let v = vals
-            .value(id)
-            .unwrap_or_else(|e| invariant!(format!("{}", e)))
-            .clone();
-        class::Display::fmt_value(&mut vals, &v)
-            .unwrap_or_else(|e| invariant!(format!("{}", e)))
-    }
-
-    pub(crate) fn stringify_value(&mut self, v: &Value) -> String {
-        let id = self.add_value(v.clone(), Span::default());
-        let mut ctx =
-            BuiltinCtx::new(self, Span::default(), OutputMeta::Payload, None);
-        let mut vals = ctx.vals();
-        let v = vals
-            .value(id)
-            .unwrap_or_else(|e| invariant!(format!("{}", e)))
-            .clone();
-        class::Display::fmt_value(&mut vals, &v)
-            .unwrap_or_else(|e| invariant!(format!("{}", e)))
-    }
-
-    /// Convert a value to JSON via `Into[Json]`.
-    ///
-    /// Used for JSON output and storage serialization.
-    ///
-    /// This is a convenience wrapper around `Into::json`.
-    pub(crate) fn jsonify(&mut self, v: &Payload) -> serde_json::Value {
-        let v = self.value_from_payload(v.clone());
-        let id = self.add_value(v, Span::default());
-        let mut ctx =
-            BuiltinCtx::new(self, Span::default(), OutputMeta::Payload, None);
-        let mut vals = ctx.vals();
-        let v = vals
-            .value(id)
-            .unwrap_or_else(|e| invariant!(format!("{}", e)))
-            .clone();
-        class::Into::json_value(&mut vals, &v)
-            .unwrap_or_else(|e| invariant!(format!("{}", e)))
-    }
-
-    pub(crate) fn jsonify_value(&mut self, v: &Value) -> serde_json::Value {
-        let id = self.add_value(v.clone(), Span::default());
-        let mut ctx =
-            BuiltinCtx::new(self, Span::default(), OutputMeta::Payload, None);
-        let mut vals = ctx.vals();
-        let v = vals
-            .value(id)
-            .unwrap_or_else(|e| invariant!(format!("{}", e)))
-            .clone();
-        class::Into::json_value(&mut vals, &v)
-            .unwrap_or_else(|e| invariant!(format!("{}", e)))
     }
 
     /// Convert a JSON value to a runtime value.
@@ -504,19 +214,6 @@ impl Interpreter<'_, '_> {
             serde_json::Value::String(_) => 3,
             serde_json::Value::Array(_) => 4,
             serde_json::Value::Object(_) => 5,
-        }
-    }
-
-    /// Escape a char for raw display.
-    fn escape_char(c: char) -> String {
-        match c {
-            '\'' => "'\\''".to_owned(),
-            '\\' => "'\\\\'".to_owned(),
-            '\n' => "'\\n'".to_owned(),
-            '\t' => "'\\t'".to_owned(),
-            '\r' => "'\\r'".to_owned(),
-            '\0' => "'\\0'".to_owned(),
-            c => format!("'{c}'"),
         }
     }
 }

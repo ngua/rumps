@@ -1,16 +1,16 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test comma as separator for statements and match arms\n\n; Comma-separated statements on single line\nLET a = 1, LET b = 2, LET c = 3\nWRITE a + b + c\n\n; Mixed: comma and newlines\nLET x = 10, LET y = 20\nLET z = x + y\nWRITE z\n\n; Comma-separated match arms (inline)\nvariant Color = Red | Green | Blue\n\nFUN color-name(c: Color) -> String {\n  MATCH c { Color.Red => \"red\", Color.Green => \"green\", Color.Blue => \"blue\" }\n}\n\nWRITE color-name(Color.Red)\nWRITE color-name(Color.Green)\nWRITE color-name(Color.Blue)\n\n; Mixed comma and newline in match\nFUN describe(c: Color) -> String {\n  MATCH c {\n    Color.Red => \"primary\", Color.Blue => \"primary\"\n    Color.Green => \"secondary\"\n  }\n}\n\nWRITE describe(Color.Red)\nWRITE describe(Color.Blue)\nWRITE describe(Color.Green)\n\n; Inline match inside string interpolation\nLET val: Option[Int] = ?42\nWRITE \"The value is: {MATCH val { Option.None => \"nothing\", Option.Some(x) => \"{x}\" }}\"\n\nLET empty: Option[Int] = Option.None\nWRITE \"Empty is: {MATCH empty { Option.None => \"N/A\", Option.Some(x) => \"{x}\" }}\"\n\n; Block with comma-separated statements\nLET result = {\n  LET p = 5, LET q = 6\n  p * q\n}\nWRITE result\n\n; Trailing comma allowed\nLET t1 = 1, LET t2 = 2,\nWRITE t1 + t2\n"
+description: "; Test comma as separator for statements and match arms\n\nfun main() {\n  ; Comma-separated statements on single line\n  let a = 1, let b = 2, let c = 3\n  write a + b + c\n\n  ; Mixed: comma and newlines\n  let x = 10, let y = 20\n  let z = x + y\n  write z\n\n  write color-name(Color.Red)\n  write color-name(Color.Green)\n  write color-name(Color.Blue)\n\n  write describe(Color.Red)\n  write describe(Color.Blue)\n  write describe(Color.Green)\n\n  ; Inline match inside string interpolation\n  let val: Option[Int] = ?42\n  write \"The value is: {match val { Option.None => \"nothing\", Option.Some(x) => \"{x}\" }}\"\n\n  let empty: Option[Int] = Option.None\n  write \"Empty is: {match empty { Option.None => \"N/A\", Option.Some(x) => \"{x}\" }}\"\n\n  ; Block with comma-separated statements\n  let result = {\n    let p = 5, let q = 6\n    p * q\n  }\n  write result\n\n  ; Trailing comma allowed\n  let t1 = 1, let t2 = 2,\n  write t1 + t2\n}\n\n; Comma-separated match arms (inline)\nvariant Color = Red | Green | Blue\n\nfun color-name(c: Color) -> String {\n  match c { Color.Red => \"red\", Color.Green => \"green\", Color.Blue => \"blue\" }\n}\n\n; Mixed comma and newline in match\nfun describe(c: Color) -> String {\n  match c {\n    Color.Red => \"primary\", Color.Blue => \"primary\"\n    Color.Green => \"secondary\"\n  }\n}\n"
 ---
 6
 30
-"red"
-"green"
-"blue"
-"primary"
-"primary"
-"secondary"
-"The value is: 42"
-"Empty is: N/A"
+red
+green
+blue
+primary
+primary
+secondary
+The value is: 42
+Empty is: N/A
 30
 3

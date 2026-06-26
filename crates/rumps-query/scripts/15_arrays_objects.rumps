@@ -4,12 +4,12 @@
 fun main() {
   ; Array literal
   let arr = [1, 2, 3, 4, 5]
-  write arr
+  write :display(arr)
   ; Expected: [1, 2, 3, 4, 5]
 
   ; Empty array
   let empty = []
-  write empty
+  write :display(empty)
   ; Expected: []
 
   ; Array indexing
@@ -25,12 +25,12 @@ fun main() {
 
   ; Object literal
   let obj = { name: "Alice", age: 30 }
-  write obj
+  write :display(obj)
   ; Expected: { name: "Alice", age: 30 }
 
   ; Empty object
   let empty-obj = {}
-  write empty-obj
+  write :display(empty-obj)
   ; Expected: {}
 
   ; Field access with dot notation
@@ -65,7 +65,7 @@ fun main() {
     items: [1, 2, 3],
     count: 3
   }
-  write rec.items
+  write :display(rec.items)
   ; Expected: [1, 2, 3]
 
   write rec.items[0]

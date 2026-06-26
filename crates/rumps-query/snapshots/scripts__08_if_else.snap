@@ -2,13 +2,13 @@
 source: crates/rumps-query/tests/scripts.rs
 description: "; Test: if/else branches\n; Tests conditional expressions and statements\n\nfun main() {\n  ; Simple if with true condition\n  if true {\n    write \"true branch taken\"\n  }\n\n  ; Simple if with false condition (no output)\n  if false {\n    write \"This should not print\"\n  }\n\n  ; if/else with true condition\n  if true {\n    write \"if branch\"\n  } else {\n    write \"else branch\"\n  }\n  ; Expected: if branch\n\n  ; if/else with false condition\n  if false {\n    write \"if branch\"\n  } else {\n    write \"else branch\"\n  }\n  ; Expected: else branch\n\n  ; if with comparison\n  let x = 10\n  if x > 5 {\n    write \"x is greater than 5\"\n  } else {\n    write \"x is not greater than 5\"\n  }\n  ; Expected: x is greater than 5\n\n  ; if with equality\n  let name = \"Alice\"\n  if name == \"Alice\" {\n    write \"Hello, Alice!\"\n  } else {\n    write \"You are not Alice\"\n  }\n  ; Expected: Hello, Alice!\n\n  ; if as expression\n  let result = if 10 > 5 { \"big\" } else { \"small\" }\n  write result\n  ; Expected: big\n\n  ; Nested if\n  let score = 85\n  if score >= 90 {\n    write \"A\"\n  } else {\n    if score >= 80 {\n      write \"B\"\n    } else {\n      if score >= 70 {\n        write \"C\"\n      } else {\n        write \"F\"\n      }\n    }\n  }\n  ; Expected: B\n\n  ; if with logical operators\n  let a = true\n  let b = false\n  if a and not b {\n    write \"a is true and b is false\"\n  }\n  ; Expected: a is true and b is false\n\n  ; if with complex condition\n  let age = 25\n  let has-license = true\n  if age >= 18 and has-license {\n    write \"Can drive\"\n  } else {\n    write \"Cannot drive\"\n  }\n  ; Expected: Can drive\n\n  write \"if/else test complete\"\n}\n"
 ---
-"true branch taken"
-"if branch"
-"else branch"
-"x is greater than 5"
-"Hello, Alice!"
-"big"
-"B"
-"a is true and b is false"
-"Can drive"
-"if/else test complete"
+true branch taken
+if branch
+else branch
+x is greater than 5
+Hello, Alice!
+big
+B
+a is true and b is false
+Can drive
+if/else test complete

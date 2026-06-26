@@ -20,12 +20,12 @@ fun main() {
   write "Range contains 11: {Array.contains(Range.collect(1 ..= 10), 11)}"
 
   ; Mappable:map on Array (Range is not Mappable; collect first)
-  write "Doubled array: {Mappable:map(x => x * 2, arr)}"
-  write "Doubled range: {Mappable:map(x => x * 2, Range.collect(1 ..= 5))}"
+  write "Doubled array: {:display(Mappable:map(x => x * 2, arr))}"
+  write "Doubled range: {:display(Mappable:map(x => x * 2, Range.collect(1 ..= 5)))}"
 
   ; Filterable:filter on Array
-  write "Evens from array: {Filterable:filter(x => x % 2 == 0, arr)}"
-  write "Evens from range: {Filterable:filter(x => x % 2 == 0, Range.collect(1 ..= 10))}"
+  write "Evens from array: {:display(Filterable:filter(x => x % 2 == 0, arr))}"
+  write "Evens from range: {:display(Filterable:filter(x => x % 2 == 0, Range.collect(1 ..= 10)))}"
 
   ; `Foldable:fold` on `Array` and collected `Range`
   write "Sum of array: {Foldable:fold((a, x) => a + x, 0, arr)}"
@@ -38,34 +38,34 @@ fun main() {
   write "Generic count (range): {count-iter(1 ..= 10)}"
 
   ; `Iterable:reverse` on `Array` and `Range`
-  write "Reversed array: {Iterable:reverse(arr)}"
-  write "Reversed array literal: {Iterable:reverse([1, 2, 3])}"
-  write "Reversed range: {Iterable:reverse(1 ..= 5)}"
-  write "Reversed range (1..10): {Iterable:reverse(1 .. 10)}"
+  write "Reversed array: {:display(Iterable:reverse(arr))}"
+  write "Reversed array literal: {:display(Iterable:reverse([1, 2, 3]))}"
+  write "Reversed range: {:display(Iterable:reverse(1 ..= 5))}"
+  write "Reversed range (1..10): {:display(Iterable:reverse(1 .. 10))}"
   write "Reversed range length (1..10): {Iterable:length(Iterable:reverse(1 .. 10))}"
-  write "Collected reversed range (1..10): {Range.collect(Iterable:reverse(1 .. 10))}"
-  write "Reversed range (10..1): {Iterable:reverse(10 .. 1)}"
-  write "Collected reversed range (10..1): {Range.collect(Iterable:reverse(10 .. 1))}"
-  write "Reversed range (5..5): {Iterable:reverse(5 .. 5)}"
+  write "Collected reversed range (1..10): {:display(Range.collect(Iterable:reverse(1 .. 10)))}"
+  write "Reversed range (10..1): {:display(Iterable:reverse(10 .. 1))}"
+  write "Collected reversed range (10..1): {:display(Range.collect(Iterable:reverse(10 .. 1)))}"
+  write "Reversed range (5..5): {:display(Iterable:reverse(5 .. 5))}"
   write "Reversed range length (5..5): {Iterable:length(Iterable:reverse(5 .. 5))}"
-  write "Collected reversed range (5..5): {Range.collect(Iterable:reverse(5 .. 5))}"
+  write "Collected reversed range (5..5): {:display(Range.collect(Iterable:reverse(5 .. 5)))}"
 
   ; `Iterable:reverse` preserves concrete return types
   let chars = ['a', 'b', 'c']
   let rev-chars: Array[Char] = Iterable:reverse(chars)
-  write "Reversed chars: {rev-chars}"
+  write "Reversed chars: {:display(rev-chars)}"
 
   let rev-range: Range = Iterable:reverse(1 .. 5)
-  write "Typed reversed range: {rev-range}"
+  write "Typed reversed range: {:display(rev-range)}"
 
   let rev-arr = Iterable:reverse
-  write "Stored reverse fn array: {rev-arr([1, 2, 3])}"
+  write "Stored reverse fn array: {:display(rev-arr([1, 2, 3]))}"
 
   let rev-r = Iterable:reverse
-  write "Stored reverse fn range: {rev-r(1 ..= 3)}"
+  write "Stored reverse fn range: {:display(rev-r(1 ..= 3))}"
 
-  write "Keep chars: {keep-chars(chars)}"
-  write "Keep range: {keep-range(1 ..= 4)}"
+  write "Keep chars: {:display(keep-chars(chars))}"
+  write "Keep range: {:display(keep-range(1 ..= 4))}"
 
   ; foreach on Array and Range (Range must be collected first)
   foreach(x => write "foreach array: {x}", [10, 20])

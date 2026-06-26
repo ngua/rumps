@@ -3,5 +3,5 @@
 fun main() {
   let j = { "a": 1 }
   let m = Map.from-entries([(j, "bad")])
-  write m
+  write :display(m)
 }

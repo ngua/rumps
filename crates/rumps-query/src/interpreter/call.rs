@@ -36,6 +36,29 @@ struct ClosureCall<'a> {
 }
 
 impl Interpreter<'_, '_> {
+    pub(crate) fn has_class_instance(
+        &self,
+        class: ClassId,
+        method: StringId,
+        ty: RuntimeTyId,
+    ) -> bool {
+        match self.checked.types.get(ty) {
+            Ty::Fn(_, _) | Ty::Var(_) | Ty::Error | Ty::Unknown => false,
+            Ty::Named(tid, _) | Ty::Union(Some(tid), _) => {
+                (*tid <= TypeId::REF
+                    && matches!(class, ClassId::DISPLAY | ClassId::FORMATTABLE))
+                    || self
+                        .user_instances
+                        .lookup_method(class, *tid, method)
+                        .is_some()
+            }
+            Ty::Union(None, members) => members.iter().all(|&member| {
+                self.has_class_instance(class, method, member.into())
+            }),
+            _ => matches!(class, ClassId::DISPLAY | ClassId::FORMATTABLE),
+        }
+    }
+
     /// Pipeline operator implementation.
     ///
     /// Applies the right operand (function/closure) to the left operand (value):

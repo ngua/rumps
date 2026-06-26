@@ -6,5 +6,5 @@ fun main() {
     x => if x > 1 { Option.Some(x) } else { Result.Ok(x) },
     [1, 2]
   )
-  write result
+  write :display(result)
 }

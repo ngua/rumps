@@ -35,7 +35,7 @@ fun main() {
     @set counter{} 2
   }
   let c = @get counter{}
-  write c
+  write :display(c)
   ; Expected: 2
 
   ; Block scope isolation

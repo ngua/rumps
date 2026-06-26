@@ -2,5 +2,5 @@
 source: crates/rumps-query/tests/scripts.rs
 description: "; User-defined class definition and instance (simple shape).\n;\n; Defines a custom `MyEq` class and implements it for `Point`.\n\nvariant Point = Point(Int, Int)\n\nclass MyEq C {\n  fun eq(a: C, b: C) -> Bool\n}\n\nclass MyEq for Point {\n  fun eq(a: Point, b: Point) -> Bool {\n    match a {\n      Point.Point(ax, ay) => {\n        match b {\n          Point.Point(bx, by) => { ax == bx && ay == by }\n        }\n      }\n    }\n  }\n}\n\nfun main() {\n  let p1 = Point.Point(1, 2)\n  let p2 = Point.Point(1, 2)\n  let p3 = Point.Point(3, 4)\n  write \"p1 eq p2: {MyEq:eq(p1, p2)}\"\n  write \"p1 eq p3: {MyEq:eq(p1, p3)}\"\n}\n"
 ---
-"p1 eq p2: true"
-"p1 eq p3: false"
+p1 eq p2: true
+p1 eq p3: false

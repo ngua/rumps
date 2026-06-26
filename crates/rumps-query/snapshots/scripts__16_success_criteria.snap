@@ -1,6 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: Success Criteria from Phase 1 doc\n; This is the exact program from the success criteria section\n\n; LET for simple bindings (sync, no subscripts)\nLET x = 10\nLET y = 20\nLET sum = x + y\nOUTPUT sum\n\n; SET for B-tree locals (async, subscriptable)\nSET z = 100\nSET z(1, \"ABC\") = 30\n\n; Comparison and branching\nIF sum > 25 {\n  OUTPUT \"Large sum\"\n} ELSE {\n  OUTPUT \"Small sum\"\n}\n\n; Expected output:\n; 30\n; Large sum\n"
+description: "; Test: Success Criteria from Phase 1 doc\n; This is the exact program from the success criteria section\n\nfun main() {\n  ; let for simple bindings (sync, no subscripts)\n  let x = 10\n  let y = 20\n  let sum = x + y\n  write sum\n\n  ; @set for B-tree locals (async, subscriptable)\n  @set z{} 100\n  @set z{1, \"ABC\"} 30\n\n  ; Comparison and branching\n  if sum > 25 {\n    write \"Large sum\"\n  } else {\n    write \"Small sum\"\n  }\n\n  ; Expected output:\n  ; 30\n  ; Large sum\n}\n"
 ---
 30
-"Large sum"
+Large sum

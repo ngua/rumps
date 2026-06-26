@@ -4,5 +4,5 @@ fun main() {
   let f = (x: Int) -> Int => x + 1
   let fs = (f,)
   let m = { fs.0 => "bad" }
-  write m
+  write :display(m)
 }

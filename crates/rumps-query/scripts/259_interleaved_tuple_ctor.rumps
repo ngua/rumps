@@ -37,13 +37,13 @@ class MyMap for (T, U,) {
 fun main() {
   ; Interleaved: (,T,)
   let t = (1, "fixed", true)
-  write MyBimap:my-bimap(x => x * 2, b => !b, t)
+  write :display(MyBimap:my-bimap(x => x * 2, b => !b, t))
 
   ; Prefix: (T,)
   let p = ("hello", 42)
-  write MyMap:my-map(x => x + 1, p)
+  write :display(MyMap:my-map(x => x + 1, p))
 
   ; Two fixed prefix: (T, U,)
   let q = (1, "two", 3)
-  write MyMap:my-map(x => x * 10, q)
+  write :display(MyMap:my-map(x => x * 10, q))
 }

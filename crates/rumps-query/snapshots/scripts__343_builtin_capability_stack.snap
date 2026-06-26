@@ -2,21 +2,21 @@
 source: crates/rumps-query/tests/scripts.rs
 description: "; Builtin numeric capability stack.\n\nfun main() {\n  write \"Int numeric: {needs-numeric(3)}\"\n  let w: Word = 4\n  write \"Word numeric: {needs-numeric(w)}\"\n  write \"Float numeric: {needs-numeric(5.5)}\"\n\n  let zi: Int = Additive:zero()\n  let zw: Word = Additive:zero()\n  let zf: Float = Additive:zero()\n  write \"zero Int: {zi}\"\n  write \"zero Word: {zw}\"\n  write \"zero Float: {zf}\"\n\n  let oi: Int = Multiplicative:one()\n  let ow: Word = Multiplicative:one()\n  let of: Float = Multiplicative:one()\n  write \"one Int: {oi}\"\n  write \"one Word: {ow}\"\n  write \"one Float: {of}\"\n\n  write \"add: {2 + 3}\"\n  write \"sub: {7 - 4}\"\n  write \"mul: {6 * 5}\"\n  write \"div Float: {7.5 / 2.5}\"\n  write \"div Int: {7 / 2}\"\n  let wa: Word = 7\n  let wb: Word = 2\n  write \"div Word: {wa / wb}\"\n  write \"floor-div: {7 // 2}\"\n  write \"mod: {7 % 2}\"\n  write \"pow: {2 ** 5}\"\n}\n\nfun needs-numeric[T: Numeric](x: T) -> T {\n  x\n}\n"
 ---
-"Int numeric: 3"
-"Word numeric: 4"
-"Float numeric: 5.5"
-"zero Int: 0"
-"zero Word: 0"
-"zero Float: 0.0"
-"one Int: 1"
-"one Word: 1"
-"one Float: 1.0"
-"add: 5"
-"sub: 3"
-"mul: 30"
-"div Float: 3.0"
-"div Int: 3"
-"div Word: 3"
-"floor-div: 3"
-"mod: 1"
-"pow: 32"
+Int numeric: 3
+Word numeric: 4
+Float numeric: 5.5
+zero Int: 0
+zero Word: 0
+zero Float: 0.0
+one Int: 1
+one Word: 1
+one Float: 1.0
+add: 5
+sub: 3
+mul: 30
+div Float: 3.0
+div Int: 3
+div Word: 3
+floor-div: 3
+mod: 1
+pow: 32

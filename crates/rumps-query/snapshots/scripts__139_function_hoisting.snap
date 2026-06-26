@@ -6,7 +6,7 @@ description: "; Function hoisting: forward references and mutual recursion\n\nfu
 true
 false
 true
-"hello"
+hello
 42
 20
 15

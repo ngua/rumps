@@ -31,7 +31,7 @@ class MyInto[Celsius] for Fahrenheit {
 fun main() {
   let c = Celsius.Celsius(100.0)
   let f = MyInto:convert(c)
-  write f
+  write :display(f)
   let back = MyInto:convert(f)
-  write back
+  write :display(back)
 }

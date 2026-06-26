@@ -3,5 +3,5 @@
 
 fun main() {
   let x = (1, 2): (Int, Int)
-  write x
+  write :display(x)
 }

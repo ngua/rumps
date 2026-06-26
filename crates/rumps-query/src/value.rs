@@ -257,8 +257,9 @@ impl ClassId {
     pub(crate) const DIVISIBLE: Self = Self(22);
     pub(crate) const FLOOR_DIVISIBLE: Self = Self(23);
     pub(crate) const POWERABLE: Self = Self(24);
+    pub(crate) const FORMATTABLE: Self = Self(25);
 
-    pub(crate) const BUILTIN_COUNT: usize = 25;
+    pub(crate) const BUILTIN_COUNT: usize = 26;
 
     pub(crate) const fn idx(self) -> usize {
         self.0 as usize
@@ -295,6 +296,7 @@ impl ClassId {
             22 => "Divisible",
             23 => "FloorDivisible",
             24 => "Powerable",
+            25 => "Formattable",
             _ => "<user class>",
         }
     }

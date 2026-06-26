@@ -51,7 +51,7 @@ fun main() {
 
   ; Non-existent env var
   let no-such-var = Io.Directory.get-env("RUMPS_NONEXISTENT_VAR_12345")
-  write no-such-var  ; Option.None
+  write :display(no-such-var)  ; Option.None
 
   ; ============ write-file / read-file ============
 
@@ -172,7 +172,7 @@ fun main() {
 
   ; Read it back
   let env-val = Io.Directory.get-env("RUMPS_TEST_VAR")
-  write env-val  ; Option.Some("test-value-123")
+  write :display(env-val)  ; Option.Some("test-value-123")
 
   ; ============ Path as FilePath ============
 
@@ -203,13 +203,13 @@ fun main() {
 
   ; Root has no parent (or returns empty)
   let root-parent = Io.Directory.parent("/" as FilePath)
-  write root-parent  ; Option.None
+  write :display(root-parent)  ; Option.None
 
   ; ============ file-name ============
 
   ; Get file name of test file
   let fname = Io.Directory.file-name(test-file)
-  write fname  ; Option.Some("test-file.txt")
+  write :display(fname)  ; Option.Some("test-file.txt")
 
   ; Get file name of directory
   let dname = Io.Directory.file-name(test-dir)
@@ -219,31 +219,31 @@ fun main() {
 
   ; Get extension of test file
   let ext = Io.Directory.extension(test-file)
-  write ext  ; Option.Some("txt")
+  write :display(ext)  ; Option.Some("txt")
 
   ; Get extension of file without extension
   let no-ext-path = "{test-dir-path}/noext"
   let no-ext-file = no-ext-path as FilePath
   let _ = Io.Directory.write-file({ path: no-ext-file, contents: "no extension" })
   let no-ext = Io.Directory.extension(no-ext-file)
-  write no-ext  ; Option.None
+  write :display(no-ext)  ; Option.None
 
   ; ============ with-extension ============
 
   ; Change extension
   let new-ext = Io.Directory.with-extension(test-file, "md")
-  write Io.Directory.extension(new-ext)  ; Option.Some("md")
+  write :display(Io.Directory.extension(new-ext))  ; Option.Some("md")
 
   ; Add extension
   let added-ext = Io.Directory.with-extension(no-ext-file, "json")
-  write Io.Directory.extension(added-ext)  ; Option.Some("json")
+  write :display(Io.Directory.extension(added-ext))  ; Option.Some("json")
 
   ; ============ join ============
 
   ; Join path components
   let joined = Io.Directory.join(test-dir, ["foo", "bar", "baz.txt"])
   write joined is FilePath  ; true
-  write Io.Directory.file-name(joined)  ; Option.Some("baz.txt")
+  write :display(Io.Directory.file-name(joined))  ; Option.Some("baz.txt")
 
   ; ============ temp-dir ============
 

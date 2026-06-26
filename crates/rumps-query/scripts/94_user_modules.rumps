@@ -41,7 +41,7 @@ fun main() {
   write id-str  ; hello
 
   let p = Utils.pair(1, "one")
-  write p  ; (1, one)
+  write :display(p)  ; (1, one)
 
   ; ============ Module function as value ============
 

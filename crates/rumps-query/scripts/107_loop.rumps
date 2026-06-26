@@ -54,7 +54,7 @@ fun main() {
       }
     }
   }
-  write evens
+  write :display(evens)
 
   ; Using @order to iterate through subscripts
   @set data{1} "one"
@@ -75,7 +75,7 @@ fun main() {
       }
     }
   }
-  write keys
+  write :display(keys)
 
   ; Collect all values using @order
   let vals = loop { key: @order data{}, acc: "" } (state, cont) => {

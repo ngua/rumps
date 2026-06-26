@@ -6,14 +6,14 @@ fun main() {
   write id("hello")   ; hello
   write id(true)      ; true
 
-  write pair(1, "hello")  ; (1, "hello")
-  write pair(true, 3.14)  ; (true, 3.14)
+  write :display(pair(1, "hello"))  ; (1, "hello")
+  write :display(pair(true, 3.14))  ; (true, 3.14)
 
-  write wrap(42)      ; Option.Some(42)
-  write wrap("test")  ; Option.Some("test")
+  write :display(wrap(42))      ; Option.Some(42)
+  write :display(wrap("test"))  ; Option.Some("test")
 
-  write swap((1, "x"))    ; ("x", 1)
-  write swap(("a", true)) ; (true, "a")
+  write :display(swap((1, "x")))    ; ("x", 1)
+  write :display(swap(("a", true))) ; (true, "a")
 
   let p = (42, "answer")
   write fst(p)  ; 42

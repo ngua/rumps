@@ -30,6 +30,6 @@ fun main() {
   ; turbofish selects the correct instance
   let lbl = MyInto[Label]:convert(w)
   let n = MyInto[Int]:convert(w)
-  write lbl
+  write :display(lbl)
   write n
 }

@@ -115,6 +115,7 @@ const SIMPLE_CLASSES: &[&str] = &[
     "Ord",
     "Eq",
     "Display",
+    "Formattable",
 ];
 
 /// HKT classes (kind `* -> *`): constraint does NOT take `[T]`.
@@ -280,6 +281,7 @@ fn class_id(name: &str) -> TokenStream2 {
         "Foldable" => "FOLDABLE",
         "Filterable" => "FILTERABLE",
         "Display" => "DISPLAY",
+        "Formattable" => "FORMATTABLE",
         "Eq" => "EQ",
         "Wrappable" => "WRAPPABLE",
         "Chainable" => "CHAINABLE",

@@ -3,46 +3,14 @@
 //! The interpreter is async because `Database` and `Transaction` methods are async.
 //! All variable access (both locals and globals) goes through async `Database` methods.
 //!
-//! # Type Coercions
+//! # Runtime Conversion Boundary
 //!
-//! The interpreter performs various type coercions for operations like string
-//! concatenation, comparison, and storage. All conversion methods live on
-//! [`Interpreter`] since they require access to the arena and type registry.
+//! Language conversions use class method dispatch. `write`, interpolation,
+//! `matches`, `raise`, `as String`, `as Json`, and JSON construction are
+//! checked as ordinary class method calls before runtime evaluation.
 //!
-//! ## String Coercion
-//!
-//! String coercion (via [`Interpreter::display`]) converts any value to a
-//! human-readable string. Used for `write` statements and string concatenation
-//! or interpolation.
-//!
-//! | *Type*   | *Result*                                              |
-//! |----------|-------------------------------------------------------|
-//! | `Bool`   | `"true"` or `"false"`                                 |
-//! | `Int`    | Decimal representation (e.g., `"42"`)                 |
-//! | `Float`  | Decimal representation (e.g., `"3.14"`)               |
-//! | `String` | The string itself                                     |
-//! | `Array`  | `"[ elem1, elem2, ... ]"` (recursive)                 |
-//! | `Object` | `"{ key1: val1, key2: val2, ... }"` (recursive)       |
-//! | `Variant` | `"TypeName.Variant"` or `"TypeName.Variant(args...)"` |
-//!
-//! ## JSON Coercion
-//!
-//! JSON conversion is used for storage serialization of complex values.
-//!
-//! **To JSON** ([`Interpreter::jsonify`]):
-//! - Scalars map directly (`Bool`, `Int`, `Float`, `String`)
-//! - `Array` becomes a JSON array
-//! - `Object` becomes a JSON object
-//! - `Variant` becomes `{"_type": "...", "_variant": "...", "_payload": [...]}`
-//!   (provisional encoding)
-//!
-//! **From JSON** ([`Interpreter::unjsonify`]):
-//! - `null` becomes `Option.None`
-//! - `bool` becomes `Bool`
-//! - `number` becomes `Float` (JSON has no int/float distinction)
-//! - `string` becomes `String`
-//! - `array` becomes `Array` if homogeneous (all elements same JSON type);
-//! - `object` becomes `Object`
+//! Stored values are already known to be `Storable`. Stored JSON is loaded via
+//! [`Interpreter::unjsonify`].
 //!
 //! ## Numeric Coercion
 //!
@@ -51,19 +19,6 @@
 //! - `Int` vs `Float`: The `Int` is promoted to `Float`
 //! - Comparisons (`==`, `<`, etc.) work across `Int`/`Float` boundaries
 //! - Division always produces `Float` (use `//` for floor division)
-//!
-//! ## Storage Coercion
-//!
-//! Storage conversion translates between runtime `Value` payload data and
-//! persistent `rumps_types::Value`.
-//!
-//! **To storage** ([`Interpreter::store`]):
-//! - `Bool`, `Int`, `Float`, `String` map directly
-//! - `Array`, `Object`, `Variant` are serialized as JSON
-//!
-//! **From storage** ([`Interpreter::load`]):
-//! - Direct types map back to their runtime equivalents
-//! - JSON is parsed via [`Interpreter::unjsonify`]
 //!
 //! ## Subscript Coercion
 //!
@@ -112,6 +67,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
+use convert::RawDisplay;
 use env::Environment;
 use ordered_float::OrderedFloat;
 use rumps_storage::{Database, Transaction};
@@ -589,7 +545,7 @@ impl<'ast, 'io> Interpreter<'ast, 'io> {
                     })
                     .await
                 } else {
-                    self.postfix(op, val, span)
+                    self.postfix(op, val, span).await
                 }
                 .map(Evaluated::Value)
             }
@@ -627,11 +583,10 @@ impl<'ast, 'io> Interpreter<'ast, 'io> {
             }
             Expr::Raise(inner) => {
                 let val = self.eval(inner).await?;
-                let msg = if let Payload::String(id) = &val.payload {
-                    self.arena.get_str(*id).unwrap_or("").to_owned()
-                } else {
-                    self.stringify_value(&val)
+                let Payload::String(id) = val.payload else {
+                    typechecked!("raise", "Display:display returned String")
                 };
+                let msg = self.arena.get_str(id).unwrap_or("").to_owned();
                 Err(Error::raise(span, msg))
             }
             Expr::Loop {
@@ -1978,51 +1933,32 @@ impl Interpreter<'_, '_> {
 
     /// Evaluate string interpolation.
     ///
-    /// Evaluates each part: literal strings pass through unchanged, expressions
-    /// are stringified. Strings are passed through without quotes.
+    /// Evaluates each part as a rewritten string expression.
     ///
     /// Collects parts into a `Vec` then joins, avoiding `O(n^2)` allocations.
     async fn interpolation(&mut self, parts: &[ExprId]) -> Result<Payload> {
-        self.interpolation_collect(parts, Vec::with_capacity(parts.len()))
-            .await
-    }
+        let mut acc = Vec::with_capacity(parts.len());
+        let mut rest = parts;
 
-    /// Accumulator helper for interpolation; collects strings then joins.
-    #[async_recursion]
-    async fn interpolation_collect(
-        &mut self,
-        parts: &[ExprId],
-        mut acc: Vec<String>,
-    ) -> Result<Payload> {
-        match parts.split_first() {
-            None => {
-                let joined = acc.join("");
-                Ok(Payload::String(self.arena.intern(&joined)))
-            }
-            Some((&id, rest)) => {
-                let val = self.eval(id).await?;
-                // Strings pass through unchanged; other values use stringify
-                let s = match &val.payload {
-                    Payload::String(sid)
-                        if !matches!(
-                            self.checked.types.get(self.expr_meta(id).ty),
-                            typecheck::Ty::Named(tid, _)
-                                if self.registry.get_def(*tid).is_some_and(
-                                    |def| matches!(def, TypeDef::Alias { .. })
-                                )
-                        ) =>
-                    {
-                        self.arena
-                            .get_str(*sid)
-                            .unwrap_or_else(|| invariant!("StringId in arena"))
-                            .to_owned()
-                    }
-                    _ => self.stringify_value(&val),
-                };
-                acc.push(s);
-                self.interpolation_collect(rest, acc).await
-            }
+        while let Some((&id, tail)) = rest.split_first() {
+            let val = self.eval(id).await?;
+            let s = match &val.payload {
+                Payload::String(sid) => self
+                    .arena
+                    .get_str(*sid)
+                    .unwrap_or_else(|| invariant!("StringId in arena"))
+                    .to_owned(),
+                _ => typechecked!(
+                    "interpolation",
+                    "Formattable:format returned String"
+                ),
+            };
+            acc.push(s);
+            rest = tail;
         }
+
+        let joined = acc.join("");
+        Ok(Payload::String(self.arena.intern(&joined)))
     }
 
     /// Create a closure value from AST closure parameters and body.
@@ -2271,7 +2207,7 @@ impl Interpreter<'_, '_> {
     /// Infallible conversions:
     /// - `Int -> Float` (widen)
     /// - `Float -> Int` (truncate)
-    /// - `T -> String` (stringify)
+    /// - `T -> String` through `Into[String]` class dispatch
     /// - `Bool -> Int` (`false` -> `0`, `true` -> `1`)
     /// - `T -> Storable` (identity if T is a Storable member type)
     ///
@@ -2298,12 +2234,9 @@ impl Interpreter<'_, '_> {
                 let meta = self.checked.types.union_meta(rty, val.repr);
                 Ok(self.value_with_context_meta(val, meta))
             } else if target_base == TypeId::STRING {
-                let s = self.coerce_value_to_str(&val);
-                let sid = self.arena.intern(&s);
-                Ok(self.value_for_expr(id, Payload::String(sid)))
+                typechecked!("as String", "synthetic Into[String] call")
             } else if target_base == TypeId::JSON {
-                let json = self.jsonify_value(&val);
-                Ok(self.value_for_expr(id, Payload::Json(Arc::new(json))))
+                typechecked!("as Json", "synthetic Into[Json] call")
             } else {
                 let target = self.checked.types.get(rty).clone();
                 self.coerce_value(&val, target_base, &target, span)
@@ -2947,17 +2880,16 @@ impl Interpreter<'_, '_> {
     /// `json` or `raw` format modifier.
     async fn write(&mut self, output: &WriteExpr) -> Result<()> {
         let span = self.ast.expr_span(output.expr).unwrap_or_default();
-        let val = self.eval(output.expr).await?;
-
-        // Apply format
-        let text = match output.format {
-            OutputFormat::Default => self.display_value(&val),
-            OutputFormat::Json => {
-                let json = self.jsonify_value(&val);
-                serde_json::to_string_pretty(&json)
-                    .unwrap_or_else(|_| invariant!("JSON serializable"))
+        let val = self.eval_payload(output.expr).await?;
+        let text = match val {
+            Payload::String(id) => {
+                let s = self.arena.get_str(id).unwrap_or_default();
+                match output.format {
+                    OutputFormat::Raw => RawDisplay::escape_str(s),
+                    OutputFormat::Default | OutputFormat::Json => s.to_owned(),
+                }
             }
-            OutputFormat::Raw => self.display_raw_value(&val),
+            _ => typechecked!("write", "Into[String] returned String"),
         };
 
         // Write to target
@@ -2974,7 +2906,7 @@ impl Interpreter<'_, '_> {
 
     /// Evaluate a JSON object literal.
     ///
-    /// Evaluates each field expression and converts to JSON via `jsonify_value`.
+    /// Evaluates each field expression as `Json`.
     /// Returns `Payload::Json(Object)`.
     #[allow(clippy::while_let_on_iterator)]
     async fn json(&mut self, fields: &[(StringId, ExprId)]) -> Result<Payload> {
@@ -2982,9 +2914,14 @@ impl Interpreter<'_, '_> {
         // Process fields sequentially to maintain order
         let mut it = fields.iter();
         while let Some((key, expr_id)) = it.next() {
-            let val = self.eval(*expr_id).await?;
-            let json_val = self.jsonify_value(&val);
-            obj.insert(self.arena.strings.resolve(*key).to_owned(), json_val);
+            let val = self.eval_payload(*expr_id).await?;
+            let Payload::Json(json) = val else {
+                typechecked!("Json literal", "Into[Json] returned Json")
+            };
+            obj.insert(
+                self.arena.strings.resolve(*key).to_owned(),
+                json.as_ref().clone(),
+            );
         }
         Ok(Payload::Json(Arc::new(serde_json::Value::Object(obj))))
     }

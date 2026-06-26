@@ -6,8 +6,8 @@ description: "; Test: let and variable lookup\n; Tests lexical scoping with let 
 50
 6
 20
-"Alice"
+Alice
 true
 50
 15
-"let variable test complete"
+let variable test complete

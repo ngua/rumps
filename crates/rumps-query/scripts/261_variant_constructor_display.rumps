@@ -1,37 +1,37 @@
-; Variants keep user-facing constructor behavior.
+; Variants keep explicit display constructor behavior.
 
 fun main() {
   let some = Option.Some(1)
   let none: Option[Int] = Option.None
 
-  ; `as String` for variants must be legal and render constructor syntax.
-  write some as String
-  write none as String
+  ; Explicit display for variants must render constructor syntax.
+  write :display(some)
+  write :display(none)
 
   let union-err: Result[Int, String] | Option[Int] = Result.Err("wide")
 
   let ok: Result[Int, String] = Result.Ok(7)
   let mapped-ok = Result.map-err(ok, e => String.length(e))
-  write mapped-ok
-  write mapped-ok as String
+  write :display(mapped-ok)
+  write :display(mapped-ok)
 
   let union-ok: Result[Int, String] | Option[Int] = Result.Ok(8)
   let mapped-union-ok = Result.map-err(union-ok, e => String.length(e))
-  write mapped-union-ok
-  write mapped-union-ok as String
+  write :display(mapped-union-ok)
+  write :display(mapped-union-ok)
 
   let union-some: Option[Int] | Array[Int] = Option.Some(5)
   let union-none: Option[Int] | Array[Int] = Option.None: Option[Int]
   write Option.unwrap-or(union-some, 0)
   write Option.unwrap-or(union-none, 0)
-  write Option.flatten(Option.Some(union-some))
-  write Option.note("missing", union-none)
+  write :display(Option.flatten(Option.Some(union-some)))
+  write :display(Option.note("missing", union-none))
   write Result.unwrap-or(union-ok, 0)
-  write Result.flatten(Result.Ok(union-ok))
-  write Result.hush(union-err)
-  write Array.sort([union-ok, union-err])
+  write :display(Result.flatten(Result.Ok(union-ok)))
+  write :display(Result.hush(union-err))
+  write :display(Array.sort([union-ok, union-err]))
 
   ; JSON serialization should keep nested Option semantics before storage.
   @set meta{1} ({ present: some, missing: none } as Json)
-  write @get meta{1}
+  write :display(@get meta{1})
 }

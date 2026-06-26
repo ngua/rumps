@@ -1,6 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Destructuring bindings\n\n; === Tuple destructuring ===\n\nLET pair = (1, 2)\nLET (a, b) = pair\n@OUTPUT a\n@OUTPUT b\n\n; Nested tuple\nLET nested = ((1, 2), (3, 4))\nLET ((x1, y1), (x2, y2)) = nested\n@OUTPUT x1\n@OUTPUT y1\n@OUTPUT x2\n@OUTPUT y2\n\n; === Object destructuring ===\n\nLET person = { name: \"Alice\", age: 30 }\nLET { name, age } = person\n@OUTPUT name\n@OUTPUT age\n\n; Object with rename\nLET point = { x: 10, y: 20 }\nLET { x: px, y: py } = point\n@OUTPUT px\n@OUTPUT py\n\n; NOTE: Array destructuring is only supported in MATCH expressions, not in LET bindings.\n; See 62_match.rumps for array pattern matching examples.\n\n; === Wildcard ===\n\nLET triple = (100, 200, 300)\nLET (keep, _, last) = triple\n@OUTPUT keep\n@OUTPUT last\n\n; Wildcard discards entire value\nLET _ = \"discarded\"\n@OUTPUT \"wildcard works\"\n\n; === Mixed nesting ===\n\nLET data = { coords: (10, 20), name: \"origin\" }\nLET { coords: (cx, cy), name: label } = data\n@OUTPUT cx\n@OUTPUT cy\n@OUTPUT label\n\n; === In expressions ===\n\nLET result = {\n  LET (x, y) = (5, 10)\n  x + y\n}\n@OUTPUT result\n\n@OUTPUT \"Destructuring test complete\"\n"
+description: "; Destructuring bindings\n\nfun main() {\n  ; === Tuple destructuring ===\n\n  let pair = (1, 2)\n  let (a, b) = pair\n  write a\n  write b\n\n  ; Nested tuple\n  let nested = ((1, 2), (3, 4))\n  let ((x1, y1), (x2, y2)) = nested\n  write x1\n  write y1\n  write x2\n  write y2\n\n  ; === Object destructuring ===\n\n  let person = { name: \"Alice\", age: 30 }\n  let { name, age } = person\n  write name\n  write age\n\n  ; Object with rename\n  let point = { x: 10, y: 20 }\n  let { x: px, y: py } = point\n  write px\n  write py\n\n  ; NOTE: Array destructuring is only supported in match expressions, not in let bindings.\n  ; See 62_match.rumps for array pattern matching examples.\n\n  ; === Wildcard ===\n\n  let triple = (100, 200, 300)\n  let (keep, _, last) = triple\n  write keep\n  write last\n\n  ; Wildcard discards entire value\n  let _ = \"discarded\"\n  write \"wildcard works\"\n\n  ; === Mixed nesting ===\n\n  let data = { coords: (10, 20), name: \"origin\" }\n  let { coords: (cx, cy), name: label } = data\n  write cx\n  write cy\n  write label\n\n  ; === In expressions ===\n\n  let result = {\n    let (x, y) = (5, 10)\n    x + y\n  }\n  write result\n\n  write \"Destructuring test complete\"\n}\n"
 ---
 1
 2
@@ -8,15 +8,15 @@ description: "; Destructuring bindings\n\n; === Tuple destructuring ===\n\nLET p
 2
 3
 4
-"Alice"
+Alice
 30
 10
 20
 100
 300
-"wildcard works"
+wildcard works
 10
 20
-"origin"
+origin
 15
-"Destructuring test complete"
+Destructuring test complete

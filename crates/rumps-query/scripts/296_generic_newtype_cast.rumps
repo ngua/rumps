@@ -1,5 +1,5 @@
 fun main() {
-  write P.f(P.mk([1, 2, 3]))
+  write :display(P.f(P.mk([1, 2, 3])))
 }
 
 module P {

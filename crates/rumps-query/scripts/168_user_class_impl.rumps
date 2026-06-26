@@ -11,8 +11,8 @@ fun main() {
   ; type with Display
   let p1 = Point.Point(10, 20)
   let p2 = Point.Origin
-  write Display:display(p1)
-  write Display:display(p2)
+  write :display(p1)
+  write :display(p2)
 
   ; type with Into[String]
   let uid = UserId.UserId(42)
@@ -24,40 +24,40 @@ fun main() {
 
   ; newtype with Display
   let my-age: Age = 30
-  write Display:display(my-age)
+  write :display(my-age)
 
   ; newtype with full `Numeric` stack (delegates to underlying `Int`)
   let a: MyInt = 10
   let b: MyInt = 3
-  write "add: {Additive:add(a, b)}"
-  write "sub: {Subtractive:sub(a, b)}"
-  write "mul: {Multiplicative:mul(a, b)}"
-  write "floor-div: {FloorDivisible:floor-div(a, b)}"
-  write "mod: {FloorDivisible:mod(a, b)}"
-  write "pow: {Powerable:pow(a, b)}"
+  write "add: {:display(Additive:add(a, b))}"
+  write "sub: {:display(Subtractive:sub(a, b))}"
+  write "mul: {:display(Multiplicative:mul(a, b))}"
+  write "floor-div: {:display(FloorDivisible:floor-div(a, b))}"
+  write "mod: {:display(FloorDivisible:mod(a, b))}"
+  write "pow: {:display(Powerable:pow(a, b))}"
 
   ; newtype with Ord (reversed comparison)
   let low: Priority = 10
   let high: Priority = 1
-  write "compare(10, 1) = {Ord:compare(low, high)}"
-  write "compare(1, 10) = {Ord:compare(high, low)}"
+  write "compare(10, 1) = {:display(Ord:compare(low, high))}"
+  write "compare(1, 10) = {:display(Ord:compare(high, low))}"
   let same1: Priority = 5
   let same2: Priority = 5
-  write "compare(5, 5) = {Ord:compare(same1, same2)}"
+  write "compare(5, 5) = {:display(Ord:compare(same1, same2))}"
 
   ; union with Display
   let soi1: StrOrInt = "hello"
   let soi2: StrOrInt = 42
-  write Display:display(soi1)
-  write Display:display(soi2)
+  write :display(soi1)
+  write :display(soi2)
 
   ; type with constrained Display
   let pair1 = Pair.Pair(1, 2)
   let pair2 = Pair.Pair("hello", "world")
   let pair3 = Pair.Pair(true, false)
-  write Display:display(pair1)
-  write Display:display(pair2)
-  write Display:display(pair3)
+  write :display(pair1)
+  write :display(pair2)
+  write :display(pair3)
 }
 
 ; === Type and Class Definitions ===
@@ -190,8 +190,8 @@ class Display for Pair[L, R] where L: Display, R: Display {
   fun display(p: Pair[L, R]) -> String {
     match p {
       Pair.Pair(l, r) => {
-        let ls = Display:display(l)
-        let rs = Display:display(r)
+        let ls = :display(l)
+        let rs = :display(r)
         "Pair({ls}, {rs})"
       }
     }

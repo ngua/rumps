@@ -3,5 +3,5 @@
 
 fun main() {
   ; This should fail: `Florbl` is not a defined type
-  write "3.14" read Florbl
+  write :display("3.14" read Florbl)
 }

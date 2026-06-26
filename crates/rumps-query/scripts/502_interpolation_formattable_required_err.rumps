@@ -1,0 +1,8 @@
+; `Display` alone is not enough for interpolation.
+
+#(deriving: Display)
+variant DebugOnly = DebugOnly
+
+fun main() {
+  write "debug={DebugOnly.DebugOnly}"
+}

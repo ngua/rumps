@@ -21,7 +21,7 @@ class MyFunctor for Box {
 fun main() {
   let b = Box.Box(10)
   let b2 = MyFunctor:fmap(b, x => x * 2)
-  write b2
+  write :display(b2)
   let b3 = MyFunctor:fmap(b2, x => "{x}!")
-  write b3
+  write :display(b3)
 }

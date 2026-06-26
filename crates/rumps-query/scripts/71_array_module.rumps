@@ -67,36 +67,36 @@ fun main() {
   ; Mappable:map with closure
   let nums = [1, 2, 3, 4, 5]
   let doubled = Mappable:map(x => x * 2, nums)
-  write doubled  ; [2, 4, 6, 8, 10]
+  write :display(doubled)  ; [2, 4, 6, 8, 10]
 
   ; Mappable:map on empty array
   let empty = []
   let mapped-empty = Mappable:map(x => x + 1, empty)
-  write mapped-empty  ; []
+  write :display(mapped-empty)  ; []
 
   ; Mappable:map with named function
   let squares = Mappable:map(square, [1, 2, 3])
-  write squares  ; [1, 4, 9]
+  write :display(squares)  ; [1, 4, 9]
 
   ; Filterable:filter with closure
   let evens = Filterable:filter(x => x % 2 == 0, nums)
-  write evens  ; [2, 4]
+  write :display(evens)  ; [2, 4]
 
   ; Filterable:filter on empty array
   let filtered-empty = Filterable:filter(x => x > 0, empty)
-  write filtered-empty  ; []
+  write :display(filtered-empty)  ; []
 
   ; Filterable:filter with named function
   let positives = Filterable:filter(is-positive, [-1, 0, 1, 2])
-  write positives  ; [1, 2]
+  write :display(positives)  ; [1, 2]
 
   ; Filterable:filter keeping all
   let all-kept = Filterable:filter(x => true, [1, 2, 3])
-  write all-kept  ; [1, 2, 3]
+  write :display(all-kept)  ; [1, 2, 3]
 
   ; Filterable:filter keeping none
   let none-kept = Filterable:filter(x => false, [1, 2, 3])
-  write none-kept  ; []
+  write :display(none-kept)  ; []
 
   ; Foldable:fold with sum
   let sum = Foldable:fold((acc, x) => acc + x, 0, nums)
@@ -118,8 +118,8 @@ fun main() {
   ; `Foldable:fold-map` with `String` and `Array` outputs
   write Foldable:fold-map(x => "{x}", [1, 2, 3])
   let empty-fold-map: Array[Int] = Foldable:fold-map(x => [x], empty)
-  write empty-fold-map
-  write Foldable:fold-map(x => [x, x * 10], [1, 2, 3])
+  write :display(empty-fold-map)
+  write :display(Foldable:fold-map(x => [x, x * 10], [1, 2, 3]))
 
   ; Combining Array functions
   let result = Foldable:fold(
@@ -133,105 +133,105 @@ fun main() {
   let piped = [1, 2, 3, 4, 5]
     |> (arr => Filterable:filter(x => x > 2, arr))
     |> (arr => Mappable:map(x => x * 10, arr))
-  write piped  ; [30, 40, 50]
+  write :display(piped)  ; [30, 40, 50]
 
   ; Module functions can be passed as first-class values
   let filter-fn = Filterable:filter
   let data = [1, 2, 3, 4, 5]
   let filtered = filter-fn(x => x > 2, data)
-  write filtered  ; [3, 4, 5]
+  write :display(filtered)  ; [3, 4, 5]
 
   ; Mappable:map with Option results (homogeneous tagged values)
   let with-opts = Mappable:map(x => Option.Some(x), [1, 2, 3])
-  write with-opts  ; [Option.Some(1), Option.Some(2), Option.Some(3)]
+  write :display(with-opts)  ; [Option.Some(1), Option.Some(2), Option.Some(3)]
 
   ; Nested Mappable:map (callback uses Array function)
   let nested = [[1, 2], [3, 4]]
   let doubled-nested = Mappable:map(arr => Mappable:map(x => x * 2, arr), nested)
-  write doubled-nested  ; [[2, 4], [6, 8]]
+  write :display(doubled-nested)  ; [[2, 4], [6, 8]]
 
   ; === foreach ===
 
   ; foreach for side effects (outputs each element)
   write "foreach:"
   let fe-result = foreach(x => { write x }, [10, 20, 30])
-  write fe-result  ; Unit
+  write :display(fe-result)  ; Unit
 
   ; foreach on empty array (no side effects)
   let fe-empty = foreach(x => { write x }, [])
-  write fe-empty  ; Unit
+  write :display(fe-empty)  ; Unit
 
   ; `foreach` with collected `Range`
   write "range foreach:"
   let fe-range = foreach(n => { write n }, Range.collect(1 .. 4))
-  write fe-range  ; Unit
+  write :display(fe-range)  ; Unit
 
   ; === Array.zip ===
 
   let a = [1, 2, 3]
   let b = ["a", "b", "c"]
   let zipped = Array.zip(a, b)
-  write zipped
+  write :display(zipped)
 
   ; Shorter array determines length
   let short = [1, 2]
   let long = ["a", "b", "c", "d"]
-  write Array.zip(short, long)
+  write :display(Array.zip(short, long))
 
   ; === Array.unzip ===
 
   let pairs: Array[(Int, String)] = [(1, "one"), (2, "two"), (3, "three")]
   let (unzip-nums, unzip-strs) = Array.unzip(pairs)
-  write unzip-nums
-  write unzip-strs
+  write :display(unzip-nums)
+  write :display(unzip-strs)
 
   ; Round-trip
   let x = [10, 20, 30]
   let y = [true, false, true]
   let (x2, y2) = Array.unzip(Array.zip(x, y))
-  write x2
-  write y2
+  write :display(x2)
+  write :display(y2)
 
   ; === Array.intersperse ===
 
   let inter-words = ["hello", "world", "!"]
-  write Array.intersperse(",", inter-words)
+  write :display(Array.intersperse(",", inter-words))
 
   let inter-nums = [1, 2, 3, 4]
-  write Array.intersperse(0, inter-nums)
+  write :display(Array.intersperse(0, inter-nums))
 
   ; Empty array
   let inter-empty: Array[Int] = []
-  write Array.intersperse(0, inter-empty)
+  write :display(Array.intersperse(0, inter-empty))
 
   ; Single element
-  write Array.intersperse(0, [42])
+  write :display(Array.intersperse(0, [42]))
 
   ; === Array.zip-with ===
 
   let xs = [1, 2, 3]
   let ys = [10, 20, 30]
-  write Array.zip-with(zip-add, xs, ys)
+  write :display(Array.zip-with(zip-add, xs, ys))
 
   ; With closure
   let multiplied = Array.zip-with((ma, mb) => ma * mb, [2, 3, 4], [5, 6, 7])
-  write multiplied
+  write :display(multiplied)
 
   ; With shorter array
-  write Array.zip-with(zip-add, [1, 2, 3, 4, 5], [10, 20])
+  write :display(Array.zip-with(zip-add, [1, 2, 3, 4, 5], [10, 20]))
 
   ; === Array.sort-by ===
 
   let unsorted = [3, 1, 4, 1, 5, 9, 2, 6]
-  write Array.sort-by(cmp-int, unsorted)
-  write Array.sort-by(Ord:compare, unsorted)
+  write :display(Array.sort-by(cmp-int, unsorted))
+  write :display(Array.sort-by(Ord:compare, unsorted))
 
   ; Sort descending (reverse comparator)
-  write Array.sort-by(cmp-desc, unsorted)
+  write :display(Array.sort-by(cmp-desc, unsorted))
 
   ; Sort by absolute value
   let signed = [-5, 3, -1, 4, -2]
-  write Array.sort-by(cmp-abs, signed)
+  write :display(Array.sort-by(cmp-abs, signed))
 
   ; Sort objects by field
   let people = [
@@ -240,7 +240,7 @@ fun main() {
     { name: "Carol", age: 35 }
   ]
   let by-age = Array.sort-by(cmp-by-age, people)
-  write Mappable:map(p => p.name, by-age)
+  write :display(Mappable:map(p => p.name, by-age))
 
   ; === Array.contains ===
 
@@ -260,10 +260,10 @@ fun main() {
 
   ; === Array Phase `2` additions ===
 
-  write Array.minimum(empty-ints)
-  write Array.minimum([3, 1, 4, 1, 5])
-  write Array.maximum(empty-ints)
-  write Array.maximum([3, 1, 4, 1, 5])
+  write :display(Array.minimum(empty-ints))
+  write :display(Array.minimum([3, 1, 4, 1, 5]))
+  write :display(Array.maximum(empty-ints))
+  write :display(Array.maximum([3, 1, 4, 1, 5]))
 
   let r1: Rank = 1
   let r3: Rank = 3
@@ -274,95 +274,95 @@ fun main() {
   write min-rank
   write max-rank
 
-  write Array.elem-index([10, 20, 10], 10)
-  write Array.elem-index([10, 20, 10], 99)
-  write Array.elem-index(empty-ints, 10)
-  write Array.elem-index([p5, p2], p4)
+  write :display(Array.elem-index([10, 20, 10], 10))
+  write :display(Array.elem-index([10, 20, 10], 99))
+  write :display(Array.elem-index(empty-ints, 10))
+  write :display(Array.elem-index([p5, p2], p4))
 
   ; === Array Phase `1` additions ===
 
-  write Array.last(empty-ints)
-  write Array.last([10, 20, 30])
+  write :display(Array.last(empty-ints))
+  write :display(Array.last([10, 20, 30]))
 
-  write Array.init(empty-ints)
-  write Array.init([42])
-  write Array.init([1, 2, 3])
+  write :display(Array.init(empty-ints))
+  write :display(Array.init([42]))
+  write :display(Array.init([1, 2, 3]))
 
-  write Array.uncons(empty-ints)
-  write Array.uncons([1, 2, 3])
+  write :display(Array.uncons(empty-ints))
+  write :display(Array.uncons([1, 2, 3]))
 
-  write Array.unsnoc(empty-ints)
-  write Array.unsnoc([1, 2, 3])
+  write :display(Array.unsnoc(empty-ints))
+  write :display(Array.unsnoc([1, 2, 3]))
 
-  write Array.take(-2, [1, 2, 3])
-  write Array.take(2, [1, 2, 3])
-  write Array.take(99, [1, 2, 3])
+  write :display(Array.take(-2, [1, 2, 3]))
+  write :display(Array.take(2, [1, 2, 3]))
+  write :display(Array.take(99, [1, 2, 3]))
 
-  write Array.drop(-2, [1, 2, 3])
-  write Array.drop(2, [1, 2, 3])
-  write Array.drop(99, [1, 2, 3])
+  write :display(Array.drop(-2, [1, 2, 3]))
+  write :display(Array.drop(2, [1, 2, 3]))
+  write :display(Array.drop(99, [1, 2, 3]))
 
-  write Array.split-at(-2, [1, 2, 3])
-  write Array.split-at(2, [1, 2, 3])
-  write Array.split-at(99, [1, 2, 3])
+  write :display(Array.split-at(-2, [1, 2, 3]))
+  write :display(Array.split-at(2, [1, 2, 3]))
+  write :display(Array.split-at(99, [1, 2, 3]))
 
-  write Array.indexed(["a", "b", "c"])
-  write Array.indexed(empty-ints)
+  write :display(Array.indexed(["a", "b", "c"]))
+  write :display(Array.indexed(empty-ints))
 
-  write Array.singleton("one")
-  write Array.cons(0, [1, 2, 3])
+  write :display(Array.singleton("one"))
+  write :display(Array.cons(0, [1, 2, 3]))
 
   ; === Array Phase `4` additions ===
 
-  write Array.set-at([1, 2, 3], 1, 99)
-  write Array.set-at([1, 2, 3], -1, 99)
-  write Array.set-at([1, 2, 3], 9, 99)
+  write :display(Array.set-at([1, 2, 3], 1, 99))
+  write :display(Array.set-at([1, 2, 3], -1, 99))
+  write :display(Array.set-at([1, 2, 3], 9, 99))
 
-  write Array.remove-at([1, 2, 3], 1)
-  write Array.remove-at([1, 2, 3], -1)
-  write Array.remove-at([1, 2, 3], 9)
+  write :display(Array.remove-at([1, 2, 3], 1))
+  write :display(Array.remove-at([1, 2, 3], -1))
+  write :display(Array.remove-at([1, 2, 3], 9))
 
-  write Array.insert-at([1, 2, 3], -1, 99)
-  write Array.insert-at([1, 2, 3], 1, 99)
-  write Array.insert-at([1, 2, 3], 9, 99)
+  write :display(Array.insert-at([1, 2, 3], -1, 99))
+  write :display(Array.insert-at([1, 2, 3], 1, 99))
+  write :display(Array.insert-at([1, 2, 3], 9, 99))
 
-  write Array.adjust-at(x => x * 10, [1, 2, 3], 1)
-  write Array.adjust-at(x => x * 10, [1, 2, 3], -1)
-  write Array.adjust-at(x => x * 10, [1, 2, 3], 9)
-  write Array.adjust-at(x => {
+  write :display(Array.adjust-at(x => x * 10, [1, 2, 3], 1))
+  write :display(Array.adjust-at(x => x * 10, [1, 2, 3], -1))
+  write :display(Array.adjust-at(x => x * 10, [1, 2, 3], 9))
+  write :display(Array.adjust-at(x => {
     write "adjust-at-called"
     x * 10
-  }, empty-ints, 0)
+  }, empty-ints, 0))
 
   ; === Array Phase `5` additions ===
 
-  write Array.flatten([[1, 2], [], [3, 4]])
+  write :display(Array.flatten([[1, 2], [], [3, 4]]))
   let flat-empty: Array[Int] = Array.flatten([])
-  write flat-empty
-  write Array.flatten([[true], [false, true]])
+  write :display(flat-empty)
+  write :display(Array.flatten([[true], [false, true]]))
 
   let chunk-zero: Word = 0
   let chunk-two: Word = 2
   let chunk-big: Word = 99
-  write Array.chunks-of(chunk-zero, [1, 2, 3])
-  write Array.chunks-of(chunk-two, [1, 2, 3, 4, 5])
-  write Array.chunks-of(chunk-big, [1, 2, 3])
-  write Array.chunks-of(chunk-two, empty-ints)
+  write :display(Array.chunks-of(chunk-zero, [1, 2, 3]))
+  write :display(Array.chunks-of(chunk-two, [1, 2, 3, 4, 5]))
+  write :display(Array.chunks-of(chunk-big, [1, 2, 3]))
+  write :display(Array.chunks-of(chunk-two, empty-ints))
 
   let window-zero: Word = 0
   let window-two: Word = 2
   let window-three: Word = 3
   let window-big: Word = 99
-  write Array.windows(window-zero, [1, 2, 3])
-  write Array.windows(window-two, [1, 2, 3, 4])
-  write Array.windows(window-three, [1, 2])
-  write Array.windows(window-big, [1, 2, 3])
-  write Array.windows(window-two, empty-ints)
+  write :display(Array.windows(window-zero, [1, 2, 3]))
+  write :display(Array.windows(window-two, [1, 2, 3, 4]))
+  write :display(Array.windows(window-three, [1, 2]))
+  write :display(Array.windows(window-big, [1, 2, 3]))
+  write :display(Array.windows(window-two, empty-ints))
 
-  write Array.replicate(-2, "x")
-  write Array.replicate(0, "x")
-  write Array.replicate(3, "x")
-  write Array.replicate(2, [1, 2])
+  write :display(Array.replicate(-2, "x"))
+  write :display(Array.replicate(0, "x"))
+  write :display(Array.replicate(3, "x"))
+  write :display(Array.replicate(2, [1, 2]))
 
   ; === Array Phase `3` additions ===
 
@@ -386,87 +386,87 @@ fun main() {
     x < 2
   }, [1, 2, 3])
 
-  write Array.find(x => x % 2 == 0, [1, 3, 4, 6])
-  write Array.find(x => x % 2 == 0, [1, 3, 5])
-  write Array.find(x => x % 2 == 0, empty-ints)
+  write :display(Array.find(x => x % 2 == 0, [1, 3, 4, 6]))
+  write :display(Array.find(x => x % 2 == 0, [1, 3, 5]))
+  write :display(Array.find(x => x % 2 == 0, empty-ints))
 
   write "array-find-short"
-  write Array.find(x => {
+  write :display(Array.find(x => {
     write x
     x == 2
-  }, [1, 2, 3])
+  }, [1, 2, 3]))
 
-  write Array.find-index(x => x % 2 == 0, [1, 3, 4, 6])
-  write Array.find-index(x => x % 2 == 0, [1, 3, 5])
-  write Array.find-index(x => x % 2 == 0, empty-ints)
+  write :display(Array.find-index(x => x % 2 == 0, [1, 3, 4, 6]))
+  write :display(Array.find-index(x => x % 2 == 0, [1, 3, 5]))
+  write :display(Array.find-index(x => x % 2 == 0, empty-ints))
 
   write "array-find-index-short"
-  write Array.find-index(x => {
+  write :display(Array.find-index(x => {
     write x
     x == 2
-  }, [1, 2, 3])
+  }, [1, 2, 3]))
 
-  write Array.find-indices(x => x % 2 == 0, [1, 2, 3, 4, 6])
-  write Array.find-indices(x => x % 2 == 0, [1, 3, 5])
-  write Array.find-indices(x => x % 2 == 0, empty-ints)
+  write :display(Array.find-indices(x => x % 2 == 0, [1, 2, 3, 4, 6]))
+  write :display(Array.find-indices(x => x % 2 == 0, [1, 3, 5]))
+  write :display(Array.find-indices(x => x % 2 == 0, empty-ints))
 
-  write Array.take-while(x => x < 4, [1, 2, 4, 3])
-  write Array.take-while(x => x < 4, [1, 2, 3])
-  write Array.take-while(x => x < 4, empty-ints)
+  write :display(Array.take-while(x => x < 4, [1, 2, 4, 3]))
+  write :display(Array.take-while(x => x < 4, [1, 2, 3]))
+  write :display(Array.take-while(x => x < 4, empty-ints))
 
   write "array-take-while-short"
-  write Array.take-while(x => {
+  write :display(Array.take-while(x => {
     write x
     x < 2
-  }, [1, 2, 3])
+  }, [1, 2, 3]))
 
-  write Array.drop-while(x => x < 4, [1, 2, 4, 3])
-  write Array.drop-while(x => x < 4, [1, 2, 3])
-  write Array.drop-while(x => x < 4, empty-ints)
+  write :display(Array.drop-while(x => x < 4, [1, 2, 4, 3]))
+  write :display(Array.drop-while(x => x < 4, [1, 2, 3]))
+  write :display(Array.drop-while(x => x < 4, empty-ints))
 
   write "array-drop-while-short"
-  write Array.drop-while(x => {
+  write :display(Array.drop-while(x => {
     write x
     x < 2
-  }, [1, 2, 3])
+  }, [1, 2, 3]))
 
-  write Array.span(x => x < 4, [1, 2, 4, 3])
-  write Array.span(x => x < 4, [1, 2, 3])
-  write Array.span(x => x < 4, empty-ints)
+  write :display(Array.span(x => x < 4, [1, 2, 4, 3]))
+  write :display(Array.span(x => x < 4, [1, 2, 3]))
+  write :display(Array.span(x => x < 4, empty-ints))
 
   write "array-span-short"
-  write Array.span(x => {
+  write :display(Array.span(x => {
     write x
     x < 2
-  }, [1, 2, 3])
+  }, [1, 2, 3]))
 
-  write Array.break(x => x >= 4, [1, 2, 4, 3])
-  write Array.break(x => x >= 4, [1, 2, 3])
-  write Array.break(x => x >= 4, empty-ints)
+  write :display(Array.break(x => x >= 4, [1, 2, 4, 3]))
+  write :display(Array.break(x => x >= 4, [1, 2, 3]))
+  write :display(Array.break(x => x >= 4, empty-ints))
 
   write "array-break-short"
-  write Array.break(x => {
+  write :display(Array.break(x => {
     write x
     x >= 2
-  }, [1, 2, 3])
+  }, [1, 2, 3]))
 
-  write Array.partition(x => x % 2 == 0, [1, 2, 3, 4])
-  write Array.partition(x => x % 2 == 0, empty-ints)
+  write :display(Array.partition(x => x % 2 == 0, [1, 2, 3, 4]))
+  write :display(Array.partition(x => x % 2 == 0, empty-ints))
 
-  write Array.concat-map(x => [x, x * 10], [1, 2, 3])
+  write :display(Array.concat-map(x => [x, x * 10], [1, 2, 3]))
   let empty-concat: Array[Int] = Array.concat-map(x => [x], empty-ints)
-  write empty-concat
+  write :display(empty-concat)
 
-  write Array.map-option(
+  write :display(Array.map-option(
     x => if x % 2 == 0 { Option.Some(x * 10) } else { Option.None },
     [1, 2, 3, 4]
-  )
-  write Array.map-option(x => Option.None: Option[Int], [1, 2, 3])
+  ))
+  write :display(Array.map-option(x => Option.None: Option[Int], [1, 2, 3]))
   let empty-options: Array[Int] = Array.map-option(
     x => Option.Some(x),
     empty-ints
   )
-  write empty-options
+  write :display(empty-options)
 
   ; === Chained operations ===
 
@@ -475,13 +475,13 @@ fun main() {
   let values = [10, 25, 30, 15, 40]
   let indexed = Array.zip(indices, values)
   let chain-filtered = Filterable:filter(pair => pair.1 > 20, indexed)
-  write chain-filtered
+  write :display(chain-filtered)
 
   ; zip-with to compute differences
   let before = [10, 20, 30]
   let after = [15, 18, 35]
   let diffs = Array.zip-with((db, da) => da - db, before, after)
-  write diffs
+  write :display(diffs)
 
   ; === Collected ranges with array constraints ===
 

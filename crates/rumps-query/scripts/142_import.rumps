@@ -14,9 +14,9 @@ fun main() {
   ; Expected: 3
 
   ; Multiple named imports
-  write head([1, 2, 3])
+  write :display(head([1, 2, 3]))
   ; Expected: Some(1)
-  write tail([1, 2, 3])
+  write :display(tail([1, 2, 3]))
   ; Expected: [ 2, 3 ]
 
   ; Wildcard import in nested scope (at top of scope)

@@ -3,21 +3,21 @@
 fun main() {
   ; bimap on Ok (only f called)
   let ok: Result[Int, String] = Result.Ok(42)
-  write Bimappable:bimap(x => x + 1, s => "{s}!", ok)
+  write :display(Bimappable:bimap(x => x + 1, s => "{s}!", ok))
 
   ; bimap on Err (only g called)
   let err: Result[Int, String] = Result.Err("oops")
-  write Bimappable:bimap(x => x + 1, s => "{s}!", err)
+  write :display(Bimappable:bimap(x => x + 1, s => "{s}!", err))
 
   ; type-changing bimap
   let r: Result[Int, Int] = Result.Ok(5)
-  write Bimappable:bimap(x => "{x}", x => x > 0, r)
+  write :display(Bimappable:bimap(x => "{x}", x => x > 0, r))
 
   let r2: Result[Int, Int] = Result.Err(0)
-  write Bimappable:bimap(x => "{x}", x => x > 0, r2)
+  write :display(Bimappable:bimap(x => "{x}", x => x > 0, r2))
 
   ; partial application
   let bm = Bimappable:bimap(x => x * 2, s => String.upper(s))
-  write bm(Result.Ok(10))
-  write bm(Result.Err("hello"))
+  write :display(bm(Result.Ok(10)))
+  write :display(bm(Result.Err("hello")))
 }

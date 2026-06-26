@@ -15,14 +15,14 @@ description: "; Test: type conversions\n; Tests explicit type conversion with as
 3
 3.0
 1.5
-"Number: 42"
-"Pi: 3.14159"
-"Flag: true"
-"Flag: false"
+Number: 42
+Pi: 3.14159
+Flag: true
+Flag: false
 true
 true
 true
 true
 true
 true
-"Type conversion test complete"
+Type conversion test complete

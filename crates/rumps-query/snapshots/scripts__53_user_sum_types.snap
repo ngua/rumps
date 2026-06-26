@@ -1,33 +1,33 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; User-defined sum types (variant declarations)\n\n; Simple enumeration with no payloads\nvariant Status = Pending | Active | Completed | Failed\n\n; Create values using the defined type\nLET s1 = Status.Pending\nLET s2 = Status.Active\nLET s3 = Status.Completed\nLET s4 = Status.Failed\n\nWRITE s1\nWRITE s2\nWRITE s3\nWRITE s4\n\n; Test with is operator\nIF s1 is Status.Pending {\n  WRITE \"s1 is Pending\"\n}\n\nIF s2 is Status.Active {\n  WRITE \"s2 is Active\"\n}\n\n; Sum type with payloads\nvariant Event = Click(Int, Int) | KeyPress(String) | Resize(Int, Int)\n\nLET click = Event.Click(100, 200)\nLET key = Event.KeyPress(\"Enter\")\nLET resize = Event.Resize(1920, 1080)\n\nWRITE click\nWRITE key\nWRITE resize\n\n; Test is with bindings\nIF click is Event.Click(x, y) {\n  WRITE \"Click at: {x}, {y}\"\n}\n\nIF key is Event.KeyPress(k) {\n  WRITE \"Key: {k}\"\n}\n\n; Parameterized type (generic)\nvariant Either[L, R] = Left(L) | Right(R)\n\nLET left = Either.Left(\"error message\")\nLET right = Either.Right(42)\n\nWRITE left\nWRITE right\n\n; Test is with generic variants\nIF left is Either.Left(msg) {\n  WRITE \"Got left: {msg}\"\n}\n\nIF right is Either.Right(val) {\n  WRITE \"Got right: {val}\"\n}\n\n; Multi-line syntax (use Outcome to avoid conflict with builtin Result)\nvariant Outcome[T, E] =\n  Success(T)\n  | Failure(E)\n\nLET ok = Outcome.Success(100)\nLET err = Outcome.Failure(\"failed\")\n\nWRITE ok\nWRITE err\n\n; Test wildcard patterns\nIF ok is Outcome.Success(_) {\n  WRITE \"ok is Success (wildcard)\"\n}\n\n; Single type parameter\nvariant Maybe[T] = Just(T) | Nothing\n\nLET just = Maybe.Just(\"hello\")\nLET nothing = Maybe.Nothing\n\nWRITE just\nWRITE nothing\n\n; Test that keywords can be used as variant names (exercises `ident_or_contextual_kw`)\n; `Raise`, `Catch`, `Write`, `Read` are keywords but should work as variant names\nvariant Action = Raise(String) | Catch(String) | Write(String) | Read(String)\n\nLET a1 = Action.Raise(\"raising\")\nLET a2 = Action.Catch(\"catching\")\nLET a3 = Action.Write(\"writing\")\nLET a4 = Action.Read(\"reading\")\n\nWRITE a1\nWRITE a2\nWRITE a3\nWRITE a4\n\nIF a1 is Action.Raise(msg) {\n  WRITE \"Action.Raise: {msg}\"\n}\n\nIF a2 is Action.Catch(msg) {\n  WRITE \"Action.Catch: {msg}\"\n}\n\nIF a3 is Action.Write(msg) {\n  WRITE \"Action.Write: {msg}\"\n}\n\nIF a4 is Action.Read(msg) {\n  WRITE \"Action.Read: {msg}\"\n}\n\nWRITE \"User-defined sum types complete\"\n"
+description: "; User-defined sum types (variant declarations)\n\n; Simple enumeration with no payloads\n#(deriving: Display)\nvariant Status = Pending | Active | Completed | Failed\n\n; Sum type with payloads\n#(deriving: Display)\nvariant Event = Click(Int, Int) | KeyPress(String) | Resize(Int, Int)\n\n; Parameterized type (generic)\n#(deriving: Display)\nvariant Either[L, R] = Left(L) | Right(R)\n\n; Multi-line syntax (use Outcome to avoid conflict with builtin Result)\n#(deriving: Display)\nvariant Outcome[T, E] =\n  Success(T)\n  | Failure(E)\n\n; Single type parameter\n#(deriving: Display)\nvariant Maybe[T] = Just(T) | Nothing\n\n; Test that keywords can be used as variant names (exercises `ident_or_contextual_kw`)\n; `Raise`, `Catch`, `Write`, `Read` are keywords but should work as variant names\n#(deriving: Display)\nvariant Action = Raise(String) | Catch(String) | Write(String) | Read(String)\n\nfun main() {\n  ; Create values using the defined type\n  let s1 = Status.Pending\n  let s2 = Status.Active\n  let s3 = Status.Completed\n  let s4 = Status.Failed\n\n  write :display(s1)\n  write :display(s2)\n  write :display(s3)\n  write :display(s4)\n\n  ; Test with is operator\n  if s1 is Status.Pending {\n    write \"s1 is Pending\"\n  }\n\n  if s2 is Status.Active {\n    write \"s2 is Active\"\n  }\n\n  let click = Event.Click(100, 200)\n  let key = Event.KeyPress(\"Enter\")\n  let resize = Event.Resize(1920, 1080)\n\n  write :display(click)\n  write :display(key)\n  write :display(resize)\n\n  ; Test is with bindings\n  if click is Event.Click(x, y) {\n    write \"Click at: {x}, {y}\"\n  }\n\n  if key is Event.KeyPress(k) {\n    write \"Key: {k}\"\n  }\n\n  let left = Either.Left(\"error message\")\n  let right = Either.Right(42)\n\n  write :display(left)\n  write :display(right)\n\n  ; Test is with generic variants\n  if left is Either.Left(msg) {\n    write \"Got left: {msg}\"\n  }\n\n  if right is Either.Right(val) {\n    write \"Got right: {val}\"\n  }\n\n  let ok = Outcome.Success(100)\n  let err = Outcome.Failure(\"failed\")\n\n  write :display(ok)\n  write :display(err)\n\n  ; Test wildcard patterns\n  if ok is Outcome.Success(_) {\n    write \"ok is Success (wildcard)\"\n  }\n\n  let just = Maybe.Just(\"hello\")\n  let nothing = Maybe.Nothing\n\n  write :display(just)\n  write :display(nothing)\n\n  let a1 = Action.Raise(\"raising\")\n  let a2 = Action.Catch(\"catching\")\n  let a3 = Action.Write(\"writing\")\n  let a4 = Action.Read(\"reading\")\n\n  write :display(a1)\n  write :display(a2)\n  write :display(a3)\n  write :display(a4)\n\n  if a1 is Action.Raise(msg) {\n    write \"Action.Raise: {msg}\"\n  }\n\n  if a2 is Action.Catch(msg) {\n    write \"Action.Catch: {msg}\"\n  }\n\n  if a3 is Action.Write(msg) {\n    write \"Action.Write: {msg}\"\n  }\n\n  if a4 is Action.Read(msg) {\n    write \"Action.Read: {msg}\"\n  }\n\n  write \"User-defined sum types complete\"\n}\n"
 ---
 Status.Pending
 Status.Active
 Status.Completed
 Status.Failed
-"s1 is Pending"
-"s2 is Active"
+s1 is Pending
+s2 is Active
 Event.Click(100, 200)
 Event.KeyPress("Enter")
 Event.Resize(1920, 1080)
-"Click at: 100, 200"
-"Key: Enter"
+Click at: 100, 200
+Key: Enter
 Either.Left("error message")
 Either.Right(42)
-"Got left: error message"
-"Got right: 42"
+Got left: error message
+Got right: 42
 Outcome.Success(100)
 Outcome.Failure("failed")
-"ok is Success (wildcard)"
+ok is Success (wildcard)
 Maybe.Just("hello")
 Maybe.Nothing
 Action.Raise("raising")
 Action.Catch("catching")
 Action.Write("writing")
 Action.Read("reading")
-"Action.Raise: raising"
-"Action.Catch: catching"
-"Action.Write: writing"
-"Action.Read: reading"
-"User-defined sum types complete"
+Action.Raise: raising
+Action.Catch: catching
+Action.Write: writing
+Action.Read: reading
+User-defined sum types complete

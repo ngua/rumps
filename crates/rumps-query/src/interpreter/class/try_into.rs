@@ -83,11 +83,6 @@ impl TryInto {
             _ if Self::types_match(&v.payload, target_ty) => {
                 Ok(vals.result_ok(id))
             }
-            (_, Ty::Json) => {
-                let json = Into::json_value(vals, v)?;
-                let id = vals.add_typed(Payload::Json(Arc::new(json)), target);
-                Ok(vals.result_ok(id))
-            }
             (Payload::String(sid), Ty::Int) => {
                 let s = vals.str(*sid)?.to_owned();
                 Ok(match s.parse::<i64>() {

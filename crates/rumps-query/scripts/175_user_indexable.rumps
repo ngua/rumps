@@ -11,44 +11,44 @@ fun main() {
 
   ; Direct class method calls
   write Indexable:index(sm, "a")
-  write Indexable:get(sm, "b")
+  write :display(Indexable:get(sm, "b"))
 
   ; Subscript syntax dispatches to user Indexable instance
   write sm["a"]
   write sm["c"]
 
   ; Safe subscript (uses `get` method)
-  write sm?["b"]
-  write sm?["missing"]
+  write :display(sm?["b"])
+  write :display(sm?["missing"])
 
   let im = ({ 1 => "one", 2 => "two" } : IntMap)
   write im[1]
   write im[2]
-  write im?[3]
+  write :display(im?[3])
 
   let as-im = ({ 1 => "one" } : AsIntMap)
   write as-im[1]
-  write as-im?[2]
+  write :display(as-im?[2])
 
   let bs = ({ "a" => 10, "b" => 20 } : Box[String, Int])
   write Indexable:index(bs, "a")
-  write Indexable:get(bs, "b")
+  write :display(Indexable:get(bs, "b"))
   write bs["b"]
-  write bs?["missing"]
+  write :display(bs?["missing"])
 
   let bi = ({ 1 => "one", 2 => "two" } : Box[Int, String])
   write Indexable:index(bi, 1)
-  write Indexable:get(bi, 2)
+  write :display(Indexable:get(bi, 2))
   write bi[2]
-  write bi?[3]
+  write :display(bi?[3])
 
   let tm = ({ 1 => "payload" } : TaggedMap)
   write tm[1]
-  write tm?[2]
+  write :display(tm?[2])
 
   let raw: Map[Int, String] = tm
   write raw[1]
-  write raw?[2]
+  write :display(raw?[2])
 
   ; Builtin `Map` uses `Indexable:Index = K` and `Indexable[V]`.
   let m: Map[String, Int] = { "a" => 1 }
@@ -56,17 +56,17 @@ fun main() {
   write map-index
 
   let map-get: Option[Int] = Indexable:get(m, "a")
-  write map-get
+  write :display(map-get)
 
   let map-missing: Option[Int] = m?["missing"]
-  write map-missing
+  write :display(map-missing)
 
   let arr = [10]
   let arr-index: Int = Indexable:index(arr, 0)
   write arr-index
 
   let arr-get: Option[Int] = Indexable:get(arr, 0)
-  write arr-get
+  write :display(arr-get)
 }
 
 ; === Type and Class Definitions ===

@@ -11,7 +11,7 @@ fun main() {
 
   ; Verify items exists
   let v1 = @get items{1}
-  write v1
+  write :display(v1)
   ; Expected: one
 
   ; @kill single node
@@ -19,7 +19,7 @@ fun main() {
 
   ; Verify deleted
   let v2 = @get items{2}
-  write v2
+  write :display(v2)
   ; Expected: Option.None
 
   ; @kill subtree
@@ -27,27 +27,27 @@ fun main() {
 
   ; Verify subtree deleted
   let v3 = @get items{1}
-  write v3
+  write :display(v3)
   ; Expected: Option.None
 
   let v4 = @get items{1, "a"}
-  write v4
+  write :display(v4)
   ; Expected: Option.None
 
   ; items{3} should still exist
   let v5 = @get items{3}
-  write v5
+  write :display(v5)
   ; Expected: three
 
   ; @kill entire variable
   @set temp{} 999
   let before = @get temp{}
-  write before
+  write :display(before)
   ; Expected: 999
 
   @kill temp{}
   let after = @get temp{}
-  write after
+  write :display(after)
   ; Expected: Option.None
 
   write "@kill test complete"

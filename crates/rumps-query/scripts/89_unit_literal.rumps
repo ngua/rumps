@@ -8,7 +8,7 @@ fun main() {
 
   ; Unit in variable
   let u = Unit
-  write u
+  write :display(u)
   ; Expected: Unit
 
   ; Unit equality via variable
@@ -17,7 +17,7 @@ fun main() {
 
   ; Unit in tuple
   let pair = (1, Unit)
-  write pair
+  write :display(pair)
   ; Expected: (1, Unit)
 
   write "Unit literal test complete"

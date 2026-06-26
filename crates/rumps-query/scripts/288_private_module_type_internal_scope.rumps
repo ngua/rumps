@@ -27,7 +27,7 @@ module Own {
     let status: Status = Status.Done
     let id: UserId = 21
     let p: Payload = "x"
-    "{status-name(status)}:{id-double(id)}:{payload-kind(p)}"
+    "{status-name(status)}:{:display(id-double(id))}:{payload-kind(p)}"
   }
 
   module Inner {
@@ -35,7 +35,7 @@ module Own {
       let status: Status = Status.Pending
       let id: UserId = 7
       let p: Payload = 3
-      if p is Int { "{status-name(status)}:{id-double(id)}:int" } else { "err" }
+      if p is Int { "{status-name(status)}:{:display(id-double(id))}:int" } else { "err" }
     }
   }
 }

@@ -1,10 +1,10 @@
 fun main() {
   let xs: Array[Int] = (3 .. 0) as Array[Int]
-  write xs
+  write :display(xs)
 
   let up = ([1, 2, 3] read Range)!
-  write up
+  write :display(up)
 
   let down = ([3, 2, 1] read Range)!
-  write down
+  write :display(down)
 }

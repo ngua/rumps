@@ -4,12 +4,12 @@ fun main() {
   write Option.None ?? "fallback"
 
   ; Wrappable: wrap
-  write ?99
+  write :display(?99)
   let w = Wrappable[Option[Int]]:wrap
-  write w(7)
+  write :display(w(7))
 
   ; Chainable: chain
-  write Chainable:chain(Option.Some(10), x => ?x)
+  write :display(Chainable:chain(Option.Some(10), x => ?x))
 
   ; Generic with Chainable (implies Wrappable + Fallible)
   let id = [T, F: Chainable](x: F[T]) -> T => x!

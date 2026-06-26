@@ -6,25 +6,25 @@ fun main() {
   ; Empty array creates a fresh type var that could collide with scheme vars
   let nums: Array[Int] = []
   let left = { "x" => 10, "y" => 20 }
-  write Map.lookup(left, "x")
-  write Map.lookup(left, "y")
+  write :display(Map.lookup(left, "x"))
+  write :display(Map.lookup(left, "y"))
 
   ; Non-empty array for comparison (always worked)
   let nums2: Array[Int] = [1, 2, 3]
   let right = { "a" => 100, "b" => 200 }
-  write Map.lookup(right, "a")
+  write :display(Map.lookup(right, "a"))
 
   ; Multiple empty collections in sequence
   let empty1: Array[String] = []
   let empty2: Array[Bool] = []
   let empty3: Map[Int, String] = Map.empty()
   let m = { "key" => 42 }
-  write Map.lookup(m, "key")
+  write :display(Map.lookup(m, "key"))
 
   ; Polymorphic functions after empty arrays
   let arr: Array[Float] = []
   write Iterable:length(arr)
-  write Mappable:map(x => x * 2, [1, 2, 3])
+  write :display(Mappable:map(x => x * 2, [1, 2, 3]))
 
   write "empty array + polymorphic OK"
 }

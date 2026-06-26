@@ -110,7 +110,7 @@ fun main() {
       x + 1
     }
   ]
-  write computed
+  write :display(computed)
   ; Expected: [ 2, 3, 4 ]
 
   ; === Object with computed values ===

@@ -129,7 +129,7 @@ fun main() {
   let w = Wrapper.Wrapper(99)
   let conv-label = MyInto[Label]:convert
   let conv-int = MyInto[Int]:convert
-  write conv-label(w)
+  write :display(conv-label(w))
   write conv-int(w)
 
   let tag-label = MyTag[Label]:tag
@@ -139,38 +139,38 @@ fun main() {
 
   let my-map = MyMap:my-map
   let alias-map = my-map
-  write my-map(x => x + 1, ("hello", 42))
-  write my-map(x => x * 10, (1, "two", 3))
-  write alias-map(x => x + 2, ("alias", 40))
+  write :display(my-map(x => x + 1, ("hello", 42)))
+  write :display(my-map(x => x * 10, (1, "two", 3)))
+  write :display(alias-map(x => x + 2, ("alias", 40)))
 
   let inc-map = my-map(x => x + 1)
-  write inc-map(("partial", 4))
+  write :display(inc-map(("partial", 4)))
 
   let id-map = id(MyMap:my-map)
-  write id-map(x => x + 6, ("id", 7))
-  write use-map(MyMap:my-map)
-  write use-front(MyFront:front-map)
+  write :display(id-map(x => x + 6, ("id", 7)))
+  write :display(use-map(MyMap:my-map))
+  write :display(use-front(MyFront:front-map))
   let lead-map = MyLead:lead-map(1)
-  write lead-map(("not", 1, 2), x => x + 8, ("lead", 14))
+  write :display(lead-map(("not", 1, 2), x => x + 8, ("lead", 14)))
 
   let id-tag = id(MyTag[Label]:tag)
   write id-tag(w)
 
   let empty = Default[Option[Int]]:default
-  write empty()
+  write :display(empty())
   let into-score = Into[Score]:into
   let score = into-score(77)
   write Into[Int]:into(score)
   let try-int = TryInto[Int]:try-into
-  write try-int("42")
+  write :display(try-int("42"))
 
   let make-fn = FnMaker:make-fn
   let made = make-fn(w)
   write made(23)
 
   let mod-map = Methods.map
-  write mod-map(x => x * 3, ("module", 7))
-  write imported-map(x => x + 4, ("import", 8))
+  write :display(mod-map(x => x * 3, ("module", 7)))
+  write :display(imported-map(x => x + 4, ("import", 8)))
   write Methods.tag(w)
   write imported-tag(w)
 }

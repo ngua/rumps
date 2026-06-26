@@ -9,7 +9,7 @@ class ShowBox F {
 class ShowBox for Box {
   fun show(x: Box[T]) -> String {
     match x {
-      Box.Box(v) => { Display:display(v) }
+      Box.Box(v) => { :display(v) }
     }
   }
 }

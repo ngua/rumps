@@ -1,9 +1,9 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test: Generic user-defined functions with explicit type parameters\n; Tests `fun name[T](x: T) -> T` syntax\n\nfun main() {\n  write id(42)        ; 42\n  write id(\"hello\")   ; hello\n  write id(true)      ; true\n\n  write pair(1, \"hello\")  ; (1, \"hello\")\n  write pair(true, 3.14)  ; (true, 3.14)\n\n  write wrap(42)      ; Option.Some(42)\n  write wrap(\"test\")  ; Option.Some(\"test\")\n\n  write swap((1, \"x\"))    ; (\"x\", 1)\n  write swap((\"a\", true)) ; (true, \"a\")\n\n  let p = (42, \"answer\")\n  write fst(p)  ; 42\n  write snd(p)  ; answer\n\n  write apply(double, 21)        ; 42\n  write apply(greet, \"World\")    ; Hello, World\n\n  ; Both should work the same way\n  write implicit-id(100)   ; 100\n  write explicit-id(100)   ; 100\n  write implicit-id(\"hi\")  ; hi\n  write explicit-id(\"hi\")  ; hi\n\n  write \"Generic functions test complete\"\n}\n\n; === Simple identity function with explicit type parameter ===\n\nfun id[T](x: T) -> T { x }\n\n; === Multiple type parameters ===\n\nfun pair[A, B](a: A, b: B) -> (A, B) {\n  (a, b)\n}\n\n; === Generic function returning parameterized type ===\n\nfun wrap[T](x: T) -> Option[T] {\n  Option.Some(x)\n}\n\n; === Generic swap function ===\n\nfun swap[A, B](p: (A, B)) -> (B, A) {\n  (p.1, p.0)\n}\n\n; === Generic first/second accessors ===\n\nfun fst[A, B](p: (A, B)) -> A { p.0 }\nfun snd[A, B](p: (A, B)) -> B { p.1 }\n\n; === Generic higher-order function ===\n\nfun apply[A, B](f: (A) -> B, x: A) -> B {\n  f(x)\n}\n\nfun double(n: Int) -> Int { n * 2 }\nfun greet(s: String) -> String { \"Hello, {s}\" }\n\n; === Mix of implicit and explicit generics ===\n\n; This function is implicitly generic (inferred)\nfun implicit-id(x) { x }\n\n; This function is explicitly generic\nfun explicit-id[T](x: T) -> T { x }\n"
+description: "; Test: Generic user-defined functions with explicit type parameters\n; Tests `fun name[T](x: T) -> T` syntax\n\nfun main() {\n  write id(42)        ; 42\n  write id(\"hello\")   ; hello\n  write id(true)      ; true\n\n  write :display(pair(1, \"hello\"))  ; (1, \"hello\")\n  write :display(pair(true, 3.14))  ; (true, 3.14)\n\n  write :display(wrap(42))      ; Option.Some(42)\n  write :display(wrap(\"test\"))  ; Option.Some(\"test\")\n\n  write :display(swap((1, \"x\")))    ; (\"x\", 1)\n  write :display(swap((\"a\", true))) ; (true, \"a\")\n\n  let p = (42, \"answer\")\n  write fst(p)  ; 42\n  write snd(p)  ; answer\n\n  write apply(double, 21)        ; 42\n  write apply(greet, \"World\")    ; Hello, World\n\n  ; Both should work the same way\n  write implicit-id(100)   ; 100\n  write explicit-id(100)   ; 100\n  write implicit-id(\"hi\")  ; hi\n  write explicit-id(\"hi\")  ; hi\n\n  write \"Generic functions test complete\"\n}\n\n; === Simple identity function with explicit type parameter ===\n\nfun id[T](x: T) -> T { x }\n\n; === Multiple type parameters ===\n\nfun pair[A, B](a: A, b: B) -> (A, B) {\n  (a, b)\n}\n\n; === Generic function returning parameterized type ===\n\nfun wrap[T](x: T) -> Option[T] {\n  Option.Some(x)\n}\n\n; === Generic swap function ===\n\nfun swap[A, B](p: (A, B)) -> (B, A) {\n  (p.1, p.0)\n}\n\n; === Generic first/second accessors ===\n\nfun fst[A, B](p: (A, B)) -> A { p.0 }\nfun snd[A, B](p: (A, B)) -> B { p.1 }\n\n; === Generic higher-order function ===\n\nfun apply[A, B](f: (A) -> B, x: A) -> B {\n  f(x)\n}\n\nfun double(n: Int) -> Int { n * 2 }\nfun greet(s: String) -> String { \"Hello, {s}\" }\n\n; === Mix of implicit and explicit generics ===\n\n; This function is implicitly generic (inferred)\nfun implicit-id(x) { x }\n\n; This function is explicitly generic\nfun explicit-id[T](x: T) -> T { x }\n"
 ---
 42
-"hello"
+hello
 true
 (1, "hello")
 (true, 3.14)
@@ -12,11 +12,11 @@ Option.Some("test")
 ("x", 1)
 (true, "a")
 42
-"answer"
+answer
 42
-"Hello, World"
+Hello, World
 100
 100
-"hi"
-"hi"
-"Generic functions test complete"
+hi
+hi
+Generic functions test complete

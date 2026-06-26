@@ -4,6 +4,6 @@ newtype I = Int
 let x: I = 10
 
 fun main() {
-  write x
+  write :display(x)
   write x + x
 }

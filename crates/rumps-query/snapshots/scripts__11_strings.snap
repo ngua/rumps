@@ -2,17 +2,17 @@
 source: crates/rumps-query/tests/scripts.rs
 description: "; Test: string operations\n; Tests string literals and concatenation\n\nfun main() {\n  ; Simple string\n  let s = \"Hello\"\n  write s\n  ; Expected: Hello\n\n  ; Empty string\n  let empty = \"\"\n  write empty\n  ; Expected: (empty line)\n\n  ; String with spaces\n  let spaced = \"Hello World\"\n  write spaced\n  ; Expected: Hello World\n\n  ; String concatenation (using interpolation)\n  let a = \"Hello\"\n  let b = \"World\"\n  let c = \"{a} {b}\"\n  write c\n  ; Expected: Hello World\n\n  ; Concatenate literals\n  write \"{\"foo\"}{\"bar\"}\"\n  ; Expected: foobar\n\n  ; Concatenate with numbers (interpolation auto-coerces)\n  write \"Value: {42}\"\n  ; Expected: Value: 42\n\n  write \"Pi is {3.14}\"\n  ; Expected: Pi is 3.14\n\n  ; Concatenate with booleans\n  write \"Flag is {true}\"\n  ; Expected: Flag is true\n\n  ; Multiple concatenations\n  let first = \"one\"\n  let second = \"two\"\n  let third = \"three\"\n  write \"{first}, {second}, {third}\"\n  ; Expected: one, two, three\n\n  ; Escape sequences (if supported)\n  let escaped = \"Line1\\nLine2\"\n  write escaped\n  ; Expected: Line1 (newline) Line2\n\n  let tabbed = \"Col1\\tCol2\"\n  write tabbed\n  ; Expected: Col1 (tab) Col2\n\n  let quoted = \"He said \\\"Hello\\\"\"\n  write quoted\n  ; Expected: He said \"Hello\"\n\n  write \"String test complete\"\n}\n"
 ---
-"Hello"
-""
-"Hello World"
-"Hello World"
-"foobar"
-"Value: 42"
-"Pi is 3.14"
-"Flag is true"
-"one, two, three"
-"Line1
-Line2"
-"Col1	Col2"
-"He said "Hello""
-"String test complete"
+Hello
+
+Hello World
+Hello World
+foobar
+Value: 42
+Pi is 3.14
+Flag is true
+one, two, three
+Line1
+Line2
+Col1	Col2
+He said "Hello"
+String test complete

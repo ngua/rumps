@@ -3,7 +3,7 @@ source: crates/rumps-query/tests/scripts.rs
 description: "; Destructured `let` bindings project generalized component schemes.\n\nnewtype Score = Int\n\nfun main() {\n  let (id, empty, _) = (x => x, [], \"discarded\")\n\n  let nums: Array[Int] = empty\n  let names: Array[String] = empty\n\n  write id(42)\n  write id(\"forty-two\")\n  write Iterable:length(nums)\n  write Iterable:length(names)\n\n  let funcs = {\n    neg: x => 0 - x,\n    same: x => x == x\n  }\n  let { neg, same } = funcs\n\n  write neg(7)\n  write neg(2.5)\n  write same(1)\n  write same(\"a\")\n\n  let { first: keep, vals } = {\n    first: x => x,\n    vals: []\n  }\n\n  let more-ints: Array[Int] = vals\n  let more-strs: Array[String] = vals\n\n  write keep(true)\n  write keep(\"ok\")\n  write Iterable:length(more-ints)\n  write Iterable:length(more-strs)\n\n  let (into-score,) = (Into[Score]:into,)\n  let score = into-score(77)\n  write Into[Int]:into(score)\n\n  let { flip } = {\n    flip: Negatable:neg\n  }\n\n  write flip(8)\n  write flip(1.25)\n}\n"
 ---
 42
-"forty-two"
+forty-two
 0
 0
 -7
@@ -11,7 +11,7 @@ description: "; Destructured `let` bindings project generalized component scheme
 true
 true
 true
-"ok"
+ok
 0
 0
 77

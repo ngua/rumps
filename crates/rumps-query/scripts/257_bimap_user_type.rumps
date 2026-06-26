@@ -14,15 +14,15 @@ class Bimappable for Either {
 
 fun main() {
   let l: Either[Int, String] = Either.Left(10)
-  write Bimappable:bimap(x => x + 5, s => String.upper(s), l)
+  write :display(Bimappable:bimap(x => x + 5, s => String.upper(s), l))
 
   let r: Either[Int, String] = Either.Right("hello")
-  write Bimappable:bimap(x => x + 5, s => String.upper(s), r)
+  write :display(Bimappable:bimap(x => x + 5, s => String.upper(s), r))
 
   ; type-changing bimap
   let l2: Either[Int, Bool] = Either.Left(42)
-  write Bimappable:bimap(x => "{x}!", b => !b, l2)
+  write :display(Bimappable:bimap(x => "{x}!", b => !b, l2))
 
   let r2: Either[Int, Bool] = Either.Right(true)
-  write Bimappable:bimap(x => "{x}!", b => !b, r2)
+  write :display(Bimappable:bimap(x => "{x}!", b => !b, r2))
 }

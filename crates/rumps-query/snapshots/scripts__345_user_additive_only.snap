@@ -1,6 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; User type with only `Additive`.\n\nfun main() {\n  let a = AddOnly.AddOnly(10)\n  let b = AddOnly.AddOnly(3)\n  write \"operator add: {a + b}\"\n  write \"method add: {Additive:add(a, b)}\"\n}\n\nvariant AddOnly = AddOnly(Int)\n\nclass Additive for AddOnly {\n  fun zero() -> AddOnly {\n    AddOnly.AddOnly(0)\n  }\n\n  fun add(a: AddOnly, b: AddOnly) -> AddOnly {\n    match a {\n      AddOnly.AddOnly(x) => {\n        match b {\n          AddOnly.AddOnly(y) => { AddOnly.AddOnly(x + y + 100) }\n        }\n      }\n    }\n  }\n}\n"
+description: "; User type with only `Additive`.\n\nfun main() {\n  let a = AddOnly.AddOnly(10)\n  let b = AddOnly.AddOnly(3)\n  write \"operator add: {:display(a + b)}\"\n  write \"method add: {:display(Additive:add(a, b))}\"\n}\n\n#(deriving: Display)\nvariant AddOnly = AddOnly(Int)\n\nclass Additive for AddOnly {\n  fun zero() -> AddOnly {\n    AddOnly.AddOnly(0)\n  }\n\n  fun add(a: AddOnly, b: AddOnly) -> AddOnly {\n    match a {\n      AddOnly.AddOnly(x) => {\n        match b {\n          AddOnly.AddOnly(y) => { AddOnly.AddOnly(x + y + 100) }\n        }\n      }\n    }\n  }\n}\n"
 ---
-"operator add: AddOnly.AddOnly(113)"
-"method add: AddOnly.AddOnly(113)"
+operator add: AddOnly.AddOnly(113)
+method add: AddOnly.AddOnly(113)

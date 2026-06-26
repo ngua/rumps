@@ -46,15 +46,15 @@ fun main() {
   ; ============ Map literals ============
 
   let m = { 1 => "one", 2 => "two", 3 => "three" }
-  write m
+  write :display(m)
 
   let str-keys = { "a" => 1, "b" => 2 }
-  write str-keys
+  write :display(str-keys)
 
   ; ============ Map.empty ============
 
   let e = Map.empty()
-  write e
+  write :display(e)
   write Map.length(e)  ; 0
 
   ; ============ Map.length ============
@@ -65,32 +65,32 @@ fun main() {
   ; ============ Map.keys ============
 
   let keys1 = Map.keys(m)
-  write keys1  ; [1, 2, 3]
+  write :display(keys1)  ; [1, 2, 3]
 
   let keys2 = Map.keys(str-keys)
-  write keys2  ; ["a", "b"]
+  write :display(keys2)  ; ["a", "b"]
 
   let keys3 = Map.keys(e)
-  write keys3  ; []
+  write :display(keys3)  ; []
 
   ; ============ Map.values ============
 
   let vals1 = Map.values(m)
-  write vals1  ; ["one", "two", "three"]
+  write :display(vals1)  ; ["one", "two", "three"]
 
   let vals2 = Map.values(str-keys)
-  write vals2  ; [1, 2]
+  write :display(vals2)  ; [1, 2]
 
   let vals3 = Map.values(e)
-  write vals3  ; []
+  write :display(vals3)  ; []
 
   ; ============ Map.entries ============
 
   let ent1 = Map.entries(m)
-  write ent1  ; [(1, "one"), (2, "two"), (3, "three")]
+  write :display(ent1)  ; [(1, "one"), (2, "two"), (3, "three")]
 
   let ent2 = Map.entries(str-keys)
-  write ent2  ; [("a", 1), ("b", 2)]
+  write :display(ent2)  ; [("a", 1), ("b", 2)]
 
   ; ============ Map.has ============
 
@@ -104,26 +104,26 @@ fun main() {
 
   ; ============ Map.lookup ============
 
-  write Map.lookup(m, 1)  ; Some("one")
-  write Map.lookup(m, 2)  ; Some("two")
-  write Map.lookup(m, 4)  ; None
-  write Map.lookup(e, 1)  ; None
+  write :display(Map.lookup(m, 1))  ; Some("one")
+  write :display(Map.lookup(m, 2))  ; Some("two")
+  write :display(Map.lookup(m, 4))  ; None
+  write :display(Map.lookup(e, 1))  ; None
 
-  write Map.lookup(str-keys, "a")  ; Some(1)
-  write Map.lookup(str-keys, "z")  ; None
+  write :display(Map.lookup(str-keys, "a"))  ; Some(1)
+  write :display(Map.lookup(str-keys, "z"))  ; None
 
   ; ============ Map.insert ============
 
   let m2 = Map.insert(m, 4, "four")
   write Map.length(m2)  ; 4
-  write Map.lookup(m2, 4)  ; Some("four")
+  write :display(Map.lookup(m2, 4))  ; Some("four")
 
   ; Original unchanged
   write Map.length(m)  ; 3
 
   ; Overwrite existing key
   let m3 = Map.insert(m, 1, "ONE")
-  write Map.lookup(m3, 1)  ; Some("ONE")
+  write :display(Map.lookup(m3, 1))  ; Some("ONE")
 
   ; ============ Map.remove ============
 
@@ -143,28 +143,28 @@ fun main() {
   let mb = { 2 => "B", 3 => "c" }
   let merged = Map.merge(ma, mb)
   write Map.length(merged)  ; 3
-  write Map.lookup(merged, 1)  ; Some("a")
-  write Map.lookup(merged, 2)  ; Some("B") (second overwrites)
-  write Map.lookup(merged, 3)  ; Some("c")
+  write :display(Map.lookup(merged, 1))  ; Some("a")
+  write :display(Map.lookup(merged, 2))  ; Some("B") (second overwrites)
+  write :display(Map.lookup(merged, 3))  ; Some("c")
 
   ; ============ Map.from-entries ============
 
   let arr = [(1, "x"), (2, "y"), (3, "z")]
   let from-arr = Map.from-entries(arr)
   write Map.length(from-arr)  ; 3
-  write Map.lookup(from-arr, 1)  ; Some("x")
-  write Map.lookup(from-arr, 2)  ; Some("y")
-  write Map.lookup(from-arr, 3)  ; Some("z")
+  write :display(Map.lookup(from-arr, 1))  ; Some("x")
+  write :display(Map.lookup(from-arr, 2))  ; Some("y")
+  write :display(Map.lookup(from-arr, 3))  ; Some("z")
 
   ; ============ `Map` HoFs ============
 
   let hof-src = Map.from-entries([(3, 30), (1, 10), (2, 20)])
 
   let map-vals = Map.map(x => x + 1, hof-src)
-  write Map.entries(map-vals)
+  write :display(Map.entries(map-vals))
 
   let map-with-keys = Map.map-with-key((k, v) => k * 100 + v, hof-src)
-  write Map.entries(map-with-keys)
+  write :display(Map.entries(map-with-keys))
 
   let fold-sum = Map.fold((acc, v) => acc + v, 0, hof-src)
   write fold-sum
@@ -180,11 +180,11 @@ fun main() {
 
   write "Map.foreach:"
   let fe = Map.foreach(v => { write "v:{v}" }, hof-src)
-  write fe
+  write :display(fe)
 
   write "Map.foreach-with-key:"
   let fe-key = Map.foreach-with-key((k, v) => { write "{k}:{v}" }, hof-src)
-  write fe-key
+  write :display(fe-key)
 
   let entry-src = Map.from-entries([(3, 300), (1, 100), (2, 200)])
   let str-entry-map = Map.map-entries((k, v) => {
@@ -193,24 +193,24 @@ fun main() {
     }
     (s, v // 10)
   }, entry-src)
-  write Map.entries(str-entry-map)
+  write :display(Map.entries(str-entry-map))
 
   let dup-entry-map = Map.map-entries((k, v) => {
     let s = if k == 2 { "even" } else { "odd" }
     (s, "{v}!")
   }, m)
-  write Map.entries(dup-entry-map)
-  write Map.lookup(dup-entry-map, "odd")
+  write :display(Map.entries(dup-entry-map))
+  write :display(Map.lookup(dup-entry-map, "odd"))
 
   let down-entry-map = Map.map-entries((k, v) => {
     let d: Down = k
     (d, v + 1)
   }, hof-src)
-  write Map.entries(down-entry-map)
+  write :display(Map.entries(down-entry-map))
 
   let empty-int: Map[Int, Int] = Map.empty()
-  write Map.entries(Map.map(x => x + 1, empty-int))
-  write Map.entries(Map.map-with-key((k, v) => k + v, empty-int))
+  write :display(Map.entries(Map.map(x => x + 1, empty-int)))
+  write :display(Map.entries(Map.map-with-key((k, v) => k + v, empty-int)))
   write Map.fold((acc, v) => acc + v, 99, empty-int)
   write Map.fold-with-key((acc, k, v) => acc + k + v, 77, empty-int)
   write Map.fold((acc, v) => {
@@ -221,18 +221,18 @@ fun main() {
     write "bad-empty-fold-key"
     acc + k + v
   }, 77, empty-int)
-  write Map.entries(Map.map-entries((k, v) => ("empty-{k}", v + 1), empty-int))
-  write Map.foreach(v => { write "empty-value:{v}" }, empty-int)
-  write Map.foreach-with-key((k, v) => { write "empty-entry:{k}:{v}" }, empty-int)
+  write :display(Map.entries(Map.map-entries((k, v) => ("empty-{k}", v + 1), empty-int)))
+  write :display(Map.foreach(v => { write "empty-value:{v}" }, empty-int))
+  write :display(Map.foreach-with-key((k, v) => { write "empty-entry:{k}:{v}" }, empty-int))
 
   let down-hof-src: Array[(Down, String)] = [(1, "one"), (3, "three"), (2, "two")]
   let down-hof = Map.from-entries(down-hof-src)
 
   let down-map-vals = Map.map(v => String.upper(v), down-hof)
-  write Map.entries(down-map-vals)
+  write :display(Map.entries(down-map-vals))
 
   let down-map-with-keys = Map.map-with-key((k, v) => "{k}:{v}", down-hof)
-  write Map.entries(down-map-with-keys)
+  write :display(Map.entries(down-map-with-keys))
 
   let down-fold = Map.fold-with-key((acc, k, v) => "{acc}|{k}:{v}", "down", down-hof)
   write down-fold
@@ -243,19 +243,19 @@ fun main() {
   let chain2 = Map.insert(chain, 4, 40)
   let chain3 = Map.remove(chain2, 1)
   write Map.length(chain3)  ; 3
-  write Map.keys(chain3)  ; [2, 3, 4]
+  write :display(Map.keys(chain3))  ; [2, 3, 4]
 
   ; ============ Float keys ============
 
   let float-map = { 1.5 => "half", 2.5 => "two-half" }
   write Map.has(float-map, 1.5)  ; true
-  write Map.lookup(float-map, 2.5)  ; Some("two-half")
+  write :display(Map.lookup(float-map, 2.5))  ; Some("two-half")
 
   ; ============ Boolean keys ============
 
   let bool-map = { true => "yes", false => "no" }
-  write Map.lookup(bool-map, true)  ; Some("yes")
-  write Map.lookup(bool-map, false)  ; Some("no")
+  write :display(Map.lookup(bool-map, true))  ; Some("yes")
+  write :display(Map.lookup(bool-map, false))  ; Some("no")
 
   ; ============ Index syntax (direct access) ============
 
@@ -266,11 +266,11 @@ fun main() {
 
   ; ============ Optional index syntax (returns Option) ============
 
-  write m?[1]  ; Some("one")
-  write m?[99]  ; None (key not found)
+  write :display(m?[1])  ; Some("one")
+  write :display(m?[99])  ; None (key not found)
 
-  write str-keys?["a"]  ; Some(1)
-  write str-keys?["missing"]  ; None
+  write :display(str-keys?["a"])  ; Some(1)
+  write :display(str-keys?["missing"])  ; None
 
   ; Chaining with optional unwrap
   write m?[1] ?? "default"  ; "one"
@@ -280,73 +280,73 @@ fun main() {
 
   let unordered-a = Map.from-entries([("b", 2), ("a", 1)])
   let unordered-b = Map.from-entries([("a", 1), ("b", 2)])
-  write Map.keys(unordered-a)
-  write Map.values(unordered-a)
-  write Map.entries(unordered-a)
+  write :display(Map.keys(unordered-a))
+  write :display(Map.values(unordered-a))
+  write :display(Map.entries(unordered-a))
   write unordered-a == unordered-b
   write unordered-a <= unordered-b
   write unordered-b <= unordered-a
 
   let dup = Map.from-entries([("a", 1), ("b", 2), ("a", 3)])
   write Map.length(dup)
-  write Map.entries(dup)
-  write Map.lookup(dup, "a")
+  write :display(Map.entries(dup))
+  write :display(Map.lookup(dup, "a"))
 
   let ml = Map.from-entries([("a", 1), ("b", 2)])
   let mr = Map.from-entries([("b", 20), ("c", 30)])
   let merged2 = Map.merge(ml, mr)
   let removed2 = Map.remove(merged2, "missing")
-  write Map.entries(merged2)
-  write Map.entries(removed2)
-  write Map.lookup(merged2, "missing")
+  write :display(Map.entries(merged2))
+  write :display(Map.entries(removed2))
+  write :display(Map.lookup(merged2, "missing"))
 
   ; ============ Required key shapes ============
 
   let bools = Map.from-entries([(true, "true"), (false, "false")])
-  write Map.keys(bools)
+  write :display(Map.keys(bools))
 
   let ints = Map.from-entries([(10, "ten"), (1, "one")])
-  write Map.keys(ints)
+  write :display(Map.keys(ints))
 
   let floats = Map.from-entries([(2.5, "two"), (1.5, "one")])
-  write Map.keys(floats)
+  write :display(Map.keys(floats))
 
   let chars = Map.from-entries([('b', "bee"), ('a', "aye")])
-  write Map.keys(chars)
+  write :display(Map.keys(chars))
 
   let strings = Map.from-entries([("b", 2), ("a", 1)])
-  write Map.keys(strings)
+  write :display(Map.keys(strings))
 
   let tuples = Map.from-entries([((2, "b"), 20), ((1, "a"), 10)])
-  write Map.keys(tuples)
-  write Map.lookup(tuples, (1, "a"))
+  write :display(Map.keys(tuples))
+  write :display(Map.lookup(tuples, (1, "a")))
 
   let arrays = Map.from-entries([([2], "two"), ([1, 2], "one-two"), ([1], "one")])
-  write Map.keys(arrays)
+  write :display(Map.keys(arrays))
 
   let none: Option[Int] = Option.None
   let some1 = Option.Some(1)
   let some2 = Option.Some(2)
   let opts = Map.from-entries([(some2, "two"), (none, "none"), (some1, "one")])
-  write Map.keys(opts)
+  write :display(Map.keys(opts))
 
   let err-a: Result[Int, String] = Result.Err("a")
   let err-b: Result[Int, String] = Result.Err("b")
   let ok1: Result[Int, String] = Result.Ok(1)
   let ress = Map.from-entries([(ok1, "ok"), (err-b, "err-b"), (err-a, "err-a")])
-  write Map.keys(ress)
+  write :display(Map.keys(ress))
 
   let ords = Map.from-entries([
     (Ordering.Gt, "gt"),
     (Ordering.Lt, "lt"),
     (Ordering.Eq, "eq"),
   ])
-  write Map.keys(ords)
+  write :display(Map.keys(ords))
 
   let key1 = Map.from-entries([(1, "one")])
   let key2 = Map.from-entries([(1, "one"), (2, "two")])
   let nested = Map.from-entries([(key2, "long"), (key1, "short")])
-  write Map.keys(nested)
+  write :display(Map.keys(nested))
 
   ; ============ Persistent update shapes ============
 
@@ -357,55 +357,55 @@ fun main() {
   let asc3 = Map.insert(asc2, 3, "three")
   let asc4 = Map.insert(asc3, 4, "four")
   let asc5 = Map.insert(asc4, 5, "five")
-  write Map.keys(asc5)
-  write Map.lookup(asc5, 1)
-  write Map.lookup(asc5, 3)
-  write Map.lookup(asc5, 5)
+  write :display(Map.keys(asc5))
+  write :display(Map.lookup(asc5, 1))
+  write :display(Map.lookup(asc5, 3))
+  write :display(Map.lookup(asc5, 5))
 
   let desc1 = Map.insert(empty, 5, "five")
   let desc2 = Map.insert(desc1, 4, "four")
   let desc3 = Map.insert(desc2, 3, "three")
   let desc4 = Map.insert(desc3, 2, "two")
   let desc5 = Map.insert(desc4, 1, "one")
-  write Map.keys(desc5)
-  write Map.lookup(desc5, 1)
-  write Map.lookup(desc5, 3)
-  write Map.lookup(desc5, 5)
+  write :display(Map.keys(desc5))
+  write :display(Map.lookup(desc5, 1))
+  write :display(Map.lookup(desc5, 3))
+  write :display(Map.lookup(desc5, 5))
 
   let mixed1 = Map.insert(empty, 3, "three")
   let mixed2 = Map.insert(mixed1, 1, "one")
   let mixed3 = Map.insert(mixed2, 5, "five")
   let mixed4 = Map.insert(mixed3, 2, "two")
   let mixed5 = Map.insert(mixed4, 4, "four")
-  write Map.keys(mixed5)
-  write Map.lookup(mixed5, 1)
-  write Map.lookup(mixed5, 3)
-  write Map.lookup(mixed5, 5)
+  write :display(Map.keys(mixed5))
+  write :display(Map.lookup(mixed5, 1))
+  write :display(Map.lookup(mixed5, 3))
+  write :display(Map.lookup(mixed5, 5))
 
-  write Map.keys(empty)
-  write Map.keys(asc1)
-  write Map.keys(asc5)
+  write :display(Map.keys(empty))
+  write :display(Map.keys(asc1))
+  write :display(Map.keys(asc5))
 
   let removed3 = Map.remove(asc5, 1)
   let removed4 = Map.remove(removed3, 3)
-  write Map.keys(asc5)
-  write Map.keys(removed3)
-  write Map.keys(removed4)
-  write Map.lookup(asc5, 1)
-  write Map.lookup(removed3, 1)
-  write Map.lookup(removed4, 3)
+  write :display(Map.keys(asc5))
+  write :display(Map.keys(removed3))
+  write :display(Map.keys(removed4))
+  write :display(Map.lookup(asc5, 1))
+  write :display(Map.lookup(removed3, 1))
+  write :display(Map.lookup(removed4, 3))
 
   ; ============ User-defined key ordering ============
 
   let ds: Array[(Down, String)] = [(1, "one"), (3, "three"), (2, "two")]
   let dm = Map.from-entries(ds)
-  write Map.keys(dm)
+  write :display(Map.keys(dm))
 
   let three: Down = 3
   let dups: Array[(Down, String)] = [(three, "three"), (three, "THREE")]
   let dup-dm = Map.from-entries(dups)
-  write Map.keys(dup-dm)
-  write Map.lookup(dup-dm, three)
+  write :display(Map.keys(dup-dm))
+  write :display(Map.lookup(dup-dm, three))
 
   let b5 = Band.Band(5)
   let b10 = Band.Band(10)
@@ -420,8 +420,8 @@ fun main() {
   ])
 
   write Map.length(bands)
-  write Map.keys(bands)
-  write Map.lookup(bands, Band.Band(11))
-  write Map.lookup(bands, b10)
-  write Map.lookup(bands, b20)
+  write :display(Map.keys(bands))
+  write :display(Map.lookup(bands, Band.Band(11)))
+  write :display(Map.lookup(bands, b10))
+  write :display(Map.lookup(bands, b20))
 }

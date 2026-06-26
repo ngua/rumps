@@ -2,7 +2,7 @@
 source: crates/rumps-query/tests/scripts.rs
 description: "; User-defined class implemented for builtin types.\n;\n; Verifies that user-defined classes can have instances for\n; builtin types like `Int`, `String`, and `Bool`.\n\nclass Describe C {\n  fun describe(x: C) -> String\n}\n\nclass Describe for Int {\n  fun describe(x: Int) -> String {\n    \"int({x})\"\n  }\n}\n\nclass Describe for String {\n  fun describe(x: String) -> String {\n    \"str({x})\"\n  }\n}\n\nclass Describe for Bool {\n  fun describe(x: Bool) -> String {\n    if x { \"yes\" } else { \"no\" }\n  }\n}\n\nfun main() {\n  write Describe:describe(42)\n  write Describe:describe(\"hello\")\n  write Describe:describe(true)\n  write Describe:describe(false)\n}\n"
 ---
-"int(42)"
-"str(hello)"
-"yes"
-"no"
+int(42)
+str(hello)
+yes
+no

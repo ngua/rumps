@@ -61,28 +61,28 @@ fun main() {
   ; Arrays with strings
   ; =============================================================================
 
-  write ["a\nb", "c\td"] raw
+  write :display(["a\nb", "c\td"]) raw
 
   ; =============================================================================
   ; Objects with strings
   ; =============================================================================
 
-  write {name: "foo\nbar", value: "x\ty"} raw
+  write :display({name: "foo\nbar", value: "x\ty"}) raw
 
   ; =============================================================================
   ; Tuples with strings
   ; =============================================================================
 
-  write ("a\nb", "c\td") raw
+  write :display(("a\nb", "c\td")) raw
 
   ; =============================================================================
   ; Options with strings
   ; =============================================================================
 
-  write Option.Some("foo\nbar") raw
-  write [Option.Some(1)] raw
-  write {value: Option.Some(1)} raw
-  write (Option.Some(1),) raw
+  write :display(Option.Some("foo\nbar")) raw
+  write :display([Option.Some(1)]) raw
+  write :display({value: Option.Some(1)}) raw
+  write :display((Option.Some(1),)) raw
 
   ; =============================================================================
   ; String.escape function

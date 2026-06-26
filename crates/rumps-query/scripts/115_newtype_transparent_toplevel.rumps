@@ -2,13 +2,13 @@
 
 fun main() {
   let x: MyInt = 42
-  write x
+  write :display(x)
 
   let s: MyStr = "hello"
-  write s
+  write :display(s)
 
   let b: MyBool = true
-  write b
+  write :display(b)
 
   let xs: List[Int] = [1, 2, 3]
   write Iterable:length(xs)
@@ -17,7 +17,7 @@ fun main() {
   write opt ?? 0
 
   let m: IntMap[String] = { 1 => "one" }
-  write m
+  write :display(m)
 
   let p1: Person = { name: "Alice", age: 30 }
 
