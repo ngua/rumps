@@ -1,12 +1,13 @@
 //! Control flow expressions: `if`, `match`, `catch`, blocks, coalesce, unwrap.
 
-use async_recursion::async_recursion;
+use std::ops::ControlFlow;
+
 use smallvec::SmallVec;
 
 use super::Interpreter;
 use crate::ast::{Expr, ExprId, MatchArm, PostfixOp, StmtId, TypePattern};
-use crate::intern::{QualifiedName, StringId};
-use crate::value::{Payload, TypeId, Value, ValueId};
+use crate::intern::StringId;
+use crate::value::{Payload, TypeId, Value};
 use crate::{ClassId, Error, Result, Span};
 
 impl Interpreter<'_, '_> {
@@ -168,31 +169,25 @@ impl Interpreter<'_, '_> {
         self.env.scopes.push();
         // Hoist local function declarations for forward references
         self.hoist_declarations(stmts).await?;
-        let result = self.block_inner(stmts, tail).await;
-        self.env.scopes.pop();
-        result
-    }
 
-    /// Inner helper for block expression evaluation.
-    #[async_recursion]
-    async fn block_inner(
-        &mut self,
-        stmts: &[StmtId],
-        tail: Option<ExprId>,
-    ) -> Result<Value> {
-        match stmts.split_first() {
-            None => match tail {
+        let mut it = stmts.iter();
+        let result = async {
+            while let Some(stmt) = it.next() {
+                self.exec(*stmt).await?;
+            }
+
+            match tail {
                 Some(e) => self.eval(e).await,
                 None => Ok(self.value_from_meta(
                     Payload::Unit,
                     self.checked.types.meta_unit(),
                 )),
-            },
-            Some((head, rest)) => {
-                self.exec(*head).await?;
-                self.block_inner(rest, tail).await
             }
         }
+        .await;
+
+        self.env.scopes.pop();
+        result
     }
 
     /// Evaluate an `if` expression.
@@ -217,8 +212,50 @@ impl Interpreter<'_, '_> {
                 expr,
                 TypePattern::VariantBind(ref ty, var, names),
             )) => {
-                self.if_with_bindings(expr, ty, var, &names, then_br, else_br)
-                    .await
+                let val = self.eval(expr).await?;
+                let matched = self.check_variant(&val, ty, var)?;
+
+                if matched {
+                    let vals = match &val.payload {
+                        Payload::Variant { vals, .. } => vals.clone(),
+                        _ => SmallVec::new(),
+                    };
+
+                    // Typechecker validates pattern arity matches variant definition.
+                    if vals.len() != names.len() {
+                        typechecked!("variant bind", "arity match");
+                    }
+
+                    self.env.scopes.push();
+                    self.bind_payloads(&names, &vals);
+                    let result = self.eval(then_br).await;
+                    self.env.scopes.pop();
+
+                    match else_br {
+                        Some(_) => result,
+                        None => {
+                            // Single-arm `if` with bindings; body must be `Unit`.
+                            // Type checker guarantees body is `Unit`.
+                            result?;
+                            Ok(self.value_from_meta(
+                                Payload::Unit,
+                                self.checked.types.meta_unit(),
+                            ))
+                        }
+                    }
+                } else {
+                    match else_br {
+                        Some(else_id) => self.eval(else_id).await,
+                        None => {
+                            // Single-arm `if` with bindings; body must be `Unit`.
+                            // Type checker guarantees body is `Unit`.
+                            Ok(self.value_from_meta(
+                                Payload::Unit,
+                                self.checked.types.meta_unit(),
+                            ))
+                        }
+                    }
+                }
             }
             _ => {
                 let cond_val = self.eval_payload(cond).await?;
@@ -254,83 +291,6 @@ impl Interpreter<'_, '_> {
         }
     }
 
-    /// Handle `if expr is Type.Variant(bindings) { then } else { else }`.
-    ///
-    /// Bindings are only visible in the then branch.
-    /// Type checking: same rules as regular `if`.
-    async fn if_with_bindings(
-        &mut self,
-        expr: ExprId,
-        ty_name: &QualifiedName,
-        var_name: StringId,
-        names: &[StringId],
-        then_br: ExprId,
-        else_br: Option<ExprId>,
-    ) -> Result<Value> {
-        let val = self.eval(expr).await?;
-        // Check if the value matches the variant
-        let matched = self.check_variant(&val, ty_name, var_name)?;
-
-        match else_br {
-            Some(else_id) => {
-                // if/else with bindings: only evaluate the taken branch
-                if matched {
-                    self.eval_with_variant_bindings(
-                        &val.payload,
-                        names,
-                        then_br,
-                    )
-                    .await
-                } else {
-                    self.eval(else_id).await
-                }
-            }
-            None => {
-                // Single-arm if with bindings: body must be Unit.
-                // Type checker guarantees body is Unit.
-                if matched {
-                    self.eval_with_variant_bindings(
-                        &val.payload,
-                        names,
-                        then_br,
-                    )
-                    .await?;
-                }
-                Ok(self.value_from_meta(
-                    Payload::Unit,
-                    self.checked.types.meta_unit(),
-                ))
-            }
-        }
-    }
-
-    /// Evaluate an expression with variant payload bindings in scope.
-    ///
-    /// Extracts payloads from `val`, validates arity against `names`,
-    /// binds them in a new scope, evaluates `body`, then pops the scope.
-    async fn eval_with_variant_bindings(
-        &mut self,
-        val: &Payload,
-        names: &[StringId],
-        body: ExprId,
-    ) -> Result<Value> {
-        let payloads = match val {
-            Payload::Variant { vals, .. } => vals.clone(),
-            _ => SmallVec::new(),
-        };
-
-        // Typechecker validates pattern arity matches variant definition
-        if payloads.len() != names.len() {
-            typechecked!("variant bind", "arity match");
-        }
-
-        self.env.scopes.push();
-        self.bind_payloads(names, &payloads);
-        let result = self.eval(body).await;
-        self.env.scopes.pop();
-        result
-    }
-
     /// Evaluate a `match` expression.
     ///
     /// Evaluates the scrutinee once, then tries each arm in order. The first
@@ -344,69 +304,53 @@ impl Interpreter<'_, '_> {
     ) -> Result<Value> {
         let val = self.eval(scrutinee).await?;
         let val_id = self.add_value(val.clone(), span);
-        self.try_match_arms(scrutinee, val_id, &val, arms, span)
-            .await
-    }
 
-    /// Try each match arm in order until one matches.
-    #[async_recursion]
-    async fn try_match_arms(
-        &mut self,
-        scrutinee: ExprId,
-        val_id: ValueId,
-        val: &Value,
-        arms: &[MatchArm],
-        span: Span,
-    ) -> Result<Value> {
-        match arms.split_first() {
-            // Typechecker validates exhaustiveness
-            None => typechecked!("match", "exhaustive"),
-            Some((arm, rest)) => {
-                // Try to match the pattern
-                match self.try_match_pattern(
-                    scrutinee,
-                    arm.pattern,
-                    Some(val_id),
-                    val,
-                    span,
-                )? {
-                    None => {
-                        self.try_match_arms(scrutinee, val_id, val, rest, span)
+        let mut it = arms.iter();
+        let mut flow = ControlFlow::Continue(());
+        while let Some(arm) = match &flow {
+            ControlFlow::Continue(()) => it.next(),
+            ControlFlow::Break(_) => None,
+        } {
+            flow = match self.try_match_pattern(
+                scrutinee,
+                arm.pattern,
+                Some(val_id),
+                &val,
+                span,
+            )? {
+                None => ControlFlow::Continue(()),
+                Some(bindings) => {
+                    self.env.scopes.push();
+                    self.apply_bindings(&bindings);
+
+                    let guard = match arm.guard {
+                        None => Ok(true),
+                        Some(guard_expr) => self
+                            .eval_payload(guard_expr)
                             .await
-                    }
-                    Some(bindings) => {
-                        // Pattern matched; check guard if present
-                        self.env.scopes.push();
-                        self.apply_bindings(&bindings);
+                            .map(|guard_val| match guard_val {
+                                Payload::Bool(b) => b,
+                                _ => typechecked!("match guard", "Bool"),
+                            }),
+                    };
 
-                        let guard_ok = match arm.guard {
-                            None => true,
-                            Some(guard_expr) => {
-                                let guard_val =
-                                    self.eval_payload(guard_expr).await?;
-                                match guard_val {
-                                    Payload::Bool(b) => b,
-                                    _ => typechecked!("match guard", "Bool"),
-                                }
-                            }
-                        };
-
-                        if guard_ok {
-                            // Guard passed; evaluate body with bindings in scope
-                            let result = self.eval(arm.body).await;
-                            self.env.scopes.pop();
-                            result
-                        } else {
-                            // Guard failed; pop scope and try next arm
-                            self.env.scopes.pop();
-                            self.try_match_arms(
-                                scrutinee, val_id, val, rest, span,
-                            )
-                            .await
+                    let next = match guard {
+                        Ok(true) => {
+                            ControlFlow::Break(self.eval(arm.body).await)
                         }
-                    }
+                        Ok(false) => ControlFlow::Continue(()),
+                        Err(e) => ControlFlow::Break(Err(e)),
+                    };
+
+                    self.env.scopes.pop();
+                    next
                 }
-            }
+            };
+        }
+
+        match flow {
+            ControlFlow::Break(result) => result,
+            ControlFlow::Continue(()) => typechecked!("match", "exhaustive"),
         }
     }
 
