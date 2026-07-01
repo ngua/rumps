@@ -1,5 +1,5 @@
 fun main() {
-  ; Fallible: unwrap and coalesce
+  ; Fallible unwrap and Coalescable fallback
   write Option.Some(42)!
   write Option.None ?? "fallback"
 

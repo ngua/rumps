@@ -1,7 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Multi-param user Fallible (partial application)\n;\n; Tests `!`, `??` for a two-param type `Either[L, R]`\n; with partial application: element type is `R` (last param).\n\nvariant Either[L, R] = Left(L) | Right(R)\n\n; Element type is `R` (last param); `L` is fixed\nclass Wrappable for Either[T] {\n  fun wrap(x: R) -> Either[T, R] {\n    Either.Right(x)\n  }\n}\n\nclass Fallible for Either[T] {\n  fun unwrap(e: Either[T, R]) -> R {\n    match e {\n      Either.Right(x) => { x }\n      Either.Left(_) => { raise \"got Left\" }\n    }\n  }\n}\n\nfun main() {\n  let r: Either[String, Int] = Either.Right(42)\n  write r!\n  write r ?? 0\n  write Either.Left(\"oops\") ?? 99\n}\n"
+description: "; Multi-param user Fallible (partial application)\n;\n; Tests `!` and explicit `Fallible:unwrap` for a two-param type `Either[L, R]`\n; with partial application: element type is `R` (last param).\n\nvariant Either[L, R] = Left(L) | Right(R)\n\n; Element type is `R` (last param); `L` is fixed\nclass Wrappable for Either[T] {\n  fun wrap(x: R) -> Either[T, R] {\n    Either.Right(x)\n  }\n}\n\nclass Fallible for Either[T] {\n  fun unwrap(e: Either[T, R]) -> R {\n    match e {\n      Either.Right(x) => { x }\n      Either.Left(_) => { raise \"got Left\" }\n    }\n  }\n}\n\nfun main() {\n  let r: Either[String, Int] = Either.Right(42)\n  write r!\n  write Fallible:unwrap(r)\n}\n"
 ---
 42
 42
-99

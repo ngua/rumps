@@ -1,0 +1,25 @@
+; Single-param user Coalescable
+;
+; Tests `??` dispatch on a user-defined `Box[T]` type.
+
+variant Box[T] = Full(T) | Empty
+
+class Coalescable[T] for Box[T] {
+  fun coalesce(b: Box[T], rhs: Lazy[T]) -> T {
+    match b {
+      Box.Full(x) => { x }
+      Box.Empty => {
+        match rhs {
+          Lazy.Lazy(f) => { f() }
+        }
+      }
+    }
+  }
+}
+
+fun main() {
+  let b: Box[Int] = Box.Full(42)
+  let empty: Box[Int] = Box.Empty
+  write b ?? 0
+  write empty ?? 99
+}

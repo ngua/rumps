@@ -1,8 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Single-param user Fallible\n;\n; Tests `!`, `??`, and explicit `Fallible:unwrap` dispatch\n; on a user-defined `Box[T]` type.\n\nvariant Box[T] = Full(T) | Empty\n\nclass Wrappable for Box {\n  fun wrap(x: T) -> Box[T] {\n    Box.Full(x)\n  }\n}\n\nclass Fallible for Box {\n  fun unwrap(b: Box[T]) -> T {\n    match b {\n      Box.Full(x) => { x }\n      Box.Empty => { raise \"empty box\" }\n    }\n  }\n}\n\nfun main() {\n  let b = Box.Full(42)\n  write b!\n  write b ?? 0\n  write Box.Empty ?? 99\n  write Fallible:unwrap(b)\n}\n"
+description: "; Single-param user Fallible\n;\n; Tests `!` and explicit `Fallible:unwrap` dispatch\n; on a user-defined `Box[T]` type.\n\nvariant Box[T] = Full(T) | Empty\n\nclass Wrappable for Box {\n  fun wrap(x: T) -> Box[T] {\n    Box.Full(x)\n  }\n}\n\nclass Fallible for Box {\n  fun unwrap(b: Box[T]) -> T {\n    match b {\n      Box.Full(x) => { x }\n      Box.Empty => { raise \"empty box\" }\n    }\n  }\n}\n\nfun main() {\n  let b = Box.Full(42)\n  write b!\n  write Fallible:unwrap(b)\n}\n"
 ---
 42
-42
-99
 42

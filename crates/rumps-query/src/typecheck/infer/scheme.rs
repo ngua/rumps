@@ -335,7 +335,9 @@ impl InferCtx<'_> {
         match (self.ty_arena.get(a).clone(), self.ty_arena.get(b).clone()) {
             (Ty::Var(v), _) => self.scheme_bind_var(v, b),
             (_, Ty::Var(v)) => self.scheme_bind_var(v, a),
-            (Ty::Array(x), Ty::Array(y)) | (Ty::Option(x), Ty::Option(y)) => {
+            (Ty::Array(x), Ty::Array(y))
+            | (Ty::Option(x), Ty::Option(y))
+            | (Ty::Lazy(x), Ty::Lazy(y)) => {
                 self.scheme_unify(x, y);
             }
             (Ty::Result(ok1, err1), Ty::Result(ok2, err2)) => {

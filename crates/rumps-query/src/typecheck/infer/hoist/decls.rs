@@ -1498,6 +1498,7 @@ impl InferCtx<'_> {
         let for_ty = match (type_id, full_args.as_slice()) {
             (TypeId::ARRAY, &[a, ..]) => self.ty_arena.alloc(Ty::Array(a)),
             (TypeId::OPTION, &[a, ..]) => self.ty_arena.alloc(Ty::Option(a)),
+            (TypeId::LAZY, &[a, ..]) => self.ty_arena.alloc(Ty::Lazy(a)),
             (TypeId::RESULT, &[ok, err, ..]) => {
                 self.ty_arena.alloc(Ty::Result(ok, err))
             }

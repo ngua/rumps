@@ -1639,6 +1639,10 @@ impl Interpreter<'_, '_> {
                 let elem = self.runtime_ty(RuntimeTyId::from(elem));
                 self.checked.types.option(elem)
             }
+            typecheck::Ty::Lazy(elem) => {
+                let elem = self.runtime_ty(RuntimeTyId::from(elem));
+                self.checked.types.lazy(elem)
+            }
             typecheck::Ty::Result(ok, err) => {
                 let ok = self.runtime_ty(RuntimeTyId::from(ok));
                 let err = self.runtime_ty(RuntimeTyId::from(err));
@@ -1721,7 +1725,8 @@ impl Interpreter<'_, '_> {
         ) {
             (typecheck::Ty::Var(v), _) => vec![(v, actual)],
             (typecheck::Ty::Array(f), typecheck::Ty::Array(a))
-            | (typecheck::Ty::Option(f), typecheck::Ty::Option(a)) => self
+            | (typecheck::Ty::Option(f), typecheck::Ty::Option(a))
+            | (typecheck::Ty::Lazy(f), typecheck::Ty::Lazy(a)) => self
                 .runtime_ty_pairs(RuntimeTyId::from(f), RuntimeTyId::from(a)),
             (typecheck::Ty::Result(fa, fb), typecheck::Ty::Result(aa, ab))
             | (typecheck::Ty::Map(fa, fb), typecheck::Ty::Map(aa, ab)) => self
@@ -2024,7 +2029,7 @@ impl Interpreter<'_, '_> {
 
     /// Evaluate a binary operation.
     ///
-    /// Handles short-circuit evaluation for `AND`, `OR`, and `Coalesce`.
+    /// Handles short-circuit evaluation for `and` and `or`.
     /// For class-dispatched operators (`==`, `+`, `<`, etc.), checks for
     /// user-defined class instances before falling through to builtin dispatch.
     async fn binary(
@@ -2036,7 +2041,7 @@ impl Interpreter<'_, '_> {
         span: Span,
     ) -> Result<Value> {
         match op {
-            // Short-circuit AND: if left is false, don't evaluate right
+            // Short-circuit `and`; if left is false, don't evaluate right.
             BinOp::And => {
                 let left = self.eval_payload(lhs).await?;
                 match left {
@@ -2055,7 +2060,7 @@ impl Interpreter<'_, '_> {
                     _ => typechecked!("&&", "Bool"),
                 }
             }
-            // Short-circuit OR: if left is true, don't evaluate right
+            // Short-circuit `or`; if left is true, don't evaluate right.
             BinOp::Or => {
                 let left = self.eval_payload(lhs).await?;
                 match left {
@@ -2074,36 +2079,22 @@ impl Interpreter<'_, '_> {
                     _ => typechecked!("||", "Bool"),
                 }
             }
-            // Coalesce: unwrap Option.Some/Result.Ok, or evaluate right for None/Err
             BinOp::Coalesce => {
                 let left = self.eval(lhs).await?;
-                if matches!(
-                    &self.checked.expr(id).aux,
-                    ExprAux::InstanceCall { .. }
-                ) {
-                    let val_id = self.add_value(left, span);
-                    let mid = self.arena.intern("unwrap");
-                    match self
-                        .dispatch_class_method_value(class::Dispatch {
-                            dispatch_expr_id: Some(id),
-                            output_expr_id: Some(id),
-                            output_ty: None,
-                            class: ClassId::FALLIBLE,
-                            method: mid,
-                            args: SmallVec::from_slice(&[val_id]),
-                            span,
-                        })
-                        .await
-                    {
-                        Ok(v) => Ok(v),
-                        Err(e) if e.runtime_variant().is_some() => {
-                            self.eval(rhs).await
-                        }
-                        Err(e) => Err(e),
-                    }
-                } else {
-                    self.coalesce(left, rhs).await
-                }
+                let right = self.eval(rhs).await?;
+                let l = self.add_value(left, span);
+                let r = self.add_value(right, span);
+                let mid = self.arena.intern("coalesce");
+                self.dispatch_class_method_value(class::Dispatch {
+                    dispatch_expr_id: Some(id),
+                    output_expr_id: Some(id),
+                    output_ty: None,
+                    class: ClassId::COALESCABLE,
+                    method: mid,
+                    args: SmallVec::from_slice(&[l, r]),
+                    span,
+                })
+                .await
             }
             // Pipeline: both sides evaluated, but requires async function call
             BinOp::Pipe => {
@@ -3195,6 +3186,10 @@ impl Values<'_, '_, '_, '_> {
                 [inner] => self.ctx.interp.checked.types.option(*inner),
                 _ => invariant!("Option variant args"),
             },
+            TypeId::LAZY => match args.as_slice() {
+                [inner] => self.ctx.interp.checked.types.lazy(*inner),
+                _ => invariant!("Lazy variant args"),
+            },
             TypeId::RESULT => match args.as_slice() {
                 [ok, err] => self.ctx.interp.checked.types.result(*ok, *err),
                 _ => invariant!("Result variant args"),
@@ -3380,6 +3375,9 @@ impl Values<'_, '_, '_, '_> {
             .or_else(|| self.ctx.interp.arena.ty(id))
             .and_then(|ty| match self.ctx.interp.checked.types.get(ty) {
                 Ty::Option(inner) if expected == TypeId::OPTION => {
+                    Some([RuntimeTyId::from(*inner)].into_iter().collect())
+                }
+                Ty::Lazy(inner) if expected == TypeId::LAZY => {
                     Some([RuntimeTyId::from(*inner)].into_iter().collect())
                 }
                 Ty::Result(ok, err) if expected == TypeId::RESULT => Some(

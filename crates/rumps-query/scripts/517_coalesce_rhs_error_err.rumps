@@ -1,0 +1,7 @@
+fun main() {
+  write Option.None ?? boom()
+}
+
+fun boom() -> Int {
+  raise "rhs failed"
+}

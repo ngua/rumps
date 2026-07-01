@@ -339,7 +339,8 @@ impl SolveCtx<'_> {
                 | (Ty::Global, Ty::Global) => Ok(()),
 
                 (Ty::Array(a), Ty::Array(b))
-                | (Ty::Option(a), Ty::Option(b)) => {
+                | (Ty::Option(a), Ty::Option(b))
+                | (Ty::Lazy(a), Ty::Lazy(b)) => {
                     self.newtype_structural_match(a, b, st)
                 }
                 (Ty::Result(ok1, err1), Ty::Result(ok2, err2)) => {

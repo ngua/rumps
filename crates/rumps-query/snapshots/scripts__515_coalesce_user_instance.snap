@@ -1,0 +1,7 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "fun main() {\n  let full: Box[Int] = Box.Full(10)\n  let empty: Box[Int] = Box.Empty\n\n  write full ?? mark(1)\n  write empty ?? mark(2)\n}\n\nvariant Box[T] = Full(T) | Empty\n\nclass Coalescable[T] for Box[T] {\n  fun coalesce(b: Box[T], rhs: Lazy[T]) -> T {\n    match b {\n      Box.Full(x) => { x }\n      Box.Empty => {\n        match rhs {\n          Lazy.Lazy(f) => { f() }\n        }\n      }\n    }\n  }\n}\n\nfun mark(i: Int) -> Int {\n  write \"rhs {i}\"\n  i\n}\n"
+---
+10
+rhs 2
+2

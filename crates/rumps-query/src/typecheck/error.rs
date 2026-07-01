@@ -93,6 +93,9 @@ impl<'a> TyPrinter<'a> {
             Ty::Option(t) => {
                 format!("Option[{}]", self.format_inner(*t, namer))
             }
+            Ty::Lazy(t) => {
+                format!("Lazy[{}]", self.format_inner(*t, namer))
+            }
             Ty::Result(ok, err) => {
                 format!(
                     "Result[{}, {}]",
@@ -410,7 +413,7 @@ pub(crate) enum TypeError {
     /// Invalid `read` conversion.
     ///
     /// The source type cannot be fallibly converted to the target type via `read`.
-    /// Function types, regex, and refs cannot be source or target of `read`.
+    /// Function types, `Lazy`, regex, and refs cannot be source or target of `read`.
     #[error("cannot `read` `{from}` as `{to}`")]
     InvalidRead { from: TyId, to: TyId, span: Span },
 
@@ -997,7 +1000,10 @@ impl TypeError {
                     p.format(*from),
                     p.format(*to)
                 ),
-                Some("function types, regex, and refs cannot be used with `read`".to_owned()),
+                Some(
+                    "function types, `Lazy`, regex, and refs cannot be used with `read`"
+                        .to_owned(),
+                ),
             ),
             Self::NewtypeReprReadRequiresTryInto { from, to, .. } => (
                 format!(
@@ -1351,6 +1357,7 @@ impl fmt::Display for Ty {
             Self::Error => write!(f, "<error>"),
             Self::Array(t) => write!(f, "Array[{t}]"),
             Self::Option(t) => write!(f, "Option[{t}]"),
+            Self::Lazy(t) => write!(f, "Lazy[{t}]"),
             Self::Result(ok, err) => write!(f, "Result[{ok}, {err}]"),
             Self::Map(k, v) => write!(f, "Map[{k}, {v}]"),
             Self::Tuple(ts) => {

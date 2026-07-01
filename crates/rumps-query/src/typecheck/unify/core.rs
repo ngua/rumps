@@ -120,6 +120,9 @@ impl SolveCtx<'_> {
             // Option: unify inner types
             (Ty::Option(a), Ty::Option(b)) => self.unify_inner(*a, *b, span),
 
+            // `Lazy`: unify inner types
+            (Ty::Lazy(a), Ty::Lazy(b)) => self.unify_inner(*a, *b, span),
+
             // Result: unify both ok and err types
             (Ty::Result(ok1, err1), Ty::Result(ok2, err2)) => {
                 let (ok1, err1, ok2, err2) = (*ok1, *err1, *ok2, *err2);

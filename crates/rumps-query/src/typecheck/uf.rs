@@ -232,6 +232,14 @@ impl UnionFind {
                     arena.alloc(Ty::Option(n))
                 }
             }
+            Ty::Lazy(inner) => {
+                let n = self.resolve(inner, arena);
+                if n == inner {
+                    id
+                } else {
+                    arena.alloc(Ty::Lazy(n))
+                }
+            }
             Ty::Result(ok, err) => {
                 let nok = self.resolve(ok, arena);
                 let nerr = self.resolve(err, arena);
@@ -320,6 +328,11 @@ impl UnionFind {
                                     arena.alloc(Ty::Option(a))
                                 })
                             }
+                            Ty::Lazy(_) => {
+                                na.first().map_or(TyArena::ERROR, |&a| {
+                                    arena.alloc(Ty::Lazy(a))
+                                })
+                            }
                             Ty::Result(_, e) => {
                                 na.first().map_or(TyArena::ERROR, |&a| {
                                     arena.alloc(Ty::Result(a, e))
@@ -343,6 +356,11 @@ impl UnionFind {
                                             .first()
                                             .map_or(TyArena::ERROR, |&a| {
                                                 arena.alloc(Ty::Option(a))
+                                            }),
+                                        Ty::Lazy(_) => na
+                                            .first()
+                                            .map_or(TyArena::ERROR, |&a| {
+                                                arena.alloc(Ty::Lazy(a))
                                             }),
                                         Ty::Result(_, e) => {
                                             match (na.first(), na.get(1)) {
@@ -521,7 +539,7 @@ impl UnionFind {
             | Ty::Global
             | Ty::Unknown
             | Ty::Error => {}
-            Ty::Array(t) | Ty::Option(t) => {
+            Ty::Array(t) | Ty::Option(t) | Ty::Lazy(t) => {
                 self.collect_free_vars(t, arena, acc);
             }
             Ty::Result(ok, err) => {

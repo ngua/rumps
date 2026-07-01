@@ -191,10 +191,10 @@ impl BinOp {
                 ty: scheme!(a, forall T: Concatable. (T, T) -> T),
             },
 
-            // Coalesce: `forall T, F: Fallible. (F[T], T) -> T`
+            // Coalesce: `forall C: Coalescable[T], T. (C, T) -> T`
             Self::Coalesce => BinOpDef {
                 name: "??",
-                ty: scheme!(a, forall T, F: Fallible. (F[T], T) -> T),
+                ty: scheme!(a, forall C: Coalescable[T], T. (C, T) -> T),
             },
 
             // Pipe: `forall T, U. (T, (T) -> U) -> U`

@@ -133,7 +133,8 @@ const HKT_CLASSES: &[&str] = &[
 ];
 
 /// Multi-param classes: constraint REQUIRES `[T]` arguments.
-const MULTI_PARAM_CLASSES: &[&str] = &["Into", "TryInto", "Indexable"];
+const MULTI_PARAM_CLASSES: &[&str] =
+    &["Into", "TryInto", "Indexable", "Coalescable"];
 
 /// Parse a single class bound.
 fn parse_var_class(input: ParseStream) -> Result<VarClass> {
@@ -282,6 +283,7 @@ fn class_id(name: &str) -> TokenStream2 {
         "Filterable" => "FILTERABLE",
         "Display" => "DISPLAY",
         "Formattable" => "FORMATTABLE",
+        "Coalescable" => "COALESCABLE",
         "Eq" => "EQ",
         "Wrappable" => "WRAPPABLE",
         "Chainable" => "CHAINABLE",
@@ -522,6 +524,10 @@ impl TyExpr {
                         let inner = &arg_tokens[0];
                         quote! { #arena.option(#inner) }
                     }
+                    "Lazy" => {
+                        let inner = &arg_tokens[0];
+                        quote! { #arena.lazy(#inner) }
+                    }
                     "Result" => {
                         let ok = &arg_tokens[0];
                         let err = &arg_tokens[1];
@@ -732,7 +738,7 @@ const PRIMITIVES: &[&str] = &[
 ];
 
 /// Parameterized type names (require `[...]` args).
-const PARAMETERIZED: &[&str] = &["Array", "Option", "Result", "Map"];
+const PARAMETERIZED: &[&str] = &["Array", "Option", "Lazy", "Result", "Map"];
 
 /// Named builtin types (represented as `Ty::Named(TypeId::XXX, vec![])`).
 ///

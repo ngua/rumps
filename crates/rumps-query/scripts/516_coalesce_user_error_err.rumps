@@ -1,0 +1,11 @@
+fun main() {
+  write Bad.Bad ?? 1
+}
+
+variant Bad = Bad
+
+class Coalescable[Int] for Bad {
+  fun coalesce(b: Bad, rhs: Lazy[Int]) -> Int {
+    raise "bad coalesce"
+  }
+}

@@ -371,8 +371,8 @@ pub(crate) enum BinOp {
     Ge, // `>=`
 
     // Logical
-    And, // `AND` or `&&`
-    Or,  // `OR` or `||`
+    And, // `and` or `&&`
+    Or,  // `or` or `||`
 
     // Bitwise
     BitAnd, // `&`
@@ -394,7 +394,7 @@ impl BinOp {
     /// Maps a binary operator to its dispatching class and method name.
     ///
     /// Returns `None` for operators that don't dispatch through a class
-    /// (e.g. `And`, `Or`, `Coalesce`, `Pipe`).
+    /// (e.g. `And`, `Or`, `Pipe`).
     ///
     /// For derived operators (`!=`, `<`, `>`, `<=`, `>=`), returns the
     /// *base* class method (`"eq"` or `"compare"`); the caller is
@@ -417,6 +417,7 @@ impl BinOp {
             Self::BitOr => Some((ClassId::BIT_LIKE, "bit-or")),
             Self::Shl => Some((ClassId::BIT_LIKE, "shl")),
             Self::Shr => Some((ClassId::BIT_LIKE, "shr")),
+            Self::Coalesce => Some((ClassId::COALESCABLE, "coalesce")),
             _ => None,
         }
     }
@@ -594,7 +595,7 @@ pub(crate) struct MatchArm {
 
     /// Optional guard condition: `if cond`.
     ///
-    /// If present, the arm only matches if the pattern matches AND the guard
+    /// If present, the arm only matches if the pattern matches and the guard
     /// evaluates to `true`. Variables bound by the pattern are visible in the
     /// guard.
     pub(crate) guard: Option<ExprId>,

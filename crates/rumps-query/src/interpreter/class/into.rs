@@ -84,6 +84,7 @@ impl Into {
             Ty::Fn(_, _) => "Function",
             Ty::Array(_) => "Array",
             Ty::Option(_) => "Option",
+            Ty::Lazy(_) => "Lazy",
             Ty::Result(_, _) => "Result",
             Ty::Map(_, _) => "Map",
             Ty::Time => "Time",

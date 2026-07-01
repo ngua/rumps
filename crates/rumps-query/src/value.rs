@@ -149,6 +149,8 @@ impl TypeId {
     ///
     /// A database reference that can be either local or global.
     pub(crate) const REF: Self = Self(27);
+    /// Builtin type: `Lazy`.
+    pub(crate) const LAZY: Self = Self(28);
     /// User-accessible builtin `TypeId`s, excludes `OBJECT`.
     ///
     /// Must be kept in sync with `name()`.
@@ -180,6 +182,7 @@ impl TypeId {
         Self::LOCAL,
         Self::GLOBAL,
         Self::REF,
+        Self::LAZY,
     ];
 
     /// Returns the canonical name for builtin types, or `None` for
@@ -213,6 +216,7 @@ impl TypeId {
             25 => Some("Local"),
             26 => Some("Global"),
             27 => Some("Ref"),
+            28 => Some("Lazy"),
             _ => None,
         }
     }
@@ -258,8 +262,9 @@ impl ClassId {
     pub(crate) const FLOOR_DIVISIBLE: Self = Self(23);
     pub(crate) const POWERABLE: Self = Self(24);
     pub(crate) const FORMATTABLE: Self = Self(25);
+    pub(crate) const COALESCABLE: Self = Self(26);
 
-    pub(crate) const BUILTIN_COUNT: usize = 26;
+    pub(crate) const BUILTIN_COUNT: usize = 27;
 
     pub(crate) const fn idx(self) -> usize {
         self.0 as usize
@@ -297,6 +302,7 @@ impl ClassId {
             23 => "FloorDivisible",
             24 => "Powerable",
             25 => "Formattable",
+            26 => "Coalescable",
             _ => "<user class>",
         }
     }
@@ -1106,7 +1112,7 @@ impl TypeRegistry {
     /// Type parameter count for builtin parameterized types.
     fn builtin_type_param_count(id: TypeId) -> Option<usize> {
         match id {
-            TypeId::ARRAY | TypeId::OPTION => Some(1),
+            TypeId::ARRAY | TypeId::OPTION | TypeId::LAZY => Some(1),
             TypeId::RESULT | TypeId::MAP => Some(2),
             _ => None,
         }
@@ -1537,6 +1543,24 @@ impl TypeRegistry {
         );
         if ref_ty != TypeId::REF {
             invariant!("Ref registered at expected index");
+        }
+
+        // `Lazy[T]` at index `28`
+        let lazy_name = arena.intern("Lazy");
+        let lazy = self.register(
+            TypeDef::Sum {
+                name: lazy_name,
+                type_params: smallvec::smallvec![t_param],
+                variants: smallvec::smallvec![VariantDef {
+                    name: lazy_name,
+                    idx: 0,
+                    arity: 1,
+                }],
+            },
+            lazy_name.into(),
+        );
+        if lazy != TypeId::LAZY {
+            invariant!("Lazy registered at expected index");
         }
     }
 

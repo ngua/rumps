@@ -1,0 +1,8 @@
+; `Lazy[T]` cannot be stored in globals.
+
+fun main() {
+  let x: Lazy[Int] = Lazy.Lazy(1)
+  let _ = transaction {
+    @set ^LAZY{1} x
+  }
+}

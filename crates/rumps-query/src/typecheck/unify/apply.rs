@@ -20,6 +20,10 @@ impl SolveCtx<'_> {
                 let ctor = self.ty_arena.option(TyArena::ERROR);
                 self.unify_apply_inner(tv, args, ctor, &[inner], span)
             }
+            Ty::Lazy(inner) => {
+                let ctor = self.ty_arena.lazy(TyArena::ERROR);
+                self.unify_apply_inner(tv, args, ctor, &[inner], span)
+            }
             Ty::Result(ok, err) => {
                 if args.len() >= 2 {
                     let ctor =
@@ -52,6 +56,10 @@ impl SolveCtx<'_> {
                         .map(|&m| match self.ty_arena.get(m).clone() {
                             Ty::Option(inner) => Some((
                                 self.ty_arena.option(TyArena::ERROR),
+                                smallvec![inner],
+                            )),
+                            Ty::Lazy(inner) => Some((
+                                self.ty_arena.lazy(TyArena::ERROR),
                                 smallvec![inner],
                             )),
                             Ty::Result(ok, err) => {

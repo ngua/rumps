@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; User variants need a `Fallible` instance for postfix `!`.\n\nvariant Box = Full(Int) | Empty\n\nfun main() {\n  let b = Box.Full(42)\n  write b!\n}\n"
+---
+ERROR: type `Box` does not satisfy `Fallible` class

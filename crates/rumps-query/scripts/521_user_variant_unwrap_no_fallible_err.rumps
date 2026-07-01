@@ -1,0 +1,8 @@
+; User variants need a `Fallible` instance for postfix `!`.
+
+variant Box = Full(Int) | Empty
+
+fun main() {
+  let b = Box.Full(42)
+  write b!
+}

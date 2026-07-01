@@ -209,6 +209,13 @@ impl ConvertCtx<'_> {
                     self.ty_arena.named(id, args)
                 }
             }
+            Ty::Named(id, _) if id == TypeId::LAZY => {
+                if args.len() == 1 {
+                    self.ty_arena.lazy(args[0])
+                } else {
+                    self.ty_arena.named(id, args)
+                }
+            }
             Ty::Named(id, _) if id == TypeId::MAP => {
                 if args.len() == 2 {
                     self.ty_arena.map_ty(args[0], args[1])
@@ -266,6 +273,9 @@ impl ConvertCtx<'_> {
             "Option" => args
                 .first()
                 .map_or(TyArena::ERROR, |&t| self.ty_arena.option(t)),
+            "Lazy" => args
+                .first()
+                .map_or(TyArena::ERROR, |&t| self.ty_arena.lazy(t)),
             "Result" => args.first().map_or(TyArena::ERROR, |&ok| {
                 args.get(1).map_or(TyArena::ERROR, |&err| {
                     self.ty_arena.result(ok, err)
@@ -747,7 +757,7 @@ impl ConvertCtx<'_> {
     /// Returns `None` for user-defined types (arity checked elsewhere).
     fn expected_type_arity(name: &str) -> Option<usize> {
         match name {
-            "Array" | "Option" => Some(1),
+            "Array" | "Option" | "Lazy" => Some(1),
             "Result" | "Map" => Some(2),
             _ => None,
         }

@@ -95,6 +95,7 @@ impl InferCtx<'_> {
             // OK. These are intentionally polymorphic (e.g., `Option.None`,
             // `Result.Err("msg")`, `[]`, `Map.empty()`, closures passed to HOFs).
             Ty::Option(_)
+            | Ty::Lazy(_)
             | Ty::Result(_, _)
             | Ty::Array(_)
             | Ty::Map(..)
@@ -140,7 +141,7 @@ impl InferCtx<'_> {
     pub(super) fn type_contains_fn(ty: TyId, arena: &TyArena) -> bool {
         match arena.get(ty) {
             Ty::Fn(_, _) => true,
-            Ty::Array(inner) | Ty::Option(inner) => {
+            Ty::Array(inner) | Ty::Option(inner) | Ty::Lazy(inner) => {
                 Self::type_contains_fn(*inner, arena)
             }
             Ty::Result(ok, err) => {
@@ -262,6 +263,9 @@ impl InferCtx<'_> {
 
             // Options: inner types must be compatible
             (Ty::Option(a), Ty::Option(b)) => self.types_compatible(*a, *b),
+
+            // `Lazy`: inner types must be compatible
+            (Ty::Lazy(a), Ty::Lazy(b)) => self.types_compatible(*a, *b),
 
             // Tuples: same length and pairwise compatible
             (Ty::Tuple(a), Ty::Tuple(b)) => {

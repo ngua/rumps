@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; `Lazy.Lazy(() => x)` delays a closure value.\n\nfun main() {\n  match Lazy.Lazy(() => 1) {\n    Lazy.Lazy(f) => {\n      let g = f()\n      write g()\n    }\n  }\n}\n"
+---
+1

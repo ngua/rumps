@@ -1,0 +1,10 @@
+; `Lazy.Lazy(() => x)` delays a closure value.
+
+fun main() {
+  match Lazy.Lazy(() => 1) {
+    Lazy.Lazy(f) => {
+      let g = f()
+      write g()
+    }
+  }
+}

@@ -728,7 +728,9 @@ impl Interpreter<'_, '_> {
     fn ty_has_hkt_var(&self, ty: TyId, var: TyVar) -> bool {
         match self.checked.types.raw(ty) {
             Ty::Var(v) => *v == var,
-            Ty::Array(t) | Ty::Option(t) => self.ty_has_hkt_var(*t, var),
+            Ty::Array(t) | Ty::Option(t) | Ty::Lazy(t) => {
+                self.ty_has_hkt_var(*t, var)
+            }
             Ty::Result(ok, err) | Ty::Map(ok, err) => {
                 self.ty_has_hkt_var(*ok, var) || self.ty_has_hkt_var(*err, var)
             }

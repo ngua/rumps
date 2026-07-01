@@ -2600,6 +2600,15 @@ impl InferCtx<'_> {
                 );
                 self.ty_arena.option(inner)
             }
+            Ty::Lazy(inner) => {
+                let inner = self.normalize_instance_assoc_ty(
+                    inner,
+                    self_var,
+                    class,
+                    assoc_types,
+                );
+                self.ty_arena.lazy(inner)
+            }
             Ty::Result(ok, err) => {
                 let ok = self.normalize_instance_assoc_ty(
                     ok,
@@ -2762,7 +2771,9 @@ impl InferCtx<'_> {
             (Ty::Var(v), _) if vars.contains(&v) => {
                 Self::match_method_ty_var(v, expected, map, bad);
             }
-            (Ty::Array(a), Ty::Array(b)) | (Ty::Option(a), Ty::Option(b)) => {
+            (Ty::Array(a), Ty::Array(b))
+            | (Ty::Option(a), Ty::Option(b))
+            | (Ty::Lazy(a), Ty::Lazy(b)) => {
                 self.match_method_ty_vars(a, b, vars, map, bad);
             }
             (Ty::Result(a1, b1), Ty::Result(a2, b2))
@@ -3132,6 +3143,7 @@ impl InferCtx<'_> {
             | Ty::Map(_, _)
             | Ty::Tuple(_)
             | Ty::Option(_)
+            | Ty::Lazy(_)
             | Ty::Result(_, _) => true,
             // Named: check registry
             Ty::Named(tid, _) => self.is_builtin_type(*tid),
@@ -3171,6 +3183,7 @@ impl InferCtx<'_> {
             Ty::Global => Some(TypeId::GLOBAL),
             Ty::Array(_) => Some(TypeId::ARRAY),
             Ty::Option(_) => Some(TypeId::OPTION),
+            Ty::Lazy(_) => Some(TypeId::LAZY),
             Ty::Result(_, _) => Some(TypeId::RESULT),
             Ty::Map(_, _) => Some(TypeId::MAP),
             Ty::Tuple(_) => Some(TypeId::TUPLE),

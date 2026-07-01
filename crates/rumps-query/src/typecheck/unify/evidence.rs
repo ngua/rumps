@@ -103,6 +103,10 @@ impl SolveCtx<'_> {
                 id: ClassId::INDEXABLE,
                 ..
             } => self.satisfy_indexable(EvidenceQuery { class, ty, span }),
+            TypeClass::Concrete {
+                id: ClassId::COALESCABLE,
+                ..
+            } => self.satisfy_coalescable(EvidenceQuery { class, ty, span }),
             TypeClass::Concrete { id, ref params }
                 if id.idx() >= ClassId::BUILTIN_COUNT && !params.is_empty() =>
             {
@@ -552,7 +556,7 @@ impl SolveCtx<'_> {
                     }
                 }
                 NewtypeEdgeStatus::Missing => match (&ty_shape, &to_shape) {
-                    (Ty::Fn(_, _), _) => {
+                    (Ty::Fn(_, _), _) | (Ty::Lazy(_), _) => {
                         self.errors.push(TypeError::InvalidRead {
                             from: ty,
                             to,
@@ -560,6 +564,7 @@ impl SolveCtx<'_> {
                         });
                     }
                     (_, Ty::Fn(_, _))
+                    | (_, Ty::Lazy(_))
                     | (_, Ty::Regex)
                     | (_, Ty::Local)
                     | (_, Ty::Global) => {
@@ -674,6 +679,45 @@ impl SolveCtx<'_> {
                             span,
                         )),
                     }
+                }
+            }
+        }
+    }
+
+    fn satisfy_coalescable(&mut self, q: EvidenceQuery<'_>) {
+        let span = q.span;
+        let ty = self.uf.resolve(q.ty, self.ty_arena);
+        let target = self.uf.resolve(q.target(), self.ty_arena);
+        let class = TypeClass::param(ClassId::COALESCABLE, target);
+        match self.ty_arena.get(ty).clone() {
+            Ty::Option(inner) => {
+                if let Err(e) = self.unify_types(target, inner, span) {
+                    self.errors.push(e);
+                }
+            }
+            Ty::Result(ok, _) => {
+                if let Err(e) = self.unify_types(target, ok, span) {
+                    self.errors.push(e);
+                }
+            }
+            Ty::Union(_, members) => {
+                self.satisfy_param_union(&class, &members, ty, span);
+            }
+            Ty::Var(_) | Ty::Error | Ty::Unknown => {}
+            _ => {
+                let q = EvidenceQuery {
+                    class: &class,
+                    ty,
+                    span,
+                };
+                let ev = self.evidence(q);
+                if self.apply_param_evidence(ev, &class, span) {
+                } else {
+                    self.errors.push(TypeError::UnsatisfiedClass(
+                        class.clone(),
+                        ty,
+                        span,
+                    ));
                 }
             }
         }

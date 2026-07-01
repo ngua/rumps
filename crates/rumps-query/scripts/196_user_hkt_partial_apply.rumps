@@ -1,6 +1,6 @@
 ; Multi-param user Fallible (partial application)
 ;
-; Tests `!`, `??` for a two-param type `Either[L, R]`
+; Tests `!` and explicit `Fallible:unwrap` for a two-param type `Either[L, R]`
 ; with partial application: element type is `R` (last param).
 
 variant Either[L, R] = Left(L) | Right(R)
@@ -24,6 +24,5 @@ class Fallible for Either[T] {
 fun main() {
   let r: Either[String, Int] = Either.Right(42)
   write r!
-  write r ?? 0
-  write Either.Left("oops") ?? 99
+  write Fallible:unwrap(r)
 }

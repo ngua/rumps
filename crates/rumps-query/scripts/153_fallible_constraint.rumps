@@ -1,4 +1,4 @@
-; Test Fallible constraint for Option/Result polymorphism
+; Test Fallible and Coalescable constraints for Option/Result polymorphism
 
 fun main() {
   ; ============================================================================
@@ -14,7 +14,7 @@ fun main() {
   write unwrap(res)
 
   ; ============================================================================
-  ; Fallible with coalesce
+  ; Coalescable with fallback
   ; ============================================================================
 
   write or-else(Option.Some(10), 0)
@@ -23,21 +23,21 @@ fun main() {
   write or-else(Result.Err("oops"), -1)
 
   ; ============================================================================
-  ; Closure with Fallible constraint
+  ; Closure with Coalescable constraint
   ; ============================================================================
 
-  let safe-get = [T, F: Fallible](x: F[T], default: T) -> T => x ?? default
+  let safe-get = [T, F: Coalescable[T]](x: F, default: T) -> T => x ?? default
 
   write safe-get(Option.Some(100), 0)
   write safe-get(Option.None, 42)
 
   ; ============================================================================
-  ; Combining Fallible with other constraints
+  ; Combining Coalescable with other constraints
   ; ============================================================================
 
-  write unwrap-numeric(Option.Some(123))
-  write unwrap-numeric(Option.None: Option[Int])
-  write unwrap-numeric(Result.Ok(4.5))
+  write numeric-or-zero(Option.Some(123))
+  write numeric-or-zero(Option.None: Option[Int])
+  write numeric-or-zero(Result.Ok(4.5))
 
   ; ============================================================================
   ; Union types with Fallible constraint
@@ -46,10 +46,10 @@ fun main() {
   write fallible-unwrap(Option.Some(42))
   write fallible-unwrap(Result.Ok(99))
 
-  write fallible-or-default(Option.Some(10), 0)
-  write fallible-or-default(Option.None, 77)
-  write fallible-or-default(Result.Ok(5), 0)
-  write fallible-or-default(Result.Err("oops"), -1)
+  write union-or-default(Option.Some(10), 0)
+  write union-or-default(Option.None, 77)
+  write union-or-default(Result.Ok(5), 0)
+  write union-or-default(Result.Err("oops"), -1)
 }
 
 ; Generic unwrap function that works on any Option[T] or Result[T, E]
@@ -58,12 +58,12 @@ fun unwrap[T, F: Fallible](x: F[T]) -> T {
 }
 
 ; Generic or-else function
-fun or-else[T, F: Fallible](x: F[T], default: T) -> T {
+fun or-else[T, F: Coalescable[T]](x: F, default: T) -> T {
   x ?? default
 }
 
-; Fallible + Numeric inner type
-fun unwrap-numeric[T: Numeric, F: Fallible](x: F[T]) -> T {
+; Coalescable + Numeric fallback type
+fun numeric-or-zero[T: Numeric, F: Coalescable[T]](x: F) -> T {
   x ?? 0
 }
 
@@ -73,6 +73,6 @@ fun fallible-unwrap(x: Option[Int] | Result[Int, String]) -> Int {
 }
 
 ; Union with coalesce
-fun fallible-or-default(x: Option[Int] | Result[Int, String], default: Int) -> Int {
+fun union-or-default(x: Option[Int] | Result[Int, String], default: Int) -> Int {
   x ?? default
 }

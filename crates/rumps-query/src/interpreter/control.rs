@@ -1,4 +1,4 @@
-//! Control flow expressions: `if`, `match`, `catch`, blocks, coalesce, unwrap.
+//! Control flow expressions: `if`, `match`, `catch`, blocks, and unwrap.
 
 use std::ops::ControlFlow;
 
@@ -103,57 +103,6 @@ impl Interpreter<'_, '_> {
             }
             // Type checker guarantees Option or Result
             _ => typechecked!("!", "Fallible"),
-        }
-    }
-
-    /// Null-coalescing operator implementation.
-    ///
-    /// Unwraps `Option` or `Result` values, falling back to rhs on None/Err:
-    /// - `Option.Some(v)` -> `v` (unwrapped)
-    /// - `Option.None` -> evaluate and return rhs
-    /// - `Result.Ok(v)` -> `v` (unwrapped)
-    /// - `Result.Err(_)` -> evaluate and return rhs (error discarded)
-    ///
-    /// Type checker guarantees operand is `Option` or `Result`.
-    pub(super) async fn coalesce(
-        &mut self,
-        left: Value,
-        rhs: ExprId,
-    ) -> Result<Value> {
-        let base = self
-            .checked
-            .types
-            .to_type_id(left.repr)
-            .or_else(|| self.checked.types.to_type_id(left.ty));
-        match (base, &left.payload) {
-            // Option.Some(v) -> unwrap to v
-            (Some(TypeId::OPTION), Payload::Variant { tag: 1, vals }) => {
-                Ok(vals
-                    .first()
-                    .and_then(|id| self.arena.value(*id).cloned())
-                    .unwrap_or_else(|| {
-                        typechecked!("??", "Option.Some has payload")
-                    }))
-            }
-            // Option.None -> evaluate rhs
-            (Some(TypeId::OPTION), Payload::Variant { tag: 0, .. }) => {
-                self.eval(rhs).await
-            }
-            // Result.Ok(v) -> unwrap to v
-            (Some(TypeId::RESULT), Payload::Variant { tag: 0, vals }) => {
-                Ok(vals
-                    .first()
-                    .and_then(|id| self.arena.value(*id).cloned())
-                    .unwrap_or_else(|| {
-                        typechecked!("??", "Result.Ok has payload")
-                    }))
-            }
-            // Result.Err(_) -> evaluate rhs (error discarded)
-            (Some(TypeId::RESULT), Payload::Variant { tag: 1, .. }) => {
-                self.eval(rhs).await
-            }
-            // Type checker guarantees Option or Result
-            _ => typechecked!("??", "Fallible"),
         }
     }
 

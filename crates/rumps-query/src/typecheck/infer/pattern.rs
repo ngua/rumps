@@ -64,6 +64,13 @@ impl InferCtx<'_> {
                         (1, Ty::Result(_, err)) => smallvec![*err],
                         _ => smallvec![self.fresh()],
                     }
+                } else if type_id == TypeId::LAZY {
+                    let inner = if let Ty::Lazy(inner) = s_ty {
+                        inner
+                    } else {
+                        self.fresh()
+                    };
+                    smallvec![self.ty_arena.func(SmallVec::new(), inner)]
                 } else if type_id == TypeId::ERROR {
                     // All Error variants have a String payload
                     smallvec![TyArena::STRING]
@@ -72,6 +79,7 @@ impl InferCtx<'_> {
                     let type_args: SmallVec<[TyId; 4]> = match &s_ty {
                         Ty::Named(_, args) => args.clone(),
                         Ty::Option(inner) => smallvec![*inner],
+                        Ty::Lazy(inner) => smallvec![*inner],
                         Ty::Result(ok, err) => smallvec![*ok, *err],
                         _ => SmallVec::new(),
                     };
@@ -381,6 +389,17 @@ impl InferCtx<'_> {
                         self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if *ty == rid && *var == er))
                     });
                     if !has_ok || !has_err {
+                        self.error(TypeError::NonExhaustiveMatch(span));
+                    }
+                }
+
+                Ty::Lazy(_) => {
+                    let lid = QualifiedName::local(self.env.intern("Lazy"));
+                    let lazy = self.env.intern("Lazy");
+                    let has_lazy = unguarded.iter().any(|arm| {
+                        self.ast.get_pattern(arm.pattern).is_some_and(|p| matches!(p, MatchPattern::Variant(ty, var, _) if *ty == lid && *var == lazy))
+                    });
+                    if !has_lazy {
                         self.error(TypeError::NonExhaustiveMatch(span));
                     }
                 }

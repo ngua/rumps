@@ -1,6 +1,6 @@
 ; Single-param user Fallible
 ;
-; Tests `!`, `??`, and explicit `Fallible:unwrap` dispatch
+; Tests `!` and explicit `Fallible:unwrap` dispatch
 ; on a user-defined `Box[T]` type.
 
 variant Box[T] = Full(T) | Empty
@@ -23,7 +23,5 @@ class Fallible for Box {
 fun main() {
   let b = Box.Full(42)
   write b!
-  write b ?? 0
-  write Box.Empty ?? 99
   write Fallible:unwrap(b)
 }

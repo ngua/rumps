@@ -1542,6 +1542,7 @@ impl<'a> InferCtx<'a> {
             Ty::Global => Some((TypeId::GLOBAL, SmallVec::new())),
             Ty::Array(e) => Some((TypeId::ARRAY, [e].into_iter().collect())),
             Ty::Option(e) => Some((TypeId::OPTION, [e].into_iter().collect())),
+            Ty::Lazy(e) => Some((TypeId::LAZY, [e].into_iter().collect())),
             Ty::Result(ok, err) => {
                 Some((TypeId::RESULT, [ok, err].into_iter().collect()))
             }
@@ -2206,7 +2207,9 @@ impl<'a> InferCtx<'a> {
                     span,
                 });
             }
-            Ty::Array(t) | Ty::Option(t) => self.require_wf_ty(t, span),
+            Ty::Array(t) | Ty::Option(t) | Ty::Lazy(t) => {
+                self.require_wf_ty(t, span);
+            }
             Ty::Result(ok, err) => {
                 self.require_wf_ty(ok, span);
                 self.require_wf_ty(err, span);

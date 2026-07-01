@@ -1,0 +1,7 @@
+; `Lazy[T]` does not satisfy `Eq`.
+
+fun main() {
+  let x: Lazy[Int] = Lazy.Lazy(1)
+  let y: Lazy[Int] = Lazy.Lazy(1)
+  write :display(x == y)
+}

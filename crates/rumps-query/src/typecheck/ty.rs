@@ -600,6 +600,21 @@ impl ClassRegistry {
                     )),
                 )],
             },
+            // `26`: `Coalescable`
+            ClassDef {
+                name: s("Coalescable"),
+                shape: ClassShape::Concrete { params: 1 },
+                assoc_types: smallvec![],
+                required_methods: vec![],
+                supers: smallvec![],
+                methods: vec![(
+                    s("coalesce"),
+                    MethodSpec::Standard(scheme!(
+                        arena,
+                        forall C: Coalescable[T], T. (C, Lazy[T]) -> T
+                    )),
+                )],
+            },
         ];
 
         defs.iter_mut().for_each(|def| {
@@ -1096,6 +1111,7 @@ pub(crate) enum Ty {
     Option(TyId),
     Result(TyId, TyId),
     Map(TyId, TyId),
+    Lazy(TyId),
 
     // Compound types
     Tuple(SmallVec<[TyId; 4]>),
@@ -1156,6 +1172,7 @@ impl Hash for Ty {
             Self::Var(v) => v.hash(state),
             Self::Array(id) => id.hash(state),
             Self::Option(id) => id.hash(state),
+            Self::Lazy(id) => id.hash(state),
             Self::Result(a, b) => {
                 a.hash(state);
                 b.hash(state);
@@ -1386,6 +1403,11 @@ impl TyArena {
         self.alloc(Ty::Option(inner))
     }
 
+    /// Allocate `Ty::Lazy(inner)`.
+    pub(crate) fn lazy(&mut self, inner: TyId) -> TyId {
+        self.alloc(Ty::Lazy(inner))
+    }
+
     /// Allocate `Ty::Result(ok, err)`.
     pub(crate) fn result(&mut self, ok: TyId, err: TyId) -> TyId {
         self.alloc(Ty::Result(ok, err))
@@ -1456,7 +1478,7 @@ impl TyArena {
             | Ty::Global
             | Ty::Unknown
             | Ty::Error => false,
-            Ty::Array(t) | Ty::Option(t) => self.occurs(*t, v),
+            Ty::Array(t) | Ty::Option(t) | Ty::Lazy(t) => self.occurs(*t, v),
             Ty::Result(ok, err) => self.occurs(*ok, v) || self.occurs(*err, v),
             Ty::Map(k, val) => self.occurs(*k, v) || self.occurs(*val, v),
             Ty::Tuple(ts) => ts.iter().any(|&t| self.occurs(t, v)),
@@ -1513,7 +1535,9 @@ impl TyArena {
             | Ty::Global
             | Ty::Unknown
             | Ty::Error => false,
-            Ty::Array(t) | Ty::Option(t) => self.occurs_uf(*t, v, uf),
+            Ty::Array(t) | Ty::Option(t) | Ty::Lazy(t) => {
+                self.occurs_uf(*t, v, uf)
+            }
             Ty::Result(ok, err) => {
                 self.occurs_uf(*ok, v, uf) || self.occurs_uf(*err, v, uf)
             }
@@ -1589,7 +1613,7 @@ impl TyArena {
             | Ty::Global
             | Ty::Unknown
             | Ty::Error => {}
-            Ty::Array(t) | Ty::Option(t) => {
+            Ty::Array(t) | Ty::Option(t) | Ty::Lazy(t) => {
                 self.collect_free_vars(*t, acc);
             }
             Ty::Result(ok, err) => {
@@ -1685,6 +1709,14 @@ impl TyArena {
                     self.alloc(Ty::Option(n))
                 }
             }
+            Ty::Lazy(inner) => {
+                let n = self.apply(inner, rename);
+                if n == inner {
+                    id
+                } else {
+                    self.alloc(Ty::Lazy(n))
+                }
+            }
             Ty::Result(ok, err) => {
                 let nok = self.apply(ok, rename);
                 let nerr = self.apply(err, rename);
@@ -1773,6 +1805,11 @@ impl TyArena {
                                     self.alloc(Ty::Option(a))
                                 })
                             }
+                            Ty::Lazy(_) => {
+                                na.first().map_or(Self::ERROR, |&a| {
+                                    self.alloc(Ty::Lazy(a))
+                                })
+                            }
                             Ty::Result(_, e) => match na.len() {
                                 1 => na.first().map_or(Self::ERROR, |&a| {
                                     self.alloc(Ty::Result(a, e))
@@ -1836,6 +1873,11 @@ impl TyArena {
                                             .first()
                                             .map_or(Self::ERROR, |&a| {
                                                 self.alloc(Ty::Option(a))
+                                            }),
+                                        Ty::Lazy(_) => na
+                                            .first()
+                                            .map_or(Self::ERROR, |&a| {
+                                                self.alloc(Ty::Lazy(a))
                                             }),
                                         Ty::Result(_, e) => match na.len() {
                                             1 => na.first().map_or(

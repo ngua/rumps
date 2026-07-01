@@ -1,0 +1,21 @@
+; `Coalescable[Int]` is not enough for `!`.
+
+variant Box = Full(Int) | Empty
+
+class Coalescable[Int] for Box {
+  fun coalesce(b: Box, rhs: Lazy[Int]) -> Int {
+    match b {
+      Box.Full(x) => { x }
+      Box.Empty => {
+        match rhs {
+          Lazy.Lazy(f) => { f() }
+        }
+      }
+    }
+  }
+}
+
+fun main() {
+  let b = Box.Full(42)
+  write b!
+}

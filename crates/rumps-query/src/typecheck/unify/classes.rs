@@ -46,6 +46,7 @@ impl SolveCtx<'_> {
             Ty::Global => Some(TypeId::GLOBAL),
             Ty::Array(_) => Some(TypeId::ARRAY),
             Ty::Option(_) => Some(TypeId::OPTION),
+            Ty::Lazy(_) => Some(TypeId::LAZY),
             Ty::Result(_, _) => Some(TypeId::RESULT),
             Ty::Map(_, _) => Some(TypeId::MAP),
             Ty::Tuple(_) => Some(TypeId::TUPLE),
@@ -66,6 +67,7 @@ impl SolveCtx<'_> {
             Ty::Named(id, args) => Some((id, args)),
             Ty::Array(e) => Some((TypeId::ARRAY, smallvec![e])),
             Ty::Option(e) => Some((TypeId::OPTION, smallvec![e])),
+            Ty::Lazy(e) => Some((TypeId::LAZY, smallvec![e])),
             Ty::Result(ok, err) => Some((TypeId::RESULT, smallvec![ok, err])),
             Ty::Map(k, v) => Some((TypeId::MAP, smallvec![k, v])),
             Ty::Tuple(ts) => Some((TypeId::TUPLE, ts)),
@@ -191,6 +193,7 @@ impl SolveCtx<'_> {
                 | Ty::Var(_)
                 | Ty::Error
                 | Ty::Unknown
+                | Ty::Lazy(_)
                 | Ty::Union(_, _)
                 | Ty::Named(_, _),
             ) => None,
@@ -487,7 +490,14 @@ impl SolveCtx<'_> {
             Ty::Apply(_, _) => {}
             Ty::Error | Ty::Unknown => {}
             Ty::Named(_, _) => {
-                self.apply_hkt_evidence(elems, class, ty, span, true);
+                if self.apply_hkt_evidence(elems, class, ty, span, true) {
+                } else {
+                    self.errors.push(TypeError::UnsatisfiedClass(
+                        class.clone(),
+                        ty,
+                        span,
+                    ));
+                }
             }
             _ => {
                 self.errors.push(TypeError::UnsatisfiedClass(

@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; `Lazy[T]` cannot be stored in globals.\n\nfun main() {\n  let x: Lazy[Int] = Lazy.Lazy(1)\n  let _ = transaction {\n    @set ^LAZY{1} x\n  }\n}\n"
+---
+ERROR: cannot cast `Lazy[Int]` to `Storable`

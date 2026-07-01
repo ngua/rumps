@@ -89,6 +89,7 @@ impl RuntimeTypes {
             Ty::Global => Some(TypeId::GLOBAL),
             Ty::Array(_) => Some(TypeId::ARRAY),
             Ty::Option(_) => Some(TypeId::OPTION),
+            Ty::Lazy(_) => Some(TypeId::LAZY),
             Ty::Result(_, _) => Some(TypeId::RESULT),
             Ty::Map(_, _) => Some(TypeId::MAP),
             Ty::Tuple(_) => Some(TypeId::TUPLE),
@@ -156,9 +157,11 @@ impl RuntimeTypes {
     ) -> bool {
         match self.get(expected) {
             Ty::Object(fields) => self.object_type_contains(actual.0, fields),
-            Ty::Array(_) | Ty::Map(_, _) | Ty::Tuple(_) | Ty::Fn(_, _) => {
-                self.types_equal(actual.0, expected.0)
-            }
+            Ty::Array(_)
+            | Ty::Lazy(_)
+            | Ty::Map(_, _)
+            | Ty::Tuple(_)
+            | Ty::Fn(_, _) => self.types_equal(actual.0, expected.0),
             _ => false,
         }
     }
@@ -275,6 +278,7 @@ impl RuntimeTypes {
                 }
                 (Ty::Array(e1), Ty::Array(e2)) => self.types_equal(*e1, *e2),
                 (Ty::Option(e1), Ty::Option(e2)) => self.types_equal(*e1, *e2),
+                (Ty::Lazy(e1), Ty::Lazy(e2)) => self.types_equal(*e1, *e2),
                 (Ty::Result(t1, e1), Ty::Result(t2, e2)) => {
                     self.types_equal(*t1, *t2) && self.types_equal(*e1, *e2)
                 }
@@ -414,6 +418,11 @@ impl RuntimeTypes {
         self.intern(Ty::Option(elem.raw()))
     }
 
+    /// Build a lazy runtime type in this arena.
+    pub(crate) fn lazy(&mut self, elem: RuntimeTyId) -> RuntimeTyId {
+        self.intern(Ty::Lazy(elem.raw()))
+    }
+
     /// Build a result runtime type in this arena.
     pub(crate) fn result(
         &mut self,
@@ -474,6 +483,10 @@ impl RuntimeTypes {
             Ty::Option(elem) => {
                 let elem = self.import_ty(source, elem);
                 self.option(elem)
+            }
+            Ty::Lazy(elem) => {
+                let elem = self.import_ty(source, elem);
+                self.lazy(elem)
             }
             Ty::Result(ok, err) => {
                 let ok = self.import_ty(source, ok);

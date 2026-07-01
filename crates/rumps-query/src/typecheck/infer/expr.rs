@@ -30,6 +30,16 @@ use crate::typecheck::CheckedTypePatternInfo;
 use crate::value::{TypeDef, TypeId};
 use crate::{ClassId, Span};
 
+struct ParamClassDispatch {
+    id: ExprId,
+    class: ClassId,
+    method: StringId,
+    recv: TyId,
+    arg: TyId,
+    span: Span,
+    use_: InstanceUse,
+}
+
 impl InferCtx<'_> {
     /// Infer the type of an expression.
     ///
@@ -531,18 +541,16 @@ impl InferCtx<'_> {
                                             class,
                                             TypeClass::Concrete { ref params, .. }
                                               if !params.is_empty()
-                                        ) && k.idx()
-                                            >= ClassId::BUILTIN_COUNT
-                                        {
-                                            self.deferred_param_calls.push((
+                                        ) {
+                                            self.defer_param_class_dispatch(ParamClassDispatch {
                                                 id,
-                                                k,
+                                                class: k,
                                                 method,
                                                 recv,
-                                                arg_ty,
+                                                arg: arg_ty,
                                                 span,
-                                                InstanceUse::MethodValue,
-                                            ));
+                                                use_: InstanceUse::MethodValue,
+                                            });
                                         }
                                     }
                                     self.emit_class_constraints(
@@ -850,6 +858,23 @@ impl InferCtx<'_> {
         }
     }
 
+    fn defer_param_class_dispatch(&mut self, dispatch: ParamClassDispatch) {
+        if matches!(
+            self.env.class_registry().shape(dispatch.class),
+            ClassShape::Concrete { params } if params > 0
+        ) {
+            self.deferred_param_calls.push((
+                dispatch.id,
+                dispatch.class,
+                dispatch.method,
+                dispatch.recv,
+                dispatch.arg,
+                dispatch.span,
+                dispatch.use_,
+            ));
+        }
+    }
+
     /// Generic class method call type checking.
     ///
     /// Uses the centralized spec from `ClassId::method` to:
@@ -940,6 +965,8 @@ impl InferCtx<'_> {
                     } else {
                         None
                     };
+                    let param_arg =
+                        self.method_ref_param_class_arg(kind, &constraints);
 
                     // Emit class constraints from scheme
                     constraints.into_iter().for_each(|(ty, class)| {
@@ -969,18 +996,23 @@ impl InferCtx<'_> {
                             true
                         };
 
-                        // For parameterized user classes, record info for
+                        // For parameterized classes, record info for
                         // deferred resolution of the specific instance fn.
-                        let is_param_user = matches!(
-                            self.env.class_registry().shape(kind),
-                            ClassShape::Concrete { params } if params > 0
-                        ) && kind.idx()
-                            >= ClassId::BUILTIN_COUNT;
-                        if is_param_user && keep_dispatch {
-                            if let Some(ty) = arg_tys.first().copied() {
-                                self.deferred_param_calls.push((
-                                    id, kind, method, ty, ret, span, use_,
-                                ));
+                        if keep_dispatch {
+                            if let Some((ty, arg)) =
+                                arg_tys.first().copied().zip(param_arg)
+                            {
+                                self.defer_param_class_dispatch(
+                                    ParamClassDispatch {
+                                        id,
+                                        class: kind,
+                                        method,
+                                        recv: ty,
+                                        arg,
+                                        span,
+                                        use_,
+                                    },
+                                );
                             }
                         }
 
@@ -1280,6 +1312,42 @@ impl InferCtx<'_> {
         let rhs_is_ref = self.ty_arena.get(rhs_ty).is_ref();
 
         let ret = match op {
+            BinOp::Coalesce => {
+                let class = TypeClass::param(ClassId::COALESCABLE, rhs_ty);
+                self.constrain(Constraint::Class {
+                    ty: lhs_ty,
+                    class,
+                    span,
+                });
+                let lazy_ty = self.env.intern("Lazy");
+                let lazy_ctor = self.env.intern("Lazy");
+                let lazy_id = self.ast.add_expr(
+                    Expr::Variant(
+                        QualifiedName::local(lazy_ty),
+                        lazy_ctor,
+                        smallvec![rhs_id],
+                    ),
+                    span,
+                );
+                match lazy_id {
+                    Ok(lazy_id) => {
+                        self.ast
+                            .set_expr(id, Expr::Binary(lhs_id, op, lazy_id));
+                        let got = self.expr(lazy_id);
+                        let expected = self.ty_arena.lazy(rhs_ty);
+                        self.unify(expected, got, span);
+                        rhs_ty
+                    }
+                    Err(e) => {
+                        self.error(TypeError::Custom {
+                            msg: e.to_string(),
+                            span,
+                        });
+                        TyArena::ERROR
+                    }
+                }
+            }
+
             // FIXME: Special case for Ref comparison. This allows comparing
             // `Local` and `Global` refs (e.g., `data{1} == ^info{"key"}`).
             // Once union types are properly represented in the interpreter
@@ -1344,52 +1412,57 @@ impl InferCtx<'_> {
         let class_tag = op.class_dispatch().map(|(tag, _)| tag);
 
         if let Some(kind) = class_tag {
-            // Operator schemes can unify a `newtype` operand through its
-            // representation before class solving. Re-check alias operands
-            // nominally so `Display`-only `newtype`s cannot satisfy `+`, etc...
-            let lhs_alias = match self.ty_arena.get(lhs_ty) {
-                Ty::Named(id, _) => self.decls.is_alias(*id),
-                _ => false,
-            };
-            let rhs_alias = match self.ty_arena.get(rhs_ty) {
-                Ty::Named(id, _) => self.decls.is_alias(*id),
-                _ => false,
-            };
-            let aliases: SmallVec<[(TyId, bool); 2]> = if lhs_ty == rhs_ty {
-                smallvec![(lhs_ty, lhs_alias)]
-            } else {
-                smallvec![(lhs_ty, lhs_alias), (rhs_ty, rhs_alias)]
-            };
-            aliases
-                .into_iter()
-                .filter_map(|(ty, alias)| alias.then_some(ty))
-                .for_each(|ty| {
-                    self.constrain(Constraint::Class {
-                        ty,
-                        class: TypeClass::simple(kind),
+            if !matches!(op, BinOp::Coalesce) {
+                // Operator schemes can unify a `newtype` operand through its
+                // representation before class solving. Re-check alias operands
+                // nominally so `Display`-only `newtype`s cannot satisfy `+`, etc...
+                let lhs_alias = match self.ty_arena.get(lhs_ty) {
+                    Ty::Named(id, _) => self.decls.is_alias(*id),
+                    _ => false,
+                };
+                let rhs_alias = match self.ty_arena.get(rhs_ty) {
+                    Ty::Named(id, _) => self.decls.is_alias(*id),
+                    _ => false,
+                };
+                let aliases: SmallVec<[(TyId, bool); 2]> = if lhs_ty == rhs_ty {
+                    smallvec![(lhs_ty, lhs_alias)]
+                } else {
+                    smallvec![(lhs_ty, lhs_alias), (rhs_ty, rhs_alias)]
+                };
+                aliases
+                    .into_iter()
+                    .filter_map(|(ty, alias)| alias.then_some(ty))
+                    .for_each(|ty| {
+                        self.constrain(Constraint::Class {
+                            ty,
+                            class: TypeClass::simple(kind),
+                            span,
+                        });
+                    });
+            }
+            let method = op
+                .class_dispatch()
+                .map(|(_, method)| self.env.intern(method));
+            let keep = self.record_inst_dispatch(
+                id,
+                lhs_ty,
+                kind,
+                span,
+                InstanceUse::Evidence,
+            );
+            if keep {
+                method.into_iter().for_each(|method| {
+                    self.defer_param_class_dispatch(ParamClassDispatch {
+                        id,
+                        class: kind,
+                        method,
+                        recv: lhs_ty,
+                        arg: ret,
                         span,
+                        use_: InstanceUse::Evidence,
                     });
                 });
-            self.record_inst_dispatch(
-                id,
-                lhs_ty,
-                kind,
-                span,
-                InstanceUse::Evidence,
-            );
-        }
-
-        // Track Fallible instance for `??` (coalesce) dispatch on user types.
-        // Coalesce is not in `class_dispatch()` so needs separate handling.
-        if matches!(op, BinOp::Coalesce) {
-            let kind = ClassId::FALLIBLE;
-            self.record_inst_dispatch(
-                id,
-                lhs_ty,
-                kind,
-                span,
-                InstanceUse::Evidence,
-            );
+            }
         }
 
         ret
@@ -2142,15 +2215,15 @@ impl InferCtx<'_> {
             ty: idx_ty,
             span,
         });
-        self.deferred_param_calls.push((
-            expr,
-            ClassId::INDEXABLE,
+        self.defer_param_class_dispatch(ParamClassDispatch {
+            id: expr,
+            class: ClassId::INDEXABLE,
             method,
-            base_ty,
-            elem,
+            recv: base_ty,
+            arg: elem,
             span,
-            InstanceUse::Evidence,
-        ));
+            use_: InstanceUse::Evidence,
+        });
         elem
     }
 
@@ -2674,43 +2747,46 @@ impl InferCtx<'_> {
             true
         };
 
-        if origin.class.idx() >= ClassId::BUILTIN_COUNT {
-            if self.method_ref_is_param_user(origin.class) && keep_dispatch {
-                args.first()
-                    .copied()
-                    .filter(|_| origin.applied == 0)
-                    .zip(origin.class_arg.or_else(|| {
-                        self.method_ref_param_class_arg(
-                            origin.class,
-                            constraints,
-                        )
-                    }))
-                    .into_iter()
-                    .for_each(|(recv, class_arg)| {
-                        self.deferred_param_calls.push((
-                            call_id,
-                            origin.class,
-                            origin.method,
-                            recv,
-                            class_arg,
-                            span,
-                            InstanceUse::MethodValue,
-                        ));
-                    });
-            }
-
-            if self.method_ref_is_hkt_user(origin.class) && keep_dispatch {
-                lookup_ty.into_iter().for_each(|ty| {
-                    self.deferred_hkt_user_calls.push((
-                        call_id,
-                        origin.class,
-                        origin.method,
-                        ty,
+        if keep_dispatch
+            && matches!(
+                self.env.class_registry().shape(origin.class),
+                ClassShape::Concrete { params } if params > 0
+            )
+        {
+            args.first()
+                .copied()
+                .filter(|_| origin.applied == 0)
+                .zip(origin.class_arg.or_else(|| {
+                    self.method_ref_param_class_arg(origin.class, constraints)
+                }))
+                .into_iter()
+                .for_each(|(recv, class_arg)| {
+                    self.defer_param_class_dispatch(ParamClassDispatch {
+                        id: call_id,
+                        class: origin.class,
+                        method: origin.method,
+                        recv,
+                        arg: class_arg,
                         span,
-                        InstanceUse::MethodValue,
-                    ));
+                        use_: InstanceUse::MethodValue,
+                    });
                 });
-            }
+        }
+
+        if origin.class.idx() >= ClassId::BUILTIN_COUNT
+            && self.method_ref_is_hkt_user(origin.class)
+            && keep_dispatch
+        {
+            lookup_ty.into_iter().for_each(|ty| {
+                self.deferred_hkt_user_calls.push((
+                    call_id,
+                    origin.class,
+                    origin.method,
+                    ty,
+                    span,
+                    InstanceUse::MethodValue,
+                ));
+            });
         }
     }
 
@@ -2750,7 +2826,9 @@ impl InferCtx<'_> {
     fn method_ref_ty_has_var(&self, ty: TyId, var: TyVar) -> bool {
         match self.ty_arena.get(ty) {
             Ty::Var(v) => *v == var,
-            Ty::Array(t) | Ty::Option(t) => self.method_ref_ty_has_var(*t, var),
+            Ty::Array(t) | Ty::Option(t) | Ty::Lazy(t) => {
+                self.method_ref_ty_has_var(*t, var)
+            }
             Ty::Result(ok, err) | Ty::Map(ok, err) => {
                 self.method_ref_ty_has_var(*ok, var)
                     || self.method_ref_ty_has_var(*err, var)
@@ -2831,13 +2909,6 @@ impl InferCtx<'_> {
         } else {
             None
         }
-    }
-
-    fn method_ref_is_param_user(&self, class: ClassId) -> bool {
-        matches!(
-            self.env.class_registry().shape(class),
-            ClassShape::Concrete { params } if params > 0
-        ) && class.idx() >= ClassId::BUILTIN_COUNT
     }
 
     fn method_ref_is_hkt_user(&self, class: ClassId) -> bool {
@@ -3111,8 +3182,6 @@ impl InferCtx<'_> {
         args: &SmallVec<[ExprId; 4]>,
         span: Span,
     ) -> TyId {
-        let arg_tys: Vec<TyId> = args.iter().map(|id| self.expr(*id)).collect();
-
         // Resolve type name using module-aware lookup
         let resolved = self.convert().resolve_type_name(&ty_name);
 
@@ -3149,87 +3218,181 @@ impl InferCtx<'_> {
                         TyArena::ERROR
                     }
                     Some((type_id, var_def)) => {
-                        if var_def.arity as usize != arg_tys.len() {
+                        if var_def.arity as usize != args.len() {
                             self.error(TypeError::ArityMismatch {
                                 expected: var_def.arity as usize,
-                                got: arg_tys.len(),
+                                got: args.len(),
                                 span,
                             });
                         }
 
-                        if type_id == TypeId::OPTION {
-                            let inner = arg_tys
-                                .first()
-                                .copied()
-                                .unwrap_or_else(|| self.fresh());
-                            self.ty_arena.option(inner)
-                        } else if type_id == TypeId::RESULT {
-                            match var_def.idx {
-                                0 => {
-                                    let ok = arg_tys
-                                        .first()
-                                        .copied()
-                                        .unwrap_or_else(|| self.fresh());
-                                    let err = self.fresh();
-                                    self.ty_arena.result(ok, err)
-                                }
-                                1 => {
-                                    let err = arg_tys
-                                        .first()
-                                        .copied()
-                                        .unwrap_or_else(|| self.fresh());
-                                    let ok = self.fresh();
-                                    self.ty_arena.result(ok, err)
-                                }
-                                _ => TyArena::ERROR,
-                            }
-                        } else if type_id == TypeId::ORDERING {
-                            // Ordering has no type parameters; all variants
-                            // are nullary
-                            TyArena::ORDERING
-                        } else {
-                            match self.registry.get_def(type_id) {
-                                Some(TypeDef::Sum { type_params, .. }) => {
-                                    let type_args: SmallVec<[TyId; 4]> =
-                                        type_params
-                                            .iter()
-                                            .map(|_| self.fresh())
-                                            .collect();
-                                    let subst: IndexMap<StringId, TyId> =
-                                        type_params
-                                            .iter()
-                                            .zip(type_args.iter())
-                                            .map(|(p, &a)| (*p, a))
-                                            .collect();
+                        match type_id {
+                            id if id == TypeId::LAZY
+                                && var_def.idx == 0
+                                && var_def.arity == 1
+                                && args.len() == 1 =>
+                            {
+                                // `Lazy.Lazy(expr)` is source-level delay
+                                // syntax. Rewrite before normal variant arg
+                                // inference, because normal variant args are
+                                // eager.
+                                match args.first().copied() {
+                                    None => TyArena::ERROR,
+                                    Some(body) => {
+                                        let body_span = self
+                                            .ast
+                                            .expr_span(body)
+                                            .unwrap_or(span);
+                                        let closure = self.ast.add_expr(
+                                            Expr::Closure {
+                                                type_params: smallvec![],
+                                                params: smallvec![],
+                                                ret: None,
+                                                body,
+                                            },
+                                            body_span,
+                                        );
 
-                                    let payloads = self
-                                        .decls
-                                        .variant_payloads(type_id, var_def.name)
-                                        .cloned()
-                                        .unwrap_or_default();
-
-                                    payloads
-                                        .iter()
-                                        .zip(arg_tys.iter())
-                                        .for_each(|(expected_id, &got)| {
-                                            let expected =
-                                                self.convert().ast_type_to_ty(
-                                                    *expected_id,
-                                                    &subst,
+                                        match closure {
+                                            Ok(closure) => {
+                                                self.ast.set_expr(
+                                                    expr_id,
+                                                    Expr::Variant(
+                                                        qid.clone(),
+                                                        var_name,
+                                                        smallvec![closure],
+                                                    ),
                                                 );
-                                            self.unify(expected, got, span);
-                                        });
-
-                                    self.ty_arena.named(type_id, type_args)
+                                                // Normal closure inference records
+                                                // the `body` function metadata
+                                                // needed to invoke the stored
+                                                // closure at runtime.
+                                                let got = self.expr(closure);
+                                                let inner = self.fresh();
+                                                let expected =
+                                                    self.ty_arena.func(
+                                                        SmallVec::new(),
+                                                        inner,
+                                                    );
+                                                self.unify(expected, got, span);
+                                                self.ty_arena.lazy(inner)
+                                            }
+                                            Err(e) => {
+                                                self.error(TypeError::Custom {
+                                                    msg: e.to_string(),
+                                                    span,
+                                                });
+                                                TyArena::ERROR
+                                            }
+                                        }
+                                    }
                                 }
-                                _ => {
-                                    let tn = ty_name.display(&self.env.strings);
-                                    let vn = self.env.resolve_string(var_name);
-                                    self.error(TypeError::UnknownType(
-                                        format!("{tn}.{vn}"),
-                                        span,
-                                    ));
-                                    TyArena::ERROR
+                            }
+                            id => {
+                                let arg_tys: Vec<TyId> = args
+                                    .iter()
+                                    .map(|id| self.expr(*id))
+                                    .collect();
+
+                                match id {
+                                    id if id == TypeId::OPTION => {
+                                        let inner = arg_tys
+                                            .first()
+                                            .copied()
+                                            .unwrap_or_else(|| self.fresh());
+                                        self.ty_arena.option(inner)
+                                    }
+                                    id if id == TypeId::RESULT => {
+                                        match var_def.idx {
+                                            0 => {
+                                                let ok = arg_tys
+                                                    .first()
+                                                    .copied()
+                                                    .unwrap_or_else(|| {
+                                                        self.fresh()
+                                                    });
+                                                let err = self.fresh();
+                                                self.ty_arena.result(ok, err)
+                                            }
+                                            1 => {
+                                                let err = arg_tys
+                                                    .first()
+                                                    .copied()
+                                                    .unwrap_or_else(|| {
+                                                        self.fresh()
+                                                    });
+                                                let ok = self.fresh();
+                                                self.ty_arena.result(ok, err)
+                                            }
+                                            _ => TyArena::ERROR,
+                                        }
+                                    }
+                                    id if id == TypeId::ORDERING => {
+                                        // `Ordering` has no type parameters; all
+                                        // variants are nullary.
+                                        TyArena::ORDERING
+                                    }
+                                    _ => match self.registry.get_def(type_id) {
+                                        Some(TypeDef::Sum {
+                                            type_params,
+                                            ..
+                                        }) => {
+                                            let type_args: SmallVec<[TyId; 4]> =
+                                                type_params
+                                                    .iter()
+                                                    .map(|_| self.fresh())
+                                                    .collect();
+                                            let subst: IndexMap<
+                                                StringId,
+                                                TyId,
+                                            > = type_params
+                                                .iter()
+                                                .zip(type_args.iter())
+                                                .map(|(p, &a)| (*p, a))
+                                                .collect();
+
+                                            let payloads = self
+                                                .decls
+                                                .variant_payloads(
+                                                    type_id,
+                                                    var_def.name,
+                                                )
+                                                .cloned()
+                                                .unwrap_or_default();
+
+                                            payloads
+                                                .iter()
+                                                .zip(arg_tys.iter())
+                                                .for_each(
+                                                    |(expected_id, &got)| {
+                                                        let expected = self
+                                                            .convert()
+                                                            .ast_type_to_ty(
+                                                                *expected_id,
+                                                                &subst,
+                                                            );
+                                                        self.unify(
+                                                            expected, got, span,
+                                                        );
+                                                    },
+                                                );
+
+                                            self.ty_arena
+                                                .named(type_id, type_args)
+                                        }
+                                        _ => {
+                                            let tn = ty_name
+                                                .display(&self.env.strings);
+                                            let vn = self
+                                                .env
+                                                .resolve_string(var_name);
+                                            self.error(TypeError::UnknownType(
+                                                format!("{tn}.{vn}"),
+                                                span,
+                                            ));
+                                            TyArena::ERROR
+                                        }
+                                    },
                                 }
                             }
                         }
@@ -3473,6 +3636,15 @@ impl InferCtx<'_> {
                         Ty::Option(inner) => smallvec![*inner],
                         _ => smallvec![TyArena::ERROR],
                     }
+                } else if type_id == TypeId::LAZY {
+                    match self.ty_arena.get(res) {
+                        Ty::Lazy(inner) => {
+                            smallvec![self
+                                .ty_arena
+                                .func(SmallVec::new(), *inner)]
+                        }
+                        _ => smallvec![TyArena::ERROR],
+                    }
                 } else if type_id == TypeId::RESULT {
                     match (vd.idx, self.ty_arena.get(res)) {
                         (0, Ty::Result(ok, _)) => smallvec![*ok],
@@ -3507,6 +3679,10 @@ impl InferCtx<'_> {
             let inner = self.fresh();
             let map = iter::once((self.env.intern("T"), inner)).collect();
             (self.ty_arena.option(inner), map)
+        } else if type_id == TypeId::LAZY {
+            let inner = self.fresh();
+            let map = iter::once((self.env.intern("T"), inner)).collect();
+            (self.ty_arena.lazy(inner), map)
         } else if type_id == TypeId::RESULT {
             let ok = self.fresh();
             let err = self.fresh();
@@ -3583,6 +3759,7 @@ impl InferCtx<'_> {
         match ty {
             // Concrete Option/Result: check type name matches
             Ty::Option(_) => s == "Option",
+            Ty::Lazy(_) => s == "Lazy",
             Ty::Result(_, _) => s == "Result",
             Ty::Ordering => s == "Ordering",
             Ty::DataStatus => s == "DataStatus",
@@ -3979,7 +4156,7 @@ impl InferCtx<'_> {
                         }
                     }
                 }
-                Ty::Array(inner) | Ty::Option(inner) => {
+                Ty::Array(inner) | Ty::Option(inner) | Ty::Lazy(inner) => {
                     self.collect_alias_expansions(inner, seen);
                 }
                 Ty::Result(ok, err) | Ty::Map(ok, err) => {

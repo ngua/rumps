@@ -1,0 +1,27 @@
+fun main() {
+  let full: Box[Int] = Box.Full(10)
+  let empty: Box[Int] = Box.Empty
+
+  write full ?? mark(1)
+  write empty ?? mark(2)
+}
+
+variant Box[T] = Full(T) | Empty
+
+class Coalescable[T] for Box[T] {
+  fun coalesce(b: Box[T], rhs: Lazy[T]) -> T {
+    match b {
+      Box.Full(x) => { x }
+      Box.Empty => {
+        match rhs {
+          Lazy.Lazy(f) => { f() }
+        }
+      }
+    }
+  }
+}
+
+fun mark(i: Int) -> Int {
+  write "rhs {i}"
+  i
+}
