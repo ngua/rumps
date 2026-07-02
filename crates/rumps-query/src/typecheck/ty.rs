@@ -243,9 +243,9 @@ impl ClassRegistry {
                     )),
                 )],
             },
-            // 6: Fallible
+            // 6: Unwrappable
             ClassDef {
-                name: s("Fallible"),
+                name: s("Unwrappable"),
                 shape: ClassShape::Hkt { kind: 1, params: 0 },
                 assoc_types: smallvec![],
                 required_methods: vec![],
@@ -254,7 +254,7 @@ impl ClassRegistry {
                     s("unwrap"),
                     MethodSpec::Standard(scheme!(
                         arena,
-                        forall T, F: Fallible. (F[T]) -> T
+                        forall T, F: Unwrappable. (F[T]) -> T
                     )),
                 )],
             },
@@ -1138,7 +1138,7 @@ pub(crate) enum Ty {
 
     /// Higher-kinded type application: `F[U]` where `F` is a type variable.
     ///
-    /// Used for polymorphism over type constructors. When `F: Fallible[T]`
+    /// Used for polymorphism over type constructors. When `F: Unwrappable[T]`
     /// and `F` resolves to `Option[T]`, then `Apply(F, [U])` becomes `Option[U]`.
     /// For `Result[T, E]`, it becomes `Result[U, E]` (preserving error type).
     ///

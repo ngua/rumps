@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Test that [F: Chainable] implies Wrappable and Fallible\n\nfun test[F: Chainable](x: F[Int]) -> Int {\n  ; Uses ! (Fallible) and ? (Wrappable) inside a Chainable-constrained context\n  let v = x!\n  let wrapped = ?v\n  Chainable:chain(wrapped, n => ?n)!\n}\n\nfun main() {\n  write test(Option.Some(42))\n}\n"
+description: "; Test that [F: Chainable] implies Wrappable and Unwrappable\n\nfun test[F: Chainable](x: F[Int]) -> Int {\n  ; Uses ! (Unwrappable) and ? (Wrappable) inside a Chainable-constrained context\n  let v = x!\n  let wrapped = ?v\n  Chainable:chain(wrapped, n => ?n)!\n}\n\nfun main() {\n  write test(Option.Some(42))\n}\n"
 ---
 42

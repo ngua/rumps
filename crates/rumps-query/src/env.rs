@@ -244,7 +244,7 @@ impl PostfixOp {
         match self {
             Self::Unwrap => PostfixOpDef {
                 name: "!",
-                ty: scheme!(a, forall T, F: Fallible. (F[T]) -> T),
+                ty: scheme!(a, forall T, F: Unwrappable. (F[T]) -> T),
             },
         }
     }

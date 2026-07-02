@@ -752,7 +752,7 @@ pub(crate) enum Constraint {
     ///
     /// Examples include `a + b` generating
     /// `Class { ty: typeof(a), class: Simple(Additive), span }`, `opt!`
-    /// generating `Class { ty: typeof(opt), class: Hkt(Fallible, ?inner), span }`,
+    /// generating `Class { ty: typeof(opt), class: Hkt(Unwrappable, ?inner), span }`,
     /// and `arr[i]` generating
     /// `Class { ty: typeof(arr), class: Parameterized(Indexable, ?elem), span }`.
     Class {
@@ -952,7 +952,7 @@ pub(crate) struct InferCtx<'a> {
     interactive: bool,
     /// Type variables representing polymorphic parameters.
     ///
-    /// When entering a function body with type parameters (e.g., `[T, F: Fallible[T]]`),
+    /// When entering a function body with type parameters (e.g., `[T, F: Unwrappable[T]]`),
     /// the fresh type variables created for those parameters are added here. These
     /// represent universally quantified types that cannot be refined by pattern matching.
     ///

@@ -1,7 +1,4 @@
-; Single-param user Fallible
-;
-; Tests `!` and explicit `Fallible:unwrap` dispatch
-; on a user-defined `Box[T]` type.
+; `F: Unwrappable` does not satisfy coalescing.
 
 variant Box[T] = Full(T) | Empty
 
@@ -11,7 +8,7 @@ class Wrappable for Box {
   }
 }
 
-class Fallible for Box {
+class Unwrappable for Box {
   fun unwrap(b: Box[T]) -> T {
     match b {
       Box.Full(x) => { x }
@@ -21,7 +18,9 @@ class Fallible for Box {
 }
 
 fun main() {
-  let b = Box.Full(42)
-  write b!
-  write Fallible:unwrap(b)
+  write or-else(Box.Empty, 99)
+}
+
+fun or-else[T, F: Unwrappable](x: F[T], default: T) -> T {
+  x ?? default
 }

@@ -242,7 +242,7 @@ impl ClassId {
     pub(crate) const CONCATABLE: Self = Self(3);
     pub(crate) const BIT_LIKE: Self = Self(4);
     pub(crate) const NEGATABLE: Self = Self(5);
-    pub(crate) const FALLIBLE: Self = Self(6);
+    pub(crate) const UNWRAPPABLE: Self = Self(6);
     pub(crate) const INTO: Self = Self(7);
     pub(crate) const TRY_INTO: Self = Self(8);
     pub(crate) const INDEXABLE: Self = Self(9);
@@ -282,7 +282,7 @@ impl ClassId {
             3 => "Concatable",
             4 => "BitLike",
             5 => "Negatable",
-            6 => "Fallible",
+            6 => "Unwrappable",
             7 => "Into",
             8 => "TryInto",
             9 => "Indexable",

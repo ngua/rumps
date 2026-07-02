@@ -336,7 +336,7 @@ impl InferCtx<'_> {
         // and the constraints. This includes:
         // - Explicit type parameters (e.g., `T` in `fun f[T](x: T) -> T`)
         // - Inferred type variables from unannotated params/returns (e.g., `fun id(x) { x }`)
-        // - Type variables that only appear in constraints (e.g., `T` in `fun f[T, F: Fallible[T]](x: F)`)
+        // - Type variables that only appear in constraints (e.g., `T` in `fun f[T, F: Unwrappable[T]](x: F)`)
         let outer_free = self.env.free_vars(&self.ty_arena, &mut self.uf);
         let mut fn_free = self.uf.free_vars(fn_ty, &self.ty_arena);
 

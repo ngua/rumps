@@ -370,7 +370,7 @@ pub(crate) enum TypeError {
 
     /// Variant pattern incompatible with scrutinee type.
     ///
-    /// Example: `if x is Option.Some(v)` where `x: F` and `F: Fallible[T]`.
+    /// Example: `if x is Option.Some(v)` where `x: F` and `F: Unwrappable[T]`.
     /// Type variables cannot be refined by variant patterns since the concrete
     /// type is unknown at compile time.
     #[error(
@@ -642,7 +642,7 @@ pub(crate) enum TypeError {
     /// Missing required superclass instance.
     ///
     /// When implementing a subclass (e.g., `Chainable`), all transitive
-    /// superclasses (e.g., `Wrappable`, `Fallible`) must already have instances.
+    /// superclasses (e.g., `Wrappable`, `Unwrappable`) must already have instances.
     #[error("cannot implement `{class}` for `{type_id:?}`; missing required superclass instance `{superclass}`")]
     MissingSuperclassInstance {
         class: ClassId,
@@ -1055,7 +1055,7 @@ impl TypeError {
             ),
             Self::UnknownClass(name, _) => (
                 format!("unknown class `{name}`"),
-                Some("valid classes: Numeric, Additive, Multiplicative, Default, Concatable, Ord, Fallible, Indexable, etc.".to_owned()),
+                Some("valid classes: Numeric, Additive, Multiplicative, Default, Concatable, Ord, Unwrappable, Indexable, etc.".to_owned()),
             ),
             Self::AmbiguousNakedMethod { method, classes, .. } => (
                 format!("ambiguous method `:{method}`; defined in multiple classes"),

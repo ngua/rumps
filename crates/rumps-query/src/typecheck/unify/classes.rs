@@ -440,7 +440,7 @@ impl SolveCtx<'_> {
         }
     }
 
-    /// Shared HKT class satisfaction logic for `Fallible`, `Wrappable`, and `Chainable`.
+    /// Shared HKT class satisfaction logic for `Unwrappable`, `Wrappable`, and `Chainable`.
     ///
     /// All three handle the same set of types, including `Option`, `Result`,
     /// `Tuple`, `Union`, `Var` defaulting to `Option`, `Apply`, and `Named`

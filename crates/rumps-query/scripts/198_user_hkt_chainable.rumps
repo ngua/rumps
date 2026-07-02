@@ -1,10 +1,10 @@
-; User Wrappable + Chainable (requires Fallible superclass)
+; User Wrappable + Chainable (requires Unwrappable superclass)
 ;
 ; Tests `?` (wrap) and `Chainable:chain` on user-defined `Box[T]`.
 
 variant Box[T] = Full(T) | Empty
 
-class Fallible for Box {
+class Unwrappable for Box {
   fun unwrap(b: Box[T]) -> T {
     match b {
       Box.Full(x) => { x }

@@ -102,7 +102,7 @@ impl Interpreter<'_, '_> {
                 Err(Error::runtime(span, msg))
             }
             // Type checker guarantees Option or Result
-            _ => typechecked!("!", "Fallible"),
+            _ => typechecked!("!", "Unwrappable"),
         }
     }
 

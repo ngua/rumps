@@ -8,7 +8,7 @@ fun main() {
 
 ; UNSOUND: F could be Option or Result, but we pattern match on Option.Some
 ; This violates parametricity; if F = Result, the Option.Some branch never matches
-fun map-fallible[T, U, F: Fallible](f: (T) -> U, x: F[T]) -> Option[U] {
+fun map-unwrappable[T, U, F: Unwrappable](f: (T) -> U, x: F[T]) -> Option[U] {
   if x is Option.Some(v) {
     Option.Some(f(v))
   } else {

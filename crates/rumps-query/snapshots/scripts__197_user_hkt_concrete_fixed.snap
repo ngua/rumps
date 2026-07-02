@@ -1,5 +1,5 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Multi-param with concrete fixed param\n;\n; Only `Tagged[String, V]` is Wrappable/Fallible (Tag fixed to `String`).\n\nvariant Tagged[Tag, Val] = Tagged(Tag, Val)\n\nclass Wrappable for Tagged[String] {\n  fun wrap(v: V) -> Tagged[String, V] {\n    Tagged.Tagged(\"default\", v)\n  }\n}\n\nclass Fallible for Tagged[String] {\n  fun unwrap(t: Tagged[String, V]) -> V {\n    match t {\n      Tagged.Tagged(_, v) => { v }\n    }\n  }\n}\n\nfun main() {\n  let t = Tagged.Tagged(\"ok\", 42)\n  write t!\n}\n"
+description: "; Multi-param with concrete fixed param\n;\n; Only `Tagged[String, V]` is Wrappable/Unwrappable (Tag fixed to `String`).\n\nvariant Tagged[Tag, Val] = Tagged(Tag, Val)\n\nclass Wrappable for Tagged[String] {\n  fun wrap(v: V) -> Tagged[String, V] {\n    Tagged.Tagged(\"default\", v)\n  }\n}\n\nclass Unwrappable for Tagged[String] {\n  fun unwrap(t: Tagged[String, V]) -> V {\n    match t {\n      Tagged.Tagged(_, v) => { v }\n    }\n  }\n}\n\nfun main() {\n  let t = Tagged.Tagged(\"ok\", 42)\n  write t!\n}\n"
 ---
 42

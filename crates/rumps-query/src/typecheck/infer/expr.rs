@@ -3724,11 +3724,11 @@ impl InferCtx<'_> {
         let scheme = op.def(&mut self.ty_arena).ty;
         let ret = self.apply_op_scheme(&scheme, &[inner_ty], span);
 
-        // Track Fallible instance for `!` dispatch on user types.
+        // Track Unwrappable instance for `!` dispatch on user types.
         // Same pattern as binary class dispatch: try immediate resolution,
         // fall back to deferred for unresolved type variables.
         if matches!(op, PostfixOp::Unwrap) {
-            let kind = ClassId::FALLIBLE;
+            let kind = ClassId::UNWRAPPABLE;
             self.record_inst_dispatch(
                 id,
                 inner_ty,
@@ -3747,7 +3747,7 @@ impl InferCtx<'_> {
     /// always returns `false` since polymorphic types cannot be refined
     /// by variant patterns (the concrete type is unknown at compile time).
     ///
-    /// This enforces parametricity: a function with `F: Fallible[T]` cannot
+    /// This enforces parametricity: a function with `F: Unwrappable[T]` cannot
     /// inspect whether `F` is `Option` or `Result` at runtime.
     pub(super) fn scrutinee_compatible_with_variant(
         &mut self,

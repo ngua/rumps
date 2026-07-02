@@ -538,7 +538,7 @@ impl<'ast, 'io> Interpreter<'ast, 'io> {
                         dispatch_expr_id: Some(id),
                         output_expr_id: Some(id),
                         output_ty: None,
-                        class: ClassId::FALLIBLE,
+                        class: ClassId::UNWRAPPABLE,
                         method: mid,
                         args: SmallVec::from_slice(&[val_id]),
                         span,

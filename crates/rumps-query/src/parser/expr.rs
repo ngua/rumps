@@ -954,7 +954,7 @@ impl Parser {
         // Dispatches to a typeclass method. Uses `ColonNoSpace` to require
         // no space around the colon, distinguishing from type annotations.
         // Examples include `Additive:add(a, b)` as a binary method,
-        // `Fallible:unwrap(opt)` as a unary method, and `Mappable:map(fn, arr)`
+        // `Unwrappable:unwrap(opt)` as a unary method, and `Mappable:map(fn, arr)`
         // as a higher-order method.
         let class_method_sep =
             just(Token::Comma).then_ignore(Self::opt_newlines());
@@ -984,7 +984,7 @@ impl Parser {
         // choice, so `class_method` (with parens) is tried first.
         //
         // The optional type arguments are required for convert methods
-        // (`Fallible`, `Into`, `TryInto`) when used as first-class values.
+        // (`Unwrappable`, `Into`, `TryInto`) when used as first-class values.
         let class_type_args = ty
             .clone()
             .separated_by(just(Token::Comma))

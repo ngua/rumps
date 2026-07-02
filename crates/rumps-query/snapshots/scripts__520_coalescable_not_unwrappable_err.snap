@@ -2,4 +2,4 @@
 source: crates/rumps-query/tests/scripts.rs
 description: "; `Coalescable[Int]` is not enough for `!`.\n\nvariant Box = Full(Int) | Empty\n\nclass Coalescable[Int] for Box {\n  fun coalesce(b: Box, rhs: Lazy[Int]) -> Int {\n    match b {\n      Box.Full(x) => { x }\n      Box.Empty => {\n        Lazy.force(rhs)\n      }\n    }\n  }\n}\n\nfun main() {\n  let b = Box.Full(42)\n  write b!\n}\n"
 ---
-ERROR: type `Box` does not satisfy `Fallible` class
+ERROR: type `Box` does not satisfy `Unwrappable` class

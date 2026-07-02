@@ -1,5 +1,5 @@
 fun main() {
-  ; Fallible unwrap and Coalescable fallback
+  ; Unwrappable unwrap and Coalescable fallback
   write Option.Some(42)!
   write Option.None ?? "fallback"
 
@@ -11,7 +11,7 @@ fun main() {
   ; Chainable: chain
   write :display(Chainable:chain(Option.Some(10), x => ?x))
 
-  ; Generic with Chainable (implies Wrappable + Fallible)
+  ; Generic with Chainable (implies Wrappable + Unwrappable)
   let id = [T, F: Chainable](x: F[T]) -> T => x!
   write id(Option.Some(1))
 }

@@ -364,7 +364,7 @@ pub(crate) enum ExprKind {
     /// Class method call: `Class:method(args)`.
     ///
     /// Dispatches to a typeclass method. Examples include `Additive:add(a, b)`
-    /// as a binary method, `Fallible:unwrap(opt)` as a unary method, and
+    /// as a binary method, `Unwrappable:unwrap(opt)` as a unary method, and
     /// `Mappable:map(fn, arr)` as a higher-order method.
     ClassMethod(StringId, StringId, Vec<Expr>),
 

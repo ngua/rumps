@@ -1,10 +1,10 @@
 use super::*;
 
 /// Unwrap for `Option` and `Result`.
-pub(crate) struct Fallible;
+pub(crate) struct Unwrappable;
 
-impl Class for Fallible {
-    const ID: ClassId = ClassId::FALLIBLE;
+impl Class for Unwrappable {
+    const ID: ClassId = ClassId::UNWRAPPABLE;
 
     fn register_all(methods: &mut ClassMethods, i: &mut StringInterner) {
         Self::register(
@@ -17,7 +17,7 @@ impl Class for Fallible {
     }
 }
 
-impl Fallible {
+impl Unwrappable {
     pub(crate) fn unwrap(
         ctx: &mut BuiltinCtx<'_, '_, '_>,
         args: SmallVec<[ValueId; 4]>,
@@ -59,7 +59,7 @@ impl Fallible {
             Payload::Variant { tag: 0, .. } => {
                 Err(Error::runtime(span, "cannot unwrap Option.None"))
             }
-            _ => typechecked!("unwrap", "Fallible instance"),
+            _ => typechecked!("unwrap", "Unwrappable instance"),
         }
     }
 }

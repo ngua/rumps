@@ -9,7 +9,7 @@ fun main() { }
 
 variant Point = Point(Int, Int)
 
-class Fallible for Point {
+class Unwrappable for Point {
   fun unwrap(p: Point) -> Int {
     match p {
       Point.Point(x, _) => { x }
@@ -19,7 +19,7 @@ class Fallible for Point {
 
 variant Pair[A, B] = Pair(A, B)
 
-class Fallible for Pair[Int, String] {
+class Unwrappable for Pair[Int, String] {
   fun unwrap(p: Pair[Int, String]) -> String {
     match p {
       Pair.Pair(_, s) => { s }
@@ -29,7 +29,7 @@ class Fallible for Pair[Int, String] {
 
 variant Triple[A, B, C] = Triple(A, B, C)
 
-class Fallible for Triple {
+class Unwrappable for Triple {
   fun unwrap(t: Triple[A, B, C]) -> C {
     match t {
       Triple.Triple(_, _, c) => { c }

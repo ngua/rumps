@@ -1,8 +1,8 @@
-; Test Fallible and Coalescable constraints for Option/Result polymorphism
+; Test Unwrappable and Coalescable constraints for Option/Result polymorphism
 
 fun main() {
   ; ============================================================================
-  ; Basic Fallible constraint with inner type
+  ; Basic Unwrappable constraint with inner type
   ; ============================================================================
 
   ; Works with Option
@@ -40,11 +40,11 @@ fun main() {
   write numeric-or-zero(Result.Ok(4.5))
 
   ; ============================================================================
-  ; Union types with Fallible constraint
+  ; Union types with Unwrappable constraint
   ; ============================================================================
 
-  write fallible-unwrap(Option.Some(42))
-  write fallible-unwrap(Result.Ok(99))
+  write unwrappable-unwrap(Option.Some(42))
+  write unwrappable-unwrap(Result.Ok(99))
 
   write union-or-default(Option.Some(10), 0)
   write union-or-default(Option.None, 77)
@@ -53,7 +53,7 @@ fun main() {
 }
 
 ; Generic unwrap function that works on any Option[T] or Result[T, E]
-fun unwrap[T, F: Fallible](x: F[T]) -> T {
+fun unwrap[T, F: Unwrappable](x: F[T]) -> T {
   x!
 }
 
@@ -67,8 +67,8 @@ fun numeric-or-zero[T: Numeric, F: Coalescable[T]](x: F) -> T {
   x ?? 0
 }
 
-; Union of fallible types should satisfy Fallible constraint
-fun fallible-unwrap(x: Option[Int] | Result[Int, String]) -> Int {
+; Union of fallible types should satisfy Unwrappable constraint
+fun unwrappable-unwrap(x: Option[Int] | Result[Int, String]) -> Int {
   x!
 }
 

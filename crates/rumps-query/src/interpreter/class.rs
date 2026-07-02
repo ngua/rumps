@@ -1,7 +1,7 @@
 //! Class method target registry.
 //!
 //! Provides a registry for class methods like `Additive:add` and
-//! `Fallible:unwrap`. The dispatch table is indexed by `ClassId` for `O(1)`
+//! `Unwrappable:unwrap`. The dispatch table is indexed by `ClassId` for `O(1)`
 //! lookup.
 //!
 //! # Organization
@@ -20,7 +20,7 @@
 //! - `Concatable`: `concat`
 //! - `Ord`: `compare`
 //! - `Eq`: `eq`
-//! - `Fallible`: `unwrap`
+//! - `Unwrappable`: `unwrap`
 //! - `Wrappable`: `wrap`
 //! - `Chainable`: `chain`
 //! - `Indexable`: `index`, `get`
@@ -152,7 +152,7 @@ impl ClassMethods {
         Eq::register_all(self, i);
         DefaultClass::register_all(self, i);
         Concatable::register_all(self, i);
-        Fallible::register_all(self, i);
+        Unwrappable::register_all(self, i);
         Wrappable::register_all(self, i);
         Indexable::register_all(self, i);
         Into::register_all(self, i);
@@ -210,7 +210,6 @@ mod dispatch;
 mod display;
 mod divisible;
 mod eq;
-mod fallible;
 mod filterable;
 mod floor_divisible;
 mod foldable;
@@ -226,6 +225,7 @@ mod ord;
 mod powerable;
 mod subtractive;
 mod try_into;
+mod unwrappable;
 mod wrappable;
 
 pub(crate) use additive::Additive;
@@ -238,7 +238,6 @@ pub(crate) use default::DefaultClass;
 pub(crate) use display::Display;
 pub(crate) use divisible::Divisible;
 pub(crate) use eq::Eq;
-pub(crate) use fallible::Fallible;
 pub(crate) use filterable::Filterable;
 pub(crate) use floor_divisible::FloorDivisible;
 pub(crate) use foldable::Foldable;
@@ -254,4 +253,5 @@ pub(crate) use ord::Ord;
 pub(crate) use powerable::Powerable;
 pub(crate) use subtractive::Subtractive;
 pub(crate) use try_into::TryInto;
+pub(crate) use unwrappable::Unwrappable;
 pub(crate) use wrappable::Wrappable;

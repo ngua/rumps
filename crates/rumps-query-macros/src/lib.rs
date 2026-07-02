@@ -46,7 +46,7 @@ use syn::{Ident, LitStr, Result, Token};
 /// `T: Default + Concatable` ; `T` has all listed class constraints
 ///
 /// HKT classes (kind `* -> *`, no type argument in constraint; element at usage):
-/// - `F: Fallible` ; `F` is a fallible type constructor; use `F[T]` in type position
+/// - `F: Unwrappable` ; `F` is a fallible type constructor; use `F[T]` in type position
 /// - `W: Wrappable` ; `W` supports wrapping a value (`wrap`); use `W[T]` in type position
 /// - `C: Chainable` ; `C` supports monadic chaining (`chain`); use `C[T]` in type position
 /// - `M: Mappable` ; `M` is a functor; use `M[T]` in type position
@@ -121,9 +121,9 @@ const SIMPLE_CLASSES: &[&str] = &[
 /// HKT classes (kind `* -> *`): constraint does NOT take `[T]`.
 ///
 /// These are higher-kinded; the element type is specified at usage sites
-/// (`F[T]` in type position), not in the constraint (`F: Fallible`).
+/// (`F[T]` in type position), not in the constraint (`F: Unwrappable`).
 const HKT_CLASSES: &[&str] = &[
-    "Fallible",
+    "Unwrappable",
     "Wrappable",
     "Chainable",
     "Mappable",
@@ -183,7 +183,7 @@ fn parse_var_classes(input: ParseStream) -> Result<Vec<VarClass>> {
 /// Syntax:
 /// - `T` (no class)
 /// - `T: Numeric` (simple class)
-/// - `F: Fallible` (HKT class; element type at usage via `F[T]`)
+/// - `F: Unwrappable` (HKT class; element type at usage via `F[T]`)
 /// - `T: Into[U]` (multi-param class)
 /// - `T: Default + Concatable` (multiple class bounds)
 fn parse_type_var(input: ParseStream) -> Result<(Ident, Vec<VarClass>)> {
@@ -273,7 +273,7 @@ fn class_id(name: &str) -> TokenStream2 {
         "BitLike" => "BIT_LIKE",
         "Negatable" => "NEGATABLE",
         "Default" => "DEFAULT",
-        "Fallible" => "FALLIBLE",
+        "Unwrappable" => "UNWRAPPABLE",
         "Into" => "INTO",
         "TryInto" => "TRY_INTO",
         "Indexable" => "INDEXABLE",
@@ -465,7 +465,7 @@ enum TyExpr {
     /// Type variable application: `F[U]` where `F` is a bound type variable.
     ///
     /// Used for higher-kinded polymorphism; `F[U]` applies the type constructor
-    /// bound to `F` to the argument `U`. For example, if `F: Fallible[T]` and
+    /// bound to `F` to the argument `U`. For example, if `F: Unwrappable[T]` and
     /// `F` resolves to `Option[T]`, then `F[U]` becomes `Option[U]`.
     Apply(String, Vec<Self>),
     /// Function type: `(A, B) -> C`.

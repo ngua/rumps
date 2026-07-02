@@ -1,6 +1,6 @@
-; Multi-param user Fallible (partial application)
+; Multi-param user Unwrappable (partial application)
 ;
-; Tests `!` and explicit `Fallible:unwrap` for a two-param type `Either[L, R]`
+; Tests `!` and explicit `Unwrappable:unwrap` for a two-param type `Either[L, R]`
 ; with partial application: element type is `R` (last param).
 
 variant Either[L, R] = Left(L) | Right(R)
@@ -12,7 +12,7 @@ class Wrappable for Either[T] {
   }
 }
 
-class Fallible for Either[T] {
+class Unwrappable for Either[T] {
   fun unwrap(e: Either[T, R]) -> R {
     match e {
       Either.Right(x) => { x }
@@ -24,5 +24,5 @@ class Fallible for Either[T] {
 fun main() {
   let r: Either[String, Int] = Either.Right(42)
   write r!
-  write Fallible:unwrap(r)
+  write Unwrappable:unwrap(r)
 }

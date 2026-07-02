@@ -54,7 +54,7 @@ pub(crate) struct Instance {
     /// All type arguments on the implementing type in positional order.
     ///
     /// Contains both `Ty::Var` entries (polymorphic params) and concrete
-    /// types (fixed params like `Int` in `class Fallible for Pair[Int]`).
+    /// types (fixed params like `Int` in `class Unwrappable for Pair[Int]`).
     /// Zipped 1:1 with the actual `type_args` at use sites.
     pub(crate) type_params: SmallVec<[TyId; 2]>,
     /// WHERE clause constraints (e.g., `[(L, Display), (R, Display)]`).

@@ -12,7 +12,7 @@ class Wrappable for Box {
   }
 }
 
-class Fallible for Box {
+class Unwrappable for Box {
   fun unwrap(x) {
     match x {
       Box.Full(v) => { v }

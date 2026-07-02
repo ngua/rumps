@@ -11,7 +11,7 @@ impl SolveCtx<'_> {
     /// 5. `Into[Json]` constraints (rejects `Fn` types)
     /// 6. `Subscript` constraints (must be `Bool | Int | Float | Char | String | Json`)
     /// 7. `Storable` constraints (must be `Bool | Int | Float | Char | String | Json`)
-    /// 8. `Fallible` constraints (must be `Option[T]` or `Result[T, E]`; third pass)
+    /// 8. `Unwrappable` constraints (must be `Option[T]` or `Result[T, E]`; third pass)
     ///
     /// Errors are recorded via `self.errors`; unification continues to collect
     /// as many errors as possible.

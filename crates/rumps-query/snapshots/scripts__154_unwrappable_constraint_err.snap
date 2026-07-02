@@ -1,0 +1,5 @@
+---
+source: crates/rumps-query/tests/scripts.rs
+description: "; Test Unwrappable constraint error cases\n\nfun main() {\n  ; Calling with Int (not Option or Result) should error\n  write bad-unwrap(42)\n}\n\n; This should fail: Int is not Unwrappable\nfun bad-unwrap[T, F: Unwrappable](x: F[T]) -> T {\n  x!\n}\n"
+---
+ERROR: type `T[U]` does not satisfy `Numeric` class

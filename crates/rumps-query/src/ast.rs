@@ -895,7 +895,7 @@ pub(crate) enum Expr {
     /// Dispatches to a typeclass method. Class name is resolved to `ClassId`
     /// during typechecking.
     ///
-    /// Examples: `Additive:add(a, b)`, `Fallible:unwrap(opt)`, `Mappable:map(fn, arr)`
+    /// Examples: `Additive:add(a, b)`, `Unwrappable:unwrap(opt)`, `Mappable:map(fn, arr)`
     ClassMethod(StringId, StringId, SmallVec<[ExprId; 4]>),
 
     /// Class method reference: `Class:method` or `Class[T, ...]:method`.

@@ -62,9 +62,9 @@ fun main() {
   write "Piped concat: {:display(piped-concat)}"
   write "Piped string concat: {piped-str-concat}"
 
-  ; Fallible methods with pipes (unary; no wrapper)
+  ; Unwrappable methods with pipes (unary; no wrapper)
   let opt = Option.Some(42)
-  write "Piped unwrap: {opt |> Fallible:unwrap}"
+  write "Piped unwrap: {opt |> Unwrappable:unwrap}"
 
   ; Indexable methods with pipes
   let piped-index = nums |> (a => Indexable:index(a, 2))

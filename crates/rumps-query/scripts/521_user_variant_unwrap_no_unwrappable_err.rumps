@@ -1,4 +1,4 @@
-; User variants need a `Fallible` instance for postfix `!`.
+; User variants need a `Unwrappable` instance for postfix `!`.
 
 variant Box = Full(Int) | Empty
 
