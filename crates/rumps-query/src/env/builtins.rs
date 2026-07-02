@@ -3,6 +3,7 @@
 // `Directory.Io`, etc...
 mod array;
 mod io;
+mod lazy;
 mod map;
 mod math;
 mod option;
@@ -26,6 +27,7 @@ impl Environment {
         self.register_time_builtin();
         self.register_option_builtin();
         self.register_result_builtin();
+        self.register_lazy_builtin();
         self.register_io_builtin();
         self.register_prelude_builtin();
         self.register_range_builtin();

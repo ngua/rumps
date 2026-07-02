@@ -1,6 +1,6 @@
 ---
 source: crates/rumps-query/tests/scripts.rs
-description: "; Single-param user Coalescable\n;\n; Tests `??` dispatch on a user-defined `Box[T]` type.\n\nvariant Box[T] = Full(T) | Empty\n\nclass Coalescable[T] for Box[T] {\n  fun coalesce(b: Box[T], rhs: Lazy[T]) -> T {\n    match b {\n      Box.Full(x) => { x }\n      Box.Empty => {\n        match rhs {\n          Lazy.Lazy(f) => { f() }\n        }\n      }\n    }\n  }\n}\n\nfun main() {\n  let b: Box[Int] = Box.Full(42)\n  let empty: Box[Int] = Box.Empty\n  write b ?? 0\n  write empty ?? 99\n}\n"
+description: "; Single-param user Coalescable\n;\n; Tests `??` dispatch on a user-defined `Box[T]` type.\n\nvariant Box[T] = Full(T) | Empty\n\nclass Coalescable[T] for Box[T] {\n  fun coalesce(b: Box[T], rhs: Lazy[T]) -> T {\n    match b {\n      Box.Full(x) => { x }\n      Box.Empty => {\n        Lazy.force(rhs)\n      }\n    }\n  }\n}\n\nfun main() {\n  let b: Box[Int] = Box.Full(42)\n  let empty: Box[Int] = Box.Empty\n  write b ?? 0\n  write empty ?? 99\n}\n"
 ---
 42
 99

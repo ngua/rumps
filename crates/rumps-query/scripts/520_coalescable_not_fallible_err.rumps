@@ -7,9 +7,7 @@ class Coalescable[Int] for Box {
     match b {
       Box.Full(x) => { x }
       Box.Empty => {
-        match rhs {
-          Lazy.Lazy(f) => { f() }
-        }
+        Lazy.force(rhs)
       }
     }
   }

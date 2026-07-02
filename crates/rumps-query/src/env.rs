@@ -27,7 +27,7 @@ use crate::value::{FunctionDef, ValueArena, ValueId};
 /// during resolution and registered at interpreter startup.
 pub(crate) const BUILTIN_MODULE_NAMES: &[&str] = &[
     "Array", "String", "Math", "Random", "Map", "Time", "Option", "Result",
-    "Io", "Prelude", "Range",
+    "Lazy", "Io", "Prelude", "Range",
 ];
 
 /// Name of the module that is automatically imported into every scope.

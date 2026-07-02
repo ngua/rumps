@@ -29,6 +29,7 @@
 
 mod array;
 mod io;
+mod lazy;
 mod map;
 mod math;
 mod option;
@@ -42,6 +43,7 @@ mod time;
 pub(crate) use array::Array;
 use futures::future::BoxFuture;
 pub(crate) use io::{Directory, Io};
+pub(crate) use lazy::Lazy;
 pub(crate) use map::Map;
 pub(crate) use math::{Math, Trig};
 pub(crate) use option::Opt;
