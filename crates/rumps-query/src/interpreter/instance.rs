@@ -168,8 +168,8 @@ mod tests {
     /// ```rumps
     /// newtype X = Int
     /// newtype Y = Int
-    /// CLASS Numeric FOR X { ... }
-    /// CLASS Numeric FOR Y { ... }
+    /// class Numeric for X { ... }
+    /// class Numeric for Y { ... }
     /// ```
     ///
     /// Even though both wrap `Int`, they have distinct `TypeId`s and should

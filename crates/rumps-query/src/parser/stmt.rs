@@ -332,9 +332,9 @@ impl Parser {
     /// Class definition or instance.
     ///
     /// Definition: `class Name[Params] SelfVar [: Supers] { sigs }`
-    /// Instance: `class Name[Args] FOR Type [WHERE constraints] { methods }`
+    /// Instance: `class Name[Args] for Type [where constraints] { methods }`
     ///
-    /// Disambiguation: after `class Name [brackets]`, `FOR` selects the
+    /// Disambiguation: after `class Name [brackets]`, `for` selects the
     /// instance path; any other ident selects the definition path.
     fn class_stmt(
         interner: &mut StringInterner,
@@ -582,7 +582,7 @@ impl Parser {
             )
     }
 
-    /// Class instance: `class Name[Args] FOR Type [WHERE constraints] { methods }`.
+    /// Class instance: `class Name[Args] for Type [where constraints] { methods }`.
     fn class_instance_stmt(
         interner: &mut StringInterner,
         stmt: impl chumsky::Parser<Token, cst::Stmt, Error = ParseErr>
@@ -608,7 +608,7 @@ impl Parser {
             .or_not()
             .map(|ps| ps.unwrap_or_default());
 
-        // WHERE clause constraint: `name: Class1 + Class2`
+        // `where` clause constraint: `name: Class1 + Class2`
         let where_constraint = Self::ident()
             .then_ignore(just(Token::Colon))
             .then_ignore(Self::opt_newlines())
@@ -622,7 +622,7 @@ impl Parser {
                     .at_least(1),
             );
 
-        // Optional WHERE clause: `WHERE A: Display, B: Display`
+        // Optional `where` clause: `where A: Display, B: Display`
         let where_clause = Self::ctx_ident(where_)
             .ignore_then(Self::opt_newlines())
             .ignore_then(
@@ -691,7 +691,7 @@ impl Parser {
                 (assoc_types, methods)
             });
 
-        // Full CLASS instance statement
+        // Full `class` instance statement
         just(Token::Class)
             .ignore_then(Self::opt_newlines())
             .ignore_then(Self::ident())
@@ -742,7 +742,7 @@ impl Parser {
             .then_ignore(Self::opt_newlines())
             .then_ignore(just(Token::RBrace))
             .map(cst::ModuleSource::Inline);
-        // File import: `FROM "path"`
+        // File import: `from "path"`
         let file_import = just(Token::From)
             .ignore_then(Self::opt_newlines())
             .ignore_then(select! { Token::String(s) => s })

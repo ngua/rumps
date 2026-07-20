@@ -74,7 +74,7 @@ pub(crate) struct TypecheckOutput {
     pub(crate) is_patterns: HashMap<ExprId, CheckedTypePatternInfo>,
     /// Checked type annotation targets for `let` bindings, keyed by RHS expr.
     pub(crate) let_targets: HashMap<ExprId, TyId>,
-    /// Checked target types for `name IS Type` match patterns.
+    /// Checked target types for `name is Type` match patterns.
     pub(crate) match_targets: HashMap<MatchPatternId, TyId>,
     /// Maps solved alias `TyId`s to their expanded underlying `TyId`s.
     pub(crate) alias_type_expansions: HashMap<TyId, TyId>,

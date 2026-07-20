@@ -291,7 +291,7 @@ pub(crate) enum AstTypeExpr {
     /// Wildcard type: `_`; represents "any type" in type argument position.
     ///
     /// Used to avoid specifying concrete type arguments when only the base type
-    /// matters, e.g., `x IS Option[_]` matches both `Option.Some(1)` and
+    /// matters, e.g., `x is Option[_]` matches both `Option.Some(1)` and
     /// `Option.Some("hello")`.
     Wildcard,
 
@@ -427,7 +427,7 @@ impl BinOp {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum UnOp {
     Neg, // `-`
-    Not, // `NOT` or `!`
+    Not, // `not` or `!`
     /// Prefix `?` wraps a value in a `Wrappable` type (`Option` or `Result`).
     ///
     /// By default, `?x` produces `Option.Some(x)`. When context expects
@@ -578,7 +578,7 @@ pub(crate) enum MatchPattern {
     /// With rest: matches arrays of at least the specified prefix length.
     Array(SmallVec<[MatchPatternId; 4]>, Option<RestPattern>),
 
-    /// Type-narrowing pattern: `x IS Int`, `val IS String`
+    /// Type-narrowing pattern: `x is Int`, `val is String`
     ///
     /// Matches if the value is of the specified type and binds it to the name.
     Is(StringId, AstTypeExprId),

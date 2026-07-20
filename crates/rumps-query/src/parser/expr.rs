@@ -280,8 +280,8 @@ impl Parser {
         let ty_pat = Self::type_pattern(interner);
 
         recursive(move |expr| {
-            // Define `pipe` (expr without CATCH) using nested recursive.
-            // Intrinsics use `pipe` for operands so they don't consume CATCH.
+            // Define `pipe` (expr without `catch`) using nested recursive.
+            // Intrinsics use `pipe` for operands so they don't consume `catch`.
             let pipe = recursive({
                 let expr = expr.clone();
                 let stmt = stmt.clone();
@@ -786,7 +786,7 @@ impl Parser {
         // Postfix operators for intrinsic expressions (e.g., `@get d(1)!`).
         let postfix_ops = Self::postfix_ops(intrinsic_op.clone());
 
-        // OUTPUT expr [JSON] [TO target]
+        // `write expr [json] [to target]`
         let output = Self::write_expr(interner, intrinsic_op.clone());
 
         // `loop seed (state, cont) => body`
@@ -827,13 +827,13 @@ impl Parser {
                 })
             });
 
-            // SET target = value
+            // `@set target value`
             let set = Self::set_expr(intrinsic_op.clone());
 
             // kill target
             let kill = Self::kill_expr(intrinsic_op.clone());
 
-            // RAISE expr
+            // `raise expr`
             let raise = Self::raise_expr(intrinsic_op.clone());
 
             choice((
@@ -1276,7 +1276,7 @@ impl Parser {
         // Transaction expression
         let txn_expr = Self::transaction_expr(interner, stmt, expr.clone());
 
-        // IF expression
+        // `if` expression
         let if_expr = just(Token::If)
             .ignore_then(expr.clone())
             .then(block_parser.clone())

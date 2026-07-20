@@ -24,7 +24,7 @@ pub(crate) enum InstanceUse {
 
 /// An associated type definition within a class instance.
 ///
-/// Example: `newtype Index = Int` inside `class Indexable[T] FOR MyVec[T] { ... }`
+/// Example: `newtype Index = Int` inside `class Indexable[T] for MyVec[T] { ... }`
 /// defines `.Index` for `MyVec[T]` to be `Int`.
 #[derive(Clone, Debug)]
 pub(crate) struct AssocTypeDef {
@@ -40,10 +40,10 @@ pub(crate) struct AssocTypeDef {
 
 /// A user-defined instance of a class for a type.
 ///
-/// Example: `class Display FOR Point { ... }` creates an instance with
+/// Example: `class Display for Point { ... }` creates an instance with
 /// `class = Display`, `for_type = Point's TypeId`.
 ///
-/// For parameterized instances like `class Display FOR Either[L, R] WHERE L: Display`,
+/// For parameterized instances like `class Display for Either[L, R] where L: Display`,
 /// `type_params` holds `[L, R]` and `constraints` holds `[(L, Display)]`.
 #[derive(Clone, Debug)]
 pub(crate) struct Instance {
@@ -57,7 +57,7 @@ pub(crate) struct Instance {
     /// types (fixed params like `Int` in `class Unwrappable for Pair[Int]`).
     /// Zipped 1:1 with the actual `type_args` at use sites.
     pub(crate) type_params: SmallVec<[TyId; 2]>,
-    /// WHERE clause constraints (e.g., `[(L, Display), (R, Display)]`).
+    /// `where` clause constraints (e.g., `[(L, Display), (R, Display)]`).
     pub(crate) constraints: SmallVec<[(TyVar, TypeClass<TyId>); 2]>,
     /// Method implementations: method name -> generated function name.
     ///

@@ -1127,7 +1127,7 @@ pub(crate) enum Ty {
     /// inline unions (`Int | String`).
     ///
     /// Provenance preserves nominal identity for:
-    /// - **`AS` semantics**: `Storable` has infallible `AS` casts that may
+    /// - **`as` semantics**: `Storable` has infallible `as` casts that may
     ///   fail at runtime with `Error::RuntimeType`.
     /// - **Error messages**: named unions display their registered name
     ///   rather than the expanded member list.

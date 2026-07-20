@@ -546,7 +546,7 @@ impl InferCtx<'_> {
             MatchPattern::Array(pats, rest) => {
                 pats.is_empty() && rest.is_some()
             }
-            // Literals, variants, and IS patterns are refutable
+            // Literals, variants, and `is` patterns are refutable
             MatchPattern::Literal(_)
             | MatchPattern::Variant(..)
             | MatchPattern::NakedVariant(..)

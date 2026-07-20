@@ -154,7 +154,7 @@ impl InferCtx<'_> {
                 self.call_or_variant(id, *callee, args, span)
             }
 
-            // Control flow: IF
+            // Control flow: `if`
             Expr::If(cond, then_br, else_br) => {
                 self.r#if(*cond, *then_br, else_br.as_ref().copied(), span)
             }
@@ -286,7 +286,7 @@ impl InferCtx<'_> {
                 TyArena::REGEX
             }
 
-            // Regex match: `expr MATCHES regex`
+            // Regex match: `expr matches regex`
             Expr::Matches(lhs, rhs) => {
                 let class = self.env.class_registry().name(ClassId::INTO);
                 let method = self.env.intern("into");
@@ -336,7 +336,7 @@ impl InferCtx<'_> {
                 TyArena::BOOL
             }
 
-            // Catch expression: `expr CATCH handler`
+            // Catch expression: `expr catch handler`
             Expr::Catch(expr_id, handler_id) => {
                 let expr_ty = self.expr(*expr_id);
                 let handler_ty = self.expr(*handler_id);
@@ -350,7 +350,7 @@ impl InferCtx<'_> {
                 expr_ty
             }
 
-            // Write expression: `write expr [JSON] [TO target]`
+            // Write expression: `write expr [json] [to target]`
             // Same typing as statement version, but returns `Unit`
             Expr::Write(output) => {
                 self.write(id, output, span);
@@ -1124,7 +1124,7 @@ impl InferCtx<'_> {
                 // to unify with unions containing numeric members. If it ends up
                 // bound to a non-numeric type, check_numeric will error.
                 //
-                // Note: join_types handles IF/match branches specially, resolving
+                // Note: join_types handles `if`/`match` branches specially, resolving
                 // numeric vars to Int for union creation (avoiding the var being
                 // bound to a sibling branch's type like String).
                 let ty = self.fresh_numeric();
@@ -1407,7 +1407,7 @@ impl InferCtx<'_> {
         // `Class:method(...)` calls.
         //
         // Skip when inside a class instance body for the same (class, type);
-        // otherwise operators like `a + b` inside `class Additive FOR MyInt`
+        // otherwise operators like `a + b` inside `class Additive for MyInt`
         // would recurse infinitely instead of auto-deriving from the inner type.
         let class_tag = op.class_dispatch().map(|(tag, _)| tag);
 
@@ -2951,13 +2951,13 @@ impl InferCtx<'_> {
         }
     }
 
-    /// Infer type of an IF expression.
+    /// Infer type of an `if` expression.
     ///
     /// # Type Checking Rules
     ///
     /// - Condition must be `Bool`
-    /// - IF/ELSE: both branches must have the same type
-    /// - Single-arm IF (no ELSE): body must be `Unit`, whole expression is `Unit`
+    /// - `if`/`else`: both branches must have the same type
+    /// - Single-arm `if` (no `else`): body must be `Unit`, whole expression is `Unit`
     ///
     /// # `is` with Bindings
     ///
@@ -3092,7 +3092,7 @@ impl InferCtx<'_> {
     ///
     /// Special case: type variables from integer literals (`numeric_vars`) are
     /// treated as storable for union creation. This allows patterns like
-    /// `if cond { 42 } ELSE { "string" }` to produce `Int | String` instead
+    /// `if cond { 42 } else { "string" }` to produce `Int | String` instead
     /// of incorrectly unifying the literal's var with `String`.
     fn join_types(&mut self, tys: &[TyId], span: Span) -> TyId {
         let first = tys.first().copied().unwrap_or(TyArena::ERROR);
@@ -3114,7 +3114,7 @@ impl InferCtx<'_> {
 
         // Only create anonymous unions for primitive storable types
         // (Bool, Int, Float, Char, String, Json) and numeric literal vars.
-        // This supports patterns like `if cond { 42 } ELSE { "string" }`.
+        // This supports patterns like `if cond { 42 } else { "string" }`.
         // For other types (Option, Result, user structs), unify normally.
         let all_storable_or_numeric_var =
             || tys.iter().all(is_storable_or_numeric_var);
@@ -3895,7 +3895,7 @@ impl InferCtx<'_> {
                     });
                 }
 
-                // Validate variant and arity; bindings are handled by IF
+                // Validate variant and arity; bindings are handled by `if`
                 let lookup = self
                     .convert()
                     .resolve_type_name(ty_name)

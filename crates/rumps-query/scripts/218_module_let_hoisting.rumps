@@ -1,5 +1,5 @@
-; Module-level LET hoisting: forward references from outside the
-; module to module LET members defined later.
+; Module-level `let` hoisting: forward references from outside the
+; module to module `let` members defined later.
 
 fun main() {
   write M.greeting

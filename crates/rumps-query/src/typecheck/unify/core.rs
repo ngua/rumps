@@ -25,7 +25,7 @@ impl SolveCtx<'_> {
     /// # No Implicit Numeric Coercion
     ///
     /// Numeric types (`Int`, `Float`, `Word`) do NOT implicitly coerce.
-    /// Use explicit `AS` casts to convert between them.
+    /// Use explicit `as` casts to convert between them.
     pub(super) fn unify_types(
         &mut self,
         t1: TyId,

@@ -426,7 +426,7 @@ impl Interpreter<'_, '_> {
     ///
     /// Type checker guarantees:
     /// - `-` is only applied to `Negatable` types (`Int` or `Float`)
-    /// - `NOT` is only applied to `Bool`
+    /// - `not` is only applied to `Bool`
     /// - `?` wraps in `Option.Some` or `Result.Ok` depending on context
     ///
     /// # Fast-paths
@@ -570,7 +570,7 @@ impl Interpreter<'_, '_> {
         .map(|v| v.payload)
     }
 
-    /// Evaluate a `MATCHES` expression.
+    /// Evaluate a `matches` expression.
     ///
     /// Tests a string LHS against the RHS regex pattern.
     /// Type checker guarantees RHS is a `Regex` value.

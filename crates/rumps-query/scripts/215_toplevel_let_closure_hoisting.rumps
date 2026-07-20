@@ -1,5 +1,5 @@
-; Top-level LET closure hoisting: forward references to closures
-; bound via LET should behave like forward references to FUNs,
+; Top-level `let` closure hoisting: forward references to closures
+; bound via `let` should behave like forward references to `fun` definitions,
 ; including independent instantiation at multiple types.
 
 fun main() {

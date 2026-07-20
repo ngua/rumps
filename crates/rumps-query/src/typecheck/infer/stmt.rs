@@ -305,7 +305,7 @@ impl InferCtx<'_> {
                     self.user_module(mod_path.child(*name), body, item_span);
                 }
 
-                // Invalid statements inside a module (SET/kill/write are now
+                // Invalid statements inside a module (`set`/`kill`/`write` are now
                 // `Stmt::Expr` wrapping their expression forms)
                 Some(Stmt::Expr(..)) => {
                     self.error(TypeError::Custom {
@@ -1567,7 +1567,7 @@ impl InferCtx<'_> {
         }
     }
 
-    /// Infer types for a `class ... FOR ...` instance declaration.
+    /// Infer types for a `class ... for ...` instance declaration.
     ///
     /// Validates:
     /// 1. The class name is a valid `ClassId`
@@ -1606,7 +1606,7 @@ impl InferCtx<'_> {
 
         // 2. Build type parameter substitution map (BEFORE resolving for_type)
         //    If `type_params` is empty, extract type param names from the
-        //    WHERE constraints (e.g., `L: Display, R: Display` gives `[L, R]`)
+        //    `where` constraints (e.g., `L: Display, R: Display` gives `[L, R]`)
         let mut type_param_subst: IndexMap<_, _> = if type_params.is_empty() {
             constraints
                 .iter()
@@ -1807,15 +1807,15 @@ impl InferCtx<'_> {
 
         // Check for forbidden builtin instance.
         //
-        // We allow implementing classes for builtin types IF the class is
-        // user-defined OR if the class has type args that include user-defined
+        // We allow implementing classes for builtin types if the class is
+        // user-defined or if the class has type args that include user-defined
         // types. For example:
-        //   - `class Display FOR Int` is forbidden (builtin has Display)
-        //   - `class Into[String] FOR Int` is forbidden (builtin has Into[String])
-        //   - `class Into[UserId] FOR Int` is ALLOWED (no builtin Into[UserId])
-        //   - `class MyClass FOR Int` is ALLOWED (user-defined class)
+        //   - `class Display for Int` is forbidden (builtin has Display)
+        //   - `class Into[String] for Int` is forbidden (builtin has Into[String])
+        //   - `class Into[UserId] for Int` is ALLOWED (no builtin Into[UserId])
+        //   - `class MyClass for Int` is ALLOWED (user-defined class)
         //
-        // The heuristic: if the class is builtin AND for_type is builtin AND
+        // The heuristic: if the class is builtin and for_type is builtin and
         // all class args are builtin, reject. User-defined classes can always
         // be implemented for any type.
         if let Some(tid) = type_id {
@@ -1851,7 +1851,7 @@ impl InferCtx<'_> {
                 });
         }
 
-        // 6. Process WHERE constraints
+        // 6. Process `where` constraints
         let mut scheme_constraints: SmallVec<[(TyVar, TypeClass<TyId>); 2]> =
             SmallVec::new();
         constraints

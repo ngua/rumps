@@ -1,5 +1,5 @@
 ; Union narrowing via type annotation should be rejected.
-; Use MATCH/IS for runtime type narrowing instead.
+; Use `match`/`is` for runtime type narrowing instead.
 
 fun main() {
   let r = 1 ..= 10

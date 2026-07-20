@@ -45,7 +45,7 @@ fun main() {
   @set set-ref "via ref"
   write :display(@get set-ref)
 
-  ; KILL local ref via variable (no transaction needed)
+  ; `@kill` local ref via variable (no transaction needed)
   let kill-ref = data{100}
   @kill kill-ref
   write :display(@get kill-ref ?? "killed")

@@ -229,7 +229,7 @@ mod tests {
         );
     }
 
-    /// Test that Instance with WHERE constraints stores them correctly.
+    /// Test that `Instance` with `where` constraints stores them correctly.
     #[test]
     fn instance_with_constraints() {
         let mut a = TyArena::new();

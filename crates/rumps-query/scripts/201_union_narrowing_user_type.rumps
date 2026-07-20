@@ -1,5 +1,5 @@
 ; Narrowing a user-defined union via annotation should be rejected.
-; Use MATCH/IS for runtime type narrowing instead.
+; Use `match`/`is` for runtime type narrowing instead.
 
 union Num-or-str = Int | String
 

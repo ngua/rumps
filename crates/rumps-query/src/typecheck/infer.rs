@@ -95,7 +95,7 @@ pub(super) struct InterpreterOutput {
     pub(super) is_patterns: HashMap<ExprId, CheckedTypePatternInfo>,
     /// Checked type annotation targets for `let` bindings, keyed by RHS expr.
     pub(super) let_targets: HashMap<ExprId, TyId>,
-    /// Checked target types for `name IS Type` match patterns.
+    /// Checked target types for `name is Type` match patterns.
     pub(super) match_targets: HashMap<MatchPatternId, TyId>,
     /// Maps solved alias `TyId`s to their expanded underlying `TyId`s.
     ///
@@ -930,7 +930,7 @@ pub(crate) struct InferCtx<'a> {
     pub(super) in_transaction: Option<TxnId>,
     /// Counter for generating unique `TxnId` values.
     next_txn_id: u32,
-    /// Current class context, if inside a `class ... FOR ...` instance.
+    /// Current class context, if inside a `class ... for ...` instance.
     ///
     /// Set when processing class instance methods and associated type
     /// definitions. Enables resolution of bare associated type references

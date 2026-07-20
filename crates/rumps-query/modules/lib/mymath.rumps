@@ -1,5 +1,5 @@
 ; Math module for testing file imports
-; This file contains functions and constants to be imported via MODULE M FROM "path"
+; This file contains functions and constants to be imported via `module M from "path"`
 
 +let pi = 3.14159
 +let e = 2.71828

@@ -309,18 +309,18 @@ pub(crate) enum ExprKind {
     /// type checking (invalid patterns produce type errors).
     Regex(String),
 
-    /// Regex match: `expr MATCHES pattern`.
+    /// Regex match: `expr matches pattern`.
     ///
     /// Returns `Bool`. The left operand must be `Into[String]`.
     Matches(Box<Expr>, Box<Expr>),
 
-    /// Catch expression: `expr CATCH handler`.
+    /// Catch expression: `expr catch handler`.
     ///
     /// Evaluates `expr`; on runtime error, calls `handler` with `Error` value.
     /// Handler must be a closure `(Error) -> T` where `T` matches expr's type.
     Catch(Box<Expr>, Box<Expr>),
 
-    /// Write expression: `write expr [JSON] [TO target]`.
+    /// Write expression: `write expr [json] [to target]`.
     ///
     /// Executes the write side effect and evaluates to `Unit`.
     /// This allows `write` in expression contexts.
@@ -584,7 +584,7 @@ pub(crate) struct InstanceMethodDef {
 /// An associated type definition in a class instance (CST form).
 ///
 /// Represents `newtype Index = Int` or `newtype Index: Ord = Int` inside a
-/// `class ... FOR ...` block.
+/// `class ... for ...` block.
 #[derive(Clone, Debug)]
 pub(crate) struct AssocTypeCst {
     /// Associated type name (e.g., `"Index"`).
@@ -674,7 +674,7 @@ pub(crate) enum StmtKind {
     ///
     /// Two forms are supported:
     /// - Inline: `module Name { ... }`
-    /// - File import: `module Name FROM "path/to/module.rumps"`
+    /// - File import: `module Name from "path/to/module.rumps"`
     Module {
         name: StringId,
         source: ModuleSource,
@@ -711,15 +711,15 @@ pub(crate) enum StmtKind {
         default_errors: Vec<ClassDefaultPlacementError>,
     },
 
-    /// User-defined class instance: `class ClassName FOR Type { methods }`.
+    /// User-defined class instance: `class ClassName for Type { methods }`.
     ///
     /// Implements a builtin class (`Display`, `Into`, `Ord`, etc.) for a user
     /// type (`variant`, `newtype`, or `union`).
     ///
     /// Examples:
-    /// - `class Display FOR Point { fun display(p: Point) -> String { ... } }`
-    /// - `class Into[String] FOR UserId { fun into(id: UserId) -> String { ... } }`
-    /// - `class Display FOR Pair[A, B] WHERE A: Display, B: Display { ... }`
+    /// - `class Display for Point { fun display(p: Point) -> String { ... } }`
+    /// - `class Into[String] for UserId { fun into(id: UserId) -> String { ... } }`
+    /// - `class Display for Pair[A, B] where A: Display, B: Display { ... }`
     ClassInstance {
         /// Class name (e.g., `"Display"`, `"Into"`, `"Ord"`).
         class_name: StringId,
@@ -729,7 +729,7 @@ pub(crate) enum StmtKind {
         type_params: Vec<TypeParam>,
         /// The user type implementing the class.
         for_type: TypeExpr,
-        /// WHERE clause constraints (e.g., `A: Display, B: Display`).
+        /// `where` clause constraints (e.g., `A: Display, B: Display`).
         ///
         /// Each entry is `(type_param_name, constraints)`.
         constraints: Vec<(StringId, Vec<CstClassConstraint>)>,
@@ -745,7 +745,7 @@ pub(crate) enum StmtKind {
 pub(crate) enum ModuleSource {
     /// Inline module body: `module Name { ... }`.
     Inline(Vec<Stmt>),
-    /// File import: `module Name FROM "path/to/module.rumps"`.
+    /// File import: `module Name from "path/to/module.rumps"`.
     ///
     /// The path is relative to the importing script's directory, or absolute.
     File(String),

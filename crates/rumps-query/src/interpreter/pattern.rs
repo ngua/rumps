@@ -219,7 +219,7 @@ impl Interpreter<'_, '_> {
         }
     }
 
-    /// Try to match a type-narrowing pattern: `x IS Type`
+    /// Try to match a type-narrowing pattern: `x is Type`
     fn try_match_is(
         &mut self,
         pat: MatchPatternId,

@@ -35,7 +35,7 @@ impl SolveCtx<'_> {
         Rename(vars.into_iter().collect())
     }
 
-    /// Check that a user instance's WHERE constraints are satisfied.
+    /// Check that a user instance's `where` constraints are satisfied.
     /// Accepts an optional pre-built `Rename` to avoid redundant
     /// `build_instance_subst` calls at sites that already have one.
     pub(super) fn apply_inst_constraints(

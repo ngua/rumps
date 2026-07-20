@@ -6,7 +6,7 @@ use crate::value::{Payload, TypeDef, TypeId, Value};
 use crate::{ClassId, Result, Span};
 
 impl Interpreter<'_, '_> {
-    /// Perform type coercion for `AS` casts with full value metadata.
+    /// Perform type coercion for `as` casts with full value metadata.
     pub(super) async fn coerce_value(
         &mut self,
         val: &Value,

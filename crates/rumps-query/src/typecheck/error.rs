@@ -611,7 +611,7 @@ pub(crate) enum TypeError {
     /// Bare associated type reference outside class context.
     ///
     /// Unqualified associated types like `:Index` can only be used inside
-    /// `class ... FOR ...` instance definitions where the class context is known.
+    /// `class ... for ...` instance definitions where the class context is known.
     #[error(
         "associated type `:{name}` can only be used inside a class instance"
     )]

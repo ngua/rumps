@@ -914,10 +914,10 @@ impl InferCtx<'_> {
     /// Hoist a class instance declaration.
     ///
     /// Registers the instance in `instance_registry` so that class method
-    /// calls can find user instances even when the CLASS statement appears
+    /// calls can find user instances even when the `class` statement appears
     /// after the call site (forward reference).
     ///
-    /// The `module` field is `Some(path_id)` when the CLASS is inside a
+    /// The `module` field is `Some(path_id)` when the `class` is inside a
     /// module, `None` for top-level instances.
     fn hoist_class_instance(
         &mut self,
@@ -939,7 +939,7 @@ impl InferCtx<'_> {
         if let Some(class) =
             self.env.class_registry().lookup_by_name(class_name)
         {
-            // Build type parameter substitution from WHERE constraints
+            // Build type parameter substitution from `where` constraints
             let mut type_param_subst: IndexMap<_, _> = if type_params.is_empty()
             {
                 constraints

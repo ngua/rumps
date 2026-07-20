@@ -223,7 +223,7 @@ fun main() {
   ; Expected: true
 
   ; ============================================================
-  ; NULL LITERAL IN json CONTEXTS
+  ; `null` LITERAL IN json CONTEXTS
   ; ============================================================
 
   ; null in json object

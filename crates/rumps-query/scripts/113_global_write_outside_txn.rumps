@@ -2,7 +2,7 @@
 ; This test should fail during typechecking, not at runtime.
 
 fun main() {
-  ; Direct global SET outside transaction
+  ; Direct global `@set` outside transaction
   @set ^data{1} "value"
 
   write "should not reach here"

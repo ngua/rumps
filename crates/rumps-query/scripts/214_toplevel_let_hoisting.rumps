@@ -1,20 +1,20 @@
-; Top-level LET hoisting: forward references from functions to
-; top-level LET bindings defined later in the source.
+; Top-level `let` hoisting: forward references from functions to
+; top-level `let` bindings defined later in the source.
 
 fun main() {
-  ; Forward reference to top-level LET (the original bug).
+  ; Forward reference to top-level `let` (the original bug).
   write :display(ys)
 
   ; Forward reference via helper.
   write add-one-to-x()
 
-  ; Reference to an annotated top-level LET via helper.
+  ; Reference to an annotated top-level `let` via helper.
   write get-greeting()
 
   ; Direct forward reference.
   write greeting
 
-  ; Generic helper forward-referencing a hoisted LET.
+  ; Generic helper forward-referencing a hoisted `let`.
   write len-of(ys)
 }
 

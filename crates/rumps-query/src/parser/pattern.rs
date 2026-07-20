@@ -294,7 +294,7 @@ impl Parser {
             let var_pat = select! { Token::Ident(s) if s != underscore => s }
                 .map(cst::MatchPattern::Var);
 
-            // Type-narrowing pattern: `name IS Type`
+            // Type-narrowing pattern: `name is Type`
             let is_pat = select! { Token::Ident(s) if s != underscore => s }
                 .then_ignore(Self::opt_newlines())
                 .then_ignore(just(Token::Is))
@@ -302,7 +302,7 @@ impl Parser {
                 .then(ty.clone())
                 .map(|(name, ty)| cst::MatchPattern::Is(name, ty));
 
-            // Order: is_pat before var (so `x IS Type` is parsed correctly)
+            // Order: is_pat before var (so `x is Type` is parsed correctly)
             // variant before var (so `Type.Variant` is parsed correctly)
             // arr_pat before literal (so `[1, 2]` parses as pattern)
             choice((
@@ -368,7 +368,7 @@ impl Parser {
         Ok(cst::MatchPattern::Array(pats, rest))
     }
 
-    /// Parse a match arm: `pattern => body` or `pattern IF guard => body`.
+    /// Parse a match arm: `pattern => body` or `pattern if guard => body`.
     pub(super) fn match_arm(
         interner: &mut StringInterner,
         expr: impl chumsky::Parser<Token, cst::Expr, Error = ParseErr>
