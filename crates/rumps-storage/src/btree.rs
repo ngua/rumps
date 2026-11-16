@@ -1,12 +1,11 @@
-#![allow(clippy::only_used_in_recursion)]
-
+use std::mem;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use async_recursion::async_recursion;
 use async_trait::async_trait;
 use dashmap::DashMap;
-use futures::{Stream, TryStreamExt};
+use futures::stream::FuturesUnordered;
+use futures::{Stream, StreamExt, TryStreamExt};
 use rumps_types::{DataStatus, Key, Subscript};
 #[cfg(feature = "debug")]
 use tokio::sync::RwLock;
@@ -547,21 +546,31 @@ impl BTree {
     /// intermediate nodes (ancestors with `has_descendants = true` but no value).
     /// This method uses `find_*_entry` to get key and data in a single traversal,
     /// then skips entries without values to match MUMPS `$QUERY` semantics.
-    #[async_recursion]
     async fn query_with_value(
         &self,
         root: NodeId,
         after: Option<&Key>,
     ) -> Result<Option<Key>> {
-        let entry = match after {
-            None => self.find_leftmost_entry(root).await?,
-            Some(key) => self.find_successor_entry(root, key).await?,
-        };
-        match entry {
-            None => Ok(None),
-            Some((key, data)) if data.value.is_some() => Ok(Some(key)),
-            Some((key, _)) => self.query_with_value(root, Some(&key)).await,
+        let mut cur = after.cloned();
+        let mut out = None;
+        let mut again = Some(());
+
+        while again.take().is_some() {
+            let entry = match cur.as_ref() {
+                None => self.find_leftmost_entry(root).await?,
+                Some(key) => self.find_successor_entry(root, key).await?,
+            };
+            match entry {
+                None => out = None,
+                Some((key, data)) if data.value.is_some() => out = Some(key),
+                Some((key, _)) => {
+                    cur = Some(key);
+                    again = Some(());
+                }
+            }
         }
+
+        Ok(out)
     }
 
     /// Returns the next subscript at a specific level (MUMPS `$ORDER`).
@@ -832,56 +841,49 @@ impl BTree {
         self.delete_subtree(root).await
     }
 
-    /// Recursively deletes a subtree rooted at `node_id`.
-    #[async_recursion]
+    /// Deletes a subtree rooted at `node_id`, deallocating all nodes.
     async fn delete_subtree(&self, node_id: NodeId) -> Result<usize> {
-        // Try to load node (might be only on disk, not in cache)
-        let node_result = self.load_node(node_id).await;
+        let mut cur = vec![node_id];
+        let mut n = 0;
 
-        // Handle node not found gracefully
-        let node = match node_result {
-            Err(StorageError::NodeNotFound(_)) => {
-                // Node doesn't exist - this is ok for delete
-                None
-            }
-            Err(e) => {
-                // Other errors should propagate
-                Some(Err(e))
-            }
-            Ok(n) => Some(Ok(n)),
-        };
+        while let Some(batch) =
+            Some(mem::take(&mut cur)).filter(|b| !b.is_empty())
+        {
+            let loads: FuturesUnordered<_> = batch
+                .iter()
+                .map(|&id| async move { (id, self.load_node(id).await) })
+                .collect();
 
-        match node {
-            None => Ok(0),
-            Some(Err(e)) => Err(e),
-            Some(Ok(node)) => {
-                // Remove from cache
-                self.nodes.remove(node_id);
+            let results: Vec<_> = loads.collect().await;
 
-                // Deallocate from storage
-                self.allocator.deallocate(node_id).await?;
+            results.into_iter().try_for_each(|(id, res)| match res {
+                Err(StorageError::NodeNotFound(_)) => Ok(()),
+                Err(e) => Err(e),
+                Ok(node) => {
+                    self.nodes.remove(id);
+                    if !node.is_leaf {
+                        cur.extend(node.children.iter().copied());
+                    }
 
-                // If internal node, recursively delete children
-                let child_counts: usize = if node.is_leaf {
-                    0
-                } else {
-                    let counts: Vec<usize> = futures::future::try_join_all(
-                        node.children.iter().map(|&c| self.delete_subtree(c)),
-                    )
-                    .await?;
-                    counts.into_iter().sum()
-                };
+                    update_stats!(self, |stats| {
+                        stats.node_count = stats.node_count.saturating_sub(1);
+                        stats.key_count =
+                            stats.key_count.saturating_sub(node.keys.len());
+                    });
 
-                // Update stats
-                update_stats!(self, |stats| {
-                    stats.node_count = stats.node_count.saturating_sub(1);
-                    stats.key_count =
-                        stats.key_count.saturating_sub(node.keys.len());
-                });
+                    n += 1;
+                    Ok(())
+                }
+            })?;
 
-                Ok(1 + child_counts)
-            }
+            let deallocs: FuturesUnordered<_> = batch
+                .iter()
+                .map(|&id| self.allocator.deallocate(id))
+                .collect();
+            deallocs.try_collect::<Vec<_>>().await?;
         }
+
+        Ok(n)
     }
 
     /// Returns the minimum degree of this B-tree.
@@ -1163,7 +1165,6 @@ impl BTree {
     }
 
     /// Skip past keys with same subscript at `prefix.len()` as `skip_sub`.
-    #[async_recursion]
     async fn order_skip_same(
         &self,
         root: NodeId,
@@ -1171,19 +1172,25 @@ impl BTree {
         after_key: &Key,
         skip_sub: &Subscript,
     ) -> Result<Option<Subscript>> {
-        let next = self
-            .find_successor_with_prefix(root, after_key, prefix)
-            .await?;
-        match next {
-            None => Ok(None),
-            Some(k) => match k.get(prefix.len()) {
-                None => Ok(None),
-                Some(sub) if sub > skip_sub => Ok(Some(sub.clone())),
-                Some(_) => {
-                    self.order_skip_same(root, prefix, &k, skip_sub).await
-                }
-            },
+        let mut cur = after_key.clone();
+        let mut out = None;
+        let mut again = Some(());
+
+        while again.take().is_some() {
+            match self.find_successor_with_prefix(root, &cur, prefix).await? {
+                None => out = None,
+                Some(k) => match k.get(prefix.len()) {
+                    None => out = None,
+                    Some(sub) if sub > skip_sub => out = Some(sub.clone()),
+                    Some(_) => {
+                        cur = k;
+                        again = Some(());
+                    }
+                },
+            }
         }
+
+        Ok(out)
     }
 
     /// Internal operation returning next key and its data in one call.
@@ -1263,7 +1270,6 @@ impl BTree {
     }
 
     /// Recursive helper for `collects_internal` that finds the next matching entry.
-    #[async_recursion]
     async fn collects_find_next<P, F, T>(
         &self,
         root: NodeId,
@@ -1276,46 +1282,30 @@ impl BTree {
         F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync,
         T: Send,
     {
-        // Get next key and data in one call
-        match self.get_next_internal(root, cursor.as_ref()).await {
-            Ok(None) => None,               // No more entries - end stream
-            Err(e) => Some((Err(e), None)), // Yield error and end stream
-            Ok(Some((key, data))) => {
-                self.collects_apply_filters(root, key, data, pred, extract)
-                    .await
-            }
-        }
-    }
+        let mut cur = cursor;
+        let mut out = None;
+        let mut again = Some(());
 
-    /// Apply predicate and extract for `collects_find_next`.
-    #[async_recursion]
-    async fn collects_apply_filters<P, F, T>(
-        &self,
-        root: NodeId,
-        key: Key,
-        data: Arc<NodeData>,
-        pred: &P,
-        extract: &F,
-    ) -> Option<(Result<T>, Option<Option<Key>>)>
-    where
-        P: Fn(&Key, &NodeData) -> bool + Send + Sync,
-        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync,
-        T: Send,
-    {
-        if pred(&key, &data) {
-            match extract(&key, &data) {
-                Some(val) => Some((Ok(val), Some(Some(key)))),
-                None => {
-                    // Extract returned None - recurse to skip
-                    self.collects_find_next(root, Some(key), pred, extract)
-                        .await
+        while again.take().is_some() {
+            match self.get_next_internal(root, cur.as_ref()).await {
+                Ok(None) => out = None,
+                Err(e) => out = Some((Err(e), None)),
+                Ok(Some((key, data))) => {
+                    match pred(&key, &data)
+                        .then(|| extract(&key, &data))
+                        .flatten()
+                    {
+                        Some(val) => out = Some((Ok(val), Some(Some(key)))),
+                        None => {
+                            cur = Some(key);
+                            again = Some(());
+                        }
+                    }
                 }
             }
-        } else {
-            // Predicate returned false - recurse to skip
-            self.collects_find_next(root, Some(key), pred, extract)
-                .await
         }
+
+        out
     }
 
     /// Internal implementation for prefix-based collection with early termination.
@@ -1409,7 +1399,6 @@ impl BTree {
     }
 
     /// Helper for `collects_prefix_internal`: find next entry after cursor.
-    #[async_recursion]
     async fn collects_prefix_next<F, T>(
         &self,
         root: NodeId,
@@ -1421,233 +1410,133 @@ impl BTree {
         F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync,
         T: Send,
     {
-        // Find entry after cursor
-        match self.get_next_internal(root, Some(cursor)).await {
-            Err(e) => Some((Err(e), None)), // Error, terminate
-            Ok(None) => None,               // No more entries, terminate
-            Ok(Some((key, data))) => {
-                // Check if key still starts with prefix
-                if key.starts_with(prefix) {
+        let mut cur = cursor.clone();
+        let mut out = None;
+        let mut again = Some(());
+
+        while again.take().is_some() {
+            match self.get_next_internal(root, Some(&cur)).await {
+                Err(e) => out = Some((Err(e), None)),
+                Ok(None) => out = None,
+                Ok(Some((key, data))) if key.starts_with(prefix) => {
                     match extract(&key, &data) {
-                        Some(val) => Some((Ok(val), Some(Some(key)))),
+                        Some(val) => out = Some((Ok(val), Some(Some(key)))),
                         None => {
-                            // Skip, find next
-                            self.collects_prefix_next(
-                                root, prefix, &key, extract,
-                            )
-                            .await
+                            cur = key;
+                            again = Some(());
                         }
                     }
-                } else {
-                    // Key doesn't match prefix - TERMINATE (the key optimization!)
-                    None
                 }
+                Ok(Some(_)) => out = None,
             }
         }
+
+        out
     }
 
     /// Finds the leftmost (smallest) key in the subtree rooted at `node_id`.
     ///
     /// This traverses down the left spine of the tree to find the minimum key.
-    #[async_recursion]
     async fn find_leftmost_key(&self, node_id: NodeId) -> Result<Option<Key>> {
-        let node = self.load_node(node_id).await?;
-
-        if node.is_leaf {
-            // Return the first key in the leaf, if any
-            Ok(node.keys.first().cloned())
-        } else {
-            // Recurse to the leftmost child
-            match node.children.first() {
-                Some(&child_id) => self.find_leftmost_key(child_id).await,
-                None => {
-                    // Internal node with no children - shouldn't happen in valid B-tree
-                    // Fall back to first key in this node
-                    Ok(node.keys.first().cloned())
-                }
-            }
-        }
+        self.find_leftmost_entry(node_id)
+            .await
+            .map(|o| o.map(|(k, _)| k))
     }
 
     /// Finds the smallest key strictly greater than `target` in the subtree.
     ///
     /// This is the core of the `$QUERY` implementation. It navigates the B-tree
     /// to find the successor key, handling transitions between leaf nodes.
-    ///
-    /// # Algorithm
-    ///
-    /// For each node visited:
-    /// 1. Binary search to find position where `target` would be inserted
-    /// 2. If we find an exact match at position `pos`:
-    ///    - If internal node and `pos+1` child exists: successor is leftmost key in that subtree
-    ///    - If there's a key at `pos+1` in this node: check if it could be the answer
-    /// 3. If no exact match:
-    ///    - The insertion point tells us where to look for the successor
-    #[async_recursion]
     async fn find_successor_key(
         &self,
         node_id: NodeId,
         target: &Key,
     ) -> Result<Option<Key>> {
-        let node = self.load_node(node_id).await?;
-
-        // Binary search: find the position where target would be inserted
-        let search_result = node.keys.binary_search(target);
-
-        if node.is_leaf {
-            // In a leaf node, we need to find the first key > target
-            let pos = match search_result {
-                Ok(p) => p + 1, // Found exact match, successor is at p+1
-                Err(p) => p,    // Not found, first key >= target is at p
-            };
-
-            // Return the key at that position if it exists
-            Ok(node.keys.get(pos).cloned())
-        } else {
-            // Internal node: need to navigate children
-            match search_result {
-                Ok(pos) => {
-                    // Found exact match at `pos`
-                    // The successor could be:
-                    // 1. Leftmost key in the right subtree (child at pos+1)
-                    // 2. If no such child/key exists, the next key in this node
-                    match node.children.get(pos + 1) {
-                        Some(&child_id) => {
-                            // Try to find leftmost in right subtree
-                            let left = self.find_leftmost_key(child_id).await?;
-                            match left {
-                                Some(k) => Ok(Some(k)),
-                                None => {
-                                    // Right subtree is empty, try next key
-                                    Ok(node.keys.get(pos + 1).cloned())
-                                }
-                            }
-                        }
-                        None => {
-                            // No right child, try next key in node
-                            Ok(node.keys.get(pos + 1).cloned())
-                        }
-                    }
-                }
-                Err(pos) => {
-                    // Key not found; `pos` is insertion point
-                    // The successor could be:
-                    // 1. In the child at `pos` (keys < key at pos)
-                    // 2. The key at `pos` itself
-                    // 3. In a subtree to the right
-                    match node.children.get(pos) {
-                        Some(&child_id) => {
-                            // Search in the appropriate child first
-                            let child_result = self
-                                .find_successor_key(child_id, target)
-                                .await?;
-                            match child_result {
-                                Some(k) => Ok(Some(k)),
-                                None => {
-                                    // Child had no successor, try key at `pos`
-                                    Ok(node.keys.get(pos).cloned())
-                                }
-                            }
-                        }
-                        None => {
-                            // No child at pos, return key at pos if it exists
-                            Ok(node.keys.get(pos).cloned())
-                        }
-                    }
-                }
-            }
-        }
+        self.find_successor_entry(node_id, target)
+            .await
+            .map(|o| o.map(|(k, _)| k))
     }
 
     /// Finds the leftmost (smallest) entry in the subtree, returning key and data.
     ///
-    /// Like `find_leftmost_key` but returns the `NodeData` too, avoiding a
-    /// separate lookup when we need to check if the node has a value.
-    #[async_recursion]
+    /// Returns the `NodeData` too, avoiding a separate lookup when we need to
+    /// check if the node has a value.
     async fn find_leftmost_entry(
         &self,
         node_id: NodeId,
     ) -> Result<Option<(Key, Arc<NodeData>)>> {
-        let node = self.load_node(node_id).await?;
+        let mut cur = Some(node_id);
+        let mut out = None;
 
-        if node.is_leaf {
-            Ok(node.keys.first().cloned().zip(node.values.first().cloned()))
-        } else {
+        while let Some(id) = cur.take() {
+            let node = self.load_node(id).await?;
+
             match node.children.first() {
-                Some(&child_id) => self.find_leftmost_entry(child_id).await,
-                None => Ok(node
-                    .keys
-                    .first()
-                    .cloned()
-                    .zip(node.values.first().cloned())),
+                Some(&c) if !node.is_leaf => cur = Some(c),
+                _ => {
+                    out = node
+                        .keys
+                        .first()
+                        .cloned()
+                        .zip(node.values.first().cloned());
+                }
             }
         }
+
+        Ok(out)
     }
 
     /// Finds the successor entry (key + data) strictly greater than `target`.
     ///
-    /// Like `find_successor_key` but returns the `NodeData` too, avoiding a
-    /// separate lookup when we need to check if the node has a value.
-    #[async_recursion]
+    /// Descends towards `target`, remembering the deepest candidate key in an
+    /// ancestor to fall back on if the subtree has no successor.
     async fn find_successor_entry(
         &self,
         node_id: NodeId,
         target: &Key,
     ) -> Result<Option<(Key, Arc<NodeData>)>> {
-        let node = self.load_node(node_id).await?;
-        let search_result = node.keys.binary_search(target);
+        let mut cur = Some(node_id);
+        let mut tgt = Some(target);
+        let mut fb = None;
+        let mut out = None;
 
-        if node.is_leaf {
-            let pos = match search_result {
-                Ok(p) => p + 1,
-                Err(p) => p,
+        while let Some(id) = cur.take() {
+            let node = self.load_node(id).await?;
+
+            let at = |i: usize| {
+                node.keys.get(i).cloned().zip(node.values.get(i).cloned())
             };
-            Ok(node
-                .keys
-                .get(pos)
-                .cloned()
-                .zip(node.values.get(pos).cloned()))
-        } else {
-            match search_result {
-                Ok(pos) => match node.children.get(pos + 1) {
-                    Some(&child_id) => {
-                        match self.find_leftmost_entry(child_id).await? {
-                            Some(entry) => Ok(Some(entry)),
-                            None => Ok(node
-                                .keys
-                                .get(pos + 1)
-                                .cloned()
-                                .zip(node.values.get(pos + 1).cloned())),
+
+            match tgt {
+                None => match node.children.first() {
+                    Some(&c) if !node.is_leaf => cur = Some(c),
+                    _ => out = at(0),
+                },
+                Some(t) => {
+                    let res = node.keys.binary_search(t);
+
+                    match (node.is_leaf, res) {
+                        (true, Ok(p)) => out = at(p + 1),
+                        (true, Err(p)) => out = at(p),
+                        (false, _) => {
+                            let p = match res {
+                                Ok(p) => p + 1,
+                                Err(p) => p,
+                            };
+                            tgt = tgt.filter(|_| res.is_err());
+                            fb = at(p).or(fb.take());
+
+                            match node.children.get(p) {
+                                Some(&c) => cur = Some(c),
+                                None => out = at(p),
+                            }
                         }
                     }
-                    None => Ok(node
-                        .keys
-                        .get(pos + 1)
-                        .cloned()
-                        .zip(node.values.get(pos + 1).cloned())),
-                },
-                Err(pos) => match node.children.get(pos) {
-                    Some(&child_id) => {
-                        match self
-                            .find_successor_entry(child_id, target)
-                            .await?
-                        {
-                            Some(entry) => Ok(Some(entry)),
-                            None => Ok(node
-                                .keys
-                                .get(pos)
-                                .cloned()
-                                .zip(node.values.get(pos).cloned())),
-                        }
-                    }
-                    None => Ok(node
-                        .keys
-                        .get(pos)
-                        .cloned()
-                        .zip(node.values.get(pos).cloned())),
-                },
+                }
             }
         }
+
+        Ok(out.or(fb))
     }
 
     /// Finds the first key > `after` that starts with `prefix` and is longer.
@@ -2015,40 +1904,42 @@ impl BTree {
     /// // Internal use only
     /// let result = btree.search_from_node(root_id, &key).await?;
     /// ```
-    #[async_recursion]
     async fn search_from_node(
         &self,
         node_id: NodeId,
         key: &Key,
     ) -> Result<Option<Arc<NodeData>>> {
-        let node = self.load_node(node_id).await?;
+        let mut cur = Some(node_id);
+        let mut out = None;
 
-        match node.keys.binary_search(key) {
-            Ok(pos) => {
-                let value = node.values.get(pos).ok_or_else(|| {
-                    StorageError::InvalidOperation(format!(
-                        "Value index {} out of bounds (len {})",
-                        pos,
-                        node.values.len()
-                    ))
-                })?;
-                Ok(Some(Arc::clone(value)))
-            }
-            Err(pos) => {
-                if node.is_leaf {
-                    Ok(None)
-                } else {
-                    let child_id = node.children.get(pos).ok_or_else(|| {
+        while let Some(id) = cur.take() {
+            let node = self.load_node(id).await?;
+
+            match node.keys.binary_search(key) {
+                Ok(pos) => {
+                    let value = node.values.get(pos).ok_or_else(|| {
+                        StorageError::InvalidOperation(format!(
+                            "Value index {} out of bounds (len {})",
+                            pos,
+                            node.values.len()
+                        ))
+                    })?;
+                    out = Some(Arc::clone(value));
+                }
+                Err(_) if node.is_leaf => {}
+                Err(pos) => {
+                    cur = Some(*node.children.get(pos).ok_or_else(|| {
                         StorageError::InvalidOperation(format!(
                             "Child index {} out of bounds (len {})",
                             pos,
                             node.children.len()
                         ))
-                    })?;
-                    self.search_from_node(*child_id, key).await
+                    })?);
                 }
             }
         }
+
+        Ok(out)
     }
 
     /// Raw node insertion without hierarchy management.
@@ -2126,44 +2017,53 @@ impl BTree {
     }
 
     /// Recursively collects keys from a node that match the prefix.
-    #[async_recursion]
     async fn collect_keys_from_node(
         &self,
         node_id: NodeId,
         prefix: &Key,
     ) -> Result<Vec<Key>> {
-        let node = self.load_node(node_id).await?;
+        let mut cur = vec![node_id];
+        let mut out = Vec::new();
 
-        // Binary search to find starting position for prefix range
-        let start = node.keys.binary_search(prefix).unwrap_or_else(|p| p);
+        while let Some(batch) =
+            Some(mem::take(&mut cur)).filter(|b| !b.is_empty())
+        {
+            let loads: FuturesUnordered<_> = batch
+                .iter()
+                .enumerate()
+                .map(|(i, &id)| async move { (i, self.load_node(id).await) })
+                .collect();
 
-        // Collect matching keys from this node
-        let matching: Vec<Key> = node
-            .keys
-            .iter()
-            .skip(start)
-            .take_while(|k| k.starts_with(prefix))
-            .cloned()
-            .collect();
+            let mut results: Vec<_> = loads.collect().await;
+            results.sort_unstable_by_key(|(i, _)| *i);
 
-        // For internal nodes, also check children that could contain matches
-        if node.is_leaf {
-            Ok(matching)
-        } else {
-            // Children at indices [start, start + matching.len()] could contain matches
-            let end = start + matching.len() + 1;
-            let child_results = futures::future::try_join_all(
-                (start..end)
-                    .filter_map(|i| node.children.get(i).copied())
-                    .map(|c| self.collect_keys_from_node(c, prefix)),
-            )
-            .await?;
+            results.into_iter().try_for_each(|(_, res)| {
+                let node = res?;
+                let start =
+                    node.keys.binary_search(prefix).unwrap_or_else(|p| p);
 
-            Ok(child_results.into_iter().fold(matching, |mut acc, keys| {
-                acc.extend(keys);
-                acc
-            }))
+                let before = out.len();
+                out.extend(
+                    node.keys
+                        .iter()
+                        .skip(start)
+                        .take_while(|k| k.starts_with(prefix))
+                        .cloned(),
+                );
+
+                if !node.is_leaf {
+                    let end = start + (out.len() - before) + 1;
+                    cur.extend(
+                        (start..end)
+                            .filter_map(|i| node.children.get(i).copied()),
+                    );
+                }
+
+                Ok::<_, StorageError>(())
+            })?;
         }
+
+        Ok(out)
     }
 
     /// Deletes a single key from the tree.
@@ -2191,29 +2091,32 @@ impl BTree {
     ///
     /// `ancestors` is the chain from root to parent: `[(grandparent, idx), (parent, idx)]`
     /// This allows us to propagate rebalancing upward through the tree.
-    #[async_recursion]
     async fn delete_key_from_node(
         &self,
         node_id: NodeId,
         key: &Key,
         ancestors: Vec<(NodeId, usize)>,
     ) -> Result<()> {
-        let node = self.load_node(node_id).await?;
+        let mut cur = Some(node_id);
+        let mut k = key.clone();
+        let mut anc = ancestors;
 
-        match node.keys.binary_search(key) {
-            Ok(pos) => {
-                if node.is_leaf {
-                    // Case 1: Key is in a leaf - remove it directly
-                    self.nodes.modify(node_id, |n| {
+        while let Some(id) = cur.take() {
+            let node = self.load_node(id).await?;
+
+            match node.keys.binary_search(&k) {
+                Ok(pos) if node.is_leaf => {
+                    self.nodes.modify(id, |n| {
                         n.keys.remove(pos);
                         n.values.remove(pos);
                     })?;
                     update_stats!(self, |stats| {
                         stats.key_count = stats.key_count.saturating_sub(1);
                     });
-                    self.rebalance_with_ancestors(node_id, ancestors).await
-                } else {
-                    // Case 2: Key is in an internal node - replace with predecessor
+                    self.rebalance_with_ancestors(id, mem::take(&mut anc))
+                        .await?;
+                }
+                Ok(pos) => {
                     let left_child =
                         *node.children.get(pos).ok_or_else(|| {
                             StorageError::InvalidOperation(format!(
@@ -2224,8 +2127,7 @@ impl BTree {
                     let (pred_key, pred_val) =
                         self.find_predecessor(left_child).await?;
 
-                    // Replace key with predecessor
-                    self.nodes.try_modify(node_id, |n| {
+                    self.nodes.try_modify(id, |n| {
                         *n.keys.get_mut(pos).ok_or_else(|| {
                             StorageError::InvalidOperation(format!(
                                 "Key index {} out of bounds",
@@ -2241,25 +2143,12 @@ impl BTree {
                         Ok(())
                     })?;
 
-                    // Delete predecessor from left subtree
-                    // Pass ancestors WITH current node so rebalancing propagates
-                    // correctly through this node and up to the root.
-                    // Do NOT call rebalance_with_ancestors again after - the
-                    // recursive delete already handles it.
-                    let mut child_ancestors = ancestors;
-                    child_ancestors.push((node_id, pos));
-                    self.delete_key_from_node(
-                        left_child,
-                        &pred_key,
-                        child_ancestors,
-                    )
-                    .await
+                    anc.push((id, pos));
+                    k = pred_key;
+                    cur = Some(left_child);
                 }
-            }
-            Err(pos) => {
-                if node.is_leaf {
-                    Ok(()) // Key not found, nothing to delete
-                } else {
+                Err(_) if node.is_leaf => {}
+                Err(pos) => {
                     let child_id =
                         node.children.get(pos).copied().ok_or_else(|| {
                             StorageError::InvalidOperation(format!(
@@ -2268,71 +2157,74 @@ impl BTree {
                             ))
                         })?;
                     drop(node);
-                    let mut child_ancestors = ancestors;
-                    child_ancestors.push((node_id, pos));
-                    self.delete_key_from_node(child_id, key, child_ancestors)
-                        .await
+                    anc.push((id, pos));
+                    cur = Some(child_id);
                 }
             }
         }
+
+        Ok(())
     }
 
     /// Finds the predecessor (rightmost key in subtree).
-    #[async_recursion]
     async fn find_predecessor(
         &self,
         node_id: NodeId,
     ) -> Result<(Key, Arc<NodeData>)> {
-        let node = self.load_node(node_id).await?;
-        if node.is_leaf {
-            let i = node.keys.len().checked_sub(1).ok_or_else(|| {
-                StorageError::InvalidOperation("Empty node".to_string())
-            })?;
-            let k = node.keys.get(i).ok_or_else(|| {
-                StorageError::InvalidOperation(
-                    "Key index out of bounds".to_string(),
-                )
-            })?;
-            let v = node.values.get(i).ok_or_else(|| {
-                StorageError::InvalidOperation(
-                    "Value index out of bounds".to_string(),
-                )
-            })?;
-            Ok((k.clone(), Arc::clone(v)))
-        } else {
-            let child = *node.children.last().ok_or_else(|| {
-                StorageError::InvalidOperation("No children".to_string())
-            })?;
-            self.find_predecessor(child).await
+        let mut cur = Some(node_id);
+        let mut out = None;
+
+        while let Some(id) = cur.take() {
+            let node = self.load_node(id).await?;
+            if node.is_leaf {
+                let i = node.keys.len().checked_sub(1).ok_or_else(|| {
+                    StorageError::InvalidOperation("Empty node".to_string())
+                })?;
+                let k = node.keys.get(i).ok_or_else(|| {
+                    StorageError::InvalidOperation(
+                        "Key index out of bounds".to_string(),
+                    )
+                })?;
+                let v = node.values.get(i).ok_or_else(|| {
+                    StorageError::InvalidOperation(
+                        "Value index out of bounds".to_string(),
+                    )
+                })?;
+                out = Some((k.clone(), Arc::clone(v)));
+            } else {
+                cur = Some(*node.children.last().ok_or_else(|| {
+                    StorageError::InvalidOperation("No children".to_string())
+                })?);
+            }
         }
+
+        out.ok_or_else(|| {
+            StorageError::InvalidOperation("Empty node".to_string())
+        })
     }
 
     /// Rebalances a node if underfull, propagating fixes up the ancestor chain.
-    #[async_recursion]
     async fn rebalance_with_ancestors(
         &self,
         node_id: NodeId,
         mut ancestors: Vec<(NodeId, usize)>,
     ) -> Result<()> {
-        let node = self.load_node(node_id).await?;
         let min_keys = self.min_degree - 1;
+        let mut cur = Some(node_id);
 
-        // Root can have fewer keys, or node is not underfull
-        match ancestors.pop() {
-            None => Ok(()), // This is the root
-            Some((parent_id, child_idx)) if node.keys.len() < min_keys => {
-                drop(node);
-                let merged =
-                    self.fix_underfull_node(parent_id, child_idx).await?;
-                // If we merged, parent lost a key - check if parent needs fixing
-                if merged {
-                    self.rebalance_with_ancestors(parent_id, ancestors).await
-                } else {
-                    Ok(())
-                }
-            }
-            _ => Ok(()),
+        while let Some(id) = cur.take() {
+            let under = self.load_node(id).await?.keys.len() < min_keys;
+
+            cur = match ancestors.pop() {
+                Some((parent_id, child_idx)) if under => self
+                    .fix_underfull_node(parent_id, child_idx)
+                    .await?
+                    .then_some(parent_id),
+                _ => None,
+            };
         }
+
+        Ok(())
     }
 
     /// Fixes an underfull node by borrowing from sibling or merging.
@@ -2682,54 +2574,52 @@ impl BTree {
     }
 
     /// Recursively checks if any key with the given prefix exists (excluding exact match).
-    #[async_recursion]
     async fn check_descendants_from_node(
         &self,
         node_id: NodeId,
         prefix: &Key,
     ) -> Result<bool> {
-        let node = self.load_node(node_id).await?;
+        let mut cur = vec![node_id];
+        let mut found = false;
 
-        // Binary search to find starting position
-        let start = node.keys.binary_search(prefix).unwrap_or_else(|p| p);
+        while let Some(batch) =
+            Some(mem::take(&mut cur)).filter(|b| !b.is_empty() && !found)
+        {
+            let loads: FuturesUnordered<_> =
+                batch.iter().map(|&id| self.load_node(id)).collect();
 
-        // Check keys in this node (excluding exact match)
-        let found = node
-            .keys
-            .iter()
-            .skip(start)
-            .take_while(|k| k.starts_with(prefix))
-            .any(|k| k != prefix);
+            let nodes: Vec<_> = loads.try_collect().await?;
 
-        if found {
-            Ok(true)
-        } else if node.is_leaf {
-            Ok(false)
-        } else {
-            // Check children that might contain descendants
-            // Count matching keys to determine child range
-            let matching_count = node
-                .keys
-                .iter()
-                .skip(start)
-                .take_while(|k| k.starts_with(prefix))
-                .count();
-            let end = start + matching_count + 1;
+            found = nodes.iter().any(|node| {
+                node.keys
+                    .iter()
+                    .skip(node.keys.binary_search(prefix).unwrap_or_else(|p| p))
+                    .take_while(|k| k.starts_with(prefix))
+                    .any(|k| k != prefix)
+            });
 
-            futures::stream::iter(
-                (start..end)
-                    .filter_map(|i| node.children.get(i).copied())
-                    .map(Ok::<_, StorageError>),
-            )
-            .try_fold(false, |acc, child_id| async move {
-                if acc {
-                    Ok(true)
-                } else {
-                    self.check_descendants_from_node(child_id, prefix).await
-                }
-            })
-            .await
+            if !found {
+                nodes.iter().for_each(|node| {
+                    let start =
+                        node.keys.binary_search(prefix).unwrap_or_else(|p| p);
+                    let cnt = node
+                        .keys
+                        .iter()
+                        .skip(start)
+                        .take_while(|k| k.starts_with(prefix))
+                        .count();
+
+                    if !node.is_leaf {
+                        cur.extend(
+                            (start..start + cnt + 1)
+                                .filter_map(|i| node.children.get(i).copied()),
+                        );
+                    }
+                });
+            }
         }
+
+        Ok(found)
     }
 
     /// Inserts a key-value pair into a non-full node.
@@ -2762,105 +2652,103 @@ impl BTree {
     /// - `value`: Takes new value if `Some`, otherwise keeps old value
     ///
     /// This ensures concurrent ancestor creation is safe and idempotent.
-    #[async_recursion]
     async fn insert_non_full_with_data(
         &self,
         node_id: NodeId,
         key: &Key,
         data: NodeData,
     ) -> Result<()> {
-        let node_arc = self.load_node(node_id).await?;
+        let max_keys = 2 * self.min_degree - 1;
+        let mut cur = Some(node_id);
+        let mut leaf = None;
 
-        // Find the position where the key should be inserted
-        let pos = node_arc
-            .keys
-            .binary_search(key)
-            .unwrap_or_else(|insert_pos| insert_pos);
+        while let Some(id) = cur.take() {
+            let node_arc = self.load_node(id).await?;
 
-        if node_arc.is_leaf {
-            // Leaf node: insert or merge the key-value pair
-            let mut updated_node =
-                Arc::try_unwrap(node_arc).unwrap_or_else(|arc| (*arc).clone());
+            let pos = node_arc
+                .keys
+                .binary_search(key)
+                .unwrap_or_else(|insert_pos| insert_pos);
 
-            match updated_node.keys.get(pos) {
-                Some(existing_key) if existing_key == key => {
-                    // Key exists - MERGE NodeData with OR semantics
-                    let existing_data =
-                        updated_node.values.get(pos).ok_or_else(|| {
-                            StorageError::InvalidOperation(format!(
-                                "Value index {} out of bounds (len {})",
-                                pos,
-                                updated_node.values.len()
-                            ))
-                        })?;
-                    let merged_data = NodeData::new(
-                        data.value.or_else(|| existing_data.value.clone()),
-                        existing_data.has_descendants || data.has_descendants,
-                    );
-                    let values_len = updated_node.values.len();
-                    *updated_node.values.get_mut(pos).ok_or_else(|| {
-                        StorageError::InvalidOperation(format!(
-                            "Value index {} out of bounds for mutation (len {})",
-                            pos, values_len
-                        ))
-                    })? = Arc::new(merged_data);
-                }
-                _ => {
-                    // Key doesn't exist, insert new NodeData
-                    updated_node.keys.insert(pos, key.clone());
-                    updated_node.values.insert(pos, Arc::new(data));
-                }
-            }
-
-            // Write the updated node back
-            self.save_node(node_id, updated_node).await?;
-
-            Ok(())
-        } else {
-            // Internal node: recurse to the appropriate child
-            let child_id = *node_arc.children.get(pos).ok_or_else(|| {
-                StorageError::InvalidOperation(format!(
-                    "Child index {} out of bounds (len {})",
-                    pos,
-                    node_arc.children.len()
-                ))
-            })?;
-
-            // Check if child is full
-            let child = self.load_node(child_id).await?;
-            let max_keys = 2 * self.min_degree - 1;
-
-            if child.keys.len() == max_keys {
-                // Child is full, split it first
-                let (median_key, median_value, new_child_id) =
-                    self.split_node(child_id).await?;
-
-                // Insert median into this node
-                let mut updated_node = Arc::try_unwrap(node_arc)
-                    .unwrap_or_else(|arc| (*arc).clone());
-                updated_node.keys.insert(pos, median_key.clone());
-                updated_node.values.insert(pos, Arc::clone(&median_value));
-                updated_node.children.insert(pos + 1, new_child_id);
-
-                // Write updated parent
-                self.save_node(node_id, updated_node).await?;
-
-                // Determine which child to recurse into
-                let next_child_id = if *key > median_key {
-                    new_child_id
-                } else {
-                    child_id
-                };
-
-                self.insert_non_full_with_data(next_child_id, key, data)
-                    .await
+            if node_arc.is_leaf {
+                leaf = Some((id, node_arc, pos));
             } else {
-                // Child is not full, recurse directly
-                drop(child);
-                drop(node_arc);
-                self.insert_non_full_with_data(child_id, key, data).await
+                let child_id =
+                    *node_arc.children.get(pos).ok_or_else(|| {
+                        StorageError::InvalidOperation(format!(
+                            "Child index {} out of bounds (len {})",
+                            pos,
+                            node_arc.children.len()
+                        ))
+                    })?;
+
+                let child = self.load_node(child_id).await?;
+
+                cur = Some(
+                    if child.keys.len() == max_keys {
+                        let (median_key, median_value, new_child_id) =
+                            self.split_node(child_id).await?;
+
+                        let mut updated_node = Arc::try_unwrap(node_arc)
+                            .unwrap_or_else(|arc| (*arc).clone());
+                        updated_node.keys.insert(pos, median_key.clone());
+                        updated_node
+                            .values
+                            .insert(pos, Arc::clone(&median_value));
+                        updated_node.children.insert(pos + 1, new_child_id);
+
+                        self.save_node(id, updated_node).await?;
+
+                        if *key > median_key {
+                            new_child_id
+                        } else {
+                            child_id
+                        }
+                    } else {
+                        drop(child);
+                        drop(node_arc);
+                        child_id
+                    },
+                );
             }
         }
+
+        let (id, node_arc, pos) = leaf.ok_or_else(|| {
+            StorageError::InvalidOperation("No leaf reached".to_string())
+        })?;
+
+        let mut updated_node =
+            Arc::try_unwrap(node_arc).unwrap_or_else(|arc| (*arc).clone());
+
+        match updated_node.keys.get(pos) {
+            Some(existing_key) if existing_key == key => {
+                let existing_data =
+                    updated_node.values.get(pos).ok_or_else(|| {
+                        StorageError::InvalidOperation(format!(
+                            "Value index {} out of bounds (len {})",
+                            pos,
+                            updated_node.values.len()
+                        ))
+                    })?;
+                let merged_data = NodeData::new(
+                    data.value.or_else(|| existing_data.value.clone()),
+                    existing_data.has_descendants || data.has_descendants,
+                );
+                let values_len = updated_node.values.len();
+                *updated_node.values.get_mut(pos).ok_or_else(|| {
+                    StorageError::InvalidOperation(format!(
+                        "Value index {} out of bounds for mutation (len {})",
+                        pos, values_len
+                    ))
+                })? = Arc::new(merged_data);
+            }
+            _ => {
+                updated_node.keys.insert(pos, key.clone());
+                updated_node.values.insert(pos, Arc::new(data));
+            }
+        }
+
+        self.save_node(id, updated_node).await
     }
 
     /// Updates the `has_descendants` flag for an existing key.
@@ -2883,20 +2771,20 @@ impl BTree {
     }
 
     /// Recursively finds and updates the `has_descendants` flag for a key.
-    #[async_recursion]
     async fn update_flag_in_node(
         &self,
         node_id: NodeId,
         key: &Key,
         flag: bool,
     ) -> Result<()> {
-        let node = self.load_node(node_id).await?;
-        let pos = node.keys.binary_search(key).unwrap_or_else(|p| p);
+        let mut cur = Some(node_id);
 
-        match node.keys.get(pos) {
-            Some(k) if k == key => {
-                // Found the key - update the flag directly
-                self.nodes.try_modify(node_id, |n| {
+        while let Some(id) = cur.take() {
+            let node = self.load_node(id).await?;
+            let pos = node.keys.binary_search(key).unwrap_or_else(|p| p);
+
+            match node.keys.get(pos) {
+                Some(k) if k == key => self.nodes.try_modify(id, |n| {
                     let old = n.values.get(pos).ok_or_else(|| {
                         StorageError::InvalidOperation(format!(
                             "Value index {} out of bounds",
@@ -2911,22 +2799,22 @@ impl BTree {
                         ))
                     })? = Arc::new(updated);
                     Ok(())
-                })
-            }
-            _ if node.is_leaf => Err(StorageError::InvalidOperation(format!(
-                "Key {:?} not found for flag update",
-                key
-            ))),
-            _ => {
-                let child = *node.children.get(pos).ok_or_else(|| {
-                    StorageError::InvalidOperation(format!(
-                        "Child index {} out of bounds",
-                        pos
-                    ))
-                })?;
-                self.update_flag_in_node(child, key, flag).await
+                })?,
+                _ if node.is_leaf => Err(StorageError::InvalidOperation(
+                    format!("Key {:?} not found for flag update", key),
+                ))?,
+                _ => {
+                    cur = Some(*node.children.get(pos).ok_or_else(|| {
+                        StorageError::InvalidOperation(format!(
+                            "Child index {} out of bounds",
+                            pos
+                        ))
+                    })?);
+                }
             }
         }
+
+        Ok(())
     }
 
     /// Ensures all ancestor keys exist with `has_descendants = true`.

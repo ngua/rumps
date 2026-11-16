@@ -45,7 +45,6 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use async_recursion::async_recursion;
 use futures::future::BoxFuture;
 use futures::{Stream, TryStreamExt};
 use tokio::fs::{self, File, OpenOptions};
@@ -252,47 +251,46 @@ impl WalReader {
     /// - `Err(_)` on I/O or deserialization error
     ///
     /// Automatically advances to the next file when the current one is exhausted.
-    #[async_recursion]
     pub(crate) async fn next(&mut self) -> Result<Option<WalEntry>> {
-        match self.file.as_mut() {
-            None => Ok(None), // No files at all
-            Some(file) => {
-                match try_read_record_at(file, self.pos, self.file_size).await?
-                {
-                    Some(raw) => {
-                        let record: WalRecord = bincode::deserialize(
-                            &raw.payload,
-                        )
-                        .map_err(|e| {
-                            StorageError::Serialization(format!(
-                                "WAL record at seq {}: {e}",
-                                raw.header.seq
-                            ))
-                        })?;
+        let mut out = None;
+        let mut again = Some(());
+        while again.take().is_some() {
+            match self.file.as_mut() {
+                None => out = None,
+                Some(file) => {
+                    match try_read_record_at(file, self.pos, self.file_size)
+                        .await?
+                    {
+                        Some(raw) => {
+                            let record: WalRecord = bincode::deserialize(
+                                &raw.payload,
+                            )
+                            .map_err(|e| {
+                                StorageError::Serialization(format!(
+                                    "WAL record at seq {}: {e}",
+                                    raw.header.seq
+                                ))
+                            })?;
 
-                        self.pos = raw.end_pos;
-                        self.next_seq = raw.header.seq.next();
+                            self.pos = raw.end_pos;
+                            self.next_seq = raw.header.seq.next();
 
-                        Ok(Some(WalEntry {
-                            seq: raw.header.seq,
-                            record,
-                        }))
-                    }
-                    None => {
-                        // EOF - try to advance to next file
-                        let prev_idx = self.current_idx;
-                        self.try_open_next_file().await?;
-                        if self.current_idx > prev_idx {
-                            // Opened a new file, recurse to read from it
-                            self.next().await
-                        } else {
-                            // No more files
-                            Ok(None)
+                            out = Some(WalEntry {
+                                seq: raw.header.seq,
+                                record,
+                            });
+                        }
+                        None => {
+                            let prev = self.current_idx;
+                            self.try_open_next_file().await?;
+                            again = (self.current_idx > prev).then_some(());
+                            out = None;
                         }
                     }
                 }
             }
         }
+        Ok(out)
     }
 
     /// Try to open the next WAL file in sequence.

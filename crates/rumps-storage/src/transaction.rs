@@ -44,13 +44,12 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::ops::{Bound, Deref};
+use std::ops::{Bound, ControlFlow, Deref};
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{fmt, future};
 
-use async_recursion::async_recursion;
 use futures::stream::{self, BoxStream, StreamExt, TryStreamExt};
 use rumps_types::{DataStatus, Key, Name, Result, Subscript, Value};
 use serde::{Deserialize, Serialize};
@@ -164,64 +163,63 @@ where
         }
     }
 
-    /// Yields buffered value if present, skips snapshot if requested, recurses.
-    #[async_recursion]
-    async fn yield_buffered_or_skip(
-        &mut self,
-        skip_snapshot: bool,
-    ) -> Option<crate::error::Result<T>> {
-        let opt_val = self.next_buffered.take().and_then(|(_, v)| v);
-        if skip_snapshot {
-            self.next_snapshot = None;
-        }
-        self.advance_buffered();
-        match opt_val {
-            Some(val) => Some(Ok(val)),
-            None => self.next_impl().await,
-        }
-    }
-
     /// Core merge logic with O(n + m) complexity.
-    #[async_recursion]
     async fn next_impl(&mut self) -> Option<crate::error::Result<T>> {
-        match self.snapshot_error.take() {
-            Some(e) => Some(Err(e)),
-            None => {
-                // Initialize buffered on first call
-                if self.next_buffered.is_none()
-                    && self.last_buffered_key.is_none()
-                {
-                    self.advance_buffered();
-                }
-
-                self.advance_snapshot().await;
-
-                // Clone keys for comparison to avoid borrow issues
-                let buf_key =
-                    self.next_buffered.as_ref().map(|(k, _)| k.clone());
-                let snap_key =
-                    self.next_snapshot.as_ref().map(|(k, _)| k.clone());
-
-                match (buf_key, snap_key) {
-                    (None, None) => None,
-                    (Some(_), None) => self.yield_buffered_or_skip(false).await,
-                    (None, Some(_)) => {
-                        self.next_snapshot.take().map(|(_, val)| Ok(val))
+        let mut out = None;
+        let mut again = Some(());
+        while again.take().is_some() {
+            out = match self.snapshot_error.take() {
+                Some(e) => Some(Err(e)),
+                None => {
+                    // Initialize buffered on first call
+                    if self.next_buffered.is_none()
+                        && self.last_buffered_key.is_none()
+                    {
+                        self.advance_buffered();
                     }
-                    (Some(bk), Some(sk)) => match bk.cmp(&sk) {
-                        Ordering::Less => {
-                            self.yield_buffered_or_skip(false).await
+
+                    self.advance_snapshot().await;
+
+                    // Clone keys for comparison to avoid borrow issues
+                    let buf_key =
+                        self.next_buffered.as_ref().map(|(k, _)| k.clone());
+                    let snap_key =
+                        self.next_snapshot.as_ref().map(|(k, _)| k.clone());
+
+                    let step = match (buf_key, snap_key) {
+                        (None, None) => ControlFlow::Break(None),
+                        (Some(_), None) => ControlFlow::Continue(false),
+                        (None, Some(_)) => ControlFlow::Break(
+                            self.next_snapshot.take().map(|(_, val)| Ok(val)),
+                        ),
+                        (Some(bk), Some(sk)) => match bk.cmp(&sk) {
+                            Ordering::Less => ControlFlow::Continue(false),
+                            Ordering::Equal => ControlFlow::Continue(true),
+                            Ordering::Greater => ControlFlow::Break(
+                                self.next_snapshot
+                                    .take()
+                                    .map(|(_, val)| Ok(val)),
+                            ),
+                        },
+                    };
+
+                    match step {
+                        ControlFlow::Break(o) => o,
+                        ControlFlow::Continue(skip) => {
+                            let opt_val =
+                                self.next_buffered.take().and_then(|(_, v)| v);
+                            if skip {
+                                self.next_snapshot = None;
+                            }
+                            self.advance_buffered();
+                            again = opt_val.is_none().then_some(());
+                            opt_val.map(Ok)
                         }
-                        Ordering::Equal => {
-                            self.yield_buffered_or_skip(true).await
-                        }
-                        Ordering::Greater => {
-                            self.next_snapshot.take().map(|(_, val)| Ok(val))
-                        }
-                    },
+                    }
                 }
-            }
+            };
         }
+        out
     }
 
     /// Gets the next item from the merged stream.
@@ -1709,19 +1707,25 @@ impl Transaction {
     ///
     /// Since `Transaction` is `Clone` with shared `Arc` state, cloning for
     /// each retry attempt is cheap and shares the same underlying buffers.
-    #[async_recursion]
     pub(crate) async fn commit_with_retry(
         self,
         retries: u32,
     ) -> crate::error::Result<()> {
-        let t = self.clone();
-        match self.commit().await {
-            Ok(()) => Ok(()),
-            Err(e) if e.is_retriable() && retries > 0 => {
-                t.commit_with_retry(retries - 1).await
-            }
-            Err(e) => Err(e),
+        let mut cur = Some(self);
+        let mut left = retries;
+        let mut out = Ok(());
+        while let Some(tx) = cur.take() {
+            let t = tx.clone();
+            out = match tx.commit().await {
+                Err(e) if e.is_retriable() && left > 0 => {
+                    left -= 1;
+                    cur = Some(t);
+                    Ok(())
+                }
+                r => r,
+            };
         }
+        out
     }
 
     /// Rolls back the transaction, discarding all buffered writes.
@@ -1819,155 +1823,153 @@ impl Transaction {
         Err(StorageError::InvalidConfiguration(msg.into()))
     }
 
-    /// Internal recursive implementation of `query()`.
-    ///
-    /// Uses async recursion to avoid `loop` with `break`/`continue`.
-    #[async_recursion]
+    /// Internal implementation of `query()`.
     async fn query_impl(
         &self,
         name: &Name,
         after: Option<&Key>,
     ) -> Result<Option<Key>> {
-        // Get snapshot view from database
-        let snapshot_candidate = self.db.query(name, after).await?;
+        let mut cur = after.cloned();
+        let mut out = None;
+        let mut again = Some(());
+        while again.take().is_some() {
+            let after = cur.as_ref();
+            let snapshot_candidate = self.db.query(name, after).await?;
 
-        // Collect buffered keys for this name
-        let writes = self.writes.read().await;
-        let deleted = self.deleted_subtrees.read().await;
+            let writes = self.writes.read().await;
+            let deleted = self.deleted_subtrees.read().await;
 
-        // Find minimum buffered key greater than `after` that's not deleted
-        let buffered_candidate = writes
-            .keys()
-            .filter(|(n, _)| n == name)
-            .map(|(_, k)| k)
-            .filter(|k| match after {
-                Some(a) => *k > a,
-                None => true,
-            })
-            .filter(|k| {
-                let not_explicitly_deleted = !matches!(
-                    writes.get(&(name.clone(), (*k).clone())),
-                    Some(WriteOp::Delete | WriteOp::KillSubtree)
-                );
-                let not_in_deleted_subtree =
-                    !deleted.iter().any(|(del_name, del_key)| {
-                        del_name == name && k.starts_with(del_key)
-                    });
-                not_explicitly_deleted && not_in_deleted_subtree
-            })
-            .min()
-            .cloned();
+            let buffered_candidate = writes
+                .keys()
+                .filter(|(n, _)| n == name)
+                .map(|(_, k)| k)
+                .filter(|k| match after {
+                    Some(a) => *k > a,
+                    None => true,
+                })
+                .filter(|k| {
+                    let not_explicitly_deleted = !matches!(
+                        writes.get(&(name.clone(), (*k).clone())),
+                        Some(WriteOp::Delete | WriteOp::KillSubtree)
+                    );
+                    let not_in_deleted_subtree =
+                        !deleted.iter().any(|(del_name, del_key)| {
+                            del_name == name && k.starts_with(del_key)
+                        });
+                    not_explicitly_deleted && not_in_deleted_subtree
+                })
+                .min()
+                .cloned();
 
-        // Choose the minimum between snapshot and buffered
-        let next =
-            match (snapshot_candidate.as_ref(), buffered_candidate.as_ref()) {
+            let next = match (
+                snapshot_candidate.as_ref(),
+                buffered_candidate.as_ref(),
+            ) {
                 (Some(snap), Some(buf)) => Some(snap.min(buf).clone()),
                 (Some(snap), None) => Some(snap.clone()),
                 (None, Some(buf)) => Some(buf.clone()),
                 (None, None) => None,
             };
 
-        // Check if candidate is deleted in our buffer; if so, recurse
-        match next {
-            None => Ok(None),
-            Some(k) => {
-                let is_deleted =
-                    matches!(
-                        writes.get(&(name.clone(), k.clone())),
-                        Some(WriteOp::Delete | WriteOp::KillSubtree)
-                    ) || deleted.iter().any(|(del_name, del_key)| {
-                        del_name == name && k.starts_with(del_key)
-                    });
+            match next {
+                None => out = None,
+                Some(k) => {
+                    let is_deleted =
+                        matches!(
+                            writes.get(&(name.clone(), k.clone())),
+                            Some(WriteOp::Delete | WriteOp::KillSubtree)
+                        ) || deleted.iter().any(|(del_name, del_key)| {
+                            del_name == name && k.starts_with(del_key)
+                        });
 
-                if is_deleted {
-                    // Recurse to find next valid key
-                    self.query_impl(name, Some(&k)).await
-                } else {
-                    Ok(Some(k))
+                    if is_deleted {
+                        cur = Some(k);
+                        again = Some(());
+                    } else {
+                        out = Some(k);
+                    }
                 }
             }
         }
+        Ok(out)
     }
 
-    /// Internal recursive implementation of `order()`.
+    /// Internal implementation of `order()`.
     ///
     /// Merges snapshot subscripts with buffered writes at the specified level.
-    #[async_recursion]
     async fn order_impl(
         &self,
         name: &Name,
         prefix: &Key,
         after: Option<&Subscript>,
     ) -> Result<Option<Subscript>> {
-        // Get snapshot view from database
-        let snapshot_sub = self.db.order(name, prefix, after).await?;
+        let mut cur = after.cloned();
+        let mut out = None;
+        let mut again = Some(());
+        while again.take().is_some() {
+            let after = cur.as_ref();
+            let snapshot_sub = self.db.order(name, prefix, after).await?;
 
-        // Collect buffered subscripts at this level
-        let writes = self.writes.read().await;
-        let deleted = self.deleted_subtrees.read().await;
+            let writes = self.writes.read().await;
+            let deleted = self.deleted_subtrees.read().await;
 
-        // Find minimum buffered subscript > `after` at this level
-        let buffered_sub = writes
-            .keys()
-            .filter(|(n, _)| n == name)
-            .map(|(_, k)| k)
-            // Key must start with prefix
-            .filter(|k| k.starts_with(prefix) && k.len() > prefix.len())
-            // Extract subscript at prefix.len()
-            .filter_map(|k| k.get(prefix.len()))
-            // Must be > after
-            .filter(|sub| match after {
-                Some(a) => *sub > a,
-                None => true,
-            })
-            // Must not be deleted
-            .filter(|sub| {
-                let mut full_key = prefix.clone();
-                full_key.push((*sub).clone());
-                let not_explicitly_deleted = !matches!(
-                    writes.get(&(name.clone(), full_key.clone())),
-                    Some(WriteOp::Delete | WriteOp::KillSubtree)
-                );
-                let not_in_deleted_subtree =
-                    !deleted.iter().any(|(del_name, del_key)| {
-                        del_name == name && full_key.starts_with(del_key)
-                    });
-                not_explicitly_deleted && not_in_deleted_subtree
-            })
-            .min()
-            .cloned();
-
-        // Choose the minimum between snapshot and buffered
-        let next = match (snapshot_sub.as_ref(), buffered_sub.as_ref()) {
-            (Some(snap), Some(buf)) => Some(snap.min(buf).clone()),
-            (Some(snap), None) => Some(snap.clone()),
-            (None, Some(buf)) => Some(buf.clone()),
-            (None, None) => None,
-        };
-
-        // Check if candidate subscript's key is deleted; if so, recurse
-        match next {
-            None => Ok(None),
-            Some(sub) => {
-                let mut check_key = prefix.clone();
-                check_key.push(sub.clone());
-
-                let is_deleted =
-                    matches!(
-                        writes.get(&(name.clone(), check_key.clone())),
+            let buffered_sub = writes
+                .keys()
+                .filter(|(n, _)| n == name)
+                .map(|(_, k)| k)
+                .filter(|k| k.starts_with(prefix) && k.len() > prefix.len())
+                .filter_map(|k| k.get(prefix.len()))
+                .filter(|sub| match after {
+                    Some(a) => *sub > a,
+                    None => true,
+                })
+                .filter(|sub| {
+                    let mut full_key = prefix.clone();
+                    full_key.push((*sub).clone());
+                    let not_explicitly_deleted = !matches!(
+                        writes.get(&(name.clone(), full_key.clone())),
                         Some(WriteOp::Delete | WriteOp::KillSubtree)
-                    ) || deleted.iter().any(|(del_name, del_key)| {
-                        del_name == name && check_key.starts_with(del_key)
-                    });
+                    );
+                    let not_in_deleted_subtree =
+                        !deleted.iter().any(|(del_name, del_key)| {
+                            del_name == name && full_key.starts_with(del_key)
+                        });
+                    not_explicitly_deleted && not_in_deleted_subtree
+                })
+                .min()
+                .cloned();
 
-                if is_deleted {
-                    // Recurse to find next valid subscript
-                    self.order_impl(name, prefix, Some(&sub)).await
-                } else {
-                    Ok(Some(sub))
+            let next = match (snapshot_sub.as_ref(), buffered_sub.as_ref()) {
+                (Some(snap), Some(buf)) => Some(snap.min(buf).clone()),
+                (Some(snap), None) => Some(snap.clone()),
+                (None, Some(buf)) => Some(buf.clone()),
+                (None, None) => None,
+            };
+
+            match next {
+                None => out = None,
+                Some(sub) => {
+                    let mut check_key = prefix.clone();
+                    check_key.push(sub.clone());
+
+                    let is_deleted =
+                        matches!(
+                            writes.get(&(name.clone(), check_key.clone())),
+                            Some(WriteOp::Delete | WriteOp::KillSubtree)
+                        ) || deleted.iter().any(|(del_name, del_key)| {
+                            del_name == name && check_key.starts_with(del_key)
+                        });
+
+                    if is_deleted {
+                        cur = Some(sub);
+                        again = Some(());
+                    } else {
+                        out = Some(sub);
+                    }
                 }
             }
         }
+        Ok(out)
     }
 }
 
