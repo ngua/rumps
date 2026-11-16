@@ -934,10 +934,7 @@ impl Database {
     /// # });
     /// ```
     pub async fn debug(&self) -> DatabaseStats {
-        let cache = match &self.storage {
-            Some(s) => Some(s.cache_stats().await),
-            None => None,
-        };
+        let cache = self.storage.as_ref().map(|s| s.cache_stats());
         let storage = match &self.storage {
             Some(s) => Some(s.metadata().await),
             None => None,

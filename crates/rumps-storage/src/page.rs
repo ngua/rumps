@@ -4,7 +4,7 @@
 //! - [`PAGE_SIZE`]: Compile-time constant for B-tree node page size
 //! - [`PageId`]: Identifier for a page (byte offset into the data file)
 //! - [`PageAllocator`]: Bitmap-based page allocator
-//! - [`PageCache`]: LRU cache of pages with dirty tracking and async flush
+//! - [`PageCache`]: Concurrent cache of pages with dirty tracking
 //!
 //! # Page Size Configuration
 //!
@@ -22,8 +22,8 @@ mod cache;
 mod id;
 
 pub(crate) use allocator::PageAllocator;
-pub(crate) use cache::PageCache;
 pub use cache::PageCacheStats;
+pub(crate) use cache::{EvictedPage, PageCache};
 pub(crate) use id::PageId;
 
 /// Page size in bytes for B-tree node storage.

@@ -91,7 +91,7 @@ RUMPS uses a three-layer architecture that separates concerns between the =Datab
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  STORAGE LAYER                                                              │
 │  ─────────────────────────────────────────────────────────────────────────  │
-│  Page cache with LRU eviction                                               │
+│  Concurrent page cache (moka; TinyLFU admission)                            │
 │  WAL files (append-only durability)                                         │
 │  Bitmap allocator for page management                                       │
 │  Global registry (name → root page mapping)                                 │
@@ -182,33 +182,49 @@ Maps global names to their B-tree root pages:
 When the database opens, we /lazily/ load globals from this registry. The first access to =^PATIENT= reads the registry, finds the root page, and caches it.
 
 ** Page Cache
-Reading from disk for every operation would be painfully slow. The storage layer maintains an LRU (Least Recently Used) page cache:
+Reading from disk for every operation would be painfully slow. The storage layer maintains a concurrent page cache backed by =moka= (a Rust port of Java's Caffeine cache):
 
 #+begin_example
 ┌─────────────────────────────────────────────────────────────────────────┐
-│  PAGE CACHE                                                             │
+│  PAGE CACHE (moka::sync::Cache)                                         │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  HashMap<PageId, CacheEntry>                                            │
+│  Cache<PageId, CachedPage>                                              │
 │                                                                         │
-│  CacheEntry:                                                            │
-│    - page_data: [u8; 4096]   (the actual bytes)                         │
-│    - dirty: bool             (modified since last flush?)               │
-│    - last_access: Instant    (for LRU eviction)                         │
-│    - pin_count: usize        (prevents eviction while in use)           │
+│  CachedPage:                                                            │
+│    - node: Arc<Node>         (deserialized B-tree node)                 │
+│    - dirty: Arc<AtomicBool>  (modified since last flush?)               │
+│                                                                         │
+│  Stats (atomic counters):                                               │
+│    - hits, misses, writes, flushes, evictions: AtomicU64                │
+│                                                                         │
+│  Eviction buffer:                                                       │
+│    - Mutex<Vec<EvictedPage>> (dirty pages captured on eviction)         │
 └─────────────────────────────────────────────────────────────────────────┘
 #+end_example
 
+*** Why Sync Operations in an Async Engine?
+
+All cache operations are deliberately synchronous. The cache is purely in-memory; no operation performs I/O or needs to yield. This avoids the overhead of async locks (waker registration, task scheduling) and eliminates the risk of holding a lock guard across an =.await= point. Async engine methods call into the cache directly, then perform any resulting disk I/O (e.g. flushing dirty evicted pages) in their own async context.
+
+*** Dirty Tracking
+
+Each cache entry carries an =Arc<AtomicBool>= dirty flag. Toggling dirty status (via =mark_dirty=, =mark_flushed=, =mark_clean=) is a single atomic store; no re-insertion into the cache is needed. This is critical for write performance, since moka's =insert= path involves frequency sketch updates and crossbeam bookkeeping that would otherwise dominate the hot path.
+
+*** Eviction
+
+Moka uses a TinyLFU admission policy (Window TinyLFU, specifically), which combines recency and frequency to decide what to keep. When a dirty page is evicted, an eviction listener captures it into a buffer. The engine drains this buffer after each =put= and at the start of =flush=, writing the dirty evicted pages to disk so no modifications are lost.
+
 *** Read Path
-1. Check cache for page
-2. On cache hit: return cached data, update ~last_access~
-3. On cache miss: read from disk, add to cache (possibly evicting LRU page first)
+1. Check cache for page (lock-free read via moka)
+2. On cache hit: return =Arc<Node>=, increment atomic hit counter
+3. On cache miss: read from disk, deserialize, insert into cache (moka may reject via TinyLFU if the new entry's estimated frequency is lower than the victim's)
 
 *** Write Path
 Writes /never/ go directly to the data file. Instead:
 
-1. Update page in cache
-2. Mark page as ~dirty~
-3. During flush: write all dirty pages to disk, clear ~dirty~ flags
+1. Update page in cache (=put= with =dirty = true=)
+2. Drain eviction buffer; flush any dirty evicted pages to disk
+3. During flush: write all dirty pages to disk, clear dirty flags via atomic store
 
 This separation enables WAL-based durability without constant disk I/O.
 
@@ -608,7 +624,7 @@ RUMPS storage is a fairly standard "pages + WAL + B-tree" architecture, but tail
 
 | *Component*   | *Purpose*                                        |
 |---------------+--------------------------------------------------|
-| Pages         | Fixed-size I/O units, managed by LRU cache       |
+| Pages         | Fixed-size I/O units, managed by concurrent cache |
 | Superblock    | Database metadata (format version, pointers)     |
 | Allocator     | Bitmap tracking free/used pages                  |
 | Registry      | Maps global names to B-tree roots                |

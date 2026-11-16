@@ -54,13 +54,9 @@ Methods removed. Split decisions use key count (`keys.len() == max_keys`), not s
 
 `NodeRaw` deleted. `Node` now derives `Serialize`/`Deserialize` directly; `SmallVec` fields use their native serde support, and the `Arc<NodeData>` values field uses custom `ser_values`/`de_values` helpers that serialize through the `Arc` and wrap on deserialize. No intermediate `Vec` allocations.
 
-### 5. Page cache: `get()` takes a write lock for reads
+### ~~5. Page cache: `get()` takes a write lock for reads~~ DONE
 
-`PageCache::get()` acquires `self.cache.write().await` just to update LRU order. This serializes all reads behind a single writer. Two options:
-- Use a concurrent-friendly LRU (e.g. `moka` or `quick_cache`) that doesn't need exclusive access for reads
-- Separate the stats tracking from the LRU access (stats can use `AtomicU64`)
-
-Also: `get()` acquires two locks sequentially (cache + stats). The stats lock should use atomics instead.
+Replaced `RwLock<LruCache>` with `moka::sync::Cache` (lock-free reads, TinyLFU admission). Stats use `AtomicU64`. All cache operations are now sync (no `.await`).
 
 ### 6. Two-layer cache redundancy
 
@@ -102,6 +98,6 @@ Fix: return `Arc<Node>` from reads instead of cloned `Node`. For mutations, use 
 
 `flush()` uses `FuturesUnordered` to write dirty pages (good), but then does a single `sync_all()`. For many dirty pages, consider batched writes with `writev` (vectored I/O) to reduce syscall overhead. The comment in the code ("sequential for now; could parallelize") is already outdated since it uses `FuturesUnordered`, but the underlying writes still contend on the single `RwLock<File>` (see #9).
 
-### 14. Dirty set uses separate `RwLock<HashSet>`
+### ~~14. Dirty set uses separate `RwLock<HashSet>`~~ DONE
 
-`PageCache` tracks dirty pages in a `RwLock<HashSet<PageId>>` separate from the LRU cache. This means every `put()` acquires three locks: cache, dirty_set, and stats. Fold the dirty bit into the `CachedPage` entry itself (it's already a struct; add a `dirty: bool` field) to eliminate the separate lock.
+Dirty tracking folded into cache entries as `Arc<AtomicBool>`. No separate lock; `mark_dirty`/`mark_flushed`/`mark_clean` flip the atomic without re-inserting. Dirty evictions captured by moka's eviction listener.
