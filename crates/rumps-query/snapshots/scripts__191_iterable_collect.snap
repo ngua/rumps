@@ -1,5 +1,0 @@
----
-source: crates/rumps-query/tests/scripts.rs
-description: "; `Iterable:collect` was removed; use `Range.collect`.\n\nfun main() {\n  let xs = Iterable:collect(1 .. 10)\n  write xs\n}\n"
----
-ERROR: class `Iterable` has no method `collect`

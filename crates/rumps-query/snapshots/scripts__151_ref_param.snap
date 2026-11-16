@@ -1,8 +1,0 @@
----
-source: crates/rumps-query/tests/scripts.rs
-description: "; Test Ref-typed function parameters with explicitly typed Local/Global args\n\nfun main() {\n  ; Explicit type annotations\n  let loc: Local = data{}\n  let glob: Global = ^info{}\n\n  ; Pass explicitly typed values to Ref parameter\n  write takes-ref(loc)\n  write takes-ref(glob)\n\n  ; Also test inline refs\n  write takes-ref(data{1, 2})\n  write takes-ref(^global{\"key\"})\n}\n\nfun takes-ref(r: Ref) -> String {\n  \"got ref\"\n}\n"
----
-got ref
-got ref
-got ref
-got ref

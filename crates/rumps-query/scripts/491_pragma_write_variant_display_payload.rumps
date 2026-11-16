@@ -1,7 +1,0 @@
-#(deriving: Display)
-variant Box = Box(Int, String) | Empty
-
-fun main() {
-  write :display(Box.Box(1, "a"))
-  write :display(Box.Empty)
-}

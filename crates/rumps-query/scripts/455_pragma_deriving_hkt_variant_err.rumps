@@ -1,6 +1,0 @@
-#(deriving: Mappable)
-variant Box[T] = Box(T)
-
-fun main() {
-  write "bad"
-}

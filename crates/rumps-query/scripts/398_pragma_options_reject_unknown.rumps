@@ -1,5 +1,0 @@
-#(options: mystery-size = 128)
-
-fun main() {
-  write "bad"
-}

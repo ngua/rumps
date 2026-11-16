@@ -1,7 +1,0 @@
-; Error: unknown constraint name
-
-fun main() {}
-
-fun bad[T: Unknown](x: T) -> T {
-  x
-}

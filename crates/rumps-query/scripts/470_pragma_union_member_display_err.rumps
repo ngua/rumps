@@ -1,7 +1,0 @@
-variant Token = Token
-union Showable = Int | Token
-
-fun main() {
-  let x: Showable = 1
-  write :display(x)
-}

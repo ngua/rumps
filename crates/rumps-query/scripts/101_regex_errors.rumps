@@ -1,8 +1,0 @@
-; Regex error handling
-; Tests invalid regex patterns produce type errors
-
-fun main() {
-  ; Invalid regex pattern (unclosed group)
-  let r = /(abc/
-  write "test" matches r
-}

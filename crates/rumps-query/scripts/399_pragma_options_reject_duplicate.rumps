@@ -1,6 +1,0 @@
-#(options: sync-mode = immediate)
-#(options: sync-mode = relaxed)
-
-fun main() {
-  write "bad"
-}

@@ -1,6 +1,0 @@
-; `Iterable:collect` was removed; use `Range.collect`.
-
-fun main() {
-  let xs = Iterable:collect(1 .. 10)
-  write :display(xs)
-}

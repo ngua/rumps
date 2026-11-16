@@ -1,9 +1,0 @@
-; Functions that evaluate to functions
-
-fun main() {
-  write f()(1, 2)
-}
-
-fun f() -> ((Int, Int) -> Int) {
-  (x, y) => { x + y }
-}

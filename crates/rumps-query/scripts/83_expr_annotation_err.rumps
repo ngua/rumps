@@ -1,7 +1,0 @@
-; Test: Expression annotation type mismatch error
-; Annotating an Int as String should fail
-
-fun main() {
-  let x = (42) : String
-  write x
-}

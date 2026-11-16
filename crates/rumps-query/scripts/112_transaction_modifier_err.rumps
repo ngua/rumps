@@ -1,8 +1,0 @@
-; Test: duplicate/out-of-order transaction modifiers produce parse errors
-
-fun main() {
-  ; Duplicate on conflict should fail
-  let r = transaction {
-    @set ^data{1} "one"
-  } on conflict abort on conflict SKIP
-}

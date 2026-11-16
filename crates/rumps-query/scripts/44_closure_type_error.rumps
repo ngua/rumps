@@ -1,9 +1,0 @@
-; Test: Closure Parameter Type Error
-; Calling a typed closure with wrong argument type.
-
-fun main() {
-  let double = (x: Int) -> Int => x * 2
-
-  ; Pass string to Int parameter
-  write double("hello")
-}

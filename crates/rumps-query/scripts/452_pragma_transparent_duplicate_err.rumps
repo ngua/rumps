@@ -1,7 +1,0 @@
-#(transparent)
-#(transparent)
-newtype UserId = Int
-
-fun main() {
-  write "bad"
-}

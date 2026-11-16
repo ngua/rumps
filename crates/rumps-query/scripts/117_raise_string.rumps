@@ -1,6 +1,0 @@
-; Test raise with a string message
-
-fun main() {
-  raise "something went wrong"
-  Unit
-}

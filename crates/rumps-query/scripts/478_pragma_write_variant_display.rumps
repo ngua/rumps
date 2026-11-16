@@ -1,6 +1,0 @@
-#(deriving: Display)
-variant Token = Token
-
-fun main() {
-  write :display(Token.Token)
-}

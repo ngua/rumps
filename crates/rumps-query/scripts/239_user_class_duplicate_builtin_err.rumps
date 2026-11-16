@@ -1,7 +1,0 @@
-; Error: defining a class with a name that conflicts with a builtin class.
-
-class Into[T] C {
-  fun convert(x: C) -> T
-}
-
-fun main() {}

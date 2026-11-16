@@ -1,5 +1,0 @@
----
-source: crates/rumps-query/tests/scripts.rs
-description: "; `Iterable` constraint rejects non-iterable values\n\nfun main() {\n  ; This should fail: `Int` does not satisfy `Iterable`\n  write process(42)\n}\n\nfun process[T: Iterable](i: T) -> Int {\n  Iterable:length(i)\n}\n"
----
-ERROR: type `Int` does not satisfy `Iterable` class

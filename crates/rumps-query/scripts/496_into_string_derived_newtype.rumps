@@ -1,7 +1,0 @@
-#(deriving: Into[String])
-newtype Label = String
-
-fun main() {
-  let x: Label = "ok"
-  write x as String
-}

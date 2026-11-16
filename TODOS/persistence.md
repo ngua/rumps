@@ -8,11 +8,10 @@
 
 These are the current next steps (post persistence and basic DB):
 
-- **Query Language**: Parser and evaluator for MUMPS commands (rewrite old parser; see ./dsl.md for sketch in progress)
 - **Networking**: Client-server protocol for remote access
 - **Parallel Transactions**: Enable concurrent transaction execution to improve throughput (see [persistence/parallel-transactions.md](persistence/parallel-transactions.md))
 
-These are the potential next steps (post query layer and networking):
+These are the potential next steps (post networking):
 
 - **Compression**: Compress nodes/pages to save disk space (see [persistence/compression.md](persistence/compression.md))
 - **Encryption**: Optional encryption at rest (see [persistence/encryption.md](persistence/encryption.md))

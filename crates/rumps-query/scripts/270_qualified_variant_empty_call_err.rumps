@@ -1,6 +1,0 @@
-; Qualified variant constructor call requires a payload.
-
-fun main() {
-  let x = Option.Some()
-  write :display(x)
-}

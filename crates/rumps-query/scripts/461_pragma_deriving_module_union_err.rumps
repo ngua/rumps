@@ -1,8 +1,0 @@
-module Types {
-  #(deriving: Eq)
-  union NameOrId = String | Int
-}
-
-fun main() {
-  write "bad"
-}

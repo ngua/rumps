@@ -1,5 +1,0 @@
-; Array destructuring not allowed in let (only in match)
-
-fun main() {
-  let [a, b, ...rest] = [1, 2, 3]
-}

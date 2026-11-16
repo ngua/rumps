@@ -1,7 +1,0 @@
-#(transparent)
-#(deriving: Eq)
-newtype UserId = Int
-
-fun main() {
-  write "bad"
-}

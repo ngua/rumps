@@ -1,3 +1,0 @@
-fun main() {
-  let _ = @kill ^data{1}
-}

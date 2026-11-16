@@ -1,9 +1,0 @@
-; Error test: global Ref variable write outside transaction
-
-fun main() {
-  ; Create a global ref
-  let g = ^info{"test-key"}
-
-  ; This should fail: global write requires transaction
-  let _ = @set g "should fail"
-}

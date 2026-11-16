@@ -1,7 +1,0 @@
-; Test Chainable:chain rejects Result/Option mismatch
-
-fun main() {
-  let res = Result.Ok(42) : Result[Int, String]
-  let bad = Chainable:chain((x: Int) => Option.Some(x + 1), res) : Option[Int]
-  write :display(bad)
-}

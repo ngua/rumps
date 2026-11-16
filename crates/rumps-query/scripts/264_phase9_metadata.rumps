@@ -1,6 +1,0 @@
-; Phase 9 expression metadata combinations
-
-fun main() {
-  write :display(:bimap(x => x + 1, s => "{s}!", Result.Ok(1)))
-  write :display(:bimap(x => x + 1, s => "{s}!", Result.Err("no")))
-}

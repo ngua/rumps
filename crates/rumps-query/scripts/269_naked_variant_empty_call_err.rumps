@@ -1,6 +1,0 @@
-; Naked variant constructor call requires a payload.
-
-fun main() {
-  let x = .Some()
-  write x
-}

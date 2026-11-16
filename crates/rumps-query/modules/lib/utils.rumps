@@ -1,7 +1,0 @@
-; Utility module for testing multiple imports
-
-+let version = "1.0"
-
-+fun stringify(x: Int) -> String { "{x}" }
-
-+fun is-even(n: Int) -> Bool { n % 2 == 0 }

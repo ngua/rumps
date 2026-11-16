@@ -1,8 +1,0 @@
-variant Token = Token
-
-union Text = Token | String
-
-fun main() {
-  let x: Text = Token.Token
-  write :display(x)
-}

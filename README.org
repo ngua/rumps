@@ -359,7 +359,7 @@ let db = Database::builder()
     .await?;
 #+end_src
 ***** In-memory performance
-When using =Database::in_memory()=, there's no WAL, no =fsync=, no disk I/O at all. Throughput /can be/ substantially higher but see the caveat below regarding I/O amortization relative to normal on-disk DBs:
+When using =Database::in_memory()=, there's WAL, =fsync=, or disk I/O. Throughput /can be/ substantially higher but see the caveat below regarding I/O amortization relative to normal on-disk DBs:
 
 | *Workload*                        | *Throughput*     |
 |-----------------------------------+------------------|

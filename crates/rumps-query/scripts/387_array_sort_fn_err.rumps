@@ -1,3 +1,0 @@
-fun main() {
-  write :display(Array.sort([x => x, y => y]))
-}

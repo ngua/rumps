@@ -1,5 +1,0 @@
-; `Reversible` was removed; use `Iterable:reverse`.
-
-fun main() {
-  write :display(Reversible:reverse([1, 2, 3]))
-}

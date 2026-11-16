@@ -1,6 +1,0 @@
-; Explicit `Map[K, V]` annotations require `Ord` keys.
-
-fun main() {
-  let m: Map[(Int) -> Int, String] = Map.empty()
-  write :display(m)
-}

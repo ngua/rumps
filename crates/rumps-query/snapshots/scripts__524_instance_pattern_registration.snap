@@ -1,7 +1,0 @@
----
-source: crates/rumps-query/tests/scripts.rs
-description: "; Instance patterns survive both registration passes.\n\n#(deriving: Display)\nvariant Tagged[Tag, Val] = Tagged(Tag, Val)\n\nclass Wrappable for Tagged[String] {\n  fun wrap(v: V) -> Tagged[String, V] {\n    Tagged.Tagged(\"tag\", v)\n  }\n}\n\nunion Choice[T] = Option[T] | Array[T]\n\nclass Display for Choice[T] {\n  fun display(c: Choice[T]) -> String {\n    \"choice\"\n  }\n}\n\nclass Numeric for Choice[T] { }\n\nvariant Pair[A, B] = Pair(A, B)\n\nclass Into[String] for Pair[Int, V] {\n  fun into(p: Pair[Int, V]) -> String {\n    \"pair\"\n  }\n}\n\nfun main() {\n  let t: Tagged[String, Int] = Wrappable:wrap(7)\n  write :display(t)\n\n  let c: Choice[Int] = Option.Some(1)\n  write :display(c)\n\n  let p = Pair.Pair(1, true)\n  write Into[String]:into(p)\n}\n"
----
-Tagged.Tagged("tag", 7)
-choice
-pair

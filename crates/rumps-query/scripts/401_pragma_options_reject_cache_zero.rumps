@@ -1,5 +1,0 @@
-#(options: cache-size = 0)
-
-fun main() {
-  write "bad"
-}

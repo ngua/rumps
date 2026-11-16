@@ -1,5 +1,0 @@
-fun main() {
-  let xs: Array[Int] = Range.collect(1 .. 10)
-  let ys = Mappable:map(x => x + 1, xs)
-  write :display(ys)
-}

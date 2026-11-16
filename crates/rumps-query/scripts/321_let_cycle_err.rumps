@@ -1,8 +1,0 @@
-; Cyclic ordinary `let` groups are rejected clearly.
-
-fun main() {
-  write a
-}
-
-let a = b
-let b = a

@@ -1,6 +1,0 @@
----
-source: crates/rumps-query/tests/scripts.rs
-description: "; Higher kinded instances infer element types from the receiver.\n\nvariant Box[T] = Box(T)\n\nclass Wrappable[Int] for Box {\n  fun wrap(v: T) -> Box[T] {\n    Box.Box(v)\n  }\n}\n\nfun main() { }\n"
----
-ERROR: class `Wrappable` is higher-kinded; element types are inferred from the type's remaining parameters
-class `Wrappable` is higher-kinded; element types are inferred from the type's remaining parameters

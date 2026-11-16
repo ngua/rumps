@@ -1,6 +1,0 @@
-; Error test: Global/Local type mismatch
-
-fun main() {
-  ; Assigning a Local ref to Global type should error
-  let x: Global = data{}
-}

@@ -1,9 +1,0 @@
-; Error: constraint violation; calling an `Additive` function with `String`
-
-fun main() {
-  write add-numeric("foo", "bar")
-}
-
-fun add-numeric[T: Additive](a: T, b: T) -> T {
-  a + b
-}

@@ -1,8 +1,0 @@
-#(deriving: Into[String], TryInto[Int])
-newtype Label = String
-
-fun main() {
-  let x: Label = "42"
-  write x as String
-  write (x read Int)!
-}

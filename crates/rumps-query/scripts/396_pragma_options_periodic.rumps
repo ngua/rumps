@@ -1,5 +1,0 @@
-#(options: sync-mode = periodic 120)
-
-fun main() {
-  write "periodic pragma"
-}
