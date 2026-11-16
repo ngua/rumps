@@ -46,18 +46,6 @@ No compression code yet; it's in the TODO. Now I have the complete picture. Here
 
 ## Storage Engine Performance Improvements
 
-### 1. Eliminate all `async_recursion` (24 call sites; high priority)
-
-**`btree.rs`**: 20 `#[async_recursion]` methods. **`transaction.rs`**: 3. **`wal/reader.rs`**: 1.
-
-Every `async_recursion` call boxes the future on the heap. B-tree traversals are bounded by tree height (typically 3-6 levels), so these can all be converted to iterative loops with an explicit stack (`SmallVec<[_; 8]>` would cover any realistic tree depth). The `stream::unfold`-based methods (`collects_find_next`, `collects_apply_filters`) are particularly bad since they recurse inside a stream combinator.
-
-`load_registry_chain` in `engine/file.rs` also uses `BoxFuture` manually for the same reason; convert to a simple `while let` loop.
-
-### 2. Replace `async_trait` with native async traits (high priority)
-
-4 trait impls across `AsyncStorageEngine` and `NodeAllocator`. Rust stable has had native `async fn` in traits since 1.75. `async_trait` boxes every future, adding an allocation per trait method call. These are hot paths (every read/write goes through `AsyncStorageEngine`).
-
 ### 3. Fix `serialized_size()` and `would_fit()` (serialize-to-measure; high priority)
 
 `Node::serialized_size()` converts `SmallVec` -> `Vec` (allocating `NodeRaw`), then serializes the entire node to a `Vec<u8>` just to call `.len()`. This runs on every insert to check if a split is needed.

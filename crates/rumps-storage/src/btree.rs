@@ -2,7 +2,6 @@ use std::mem;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use dashmap::DashMap;
 use futures::stream::FuturesUnordered;
 use futures::{Stream, StreamExt, TryStreamExt};
@@ -121,79 +120,51 @@ pub struct BTreeStats {
     pub merges: u64,
 }
 
-/// Trait for node ID allocation strategies.
-#[async_trait]
-pub(crate) trait NodeAllocator: Send + Sync {
-    /// Allocate a new node ID
-    async fn allocate(&self) -> Result<NodeId>;
-
-    /// Deallocate a node ID for reuse
-    async fn deallocate(&self, id: NodeId) -> Result<()>;
-
-    /// Get the next available ID without allocating
-    async fn peek_next(&self) -> NodeId;
+/// Node ID allocation strategy; either in-memory (incrementing) or
+/// disk-backed (delegates to the storage engine's page allocator).
+pub(crate) enum NodeAllocator {
+    InMemory {
+        next_id: AtomicU64,
+    },
+    Disk {
+        storage: Arc<engine::FileStorageEngine>,
+    },
 }
 
-/// Simple incrementing allocator for in-memory use.
-pub(crate) struct IncrementingAllocator {
-    next_id: AtomicU64,
-}
-
-impl IncrementingAllocator {
-    pub(crate) fn new() -> Self {
-        Self {
+impl NodeAllocator {
+    pub(crate) fn in_memory() -> Self {
+        Self::InMemory {
             next_id: AtomicU64::new(0),
         }
     }
-}
 
-#[async_trait]
-impl NodeAllocator for IncrementingAllocator {
-    async fn allocate(&self) -> Result<NodeId> {
-        Ok(NodeId::from(self.next_id.fetch_add(1, Ordering::Relaxed)))
+    pub(crate) fn disk(storage: Arc<engine::FileStorageEngine>) -> Self {
+        Self::Disk { storage }
     }
 
-    async fn deallocate(&self, _id: NodeId) -> Result<()> {
-        // No-op for simple allocator
-        Ok(())
+    pub(crate) async fn allocate(&self) -> Result<NodeId> {
+        match self {
+            Self::InMemory { next_id } => {
+                Ok(NodeId::from(next_id.fetch_add(1, Ordering::Relaxed)))
+            }
+            Self::Disk { storage } => storage.allocate().await,
+        }
     }
 
-    async fn peek_next(&self) -> NodeId {
-        NodeId::from(self.next_id.load(Ordering::Relaxed))
-    }
-}
-
-/// Disk-backed allocator that delegates to storage engine.
-///
-/// Used when the B-tree is backed by persistent storage. Delegates all
-/// allocation/deallocation to the underlying `AsyncStorageEngine`, which
-/// manages page allocation via a free list or bitmap.
-pub(crate) struct DiskNodeAllocator {
-    storage: Arc<dyn engine::AsyncStorageEngine>,
-}
-
-impl DiskNodeAllocator {
-    /// Creates a new disk allocator backed by the given storage engine.
-    pub(crate) fn new(storage: Arc<dyn engine::AsyncStorageEngine>) -> Self {
-        Self { storage }
-    }
-}
-
-#[async_trait]
-impl NodeAllocator for DiskNodeAllocator {
-    async fn allocate(&self) -> Result<NodeId> {
-        self.storage.allocate().await
+    pub(crate) async fn deallocate(&self, id: NodeId) -> Result<()> {
+        match self {
+            Self::InMemory { .. } => Ok(()),
+            Self::Disk { storage } => storage.deallocate(id).await,
+        }
     }
 
-    async fn deallocate(&self, id: NodeId) -> Result<()> {
-        self.storage.deallocate(id).await
-    }
-
-    async fn peek_next(&self) -> NodeId {
-        // For disk-backed storage, peek_next isn't meaningful since
-        // pages can be allocated non-sequentially from a free list.
-        // Return a sentinel value.
-        NodeId::from(0)
+    pub(crate) async fn peek_next(&self) -> NodeId {
+        match self {
+            Self::InMemory { next_id } => {
+                NodeId::from(next_id.load(Ordering::Relaxed))
+            }
+            Self::Disk { .. } => NodeId::from(0),
+        }
     }
 }
 
@@ -267,10 +238,10 @@ pub(crate) struct BTree {
     /// When `None`, the B-tree operates entirely in memory.
     /// When `Some`, nodes are persisted to disk and the `nodes` map
     /// becomes a page cache with lazy loading.
-    storage: Option<Arc<dyn engine::AsyncStorageEngine>>,
+    storage: Option<Arc<engine::FileStorageEngine>>,
 
     /// Node ID allocator strategy.
-    allocator: Arc<dyn NodeAllocator>,
+    allocator: NodeAllocator,
 
     /// Minimum degree `t` of the B-tree.
     ///
@@ -323,7 +294,7 @@ pub(crate) struct BTree {
 #[derive(Default)]
 pub(crate) struct BTreeBuilder {
     min_degree: Option<usize>,
-    storage: Option<Arc<dyn engine::AsyncStorageEngine>>,
+    storage: Option<Arc<engine::FileStorageEngine>>,
     max_memory_bytes: Option<usize>,
 }
 
@@ -347,10 +318,7 @@ impl BTreeBuilder {
     ///
     /// When set, the tree becomes disk-backed with lazy-loading and page caching.
     /// When `None` (default), the tree operates entirely in memory.
-    pub(crate) fn storage(
-        mut self,
-        s: Arc<dyn engine::AsyncStorageEngine>,
-    ) -> Self {
+    pub(crate) fn storage(mut self, s: Arc<engine::FileStorageEngine>) -> Self {
         self.storage = Some(s);
         self
     }
@@ -377,11 +345,9 @@ impl BTreeBuilder {
                 "min_degree must be >= 2".to_string(),
             ))
         } else {
-            let allocator: Arc<dyn NodeAllocator> = match &self.storage {
-                Some(storage) => {
-                    Arc::new(DiskNodeAllocator::new(Arc::clone(storage)))
-                }
-                None => Arc::new(IncrementingAllocator::new()),
+            let allocator = match &self.storage {
+                Some(storage) => NodeAllocator::disk(Arc::clone(storage)),
+                None => NodeAllocator::in_memory(),
             };
 
             Ok(BTree {

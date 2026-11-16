@@ -4,7 +4,6 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use futures::future::BoxFuture;
 use futures::stream::TryStreamExt;
 use tokio::fs::{self, File, OpenOptions};
@@ -12,8 +11,8 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
 use tokio::sync::RwLock;
 
 use super::{
-    AsyncStorageEngine, GlobalRegistry, IndirectPage, MetadataPage,
-    StorageConfig, StorageMetadata, Superblock,
+    GlobalRegistry, IndirectPage, MetadataPage, StorageConfig, StorageMetadata,
+    Superblock,
 };
 use crate::error::{Result, StorageError};
 use crate::node::{Node, NodeId};
@@ -563,9 +562,8 @@ impl FileStorageEngine {
     }
 }
 
-#[async_trait]
-impl AsyncStorageEngine for FileStorageEngine {
-    async fn read(&self, id: NodeId) -> Result<Node> {
+impl FileStorageEngine {
+    pub(crate) async fn read(&self, id: NodeId) -> Result<Node> {
         let page_id = PageId::from(id);
 
         // Check cache first
@@ -612,7 +610,11 @@ impl AsyncStorageEngine for FileStorageEngine {
         }
     }
 
-    async fn mark_dirty(&self, id: NodeId, node: &Node) -> Result<()> {
+    pub(crate) async fn mark_dirty(
+        &self,
+        id: NodeId,
+        node: &Node,
+    ) -> Result<()> {
         let page_id = PageId::from(id);
 
         // Put in cache as dirty
@@ -628,13 +630,13 @@ impl AsyncStorageEngine for FileStorageEngine {
         Ok(())
     }
 
-    async fn allocate(&self) -> Result<NodeId> {
+    pub(crate) async fn allocate(&self) -> Result<NodeId> {
         // Ensure we have capacity for another page (may grow bitmap if needed)
         self.ensure_bitmap_capacity().await?;
         Ok(NodeId::from(self.page_alloc.allocate().await?))
     }
 
-    async fn deallocate(&self, id: NodeId) -> Result<()> {
+    pub(crate) async fn deallocate(&self, id: NodeId) -> Result<()> {
         let page_id = PageId::from(id);
 
         // Remove from cache if present
@@ -646,7 +648,7 @@ impl AsyncStorageEngine for FileStorageEngine {
         Ok(())
     }
 
-    async fn flush(&self) -> Result<()> {
+    pub(crate) async fn flush(&self) -> Result<()> {
         // Get all dirty pages
         let dirty = self.cache.dirty_pages().await;
 
@@ -684,7 +686,7 @@ impl AsyncStorageEngine for FileStorageEngine {
         Ok(())
     }
 
-    async fn metadata(&self) -> StorageMetadata {
+    pub(crate) async fn metadata(&self) -> StorageMetadata {
         StorageMetadata {
             allocated_pages: self.page_alloc.allocated_count().await,
             free_pages: self.page_alloc.free_count().await,
@@ -694,9 +696,7 @@ impl AsyncStorageEngine for FileStorageEngine {
             data_dir: self.data_dir.clone(),
         }
     }
-}
 
-impl FileStorageEngine {
     /// Returns page cache statistics.
     pub(crate) async fn cache_stats(&self) -> page::PageCacheStats {
         self.cache.stats().await

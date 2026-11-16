@@ -122,8 +122,8 @@ use tokio::sync::RwLock;
 
 use crate::btree::{BTree, BTreeBuilder, BTreeStats};
 use crate::engine::{
-    AsyncStorageEngine, FileStorageEngine, MetadataPage, SafeReconfiguration,
-    StorageConfig, StorageMetadata, Superblock,
+    FileStorageEngine, MetadataPage, SafeReconfiguration, StorageConfig,
+    StorageMetadata, Superblock,
 };
 use crate::error::StorageError;
 use crate::node::{NodeData, NodeId};
@@ -283,8 +283,7 @@ impl Database {
 
         let btree = Arc::new(
             BTreeBuilder::default()
-                .storage(Arc::clone(&storage)
-                    as Arc<dyn crate::engine::AsyncStorageEngine>)
+                .storage(Arc::clone(&storage))
                 .min_degree(deg as usize)
                 .build()?,
         );
@@ -1643,7 +1642,7 @@ impl DatabaseBuilder {
         );
 
         let mut builder = BTreeBuilder::default()
-            .storage(Arc::clone(&storage) as Arc<dyn AsyncStorageEngine>)
+            .storage(Arc::clone(&storage))
             .min_degree(deg as usize);
         if let Some(bytes) = self.max_memory_bytes {
             builder = builder.max_memory_bytes(bytes);
@@ -1726,7 +1725,7 @@ impl DatabaseOverride {
 
         let deg = storage.min_degree().await as usize;
         let mut builder = BTreeBuilder::default()
-            .storage(Arc::clone(&storage) as Arc<dyn AsyncStorageEngine>)
+            .storage(Arc::clone(&storage))
             .min_degree(deg);
         if let Some(bytes) = storage.max_memory_bytes().await {
             builder = builder.max_memory_bytes(bytes);
