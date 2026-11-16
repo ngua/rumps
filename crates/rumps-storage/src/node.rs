@@ -142,12 +142,11 @@ impl fmt::Display for NodeId {
 /// Values are wrapped in `Arc<NodeData>` for efficient hierarchy navigation.
 /// MUMPS operations like `$DATA`, `$ORDER`, and internal ancestor maintenance
 /// frequently check the `has_descendants` flag without needing ownership.
-/// Using `Arc` makes these checks cheap - just a reference count increment.
+/// Using `Arc` makes these checks cheap; just a reference count increment.
 ///
-/// Serialization goes through [`NodeRaw`] (without `Arc` wrappers) via the
-/// `#[serde(from/into)]` attributes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(from = "NodeRaw", into = "NodeRaw")]
+/// Serialization works directly on the `SmallVec` and `Arc` fields with no
+/// intermediate allocation.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Node {
     /// Complete key paths (sorted) stored in this node
     pub(crate) keys: KeyVec,
@@ -159,14 +158,75 @@ pub(crate) struct Node {
     pub(crate) is_leaf: bool,
 }
 
-impl From<NodeRaw> for Node {
-    fn from(raw: NodeRaw) -> Self {
-        Self {
-            keys: raw.keys.into_iter().collect(),
-            children: raw.children.into_iter().collect(),
-            values: raw.values.into_iter().map(Arc::new).collect(),
-            is_leaf: raw.is_leaf,
+impl Serialize for Node {
+    fn serialize<S: Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::{SerializeSeq, SerializeStruct};
+        let mut s = ser.serialize_struct("Node", 4)?;
+        s.serialize_field("keys", &self.keys)?;
+        s.serialize_field("children", &self.children)?;
+
+        struct Values<'a>(&'a ValueVec);
+        impl Serialize for Values<'_> {
+            fn serialize<S: Serializer>(
+                &self,
+                ser: S,
+            ) -> Result<S::Ok, S::Error> {
+                let mut seq = ser.serialize_seq(Some(self.0.len()))?;
+                self.0
+                    .iter()
+                    .try_for_each(|v| seq.serialize_element(v.as_ref()))?;
+                seq.end()
+            }
         }
+
+        s.serialize_field("values", &Values(&self.values))?;
+        s.serialize_field("is_leaf", &self.is_leaf)?;
+        s.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for Node {
+    fn deserialize<D: Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        struct NodeVisitor;
+
+        impl<'de> Visitor<'de> for NodeVisitor {
+            type Value = Node;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("a Node struct")
+            }
+
+            fn visit_seq<A: de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<Self::Value, A::Error> {
+                let keys = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::missing_field("keys"))?;
+                let children = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::missing_field("children"))?;
+                let raw: SmallVec<[NodeData; INLINE_CAP]> = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::missing_field("values"))?;
+                let is_leaf = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::missing_field("is_leaf"))?;
+
+                Ok(Node {
+                    keys,
+                    children,
+                    values: raw.into_iter().map(Arc::new).collect(),
+                    is_leaf,
+                })
+            }
+        }
+
+        de.deserialize_struct(
+            "Node",
+            &["keys", "children", "values", "is_leaf"],
+            NodeVisitor,
+        )
     }
 }
 
@@ -246,91 +306,6 @@ impl Node {
     /// ```
     pub(crate) fn is_empty(&self) -> bool {
         self.keys.is_empty()
-    }
-
-    /// Calculates the serialized size of this node in bytes.
-    ///
-    /// This is useful for determining when a node needs to be split to fit
-    /// within a fixed page size. The calculation accounts for all components:
-    /// `is_leaf` flag, `keys`, `children`, and `values`.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use rumps_storage::node::{Node, NodeData};
-    /// use rumps_types::{Key, Value};
-    /// use std::sync::Arc;
-    ///
-    /// let mut node = Node::new_leaf();
-    /// let empty_size = node.serialized_size();
-    ///
-    /// // Add an entry
-    /// node.keys.push(key!["A"]);
-    /// node.values.push(Arc::new(NodeData::with_value(Value::Integer(1))));
-    ///
-    /// let with_entry_size = node.serialized_size();
-    /// assert!(with_entry_size > empty_size);
-    /// ```
-    pub(crate) fn serialized_size(&self) -> usize {
-        let raw = NodeRaw {
-            keys: self.keys.to_vec(),
-            children: self.children.to_vec(),
-            values: self.values.iter().map(|a| (**a).clone()).collect(),
-            is_leaf: self.is_leaf,
-        };
-        bincode::serialize(&raw)
-            .map(|bytes| bytes.len())
-            .unwrap_or(0)
-    }
-
-    /// Estimates whether adding a new key-value pair would fit within the given size limit.
-    ///
-    /// This is useful during insertion to determine if the node needs to be split
-    /// before adding a new entry. The estimate accounts for the serialized size
-    /// of the new key and value.
-    ///
-    /// # Arguments
-    ///
-    /// * `key` - The key to potentially add
-    /// * `value` - The value data to potentially add
-    /// * `max_size` - The maximum allowed size in bytes (e.g., page size)
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use rumps_storage::node::{Node, NodeData};
-    /// use rumps_types::{Key, Value};
-    ///
-    /// let node = Node::new_leaf();
-    /// let key = key!["TEST"];
-    /// let value = NodeData::with_value(Value::Integer(42));
-    ///
-    /// // Assume 4KB page size
-    /// if node.would_fit(&key, &value, 4096) {
-    ///     println!("Entry would fit");
-    /// } else {
-    ///     println!("Need to split node first");
-    /// }
-    /// ```
-    pub(crate) fn would_fit(
-        &self,
-        key: &Key,
-        value: &NodeData,
-        max_size: usize,
-    ) -> bool {
-        // Calculate current size
-        let current_size = self.serialized_size();
-
-        // Estimate size of the new entry
-        // We add the key and value to temporary vectors and measure
-        bincode::serialize(&vec![key])
-            .and_then(|key_bytes| {
-                bincode::serialize(&vec![value]).map(|value_bytes| {
-                    let entry_size = key_bytes.len() + value_bytes.len();
-                    current_size + entry_size <= max_size
-                })
-            })
-            .unwrap_or(false)
     }
 }
 
@@ -647,35 +622,6 @@ impl<'de> Deserialize<'de> for NodeData {
     }
 }
 
-/// Serialization-friendly representation of a B-tree node.
-///
-/// Mirrors [`Node`] but without `Arc` wrappers on values, allowing
-/// efficient derived `Serialize`/`Deserialize` implementations.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct NodeRaw {
-    keys: Vec<Key>,
-    children: Vec<NodeId>,
-    values: Vec<NodeData>,
-    is_leaf: bool,
-}
-
-impl From<Node> for NodeRaw {
-    fn from(node: Node) -> Self {
-        Self {
-            keys: node.keys.into_vec(),
-            children: node.children.into_vec(),
-            values: node
-                .values
-                .into_iter()
-                .map(|arc| {
-                    Arc::try_unwrap(arc).unwrap_or_else(|a| (*a).clone())
-                })
-                .collect(),
-            is_leaf: node.is_leaf,
-        }
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -917,255 +863,7 @@ mod tests {
         assert!(internal.values.is_empty());
     }
 
-    #[test]
-    fn test_node_raw_serialization_empty_leaf() {
-        let raw = NodeRaw {
-            keys: vec![],
-            children: vec![],
-            values: vec![],
-            is_leaf: true,
-        };
-        let bytes = bincode::serialize(&raw).unwrap();
-        let deserialized: NodeRaw = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(raw, deserialized);
-    }
-
-    #[test]
-    fn test_node_raw_serialization_empty_internal() {
-        let raw = NodeRaw {
-            keys: vec![],
-            children: vec![],
-            values: vec![],
-            is_leaf: false,
-        };
-        let bytes = bincode::serialize(&raw).unwrap();
-        let deserialized: NodeRaw = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(raw, deserialized);
-    }
-
-    #[test]
-    fn test_node_raw_serialization_leaf_with_data() {
-        let raw = NodeRaw {
-            keys: vec![key![123, "NAME"], key![124, "NAME"]],
-            children: vec![],
-            values: vec![
-                NodeData::with_value(value!("John")),
-                NodeData::with_value(value!("Jane")),
-            ],
-            is_leaf: true,
-        };
-
-        let bytes = bincode::serialize(&raw).unwrap();
-        let deserialized: NodeRaw = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(raw, deserialized);
-    }
-
-    #[test]
-    fn test_node_raw_serialization_internal_with_children() {
-        let raw = NodeRaw {
-            keys: vec![key![100], key![200]],
-            children: vec![
-                NodeId::from(1u64),
-                NodeId::from(2u64),
-                NodeId::from(3u64),
-            ],
-            values: vec![NodeData::empty(), NodeData::empty()],
-            is_leaf: false,
-        };
-
-        let bytes = bincode::serialize(&raw).unwrap();
-        let deserialized: NodeRaw = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(raw, deserialized);
-        assert_eq!(deserialized.children.len(), 3);
-        assert_eq!(deserialized.keys.len(), 2);
-    }
-
-    #[test]
-    fn test_node_raw_roundtrip_various_types() {
-        let test_cases = vec![
-            NodeRaw {
-                keys: vec![],
-                children: vec![],
-                values: vec![],
-                is_leaf: true,
-            },
-            NodeRaw {
-                keys: vec![],
-                children: vec![],
-                values: vec![],
-                is_leaf: false,
-            },
-            NodeRaw {
-                keys: vec![key!["A"]],
-                children: vec![],
-                values: vec![NodeData::with_value(value!(42))],
-                is_leaf: true,
-            },
-            NodeRaw {
-                keys: vec![key![1, "a"], key![1, "b"], key![2, "a"]],
-                children: vec![],
-                values: vec![
-                    NodeData::with_value(value!(true)),
-                    NodeData::with_value(value!(3.14)),
-                    NodeData::new(Some(value!('x')), true),
-                ],
-                is_leaf: true,
-            },
-        ];
-
-        test_cases.into_iter().for_each(|original| {
-            let bytes = bincode::serialize(&original).unwrap();
-            let deserialized: NodeRaw = bincode::deserialize(&bytes).unwrap();
-            assert_eq!(original, deserialized);
-        });
-    }
-
-    #[test]
-    fn test_node_raw_serialization_preserves_is_leaf() {
-        let leaf = NodeRaw {
-            keys: vec![key!["test"]],
-            children: vec![],
-            values: vec![NodeData::with_value(value!(1))],
-            is_leaf: true,
-        };
-
-        let bytes = bincode::serialize(&leaf).unwrap();
-        let deserialized: NodeRaw = bincode::deserialize(&bytes).unwrap();
-        assert!(deserialized.is_leaf);
-
-        let internal = NodeRaw {
-            keys: vec![key!["test"]],
-            children: vec![NodeId::from(1u64), NodeId::from(2u64)],
-            values: vec![NodeData::empty()],
-            is_leaf: false,
-        };
-
-        let bytes = bincode::serialize(&internal).unwrap();
-        let deserialized: NodeRaw = bincode::deserialize(&bytes).unwrap();
-        assert!(!deserialized.is_leaf);
-    }
-
-    // Size Calculation Tests
-
-    #[test]
-    fn test_node_serialized_size_empty() {
-        let leaf = Node::new_leaf();
-        let size = leaf.serialized_size();
-        assert!(size > 0);
-
-        let internal = Node::new_internal();
-        let internal_size = internal.serialized_size();
-        assert!(internal_size > 0);
-    }
-
-    #[test]
-    fn test_node_serialized_size_grows_with_entries() {
-        let mut node = Node::new_leaf();
-        let empty_size = node.serialized_size();
-
-        // Add first entry
-        node.keys.push(key!["A"]);
-        node.values.push(Arc::new(NodeData::with_value(value!(1))));
-        let one_entry_size = node.serialized_size();
-        assert!(one_entry_size > empty_size);
-
-        // Add second entry
-        node.keys.push(key!["B"]);
-        node.values.push(Arc::new(NodeData::with_value(value!(2))));
-        let two_entry_size = node.serialized_size();
-        assert!(two_entry_size > one_entry_size);
-    }
-
-    #[test]
-    fn test_node_serialized_size_matches_actual() {
-        let node = Node {
-            keys: smallvec![key![123, "NAME"], key![124, "NAME"]],
-            children: smallvec![],
-            values: smallvec![
-                Arc::new(NodeData::with_value(value!("John"))),
-                Arc::new(NodeData::with_value(value!("Jane"))),
-            ],
-            is_leaf: true,
-        };
-
-        let reported_size = node.serialized_size();
-        let raw = NodeRaw::from(node);
-        let actual_bytes = bincode::serialize(&raw).unwrap();
-        assert_eq!(reported_size, actual_bytes.len());
-    }
-
-    #[test]
-    fn test_node_would_fit_empty_node() {
-        let node = Node::new_leaf();
-        let key = key!["TEST"];
-        let value = NodeData::with_value(value!(42));
-
-        // Should fit in a 4KB page
-        assert!(node.would_fit(&key, &value, 4096));
-
-        // Should not fit in a tiny page
-        assert!(!node.would_fit(&key, &value, 10));
-    }
-
-    #[test]
-    fn test_node_would_fit_with_existing_entries() {
-        let mut node = Node::new_leaf();
-
-        // Add several entries
-        (0..10).for_each(|i| {
-            node.keys.push(key![i]);
-            node.values.push(Arc::new(NodeData::with_value(value!(i))));
-        });
-
-        let key = key!["NEW"];
-        let value = NodeData::with_value(value!("test"));
-
-        // Should fit in a large page
-        assert!(node.would_fit(&key, &value, 10000));
-
-        // May not fit in current size (should be at or near limit)
-        let current_size = node.serialized_size();
-        assert!(!node.would_fit(&key, &value, current_size));
-    }
-
-    #[test]
-    fn test_node_would_fit_large_value() {
-        let node = Node::new_leaf();
-        let key = key!["LARGE"];
-        let large_string = "x".repeat(5000);
-        let value = NodeData::with_value(value!(large_string));
-
-        // Should not fit in a 4KB page
-        assert!(!node.would_fit(&key, &value, 4096));
-
-        // Should fit in a larger page
-        assert!(node.would_fit(&key, &value, 10000));
-    }
-
-    #[test]
-    fn test_node_serialized_size_internal_with_children() {
-        let internal = Node {
-            keys: smallvec![key![100], key![200]],
-            children: smallvec![
-                NodeId::from(1u64),
-                NodeId::from(2u64),
-                NodeId::from(3u64),
-            ],
-            values: smallvec![
-                Arc::new(NodeData::empty()),
-                Arc::new(NodeData::empty()),
-            ],
-            is_leaf: false,
-        };
-
-        let size = internal.serialized_size();
-        let raw = NodeRaw::from(internal);
-        let bytes = bincode::serialize(&raw).unwrap();
-        assert_eq!(size, bytes.len());
-        assert!(size > 0);
-    }
-
-    // Node serde roundtrip tests (using derived Serialize/Deserialize via NodeRaw)
+    // Node serde roundtrip tests
 
     mod node_serde_tests {
         use super::*;

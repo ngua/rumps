@@ -38,25 +38,21 @@ These are future considerations not yet planned:
 
 ## Fixes
 
-Following needs to be fixed in storage layer (went nuts with async nonsense):
+### ~~1. Eliminate all `async_recursion`~~ DONE
 
-No compression code yet; it's in the TODO. Now I have the complete picture. Here's the performance improvement list:
+All 27 `#[async_recursion]` sites converted to iterative loops with explicit stacks. `async_recursion` crate removed. Three subtree-walking methods (`delete_subtree`, `collect_keys_from_node`, `check_descendants_from_node`) use `FuturesUnordered` for concurrent child loads.
 
----
+### ~~2. Replace `async_trait` with native async / remove trait objects~~ DONE
 
-## Storage Engine Performance Improvements
+`AsyncStorageEngine` trait deleted; methods are now inherent on `FileStorageEngine`. `NodeAllocator` trait replaced with an enum (`InMemory` / `Disk`). `async-trait` crate removed. No more `dyn` dispatch or boxed futures on the storage hot path.
 
-### 3. Fix `serialized_size()` and `would_fit()` (serialize-to-measure; high priority)
+### ~~3. Fix `serialized_size()` and `would_fit()`~~ DELETED
 
-`Node::serialized_size()` converts `SmallVec` -> `Vec` (allocating `NodeRaw`), then serializes the entire node to a `Vec<u8>` just to call `.len()`. This runs on every insert to check if a split is needed.
+Methods removed. Split decisions use key count (`keys.len() == max_keys`), not serialized size, so these were dead code. When page-size-based splitting is needed (e.g. for compression or variable-length pages), implement it with incremental size tracking from the start rather than serialize-to-measure.
 
-`would_fit()` calls `serialized_size()` AND serializes the new key+value into separate `Vec`s.
+### ~~4. Eliminate `NodeRaw` serde intermediary~~ DONE
 
-Fix: track size incrementally. Maintain a `cached_size: usize` field on `Node`, updated on insert/remove. For `would_fit`, compute the marginal cost of the new entry (key subscripts * avg subscript size + value tag byte + value payload) without serializing. Alternatively, use `bincode::serialized_size()` which computes size without allocating the output buffer, but incremental tracking is better.
-
-### 4. Eliminate `NodeRaw` serde intermediary
-
-`Node` uses `SmallVec<[_; 8]>` but bincode serde goes through `NodeRaw` (which uses `Vec` and non-`Arc` values). Every serialize does `SmallVec` -> `Vec` allocation; every deserialize does `Vec` -> `SmallVec` copy. Implement custom `Serialize`/`Deserialize` directly on `Node` (or on a wrapper) that reads/writes the `SmallVec` in place, skipping the intermediate allocation.
+`NodeRaw` deleted. `Node` now derives `Serialize`/`Deserialize` directly; `SmallVec` fields use their native serde support, and the `Arc<NodeData>` values field uses custom `ser_values`/`de_values` helpers that serialize through the `Arc` and wrap on deserialize. No intermediate `Vec` allocations.
 
 ### 5. Page cache: `get()` takes a write lock for reads
 
@@ -86,13 +82,13 @@ Fix: implement a subtree-drop operation that removes an entire subtree in one pa
 
 Fix: use `pread`/`pwrite` (positional I/O) which don't need seeking and can run concurrently. On Linux, `pread64`/`pwrite64` are atomic at the page level. Tokio's `spawn_blocking` + `std::os::unix::fs::FileExt` is one path; `io_uring` via `tokio-uring` is the high-performance path.
 
-### 10. Full-page reads and writes (always `PAGE_SIZE` bytes)
+### 10. Full-page reads and writes (always `PAGE_SIZE` bytes; high priority)
 
 `read()` always reads `PAGE_SIZE` bytes and deserializes the whole buffer. `write_page_to_disk()` serializes then pads to `PAGE_SIZE`. A small leaf node that serializes to 200 bytes still reads/writes 4096 bytes.
 
 When compression is added (per your TODO), this becomes critical: store the compressed length in a small header, read only the compressed bytes, decompress on demand. Without compression, at least consider variable-length records with a page directory for multi-record pages, or prefix compression for keys that share common prefixes (which is the norm in RUMPS's hierarchical key model).
 
-### 11. `Node::clone()` is expensive and pervasive
+### 11. `Node::clone()` is expensive and pervasive (high priority)
 
 `Node` contains `SmallVec<[Key; 8]>`, `SmallVec<[Arc<NodeData>; 8]>`, `SmallVec<[NodeId; 8]>`. Cloning a `Node` deep-copies all the `SmallVec`s (though `NodeData` is behind `Arc`). `btree.rs` clones nodes frequently: `Arc::try_unwrap(...).unwrap_or_else(|arc| (*arc).clone())` appears 4 times. The engine's `read()` also clones: it returns `Ok((*cached).clone())` from the cache hit path.
 
