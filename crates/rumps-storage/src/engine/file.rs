@@ -1,12 +1,12 @@
 //! File-based storage engine with WAL and page cache.
 
-use std::fmt;
+use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::{fmt, fs};
 
 use futures::future::BoxFuture;
-use futures::stream::TryStreamExt;
-use tokio::fs::{self, File, OpenOptions};
+use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
 use tokio::sync::RwLock;
 
@@ -55,8 +55,8 @@ struct LoadedIndirectPages {
 /// [`open`]: Self::open
 /// [`create`]: Self::create
 pub(crate) struct FileStorageEngine {
-    /// Data file handle for page I/O.
-    data_file: Arc<RwLock<File>>,
+    /// Data file handle for page I/O (positional reads/writes via `pread`/`pwrite`).
+    data_file: Arc<fs::File>,
 
     /// Write-ahead log for durability.
     wal: Arc<WalWriter>,
@@ -104,7 +104,7 @@ pub(crate) struct FileStorageEngine {
     /// Lock file handle; held for the lifetime of the engine to prevent
     /// concurrent access from other processes.
     #[allow(dead_code)]
-    lock_file: std::fs::File,
+    lock_file: fs::File,
 }
 
 impl fmt::Debug for FileStorageEngine {
@@ -134,12 +134,12 @@ impl FileStorageEngine {
     /// Creates the lock file if it doesn't exist, then attempts to acquire
     /// an exclusive (non-blocking) lock. Returns the locked file handle on
     /// success; the lock is held until the file is dropped.
-    fn acquire_lock(dir: &Path) -> Result<std::fs::File> {
+    fn acquire_lock(dir: &Path) -> Result<fs::File> {
         use fs2::FileExt;
 
         let lock_path = dir.join(Self::LOCK_FILE_NAME);
         // Note: `fs2` requires blocking I/O for lock acquisition
-        let lock_file = std::fs::OpenOptions::new()
+        let lock_file = fs::OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
@@ -318,8 +318,10 @@ impl FileStorageEngine {
         let sync_task_abort =
             Self::maybe_spawn_sync_task(&cfg, Arc::clone(&wal));
 
+        let data_file = Arc::new(file.into_std().await);
+
         Ok(Self {
-            data_file: Arc::new(RwLock::new(file)),
+            data_file,
             wal,
             cache: Arc::new(cache),
             page_alloc: Arc::new(page_alloc),
@@ -367,7 +369,7 @@ impl FileStorageEngine {
         let wal_dir = dir.join(Self::WAL_DIR_NAME);
 
         // Create directories
-        fs::create_dir_all(dir)
+        tokio::fs::create_dir_all(dir)
             .await
             .map_err(|e| StorageError::Io {
                 op: "create data directory".into(),
@@ -375,13 +377,13 @@ impl FileStorageEngine {
                 source: e,
             })?;
 
-        fs::create_dir_all(&wal_dir)
-            .await
-            .map_err(|e| StorageError::Io {
+        tokio::fs::create_dir_all(&wal_dir).await.map_err(|e| {
+            StorageError::Io {
                 op: "create WAL directory".into(),
                 path: wal_dir.clone(),
                 source: e,
-            })?;
+            }
+        })?;
 
         // Acquire exclusive lock after creating directories
         let lock_file = Self::acquire_lock(dir)?;
@@ -493,8 +495,10 @@ impl FileStorageEngine {
             let sync_task_abort =
                 Self::maybe_spawn_sync_task(&cfg, Arc::clone(&wal));
 
+            let data_file = Arc::new(file.into_std().await);
+
             Ok(Self {
-                data_file: Arc::new(RwLock::new(file)),
+                data_file,
                 wal,
                 cache: Arc::new(cache),
                 page_alloc: Arc::new(page_alloc),
@@ -551,52 +555,38 @@ impl FileStorageEngine {
 }
 
 impl FileStorageEngine {
-    async fn flush_evicted(
-        &self,
-        evicted: Vec<page::EvictedPage>,
-    ) -> Result<()> {
+    fn flush_evicted(&self, evicted: Vec<page::EvictedPage>) -> Result<()> {
         evicted
             .iter()
             .filter(|ev| ev.dirty)
-            .map(|ev| self.write_page_to_disk(ev.id, &ev.node))
-            .collect::<futures::stream::FuturesUnordered<_>>()
-            .try_collect()
-            .await
+            .try_for_each(|ev| self.write_page_to_disk(ev.id, &ev.node))
     }
 
-    pub(crate) async fn read(&self, id: NodeId) -> Result<Node> {
+    pub(crate) async fn read(&self, id: NodeId) -> Result<Arc<Node>> {
         let page_id = PageId::from(id);
 
         if let Some(cached) = self.cache.get(page_id) {
-            Ok((*cached).clone())
+            Ok(cached)
         } else {
-            // Cache miss; read from disk
-            let offset = page_id.byte_offset();
             let mut buf = vec![0u8; page::PAGE_SIZE];
-            let mut file = self.data_file.write().await;
-
-            file.seek(SeekFrom::Start(offset)).await.map_err(|e| {
-                StorageError::Io {
-                    op: "seek for read".into(),
-                    path: self.data_dir.join(Self::DATA_FILE_NAME),
-                    source: e,
-                }
-            })?;
-            file.read_exact(&mut buf)
-                .await
+            self.data_file
+                .read_exact_at(&mut buf, page_id.byte_offset())
                 .map_err(|e| StorageError::Io {
                     op: "read page".into(),
                     path: self.data_dir.join(Self::DATA_FILE_NAME),
                     source: e,
                 })?;
-            drop(file);
 
-            let node: Node = bincode::deserialize(&buf).map_err(|e| {
-                StorageError::Serialization(format!("deserialize node: {e}"))
-            })?;
+            let node: Arc<Node> = bincode::deserialize::<Node>(&buf)
+                .map(Arc::new)
+                .map_err(|e| {
+                    StorageError::Serialization(format!(
+                        "deserialize node: {e}"
+                    ))
+                })?;
 
-            let evicted = self.cache.put(page_id, node.clone(), false);
-            self.flush_evicted(evicted).await?;
+            let evicted = self.cache.put_arc(page_id, Arc::clone(&node), false);
+            self.flush_evicted(evicted)?;
 
             Ok(node)
         }
@@ -609,7 +599,7 @@ impl FileStorageEngine {
     ) -> Result<()> {
         let page_id = PageId::from(id);
         let evicted = self.cache.put(page_id, node.clone(), true);
-        self.flush_evicted(evicted).await
+        self.flush_evicted(evicted)
     }
 
     pub(crate) async fn allocate(&self) -> Result<NodeId> {
@@ -631,18 +621,14 @@ impl FileStorageEngine {
 
     pub(crate) async fn flush(&self) -> Result<()> {
         // Flush any dirty pages that were evicted since last drain
-        self.flush_evicted(self.cache.drain_evicted()).await?;
+        self.flush_evicted(self.cache.drain_evicted())?;
 
         let dirty = self.cache.dirty_pages();
 
         let ids: Vec<_> = dirty
             .iter()
-            .map(|(id, node)| async move {
-                self.write_page_to_disk(*id, node).await.map(|_| *id)
-            })
-            .collect::<futures::stream::FuturesUnordered<_>>()
-            .try_collect()
-            .await?;
+            .map(|(id, node)| self.write_page_to_disk(*id, node).map(|_| *id))
+            .collect::<Result<_>>()?;
 
         self.cache.mark_flushed(&ids);
 
@@ -654,9 +640,7 @@ impl FileStorageEngine {
 
         // Sync data file (skip in Relaxed mode)
         if self.cfg.wal_config.sync_mode != SyncMode::Relaxed {
-            let file = self.data_file.read().await;
-
-            file.sync_all().await.map_err(|e| StorageError::Io {
+            self.data_file.sync_all().map_err(|e| StorageError::Io {
                 op: "sync data file".into(),
                 path: self.data_dir.join(Self::DATA_FILE_NAME),
                 source: e,
@@ -907,17 +891,11 @@ impl FileStorageEngine {
     // Private Helpers for write operations
 
     /// Write a page to disk at its designated offset.
-    async fn write_page_to_disk(&self, id: PageId, node: &Node) -> Result<()> {
-        use tokio::io::AsyncWriteExt;
-
-        let offset = id.byte_offset();
-
-        // Serialize node
+    fn write_page_to_disk(&self, id: PageId, node: &Node) -> Result<()> {
         let data = bincode::serialize(node).map_err(|e| {
             StorageError::InvalidOperation(format!("serialize node: {e}"))
         })?;
 
-        // Pad to page size
         let mut buf = vec![0u8; page::PAGE_SIZE];
 
         buf.get_mut(..data.len())
@@ -926,23 +904,13 @@ impl FileStorageEngine {
             })?
             .copy_from_slice(&data);
 
-        // Write to file
-        let mut file = self.data_file.write().await;
-
-        file.seek(SeekFrom::Start(offset)).await.map_err(|e| {
-            StorageError::Io {
-                op: "seek for write".into(),
+        self.data_file
+            .write_all_at(&buf, id.byte_offset())
+            .map_err(|e| StorageError::Io {
+                op: "write page".into(),
                 path: self.data_dir.join(Self::DATA_FILE_NAME),
                 source: e,
-            }
-        })?;
-        file.write_all(&buf).await.map_err(|e| StorageError::Io {
-            op: "write page".into(),
-            path: self.data_dir.join(Self::DATA_FILE_NAME),
-            source: e,
-        })?;
-
-        Ok(())
+            })
     }
 
     /// Flush metadata (bitmap pages + indirect pages + superblock) to disk.
@@ -983,7 +951,7 @@ impl FileStorageEngine {
             .collect();
 
         // Write bitmap pages sequentially
-        Self::write_pages(&self.data_file, &bm_pages, &data_path).await?;
+        Self::write_pages(&self.data_file, &bm_pages, &data_path)?;
 
         // Write indirect pages if present
         self.flush_indirect_pages(&data_path).await?;
@@ -994,7 +962,7 @@ impl FileStorageEngine {
         let sb_data = superblock.serialize();
         drop(superblock);
 
-        Self::write_page_at(&self.data_file, 0, &sb_data, &data_path).await
+        Self::write_page_at(&self.data_file, 0, &sb_data, &data_path)
     }
 
     /// Collect all bitmap page IDs from direct slots and indirect pages.
@@ -1035,100 +1003,69 @@ impl FileStorageEngine {
                 single_pid.byte_offset(),
                 &buf,
                 data_path,
-            )
-            .await?;
+            )?;
         }
 
         // Write double-indirect page and sub-pages if present
         if let (Some(double_pid), Some((double_page, sub_pages))) =
             (superblock.double_indirect, double_indirect.as_ref())
         {
-            // Write the double-indirect page itself
             let double_buf = double_page.serialize();
             Self::write_page_at(
                 &self.data_file,
                 double_pid.byte_offset(),
                 &double_buf,
                 data_path,
-            )
-            .await?;
+            )?;
 
-            // Write each sub-indirect page
             Self::write_sub_indirect_pages(
                 &self.data_file,
                 &double_page.entries,
                 sub_pages,
                 data_path,
-            )
-            .await?;
+            )?;
         }
 
         Ok(())
     }
 
-    /// Write sub-indirect pages recursively.
-    fn write_sub_indirect_pages<'a>(
-        file: &'a RwLock<File>,
-        pids: &'a [PageId],
-        pages: &'a [IndirectPage],
-        path: &'a Path,
-    ) -> BoxFuture<'a, Result<()>> {
-        Box::pin(async move {
-            match (pids.split_first(), pages.split_first()) {
-                (Some((&pid, rest_pids)), Some((page, rest_pages))) => {
-                    let buf = page.serialize();
-                    Self::write_page_at(file, pid.byte_offset(), &buf, path)
-                        .await?;
-                    Self::write_sub_indirect_pages(
-                        file, rest_pids, rest_pages, path,
-                    )
-                    .await
-                }
-                _ => Ok(()),
-            }
+    /// Write sub-indirect pages sequentially.
+    fn write_sub_indirect_pages(
+        file: &fs::File,
+        pids: &[PageId],
+        pages: &[IndirectPage],
+        path: &Path,
+    ) -> Result<()> {
+        pids.iter().zip(pages.iter()).try_for_each(|(&pid, page)| {
+            let buf = page.serialize();
+            Self::write_page_at(file, pid.byte_offset(), &buf, path)
         })
     }
 
     /// Write a sequence of pages to disk.
-    fn write_pages<'a>(
-        file: &'a RwLock<File>,
-        pages: &'a [(PageId, Vec<u8>)],
-        path: &'a Path,
-    ) -> BoxFuture<'a, Result<()>> {
-        Box::pin(async move {
-            match pages.split_first() {
-                None => Ok(()),
-                Some(((pid, buf), rest)) => {
-                    Self::write_page_at(file, pid.byte_offset(), buf, path)
-                        .await?;
-                    Self::write_pages(file, rest, path).await
-                }
-            }
+    fn write_pages(
+        file: &fs::File,
+        pages: &[(PageId, Vec<u8>)],
+        path: &Path,
+    ) -> Result<()> {
+        pages.iter().try_for_each(|(pid, buf)| {
+            Self::write_page_at(file, pid.byte_offset(), buf, path)
         })
     }
 
-    /// Write data at a specific offset.
-    async fn write_page_at(
-        file: &RwLock<File>,
+    /// Write data at a specific offset using positional I/O (`pwrite`).
+    fn write_page_at(
+        file: &fs::File,
         offset: u64,
         data: &[u8],
         path: &Path,
     ) -> Result<()> {
-        use tokio::io::AsyncWriteExt;
-
-        let mut f = file.write().await;
-        f.seek(SeekFrom::Start(offset)).await.map_err(|e| {
-            StorageError::Io {
-                op: "seek".into(),
+        file.write_all_at(data, offset)
+            .map_err(|e| StorageError::Io {
+                op: "write".into(),
                 path: path.to_path_buf(),
                 source: e,
-            }
-        })?;
-        f.write_all(data).await.map_err(|e| StorageError::Io {
-            op: "write".into(),
-            path: path.to_path_buf(),
-            source: e,
-        })
+            })
     }
 
     /// Ensure the bitmap has capacity for at least one more page allocation.
@@ -1189,45 +1126,20 @@ impl FileStorageEngine {
 
     /// Add a bitmap page to direct slots.
     async fn grow_bitmap_direct(&self) -> Result<()> {
-        use tokio::io::AsyncWriteExt;
-
-        // Allocate a new page for the bitmap
         let new_bm_page = self.page_alloc.allocate().await?;
 
-        // Mark it as reserved so it can't be freed
         self.page_alloc.add_reserved(new_bm_page.page_num()).await;
 
-        // Extend the allocator capacity
         let bits_per_page = page::PAGE_SIZE * 8;
         let new_capacity =
             self.page_alloc.capacity().await + bits_per_page as u64;
         self.page_alloc.extend_capacity(new_capacity).await;
 
-        // Add to superblock
         let mut superblock = self.superblock.write().await;
         superblock.add_direct_bitmap_page(new_bm_page)?;
         drop(superblock);
 
-        // Initialize the new bitmap page with zeros
-        let data_path = self.data_dir.join(Self::DATA_FILE_NAME);
-        let mut file = self.data_file.write().await;
-        let zeros = vec![0u8; page::PAGE_SIZE];
-
-        file.seek(SeekFrom::Start(new_bm_page.byte_offset()))
-            .await
-            .map_err(|e| StorageError::Io {
-                op: "seek to new bitmap page".into(),
-                path: data_path.clone(),
-                source: e,
-            })?;
-
-        file.write_all(&zeros).await.map_err(|e| StorageError::Io {
-            op: "initialize bitmap page".into(),
-            path: data_path,
-            source: e,
-        })?;
-
-        Ok(())
+        self.initialize_page(new_bm_page)
     }
 
     /// Add a bitmap page to indirect slots.
@@ -1268,8 +1180,8 @@ impl FileStorageEngine {
                 drop(single_indirect);
 
                 // Initialize pages with zeros
-                self.initialize_page(new_bm_page).await?;
-                self.initialize_page(single_page_id).await
+                self.initialize_page(new_bm_page)?;
+                self.initialize_page(single_page_id)
             }
             Some(page) if !page.is_full() => {
                 // Add to existing single-indirect
@@ -1286,7 +1198,7 @@ impl FileStorageEngine {
                 drop(single_indirect);
 
                 // Initialize the new bitmap page
-                self.initialize_page(new_bm_page).await
+                self.initialize_page(new_bm_page)
             }
             _ => {
                 // Single-indirect is full (or inconsistent state), need double-indirect
@@ -1341,9 +1253,9 @@ impl FileStorageEngine {
             drop(double_indirect);
 
             // Initialize all pages
-            self.initialize_page(double_page_id).await?;
-            self.initialize_page(sub_page_id).await?;
-            self.initialize_page(new_bm_page).await
+            self.initialize_page(double_page_id)?;
+            self.initialize_page(sub_page_id)?;
+            self.initialize_page(new_bm_page)
         } else {
             // Double-indirect exists, check sub-indirects
             let (double_page, sub_pages): &mut (
@@ -1377,7 +1289,7 @@ impl FileStorageEngine {
                     .push(new_bm_page)?;
 
                 drop(double_indirect);
-                self.initialize_page(new_bm_page).await
+                self.initialize_page(new_bm_page)
             } else if !double_page.is_full() {
                 // Create new sub-indirect
                 let sub_page_id = self.page_alloc.allocate().await?;
@@ -1399,8 +1311,8 @@ impl FileStorageEngine {
 
                 drop(double_indirect);
 
-                self.initialize_page(sub_page_id).await?;
-                self.initialize_page(new_bm_page).await
+                self.initialize_page(sub_page_id)?;
+                self.initialize_page(new_bm_page)
             } else {
                 // Both double-indirect and all sub-indirects are full
                 let max = Superblock::MAX_DIRECT_BITMAP_PAGES
@@ -1416,28 +1328,15 @@ impl FileStorageEngine {
     }
 
     /// Initialize a page with zeros on disk.
-    async fn initialize_page(&self, pid: PageId) -> Result<()> {
-        use tokio::io::AsyncWriteExt;
-
-        let data_path = self.data_dir.join(Self::DATA_FILE_NAME);
-        let mut file = self.data_file.write().await;
-        let zeros = vec![0u8; page::PAGE_SIZE];
-
-        file.seek(SeekFrom::Start(pid.byte_offset()))
-            .await
+    fn initialize_page(&self, pid: PageId) -> Result<()> {
+        let zeros = [0u8; page::PAGE_SIZE];
+        self.data_file
+            .write_all_at(&zeros, pid.byte_offset())
             .map_err(|e| StorageError::Io {
-                op: "seek to initialize page".into(),
-                path: data_path.clone(),
+                op: "initialize page".into(),
+                path: self.data_dir.join(Self::DATA_FILE_NAME),
                 source: e,
-            })?;
-
-        file.write_all(&zeros).await.map_err(|e| StorageError::Io {
-            op: "initialize page".into(),
-            path: data_path,
-            source: e,
-        })?;
-
-        Ok(())
+            })
     }
 
     // Registry Chain Operations
@@ -1521,7 +1420,7 @@ impl FileStorageEngine {
         let new_pid = self.page_alloc.allocate().await?;
 
         // Initialize the page on disk
-        self.initialize_page(new_pid).await?;
+        self.initialize_page(new_pid)?;
 
         // Re-acquire the lock and check if another thread beat us
         let mut chain = self.registry_chain.write().await;
@@ -1678,26 +1577,14 @@ impl FileStorageEngine {
         let chain = self.registry_chain.read().await;
         let data_path = self.data_dir.join(Self::DATA_FILE_NAME);
 
-        // Write each registry page
-        Self::write_registry_pages(&self.data_file, &chain, &data_path).await
-    }
-
-    /// Write registry pages recursively.
-    fn write_registry_pages<'a>(
-        file: &'a RwLock<File>,
-        pages: &'a [(PageId, GlobalRegistry)],
-        path: &'a Path,
-    ) -> BoxFuture<'a, Result<()>> {
-        Box::pin(async move {
-            match pages.split_first() {
-                None => Ok(()),
-                Some(((pid, reg), rest)) => {
-                    let buf = reg.serialize();
-                    Self::write_page_at(file, pid.byte_offset(), &buf, path)
-                        .await?;
-                    Self::write_registry_pages(file, rest, path).await
-                }
-            }
+        chain.iter().try_for_each(|(pid, reg)| {
+            let buf = reg.serialize();
+            Self::write_page_at(
+                &self.data_file,
+                pid.byte_offset(),
+                &buf,
+                &data_path,
+            )
         })
     }
 }
