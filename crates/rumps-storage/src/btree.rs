@@ -332,11 +332,7 @@ impl BTreeBuilder {
         self
     }
 
-    /// Builds the `BTree` with the configured settings.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `min_degree < 2`.
+    /// Builds the `BTree` with the configured settings. Fails if `min_degree < 2`.
     pub(crate) fn build(self) -> Result<BTree> {
         let min_degree = self.min_degree.unwrap_or(3);
 
@@ -580,29 +576,6 @@ impl BTree {
     /// that match the predicate, transformed by the extract function.
     ///
     /// Always reads committed state. Transaction context for metadata only.
-    ///
-    /// # Type Parameters
-    ///
-    /// * `P` - Predicate function: `(&Key, &NodeData) -> bool`
-    ///   - Returns `true` to include the entry in the stream
-    ///   - Returns `false` to skip the entry (iteration continues)
-    /// * `F` - Extract function: `(&Key, &NodeData) -> Option<T>`
-    ///   - Transforms matching entries into output type `T`
-    ///   - Returns `None` to skip (entry matched predicate but shouldn't be yielded)
-    ///   - Clone `NodeData` or its fields if ownership is needed
-    /// * `T` - Output type yielded by the stream
-    ///
-    /// # Arguments
-    ///
-    /// * `root` - Root `NodeId` of the tree
-    /// * `start` - Optional starting key (`None` starts from beginning)
-    /// * `pred` - Function that determines whether to include entries
-    /// * `extract` - Function that transforms entries into output type
-    /// * `ctx` - Optional transaction context for snapshot isolation
-    ///
-    /// # Returns
-    ///
-    /// A `Stream` that yields `Result<T>` for each matching entry.
     pub(crate) fn collects_at<'a, P, F, T>(
         &'a self,
         root: NodeId,
@@ -624,18 +597,6 @@ impl BTree {
     /// Convenience wrapper around `collects_at` that consumes the entire stream.
     /// Use `collects_at` directly for large datasets to avoid loading everything
     /// into memory.
-    ///
-    /// # Arguments
-    ///
-    /// * `root` - Root `NodeId` of the tree
-    /// * `start` - Optional key to start iteration after (exclusive)
-    /// * `pred` - Predicate returning `true` to include entry, `false` to skip
-    /// * `extract` - Extractor returning `Some(T)` to yield, `None` to skip
-    /// * `ctx` - Optional transaction context (currently unused)
-    ///
-    /// # Returns
-    ///
-    /// A `Vec<T>` containing all extracted values from matching entries.
     pub(crate) async fn collects_vec_at<P, F, T>(
         &self,
         root: NodeId,
@@ -660,17 +621,6 @@ impl BTree {
     /// a key is encountered that doesn't start with the prefix. This is much
     /// more efficient for prefix-based queries because it doesn't scan the
     /// entire tree after the prefix range.
-    ///
-    /// # Arguments
-    ///
-    /// * `root` - Root `NodeId` of the tree
-    /// * `prefix` - The key prefix to match
-    /// * `extract` - Extractor returning `Some(T)` to yield, `None` to skip
-    ///
-    /// # Returns
-    ///
-    /// A `Vec<T>` containing all extracted values from entries whose keys
-    /// start with `prefix`.
     pub(crate) async fn collects_prefix_vec_at<F, T>(
         &self,
         root: NodeId,
@@ -692,22 +642,6 @@ impl BTree {
     /// terminating as soon as a non-matching key is encountered. The iteration
     /// seeks to the prefix position first (O(log n)), then yields matching
     /// entries until the prefix range ends.
-    ///
-    /// # Type Parameters
-    ///
-    /// * `F` - Extract function: `(&Key, &NodeData) -> Option<T>`
-    /// * `T` - Output type yielded by the stream
-    ///
-    /// # Arguments
-    ///
-    /// * `root` - Root `NodeId` of the tree
-    /// * `prefix` - The key prefix to match
-    /// * `extract` - Transforms matching entries into output type `T`
-    ///
-    /// # Returns
-    ///
-    /// A `Stream` that yields `Result<T>` for each entry whose key starts
-    /// with `prefix`.
     pub(crate) fn collects_prefix_at<'a, F, T>(
         &'a self,
         root: NodeId,
@@ -727,12 +661,8 @@ impl BTree {
     /// Loads a node from cache or disk.
     ///
     /// First checks the in-memory `nodes` cache. On cache miss, loads from
-    /// storage (if available) and adds to cache.
-    ///
-    /// # Errors
-    ///
-    /// Returns `StorageError::NodeNotFound` if the node doesn't exist in
-    /// cache or storage.
+    /// storage (if available) and adds to cache. Returns
+    /// `StorageError::NodeNotFound` if absent from both.
     async fn load_node(&self, id: NodeId) -> Result<Arc<Node>> {
         // Check cache first; on miss, load from disk
         match self.nodes.get(id) {
@@ -1069,11 +999,6 @@ impl BTree {
 
     /// Internal QUERY operation returning the next full key in lexicographic order.
     ///
-    /// # Returns
-    ///
-    /// * `Ok(Some(key))` - The next key in lexicographic order
-    /// * `Ok(None)` - No more keys (end of iteration or empty tree)
-    ///
     /// # Algorithm
     ///
     /// 1. If `after` is `None`, return the leftmost (smallest) key
@@ -1159,31 +1084,15 @@ impl BTree {
         Ok(out)
     }
 
-    /// Internal operation returning next key and its data in one call.
-    ///
-    /// Combines `query_internal` and `get_internal` for efficiency in iteration.
-    ///
-    /// # Arguments
-    ///
-    /// * `root` - Root `NodeId` of the tree
-    /// * `after` - The key to start after, or `None` to get the first entry
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(Some((key, data)))` - Next entry found
-    /// * `Ok(None)` - No more entries
-    /// * `Err(...)` - Error during traversal
+    /// Internal operation returning next key and its data in a single traversal.
     async fn get_next_internal(
         &self,
         root: NodeId,
         after: Option<&Key>,
     ) -> Result<Option<(Key, Arc<NodeData>)>> {
-        match self.query_internal(root, after).await? {
-            None => Ok(None),
-            Some(key) => self
-                .get_internal(root, &key)
-                .await
-                .map(|opt| opt.map(|data| (key, data))),
+        match after {
+            None => self.find_leftmost_entry(root).await,
+            Some(key) => self.find_successor_entry(root, key).await,
         }
     }
 
@@ -1552,17 +1461,6 @@ impl BTree {
     ///
     /// For cache-aware loading that supports disk persistence,
     /// use `load_node()` instead.
-    ///
-    /// # Errors
-    ///
-    /// Returns `StorageError::NodeNotFound` if the node doesn't exist.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// // Internal use only - not exposed in public API
-    /// let node = btree.find_node(node_id).await?;
-    /// ```
     async fn find_node(&self, id: NodeId) -> Result<Arc<Node>> {
         self.load_node(id).await
     }
@@ -1604,30 +1502,8 @@ impl BTree {
     /// Right: [40, 50]
     /// ```
     ///
-    /// # Returns
-    ///
-    /// A tuple of:
-    /// - `Key`: The median key to be promoted to the parent
-    /// - `NodeData`: The median's associated data value
-    /// - `NodeId`: The ID of the newly created right node
-    ///
-    /// The original node (identified by `id`) is modified in place to
-    /// contain only the left half of the keys.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - The node doesn't exist (`NodeNotFound`)
-    /// - The node is not full enough to split
-    /// - Node allocation fails
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// // Internal use only - used during SET operations
-    /// let (median_key, median_data, right_id) = btree.split_node(full_node_id).await?;
-    /// // Caller must promote median_key and median_data to parent and link right_id
-    /// ```
+    /// Returns `(median_key, median_data, right_node_id)`. The original
+    /// node is modified in place to contain only the left half.
     async fn split_node(
         &self,
         id: NodeId,
@@ -1755,27 +1631,8 @@ impl BTree {
     /// Merged: [10, 20, 30, 40, 50]
     /// ```
     ///
-    /// # Parameters
-    ///
-    /// - `left_id`: ID of the left sibling node (will contain merged result)
-    /// - `separator_key`: The key from the parent between these siblings
-    /// - `separator_value`: The value associated with the separator key
-    /// - `right_id`: ID of the right sibling node (will be deallocated)
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - Either node doesn't exist (`NodeNotFound`)
-    /// - Nodes are incompatible (one leaf, one internal)
-    /// - Deallocation fails
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// // Internal use only - used during KILL operations
-    /// btree.merge_nodes(left_id, separator_key, separator_value, right_id).await?;
-    /// // Caller must remove separator from parent and update child pointer
-    /// ```
+    /// Merges into the left node; the right node is deallocated. The caller
+    /// must remove the separator from the parent and update its child pointer.
     async fn merge_nodes(
         &self,
         left_id: NodeId,
@@ -2717,13 +2574,8 @@ impl BTree {
         self.save_node(id, updated_node).await
     }
 
-    /// Updates the `has_descendants` flag for an existing key.
-    ///
-    /// This is used when an ancestor already exists but needs its flag updated.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the key doesn't exist.
+    /// Updates the `has_descendants` flag for an existing key. Fails if the
+    /// key doesn't exist.
     async fn update_descendants_flag(
         &self,
         root: NodeId,

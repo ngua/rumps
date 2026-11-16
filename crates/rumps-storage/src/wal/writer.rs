@@ -721,11 +721,8 @@ impl WalWriter {
     ///    operations have been flushed to the main data file
     /// 2. Delete archived WAL files that are entirely before the checkpoint
     ///
-    /// # Arguments
-    ///
-    /// * `flushed_seq` - The sequence number up to which all data has been
-    ///   flushed to the main data file. Operations with `seq <= flushed_seq`
-    ///   no longer need to be replayed during recovery.
+    /// `flushed_seq` is the sequence number up to which all data has been
+    /// flushed to disk; operations at or before it are safe to discard.
     ///
     /// # Rotation
     ///
@@ -733,10 +730,6 @@ impl WalWriter {
     /// the checkpoint begins a new file. This makes it easier to delete
     /// old files: any archived file whose `last_seq <= flushed_seq` can
     /// be safely removed.
-    ///
-    /// # Returns
-    ///
-    /// The sequence number of the checkpoint record itself.
     pub(crate) async fn checkpoint(
         &self,
         flushed_seq: WalSequence,

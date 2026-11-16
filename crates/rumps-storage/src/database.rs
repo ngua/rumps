@@ -803,13 +803,7 @@ impl Database {
     ///
     /// This is a RUMPS extension providing stream-based iteration.
     /// The stream yields entries that match the predicate, transformed
-    /// by the extract function. Read-only operation - no WAL logging.
-    ///
-    /// # Type Parameters
-    ///
-    /// * `P` - Predicate: `(&Key, &Option<Value>) -> bool` (include if `true`)
-    /// * `F` - Extract: `(&Key, &Option<Value>) -> Option<T>` (transform entry)
-    /// * `T` - Output type yielded by the stream
+    /// by the extract function. Read-only operation; no WAL logging.
     ///
     /// # Examples
     ///
@@ -1277,11 +1271,6 @@ impl Database {
     /// For in-memory databases, simply checks the local cache.
     /// For persistent databases, lazy-loads globals from the registry
     /// if not already cached.
-    ///
-    /// # Returns
-    ///
-    /// - `Ok(Some(root))` - Root exists
-    /// - `Ok(None)` - Variable doesn't exist
     async fn get_root(
         &self,
         name: &Name,
@@ -1846,12 +1835,7 @@ impl DatabaseReconfigure {
     /// 4. Writes the updated metadata back
     /// 5. Syncs to disk for durability
     ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - The database is currently open (by this or another process)
-    /// - The database directory or files don't exist
-    /// - I/O errors occur during read/write
+    /// Fails if the database is currently open or the directory doesn't exist.
     pub async fn apply(self) -> crate::error::Result<()> {
         // Validate path exists
         if !self.path.exists() {
@@ -2097,17 +2081,8 @@ impl DatabaseRebuild {
         self
     }
 
-    /// Applies the rebuild, copying data to the new database.
-    ///
-    /// Returns the path to the newly created database on success.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - No output path was specified
-    /// - The output path already exists
-    /// - The source database doesn't exist or can't be opened
-    /// - I/O errors during copy
+    /// Applies the rebuild, copying data to the new database. Fails if no
+    /// output path was specified or the output path already exists.
     pub async fn apply(self) -> Result<PathBuf> {
         let out = self.output.ok_or_else(|| {
             StorageError::InvalidOperation(

@@ -107,14 +107,8 @@ impl WalReader {
     /// existing records, call [`into_writer`] to begin writing.
     ///
     /// Discovers all WAL files (archived and active) and reads them in
-    /// sequence order. The reader automatically handles file transitions.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err` if:
-    /// - The directory cannot be created
-    /// - WAL files have sequence gaps (corruption)
-    /// - A file exists but has an invalid header
+    /// sequence order. Fails if the directory cannot be created, WAL files
+    /// have sequence gaps, or a file header is invalid.
     ///
     /// [`into_writer`]: WalReader::into_writer
     pub(crate) async fn open(dir: &Path) -> Result<Self> {
@@ -353,10 +347,6 @@ impl WalReader {
     ///
     /// If there's no active `wal.log` (only archived files), a new one
     /// is created continuing from the last sequence number.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err` if the file cannot be reopened for writing.
     pub(crate) async fn into_writer(
         self,
         cfg: WalWriterConfig,
@@ -389,19 +379,8 @@ impl WalReader {
     /// Perform WAL recovery by reading all records and determining which
     /// operations should be replayed.
     ///
-    /// Consumes the reader, iterates through all records via stream fold,
-    /// and returns both the recovery result and `self` (for conversion
-    /// to a writer via [`into_writer`]).
-    ///
-    /// # Returns
-    ///
-    /// A tuple of:
-    /// - [`RecoveryResult`] containing committed operations to replay
-    /// - `Self`, positioned at EOF, ready for [`into_writer`]
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err` on I/O error or WAL corruption.
+    /// Returns the committed operations to replay plus `self` positioned
+    /// at EOF (ready for [`into_writer`]).
     ///
     /// [`into_writer`]: WalReader::into_writer
     pub(crate) async fn recover(self) -> Result<(RecoveryResult, Self)> {

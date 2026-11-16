@@ -100,11 +100,8 @@ impl FileHeader {
         buf
     }
 
-    /// Deserialize from bytes.
-    ///
-    /// # Errors
-    ///
-    /// Returns `WalInvalidMagic` or `WalUnsupportedVersion` on mismatch.
+    /// Deserialize from bytes. Returns `WalInvalidMagic` or
+    /// `WalUnsupportedVersion` on mismatch.
     pub(crate) fn from_bytes(buf: &[u8; Self::SIZE]) -> Result<Self> {
         // SAFETY: slice lengths match array sizes exactly
         #[allow(clippy::unwrap_used)]
@@ -210,12 +207,8 @@ pub(crate) struct RawRecord {
 ///
 /// This is the shared low-level record reading logic used by both
 /// `WalWriter` (for scanning) and `WalReader` (for iteration).
-///
-/// # Returns
-///
-/// - `Ok(Some(raw))` on success
-/// - `Ok(None)` if record is incomplete (EOF)
-/// - `Err(WalCorruption)` on checksum mismatch
+/// Returns `None` on incomplete records (EOF) or `WalCorruption`
+/// on checksum mismatch.
 pub(crate) async fn try_read_record_at(
     file: &mut File,
     pos: u64,

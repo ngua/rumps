@@ -70,12 +70,8 @@ impl WalFileInfo {
     }
 
     /// Discover all WAL files in a directory, sorted by `first_seq`.
-    ///
-    /// Returns an empty `Vec` if no WAL files exist.
-    ///
-    /// # Errors
-    ///
-    /// Returns `WalCorruption` if sequence gaps are detected between files.
+    /// Returns an empty `Vec` if none exist, or `WalCorruption` if
+    /// sequence gaps are detected.
     pub(crate) async fn discover(dir: &Path) -> Result<Vec<Self>> {
         match fs::read_dir(dir).await {
             Err(e) if e.kind() == ErrorKind::NotFound => Ok(Vec::new()),

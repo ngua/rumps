@@ -68,9 +68,9 @@ There are two caches: `DashMap<NodeId, Arc<Node>>` (`NodeCache` in btree.rs, use
 
 Fix: implement a subtree-drop operation that removes an entire subtree in one pass, deallocating child pages directly without individually searching for each key.
 
-### 8. `get_next_internal` does two tree traversals
+### ~~8. `get_next_internal` does two tree traversals~~ DONE
 
-`get_next_internal` (used by `@QUERY`) first calls `collects_find_next` to find the next key path, then calls `get` to retrieve its value. Both traverse the tree from root. These should be fused into a single traversal that finds the next key and reads its value in one pass.
+Fused into a single traversal by calling `find_leftmost_entry`/`find_successor_entry` directly (which already return key + data). `collects` benchmarks improved ~33%.
 
 ### 9. File I/O: single `RwLock<File>` for all reads and writes (high priority)
 

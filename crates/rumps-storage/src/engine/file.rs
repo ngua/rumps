@@ -175,13 +175,8 @@ impl FileStorageEngine {
     /// replayed to bring the database to a consistent state. Uncommitted
     /// transactions are discarded.
     ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - The path exists but is not a directory
-    /// - The directory doesn't exist
-    /// - The data file is missing or corrupted
-    /// - WAL recovery fails
+    /// Fails if the path is not a valid database directory, or if WAL
+    /// recovery encounters corruption.
     pub(crate) async fn open(dir: &Path) -> Result<Self> {
         Self::open_with_overrides(dir, super::SafeReconfiguration::default())
             .await
@@ -351,13 +346,6 @@ impl FileStorageEngine {
     /// - Page 0: Superblock (metadata + bitmap page IDs)
     /// - Page 1: First bitmap page
     ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - The path exists but is not a directory
-    /// - The directory already exists with a data file
-    /// - Directory creation fails
-    /// - File creation fails
     pub(crate) async fn create(
         dir: &Path,
         cfg: StorageConfig,

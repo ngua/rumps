@@ -683,11 +683,8 @@ impl TransactionManager {
         )
     }
 
-    /// Registers a new transaction as active.
-    ///
-    /// # Errors
-    ///
-    /// Returns `TooManyConcurrentTransactions` if the limit is reached.
+    /// Registers a new transaction as active. Returns
+    /// `TooManyConcurrentTransactions` if the limit is reached.
     pub(crate) async fn register(
         &self,
         metadata: TransactionMetadata,
@@ -1542,12 +1539,6 @@ impl Transaction {
     /// This method is optimized for prefix-based queries. It uses the
     /// existing merge logic to combine buffered writes with the snapshot,
     /// filtering by the given prefix.
-    ///
-    /// # Parameters
-    ///
-    /// * `name` - The variable name (global or local)
-    /// * `prefix` - The key prefix to match
-    /// * `extract` - Extractor returning `Some(T)` to yield, `None` to skip
     pub(crate) async fn collects_prefix_vec<F, T>(
         &self,
         name: &Name,
@@ -1586,13 +1577,8 @@ impl Transaction {
     /// The atomic validate+record step prevents race conditions where two
     /// transactions both pass validation before either records their commit.
     ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - The transaction has already been committed or aborted
-    /// - Conflict detection fails (based on conflict strategy)
-    /// - Any write operation fails
-    /// - Flush to disk fails
+    /// Fails if the transaction has already been committed/aborted, or if
+    /// conflict detection rejects it.
     pub async fn commit(self) -> crate::error::Result<()> {
         // Check transaction state
         {
