@@ -56,11 +56,9 @@ Methods removed. Split decisions use key count (`keys.len() == max_keys`), not s
 
 ### 5. Page cache: `get()` takes a write lock for reads
 
-`PageCache::get()` acquires `self.cache.write().await` just to update LRU order. This serializes all reads behind a single writer. Two options:
-- Use a concurrent-friendly LRU (e.g. `moka` or `quick_cache`) that doesn't need exclusive access for reads
-- Separate the stats tracking from the LRU access (stats can use `AtomicU64`)
+`PageCache::get()` acquires `self.cache.write().await` just to update LRU order. This serializes all reads behind a single writer.
 
-Also: `get()` acquires two locks sequentially (cache + stats). The stats lock should use atomics instead.
+**Note**: `moka::sync::Cache` was tried and reverted; it caused +43% regression on `get_existing` and widespread slowdowns across all benchmarks. Moka's TinyLFU frequency counting, `run_pending_tasks()` on every `put()`, and `Mutex`-guarded eviction buffer add overhead that far outweighs the lock-free-read benefit for a B-tree page cache with strong temporal locality and low contention. A simpler approach: make the cache sync (drop the `tokio::sync::RwLock` for a `std::sync::RwLock` or `parking_lot::RwLock`) and use `AtomicU64` for stats. The cache is purely in-memory; it does not need to be `async`.
 
 ### 6. Two-layer cache redundancy
 
@@ -76,11 +74,13 @@ Fix: implement a subtree-drop operation that removes an entire subtree in one pa
 
 Fused into a single traversal by calling `find_leftmost_entry`/`find_successor_entry` directly (which already return key + data). `collects` benchmarks improved ~33%.
 
-### 9. File I/O: single `RwLock<File>` for all reads and writes (high priority)
+### 9. File I/O: single `RwLock<File>` for all reads and writes
 
 `FileStorageEngine` wraps the data file in `Arc<RwLock<File>>`. Every page read acquires a write lock (because `seek` + `read_exact` must be atomic). This serializes all disk I/O.
 
-Fix: use `pread`/`pwrite` (positional I/O) which don't need seeking and can run concurrently. On Linux, `pread64`/`pwrite64` are atomic at the page level. Tokio's `spawn_blocking` + `std::os::unix::fs::FileExt` is one path; `io_uring` via `tokio-uring` is the high-performance path.
+Fix: use `pread`/`pwrite` (positional I/O) which don't need seeking and can run concurrently. On Linux, `pread64`/`pwrite64` are atomic at the page level.
+
+**Note**: `pread`/`pwrite` via `spawn_blocking` + `std::os::unix::fs::FileExt` was tried and reverted. The `spawn_blocking` overhead per call (~2-5 us for thread pool scheduling + context switch) dominates the actual `pwrite` syscall time (~1 us). For batch flushes with hundreds of dirty pages, this overhead compounds: `set_batch/10000` regressed +63%, `set_batch_large/100000` regressed +58%. Single-op benchmarks improved (e.g. `set_single` -35%) because the overhead is amortized. The `RwLock` has zero contention in the current single-threaded model, so removing it provides no benefit. Revisit when parallel transactions are implemented; the contention-free `pread`/`pwrite` path will pay off once multiple transactions do I/O concurrently.
 
 ### 10. Full-page reads and writes (always `PAGE_SIZE` bytes; high priority)
 
@@ -94,13 +94,13 @@ When compression is added (per your TODO), this becomes critical: store the comp
 
 Fix: return `Arc<Node>` from reads instead of cloned `Node`. For mutations, use copy-on-write; only clone when `Arc::strong_count() > 1`.
 
-### 12. WAL writer serializes with `bincode::serialize_into` but could use zero-copy
+### ~~12. WAL writer serializes with `bincode::serialize_into` but could use zero-copy~~ DELETED
 
-`WalWriter::write_record` serializes each WAL record into a buffer via bincode. For `Set` records that carry the full serialized node, this is a double serialization (node was already serialized for the page write). Consider writing the raw page bytes directly as the WAL payload.
+Not a real issue. `WalRecord::Set` carries `NodeData` (one key's value), not a full serialized `Node`. The WAL logs the logical operation while the page write serializes the entire B-tree node; different data at different granularities. No double serialization.
 
 ### 13. Flush writes dirty pages sequentially then syncs
 
-`flush()` uses `FuturesUnordered` to write dirty pages (good), but then does a single `sync_all()`. For many dirty pages, consider batched writes with `writev` (vectored I/O) to reduce syscall overhead. The comment in the code ("sequential for now; could parallelize") is already outdated since it uses `FuturesUnordered`, but the underlying writes still contend on the single `RwLock<File>` (see #9).
+`flush()` uses `FuturesUnordered` to write dirty pages, but the writes still contend on the single `RwLock<File>` (see #9), so concurrency is illusory. Once #9 is resolved with lock-free positional I/O, the `FuturesUnordered` path becomes truly concurrent. Remaining opportunity: vectored I/O (`writev`) to batch multiple page writes into fewer syscalls.
 
 ### 14. Dirty set uses separate `RwLock<HashSet>`
 
