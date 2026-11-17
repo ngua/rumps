@@ -128,7 +128,7 @@ impl PageCache {
     pub(crate) async fn put(
         &self,
         id: PageId,
-        node: Node,
+        node: Arc<Node>,
         dirty: bool,
     ) -> Option<EvictedPage> {
         let mut cache = self.cache.write().await;
@@ -149,13 +149,7 @@ impl PageCache {
                 }
             });
 
-        cache.put(
-            id,
-            CachedPage {
-                node: Arc::new(node),
-                dirty,
-            },
-        );
+        cache.put(id, CachedPage { node, dirty });
 
         evicted
     }
@@ -304,12 +298,12 @@ mod tests {
     use crate::node::NodeData;
     use crate::page::PageId;
 
-    fn make_node(id: u64) -> Node {
+    fn make_node(id: u64) -> Arc<Node> {
         let mut node = Node::new_leaf();
         node.keys.push(key![id as i64]);
         node.values
             .push(Arc::new(NodeData::new(Some((id as i64).into()), false)));
-        node
+        Arc::new(node)
     }
 
     #[tokio::test]
@@ -320,10 +314,10 @@ mod tests {
 
         assert!(cache.get(id).await.is_none());
 
-        cache.put(id, node.clone(), false).await;
+        cache.put(id, Arc::clone(&node), false).await;
 
         let retrieved = cache.get(id).await.expect("should be in cache");
-        assert_eq!(*retrieved, node);
+        assert_eq!(*retrieved, *node);
     }
 
     #[tokio::test]
@@ -569,7 +563,7 @@ mod tests {
         cache.put(id, new_node.clone(), true).await;
 
         let retrieved = cache.get(id).await.expect("should be in cache");
-        assert_eq!(*retrieved, new_node);
+        assert_eq!(*retrieved, *new_node);
         assert!(cache.is_dirty(id).await);
     }
 

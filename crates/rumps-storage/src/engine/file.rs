@@ -551,12 +551,12 @@ impl FileStorageEngine {
 }
 
 impl FileStorageEngine {
-    pub(crate) async fn read(&self, id: NodeId) -> Result<Node> {
+    pub(crate) async fn read(&self, id: NodeId) -> Result<Arc<Node>> {
         let page_id = PageId::from(id);
 
         // Check cache first
         if let Some(cached) = self.cache.get(page_id).await {
-            Ok((*cached).clone())
+            Ok(cached)
         } else {
             // Cache miss - read from disk
             let offset = page_id.byte_offset();
@@ -580,12 +580,16 @@ impl FileStorageEngine {
             drop(file);
 
             // Deserialize
-            let node: Node = bincode::deserialize(&buf).map_err(|e| {
-                StorageError::Serialization(format!("deserialize node: {e}"))
-            })?;
+            let node: Arc<Node> =
+                Arc::new(bincode::deserialize(&buf).map_err(|e| {
+                    StorageError::Serialization(format!(
+                        "deserialize node: {e}"
+                    ))
+                })?);
 
             // Add to cache (clean, since it came from disk)
-            let evicted = self.cache.put(page_id, node.clone(), false).await;
+            let evicted =
+                self.cache.put(page_id, Arc::clone(&node), false).await;
 
             // Handle evicted dirty page
             if let Some(ev) = evicted {
@@ -601,12 +605,12 @@ impl FileStorageEngine {
     pub(crate) async fn mark_dirty(
         &self,
         id: NodeId,
-        node: &Node,
+        node: Arc<Node>,
     ) -> Result<()> {
         let page_id = PageId::from(id);
 
         // Put in cache as dirty
-        let evicted = self.cache.put(page_id, node.clone(), true).await;
+        let evicted = self.cache.put(page_id, node, true).await;
 
         // Handle evicted dirty page - write to disk
         if let Some(ev) = evicted {

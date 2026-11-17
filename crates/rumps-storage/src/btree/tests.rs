@@ -118,7 +118,7 @@ mod tests {
 
         // Insert a node
         let node_id = NodeId::from(1);
-        btree.nodes.insert(node_id, Node::new_leaf());
+        btree.nodes.insert(node_id, Arc::new(Node::new_leaf()));
 
         // Concurrent reads should work
         let btree_clone = Arc::clone(&btree);
@@ -210,7 +210,7 @@ mod tests {
         let node_id = NodeId::from(1);
         let test_node = Node::new_leaf();
 
-        btree.nodes.insert(node_id, test_node.clone());
+        btree.nodes.insert(node_id, Arc::new(test_node.clone()));
 
         let result = btree.find_node(node_id).await;
         assert!(result.is_ok());
@@ -237,7 +237,7 @@ mod tests {
             is_leaf: true,
         };
 
-        btree.nodes.insert(node_id, node);
+        btree.nodes.insert(node_id, Arc::new(node));
 
         let result = btree.split_node(node_id).await;
         assert!(result.is_ok());
@@ -292,8 +292,8 @@ mod tests {
             is_leaf: true,
         };
 
-        btree.nodes.insert(left_id, left_node);
-        btree.nodes.insert(right_id, right_node);
+        btree.nodes.insert(left_id, Arc::new(left_node));
+        btree.nodes.insert(right_id, Arc::new(right_node));
 
         btree
             .merge_nodes(left_id, sep_key, sep_val, right_id)

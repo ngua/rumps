@@ -60,8 +60,8 @@ impl NodeCache {
         self.inner.get(&id).map(|r| Arc::clone(&*r))
     }
 
-    fn insert(&self, id: NodeId, node: Node) {
-        self.inner.insert(id, Arc::new(node));
+    fn insert(&self, id: NodeId, node: Arc<Node>) {
+        self.inner.insert(id, node);
     }
 
     fn remove(&self, id: NodeId) -> Option<Arc<Node>> {
@@ -674,8 +674,8 @@ impl BTree {
                     .ok_or(StorageError::NodeNotFound(*id))?;
 
                 let node = storage.read(id).await?;
-                self.nodes.insert(id, node.clone());
-                Ok(Arc::new(node))
+                self.nodes.insert(id, Arc::clone(&node));
+                Ok(node)
             }
         }
     }
@@ -688,9 +688,11 @@ impl BTree {
     /// For disk-backed trees, the page is marked dirty in the storage cache.
     /// For in-memory trees, just updates the node map.
     async fn save_node(&self, id: NodeId, node: Node) -> Result<()> {
+        let node = Arc::new(node);
+
         // Mark dirty in storage cache (if configured)
         if let Some(storage) = self.storage.as_ref() {
-            storage.mark_dirty(id, &node).await?;
+            storage.mark_dirty(id, Arc::clone(&node)).await?;
         }
 
         self.nodes.insert(id, node);
@@ -1509,9 +1511,7 @@ impl BTree {
         id: NodeId,
     ) -> Result<(Key, Arc<NodeData>, NodeId)> {
         // Find the node to split and take ownership
-        let node_arc = self.load_node(id).await?;
-        let node =
-            Arc::try_unwrap(node_arc).unwrap_or_else(|arc| (*arc).clone());
+        let node = Arc::unwrap_or_clone(self.load_node(id).await?);
 
         // Calculate the median index
         let mid = node.keys.len() / 2;
@@ -1651,10 +1651,8 @@ impl BTree {
             ))
         } else {
             // Take ownership of components
-            let left =
-                Arc::try_unwrap(left_arc).unwrap_or_else(|arc| (*arc).clone());
-            let right =
-                Arc::try_unwrap(right_arc).unwrap_or_else(|arc| (*arc).clone());
+            let left = Arc::unwrap_or_clone(left_arc);
+            let right = Arc::unwrap_or_clone(right_arc);
 
             let Node {
                 keys: mut left_keys,
@@ -2512,8 +2510,7 @@ impl BTree {
                         let (median_key, median_value, new_child_id) =
                             self.split_node(child_id).await?;
 
-                        let mut updated_node = Arc::try_unwrap(node_arc)
-                            .unwrap_or_else(|arc| (*arc).clone());
+                        let mut updated_node = Arc::unwrap_or_clone(node_arc);
                         updated_node.keys.insert(pos, median_key.clone());
                         updated_node
                             .values
@@ -2540,8 +2537,7 @@ impl BTree {
             StorageError::InvalidOperation("No leaf reached".to_string())
         })?;
 
-        let mut updated_node =
-            Arc::try_unwrap(node_arc).unwrap_or_else(|arc| (*arc).clone());
+        let mut updated_node = Arc::unwrap_or_clone(node_arc);
 
         match updated_node.keys.get(pos) {
             Some(existing_key) if existing_key == key => {
