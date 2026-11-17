@@ -64,10 +64,6 @@ impl NodeCache {
         self.inner.insert(id, Arc::new(node));
     }
 
-    fn insert_arc(&self, id: NodeId, node: Arc<Node>) {
-        self.inner.insert(id, node);
-    }
-
     fn remove(&self, id: NodeId) -> Option<Arc<Node>> {
         self.inner.remove(&id).map(|(_, v)| v)
     }
@@ -678,8 +674,8 @@ impl BTree {
                     .ok_or(StorageError::NodeNotFound(*id))?;
 
                 let node = storage.read(id).await?;
-                self.nodes.insert_arc(id, Arc::clone(&node));
-                Ok(node)
+                self.nodes.insert(id, node.clone());
+                Ok(Arc::new(node))
             }
         }
     }

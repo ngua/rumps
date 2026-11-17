@@ -174,16 +174,6 @@ impl PageCache {
         node: Node,
         dirty: bool,
     ) -> Vec<EvictedPage> {
-        self.put_arc(id, Arc::new(node), dirty)
-    }
-
-    /// Like `put`, but takes an already shared `Arc<Node>` (no copy).
-    pub(crate) fn put_arc(
-        &self,
-        id: PageId,
-        node: Arc<Node>,
-        dirty: bool,
-    ) -> Vec<EvictedPage> {
         if dirty {
             self.stats.writes.fetch_add(1, Ordering::Relaxed);
         }
@@ -191,7 +181,7 @@ impl PageCache {
         self.cache.insert(
             id,
             CachedPage {
-                node,
+                node: Arc::new(node),
                 dirty: Arc::new(AtomicBool::new(dirty)),
             },
         );
