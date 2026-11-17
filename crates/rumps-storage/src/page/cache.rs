@@ -1,6 +1,5 @@
 //! LRU page cache with dirty tracking.
 
-use std::collections::HashSet;
 use std::fmt;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -16,6 +15,8 @@ use crate::node::Node;
 struct CachedPage {
     /// The node stored in this page.
     node: Arc<Node>,
+    /// Whether the page needs flushing.
+    dirty: bool,
 }
 
 /// Result of attempting to mark a page as dirty.
@@ -76,8 +77,6 @@ pub struct PageCacheStats {
 pub(crate) struct PageCache {
     /// LRU cache of pages.
     cache: RwLock<LruCache<PageId, CachedPage>>,
-    /// Set of dirty page IDs for quick lookup.
-    dirty_set: RwLock<HashSet<PageId>>,
     /// Cache statistics.
     stats: RwLock<PageCacheStats>,
     /// Maximum number of pages in cache.
@@ -95,7 +94,6 @@ impl PageCache {
         let cap_nz = NonZeroUsize::new(cap).unwrap();
         Self {
             cache: RwLock::new(LruCache::new(cap_nz)),
-            dirty_set: RwLock::new(HashSet::new()),
             stats: RwLock::new(PageCacheStats::default()),
             capacity: cap,
         }
@@ -134,55 +132,46 @@ impl PageCache {
         dirty: bool,
     ) -> Option<EvictedPage> {
         let mut cache = self.cache.write().await;
-        let mut dirty_set = self.dirty_set.write().await;
         let mut stats = self.stats.write().await;
 
-        // Update dirty status for this page
-        if dirty {
-            dirty_set.insert(id);
-            stats.writes += 1;
-        } else {
-            dirty_set.remove(&id);
-        }
+        stats.writes += u64::from(dirty);
 
-        let entry = CachedPage {
-            node: Arc::new(node),
-        };
-
-        // Check if we'll evict something (only if inserting new page at capacity)
+        // Only evict when inserting a new page at capacity
         let evicted = (cache.len() >= self.capacity && !cache.contains(&id))
-            .then(|| {
-                cache.peek_lru().map(|(evict_id, evict_entry)| {
-                    let evict_id = *evict_id;
-                    let evict_node = Arc::clone(&evict_entry.node);
-                    let evict_dirty = dirty_set.remove(&evict_id);
-                    stats.evictions += 1;
-                    EvictedPage {
-                        id: evict_id,
-                        node: evict_node,
-                        dirty: evict_dirty,
-                    }
-                })
-            })
-            .flatten();
+            .then(|| cache.pop_lru())
+            .flatten()
+            .map(|(id, e)| {
+                stats.evictions += 1;
+                EvictedPage {
+                    id,
+                    node: e.node,
+                    dirty: e.dirty,
+                }
+            });
 
-        cache.put(id, entry);
+        cache.put(
+            id,
+            CachedPage {
+                node: Arc::new(node),
+                dirty,
+            },
+        );
 
         evicted
     }
 
     /// Mark a page as dirty (needs flush).
     pub(crate) async fn mark_dirty(&self, id: PageId) -> MarkDirtyResult {
-        let cache = self.cache.read().await;
-        let mut dirty_set = self.dirty_set.write().await;
-        let mut stats = self.stats.write().await;
+        let mut cache = self.cache.write().await;
 
-        if cache.contains(&id) {
-            dirty_set.insert(id);
-            stats.writes += 1;
-            MarkDirtyResult::Marked
-        } else {
-            MarkDirtyResult::NotInCache
+        // `peek_mut` leaves the LRU order untouched
+        match cache.peek_mut(&id) {
+            Some(e) => {
+                e.dirty = true;
+                self.stats.write().await.writes += 1;
+                MarkDirtyResult::Marked
+            }
+            None => MarkDirtyResult::NotInCache,
         }
     }
 
@@ -190,14 +179,12 @@ impl PageCache {
     ///
     /// Returns a list of `(PageId, Node)` pairs for pages that need flushing.
     pub(crate) async fn dirty_pages(&self) -> Vec<(PageId, Arc<Node>)> {
-        let cache = self.cache.read().await;
-        let dirty_set = self.dirty_set.read().await;
-
-        dirty_set
+        self.cache
+            .read()
+            .await
             .iter()
-            .filter_map(|&id| {
-                cache.peek(&id).map(|entry| (id, Arc::clone(&entry.node)))
-            })
+            .filter(|(_, e)| e.dirty)
+            .map(|(&id, e)| (id, Arc::clone(&e.node)))
             .collect()
     }
 
@@ -206,11 +193,12 @@ impl PageCache {
     /// Call this after successfully writing pages to disk.
     /// Only increments flush stats for pages that were actually dirty.
     pub(crate) async fn mark_flushed(&self, ids: &[PageId]) {
-        let mut dirty_set = self.dirty_set.write().await;
+        let mut cache = self.cache.write().await;
         let mut stats = self.stats.write().await;
 
-        ids.iter().for_each(|&id| {
-            if dirty_set.remove(&id) {
+        ids.iter().for_each(|id| {
+            if let Some(e) = cache.peek_mut(id).filter(|e| e.dirty) {
+                e.dirty = false;
                 stats.flushes += 1;
             }
         });
@@ -218,28 +206,31 @@ impl PageCache {
 
     /// Clear the dirty flag for a specific page.
     pub(crate) async fn mark_clean(&self, id: PageId) {
-        self.dirty_set.write().await.remove(&id);
+        if let Some(e) = self.cache.write().await.peek_mut(&id) {
+            e.dirty = false;
+        }
     }
 
     /// Check if a page is dirty.
     pub(crate) async fn is_dirty(&self, id: PageId) -> bool {
-        self.dirty_set.read().await.contains(&id)
+        self.cache.read().await.peek(&id).is_some_and(|e| e.dirty)
     }
 
     /// Get the number of dirty pages.
     pub(crate) async fn dirty_count(&self) -> usize {
-        self.dirty_set.read().await.len()
+        self.cache
+            .read()
+            .await
+            .iter()
+            .filter(|(_, e)| e.dirty)
+            .count()
     }
 
     /// Remove a page from the cache.
     ///
     /// Returns the removed page if it was in cache.
     pub(crate) async fn remove(&self, id: PageId) -> Option<Arc<Node>> {
-        let mut cache = self.cache.write().await;
-        let mut dirty_set = self.dirty_set.write().await;
-
-        dirty_set.remove(&id);
-        cache.pop(&id).map(|entry| entry.node)
+        self.cache.write().await.pop(&id).map(|e| e.node)
     }
 
     /// Clear all pages from the cache.
@@ -248,17 +239,14 @@ impl PageCache {
     /// flush them if needed.
     pub(crate) async fn clear(&self) -> Vec<(PageId, Arc<Node>)> {
         let mut cache = self.cache.write().await;
-        let mut dirty_set = self.dirty_set.write().await;
 
-        let dirty_pages = dirty_set
+        let dirty_pages = cache
             .iter()
-            .filter_map(|&id| {
-                cache.peek(&id).map(|e| (id, Arc::clone(&e.node)))
-            })
+            .filter(|(_, e)| e.dirty)
+            .map(|(&id, e)| (id, Arc::clone(&e.node)))
             .collect();
 
         cache.clear();
-        dirty_set.clear();
 
         dirty_pages
     }
