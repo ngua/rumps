@@ -2,10 +2,11 @@
 
 use std::fmt;
 use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use lru::LruCache;
-use tokio::sync::RwLock;
+use parking_lot::RwLock;
 
 use super::PageId;
 use crate::node::Node;
@@ -56,6 +57,38 @@ pub struct PageCacheStats {
     pub evictions: u64,
 }
 
+/// Atomic counters for cache statistics.
+struct AtomicStats {
+    hits: AtomicU64,
+    misses: AtomicU64,
+    writes: AtomicU64,
+    flushes: AtomicU64,
+    evictions: AtomicU64,
+}
+
+impl AtomicStats {
+    fn new() -> Self {
+        Self {
+            hits: AtomicU64::new(0),
+            misses: AtomicU64::new(0),
+            writes: AtomicU64::new(0),
+            flushes: AtomicU64::new(0),
+            evictions: AtomicU64::new(0),
+        }
+    }
+
+    fn snapshot(&self, capacity: usize) -> PageCacheStats {
+        PageCacheStats {
+            max_capacity: capacity,
+            hits: self.hits.load(Ordering::Relaxed),
+            misses: self.misses.load(Ordering::Relaxed),
+            writes: self.writes.load(Ordering::Relaxed),
+            flushes: self.flushes.load(Ordering::Relaxed),
+            evictions: self.evictions.load(Ordering::Relaxed),
+        }
+    }
+}
+
 /// LRU cache for B-tree node pages with dirty tracking.
 ///
 /// `PageCache` provides an in-memory cache of pages read from or to be written
@@ -64,8 +97,9 @@ pub struct PageCacheStats {
 ///
 /// # Thread Safety
 ///
-/// `PageCache` uses internal `RwLock` for concurrent access. Multiple readers
-/// can access the cache simultaneously, but writes are serialized.
+/// `PageCache` uses a `parking_lot::RwLock` for the LRU cache and atomic
+/// counters for statistics, allowing concurrent stat reads without blocking
+/// cache operations.
 ///
 /// # Eviction
 ///
@@ -77,8 +111,8 @@ pub struct PageCacheStats {
 pub(crate) struct PageCache {
     /// LRU cache of pages.
     cache: RwLock<LruCache<PageId, CachedPage>>,
-    /// Cache statistics.
-    stats: RwLock<PageCacheStats>,
+    /// Cache statistics (lock-free).
+    stats: AtomicStats,
     /// Maximum number of pages in cache.
     capacity: usize,
 }
@@ -94,7 +128,7 @@ impl PageCache {
         let cap_nz = NonZeroUsize::new(cap).unwrap();
         Self {
             cache: RwLock::new(LruCache::new(cap_nz)),
-            stats: RwLock::new(PageCacheStats::default()),
+            stats: AtomicStats::new(),
             capacity: cap,
         }
     }
@@ -103,18 +137,17 @@ impl PageCache {
     ///
     /// Returns `None` if the page is not in cache (cache miss).
     /// Updates LRU order on hit.
-    pub(crate) async fn get(&self, id: PageId) -> Option<Arc<Node>> {
-        let mut cache = self.cache.write().await;
-        let mut stats = self.stats.write().await;
+    pub(crate) fn get(&self, id: PageId) -> Option<Arc<Node>> {
+        let mut cache = self.cache.write();
 
         cache
             .get(&id)
             .map(|entry| {
-                stats.hits += 1;
+                self.stats.hits.fetch_add(1, Ordering::Relaxed);
                 Arc::clone(&entry.node)
             })
             .or_else(|| {
-                stats.misses += 1;
+                self.stats.misses.fetch_add(1, Ordering::Relaxed);
                 None
             })
     }
@@ -125,23 +158,23 @@ impl PageCache {
     /// If `dirty` is `false`, any previous dirty status is cleared.
     /// Returns the evicted page (with dirty status) if the cache was at capacity.
     #[must_use = "dirty evicted pages must be flushed to disk"]
-    pub(crate) async fn put(
+    pub(crate) fn put(
         &self,
         id: PageId,
         node: Arc<Node>,
         dirty: bool,
     ) -> Option<EvictedPage> {
-        let mut cache = self.cache.write().await;
-        let mut stats = self.stats.write().await;
+        let mut cache = self.cache.write();
 
-        stats.writes += u64::from(dirty);
+        if dirty {
+            self.stats.writes.fetch_add(1, Ordering::Relaxed);
+        }
 
-        // Only evict when inserting a new page at capacity
         let evicted = (cache.len() >= self.capacity && !cache.contains(&id))
             .then(|| cache.pop_lru())
             .flatten()
             .map(|(id, e)| {
-                stats.evictions += 1;
+                self.stats.evictions.fetch_add(1, Ordering::Relaxed);
                 EvictedPage {
                     id,
                     node: e.node,
@@ -155,14 +188,13 @@ impl PageCache {
     }
 
     /// Mark a page as dirty (needs flush).
-    pub(crate) async fn mark_dirty(&self, id: PageId) -> MarkDirtyResult {
-        let mut cache = self.cache.write().await;
+    pub(crate) fn mark_dirty(&self, id: PageId) -> MarkDirtyResult {
+        let mut cache = self.cache.write();
 
-        // `peek_mut` leaves the LRU order untouched
         match cache.peek_mut(&id) {
             Some(e) => {
                 e.dirty = true;
-                self.stats.write().await.writes += 1;
+                self.stats.writes.fetch_add(1, Ordering::Relaxed);
                 MarkDirtyResult::Marked
             }
             None => MarkDirtyResult::NotInCache,
@@ -172,10 +204,9 @@ impl PageCache {
     /// Get all dirty pages.
     ///
     /// Returns a list of `(PageId, Node)` pairs for pages that need flushing.
-    pub(crate) async fn dirty_pages(&self) -> Vec<(PageId, Arc<Node>)> {
+    pub(crate) fn dirty_pages(&self) -> Vec<(PageId, Arc<Node>)> {
         self.cache
             .read()
-            .await
             .iter()
             .filter(|(_, e)| e.dirty)
             .map(|(&id, e)| (id, Arc::clone(&e.node)))
@@ -186,53 +217,47 @@ impl PageCache {
     ///
     /// Call this after successfully writing pages to disk.
     /// Only increments flush stats for pages that were actually dirty.
-    pub(crate) async fn mark_flushed(&self, ids: &[PageId]) {
-        let mut cache = self.cache.write().await;
-        let mut stats = self.stats.write().await;
+    pub(crate) fn mark_flushed(&self, ids: &[PageId]) {
+        let mut cache = self.cache.write();
 
         ids.iter().for_each(|id| {
             if let Some(e) = cache.peek_mut(id).filter(|e| e.dirty) {
                 e.dirty = false;
-                stats.flushes += 1;
+                self.stats.flushes.fetch_add(1, Ordering::Relaxed);
             }
         });
     }
 
     /// Clear the dirty flag for a specific page.
-    pub(crate) async fn mark_clean(&self, id: PageId) {
-        if let Some(e) = self.cache.write().await.peek_mut(&id) {
+    pub(crate) fn mark_clean(&self, id: PageId) {
+        if let Some(e) = self.cache.write().peek_mut(&id) {
             e.dirty = false;
         }
     }
 
     /// Check if a page is dirty.
-    pub(crate) async fn is_dirty(&self, id: PageId) -> bool {
-        self.cache.read().await.peek(&id).is_some_and(|e| e.dirty)
+    pub(crate) fn is_dirty(&self, id: PageId) -> bool {
+        self.cache.read().peek(&id).is_some_and(|e| e.dirty)
     }
 
     /// Get the number of dirty pages.
-    pub(crate) async fn dirty_count(&self) -> usize {
-        self.cache
-            .read()
-            .await
-            .iter()
-            .filter(|(_, e)| e.dirty)
-            .count()
+    pub(crate) fn dirty_count(&self) -> usize {
+        self.cache.read().iter().filter(|(_, e)| e.dirty).count()
     }
 
     /// Remove a page from the cache.
     ///
     /// Returns the removed page if it was in cache.
-    pub(crate) async fn remove(&self, id: PageId) -> Option<Arc<Node>> {
-        self.cache.write().await.pop(&id).map(|e| e.node)
+    pub(crate) fn remove(&self, id: PageId) -> Option<Arc<Node>> {
+        self.cache.write().pop(&id).map(|e| e.node)
     }
 
     /// Clear all pages from the cache.
     ///
     /// Returns all dirty pages that were discarded, allowing the caller to
     /// flush them if needed.
-    pub(crate) async fn clear(&self) -> Vec<(PageId, Arc<Node>)> {
-        let mut cache = self.cache.write().await;
+    pub(crate) fn clear(&self) -> Vec<(PageId, Arc<Node>)> {
+        let mut cache = self.cache.write();
 
         let dirty_pages = cache
             .iter()
@@ -246,13 +271,13 @@ impl PageCache {
     }
 
     /// Get the number of pages in cache.
-    pub(crate) async fn len(&self) -> usize {
-        self.cache.read().await.len()
+    pub(crate) fn len(&self) -> usize {
+        self.cache.read().len()
     }
 
     /// Check if the cache is empty.
-    pub(crate) async fn is_empty(&self) -> bool {
-        self.cache.read().await.is_empty()
+    pub(crate) fn is_empty(&self) -> bool {
+        self.cache.read().is_empty()
     }
 
     /// Get the cache capacity.
@@ -261,20 +286,19 @@ impl PageCache {
     }
 
     /// Get cache statistics.
-    pub(crate) async fn stats(&self) -> PageCacheStats {
-        let mut s = self.stats.read().await.clone();
-        s.max_capacity = self.capacity;
-        s
+    pub(crate) fn stats(&self) -> PageCacheStats {
+        self.stats.snapshot(self.capacity)
     }
 
     /// Calculate the hit rate (`0.0` to `1.0`).
-    pub(crate) async fn hit_rate(&self) -> f64 {
-        let stats = self.stats.read().await;
-        let total = stats.hits + stats.misses;
+    pub(crate) fn hit_rate(&self) -> f64 {
+        let hits = self.stats.hits.load(Ordering::Relaxed);
+        let misses = self.stats.misses.load(Ordering::Relaxed);
+        let total = hits + misses;
         if total == 0 {
             0.0
         } else {
-            stats.hits as f64 / total as f64
+            hits as f64 / total as f64
         }
     }
 }
@@ -306,73 +330,65 @@ mod tests {
         Arc::new(node)
     }
 
-    #[tokio::test]
-    async fn cache_basic_get_put() {
+    #[test]
+    fn cache_basic_get_put() {
         let cache = PageCache::new(10);
         let id = PageId::from_page_num(1).unwrap();
         let node = make_node(1);
 
-        assert!(cache.get(id).await.is_none());
+        assert!(cache.get(id).is_none());
 
-        cache.put(id, Arc::clone(&node), false).await;
+        cache.put(id, Arc::clone(&node), false);
 
-        let retrieved = cache.get(id).await.expect("should be in cache");
+        let retrieved = cache.get(id).expect("should be in cache");
         assert_eq!(*retrieved, *node);
     }
 
-    #[tokio::test]
-    async fn cache_dirty_tracking() {
+    #[test]
+    fn cache_dirty_tracking() {
         let cache = PageCache::new(10);
         let id = PageId::from_page_num(1).unwrap();
         let node = make_node(1);
 
         // Insert clean
-        cache.put(id, node.clone(), false).await;
-        assert!(!cache.is_dirty(id).await);
-        assert_eq!(cache.dirty_count().await, 0);
+        cache.put(id, node.clone(), false);
+        assert!(!cache.is_dirty(id));
+        assert_eq!(cache.dirty_count(), 0);
 
         // Mark dirty
-        assert_eq!(cache.mark_dirty(id).await, MarkDirtyResult::Marked);
-        assert!(cache.is_dirty(id).await);
-        assert_eq!(cache.dirty_count().await, 1);
+        assert_eq!(cache.mark_dirty(id), MarkDirtyResult::Marked);
+        assert!(cache.is_dirty(id));
+        assert_eq!(cache.dirty_count(), 1);
 
         // Mark clean
-        cache.mark_clean(id).await;
-        assert!(!cache.is_dirty(id).await);
-        assert_eq!(cache.dirty_count().await, 0);
+        cache.mark_clean(id);
+        assert!(!cache.is_dirty(id));
+        assert_eq!(cache.dirty_count(), 0);
     }
 
-    #[tokio::test]
-    async fn cache_insert_dirty() {
+    #[test]
+    fn cache_insert_dirty() {
         let cache = PageCache::new(10);
         let id = PageId::from_page_num(1).unwrap();
         let node = make_node(1);
 
-        cache.put(id, node, true).await;
+        cache.put(id, node, true);
 
-        assert!(cache.is_dirty(id).await);
-        assert_eq!(cache.dirty_count().await, 1);
+        assert!(cache.is_dirty(id));
+        assert_eq!(cache.dirty_count(), 1);
     }
 
-    #[tokio::test]
-    async fn cache_dirty_pages() {
+    #[test]
+    fn cache_dirty_pages() {
         let cache = PageCache::new(10);
 
         // Insert some clean and some dirty
-        cache
-            .put(PageId::from_page_num(1).unwrap(), make_node(1), false)
-            .await;
-        cache
-            .put(PageId::from_page_num(2).unwrap(), make_node(2), true)
-            .await;
-        cache
-            .put(PageId::from_page_num(3).unwrap(), make_node(3), false)
-            .await;
-        cache
-            .put(PageId::from_page_num(4).unwrap(), make_node(4), true)
-            .await;
+        cache.put(PageId::from_page_num(1).unwrap(), make_node(1), false);
+        cache.put(PageId::from_page_num(2).unwrap(), make_node(2), true);
+        cache.put(PageId::from_page_num(3).unwrap(), make_node(3), false);
+        cache.put(PageId::from_page_num(4).unwrap(), make_node(4), true);
 
-        let dirty = cache.dirty_pages().await;
+        let dirty = cache.dirty_pages();
         assert_eq!(dirty.len(), 2);
 
         let ids: HashSet<_> = dirty.iter().map(|(id, _)| *id).collect();
@@ -380,488 +396,428 @@ mod tests {
         assert!(ids.contains(&PageId::from_page_num(4).unwrap()));
     }
 
-    #[tokio::test]
-    async fn cache_mark_flushed() {
+    #[test]
+    fn cache_mark_flushed() {
         let cache = PageCache::new(10);
 
-        cache
-            .put(PageId::from_page_num(1).unwrap(), make_node(1), true)
-            .await;
-        cache
-            .put(PageId::from_page_num(2).unwrap(), make_node(2), true)
-            .await;
-        cache
-            .put(PageId::from_page_num(3).unwrap(), make_node(3), true)
-            .await;
+        cache.put(PageId::from_page_num(1).unwrap(), make_node(1), true);
+        cache.put(PageId::from_page_num(2).unwrap(), make_node(2), true);
+        cache.put(PageId::from_page_num(3).unwrap(), make_node(3), true);
 
-        assert_eq!(cache.dirty_count().await, 3);
+        assert_eq!(cache.dirty_count(), 3);
 
-        cache
-            .mark_flushed(&[
-                PageId::from_page_num(1).unwrap(),
-                PageId::from_page_num(3).unwrap(),
-            ])
-            .await;
+        cache.mark_flushed(&[
+            PageId::from_page_num(1).unwrap(),
+            PageId::from_page_num(3).unwrap(),
+        ]);
 
-        assert_eq!(cache.dirty_count().await, 1);
-        assert!(cache.is_dirty(PageId::from_page_num(2).unwrap()).await);
-        assert!(!cache.is_dirty(PageId::from_page_num(1).unwrap()).await);
-        assert!(!cache.is_dirty(PageId::from_page_num(3).unwrap()).await);
+        assert_eq!(cache.dirty_count(), 1);
+        assert!(cache.is_dirty(PageId::from_page_num(2).unwrap()));
+        assert!(!cache.is_dirty(PageId::from_page_num(1).unwrap()));
+        assert!(!cache.is_dirty(PageId::from_page_num(3).unwrap()));
     }
 
-    #[tokio::test]
-    async fn cache_eviction() {
+    #[test]
+    fn cache_eviction() {
         let cache = PageCache::new(3);
 
         // Fill cache
-        cache
-            .put(PageId::from_page_num(1).unwrap(), make_node(1), false)
-            .await;
-        cache
-            .put(PageId::from_page_num(2).unwrap(), make_node(2), false)
-            .await;
-        cache
-            .put(PageId::from_page_num(3).unwrap(), make_node(3), false)
-            .await;
+        cache.put(PageId::from_page_num(1).unwrap(), make_node(1), false);
+        cache.put(PageId::from_page_num(2).unwrap(), make_node(2), false);
+        cache.put(PageId::from_page_num(3).unwrap(), make_node(3), false);
 
-        assert_eq!(cache.len().await, 3);
+        assert_eq!(cache.len(), 3);
 
         // This should evict page 1 (LRU)
-        let evicted = cache
-            .put(PageId::from_page_num(4).unwrap(), make_node(4), false)
-            .await;
+        let evicted =
+            cache.put(PageId::from_page_num(4).unwrap(), make_node(4), false);
 
         assert!(evicted.is_some());
         let ev = evicted.unwrap();
         assert_eq!(ev.id, PageId::from_page_num(1).unwrap());
         assert!(!ev.dirty);
 
-        assert!(cache.get(PageId::from_page_num(1).unwrap()).await.is_none());
-        assert!(cache.get(PageId::from_page_num(4).unwrap()).await.is_some());
+        assert!(cache.get(PageId::from_page_num(1).unwrap()).is_none());
+        assert!(cache.get(PageId::from_page_num(4).unwrap()).is_some());
     }
 
-    #[tokio::test]
-    async fn cache_lru_order() {
+    #[test]
+    fn cache_lru_order() {
         let cache = PageCache::new(3);
 
-        cache
-            .put(PageId::from_page_num(1).unwrap(), make_node(1), false)
-            .await;
-        cache
-            .put(PageId::from_page_num(2).unwrap(), make_node(2), false)
-            .await;
-        cache
-            .put(PageId::from_page_num(3).unwrap(), make_node(3), false)
-            .await;
+        cache.put(PageId::from_page_num(1).unwrap(), make_node(1), false);
+        cache.put(PageId::from_page_num(2).unwrap(), make_node(2), false);
+        cache.put(PageId::from_page_num(3).unwrap(), make_node(3), false);
 
         // Access page 1 to make it recently used
-        cache.get(PageId::from_page_num(1).unwrap()).await;
+        cache.get(PageId::from_page_num(1).unwrap());
 
         // Now page 2 should be LRU
-        let evicted = cache
-            .put(PageId::from_page_num(4).unwrap(), make_node(4), false)
-            .await;
+        let evicted =
+            cache.put(PageId::from_page_num(4).unwrap(), make_node(4), false);
 
         assert_eq!(evicted.unwrap().id, PageId::from_page_num(2).unwrap());
     }
 
-    #[tokio::test]
-    async fn cache_remove() {
+    #[test]
+    fn cache_remove() {
         let cache = PageCache::new(10);
         let id = PageId::from_page_num(1).unwrap();
 
-        cache.put(id, make_node(1), true).await;
-        assert!(cache.get(id).await.is_some());
-        assert!(cache.is_dirty(id).await);
+        cache.put(id, make_node(1), true);
+        assert!(cache.get(id).is_some());
+        assert!(cache.is_dirty(id));
 
-        let removed = cache.remove(id).await;
+        let removed = cache.remove(id);
         assert!(removed.is_some());
-        assert!(cache.get(id).await.is_none());
-        assert!(!cache.is_dirty(id).await);
+        assert!(cache.get(id).is_none());
+        assert!(!cache.is_dirty(id));
     }
 
-    #[tokio::test]
-    async fn cache_clear() {
+    #[test]
+    fn cache_clear() {
         let cache = PageCache::new(10);
 
-        cache
-            .put(PageId::from_page_num(1).unwrap(), make_node(1), true)
-            .await;
-        cache
-            .put(PageId::from_page_num(2).unwrap(), make_node(2), false)
-            .await;
+        cache.put(PageId::from_page_num(1).unwrap(), make_node(1), true);
+        cache.put(PageId::from_page_num(2).unwrap(), make_node(2), false);
 
-        assert_eq!(cache.len().await, 2);
-        assert_eq!(cache.dirty_count().await, 1);
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.dirty_count(), 1);
 
-        let discarded = cache.clear().await;
+        let discarded = cache.clear();
 
-        assert!(cache.is_empty().await);
-        assert_eq!(cache.dirty_count().await, 0);
+        assert!(cache.is_empty());
+        assert_eq!(cache.dirty_count(), 0);
 
         // Should return the dirty page that was discarded
         assert_eq!(discarded.len(), 1);
         assert_eq!(discarded[0].0, PageId::from_page_num(1).unwrap());
     }
 
-    #[tokio::test]
-    async fn cache_stats() {
+    #[test]
+    fn cache_stats() {
         let cache = PageCache::new(10);
         let id = PageId::from_page_num(1).unwrap();
 
         // Miss
-        cache.get(id).await;
+        cache.get(id);
 
         // Insert (write)
-        cache.put(id, make_node(1), true).await;
+        cache.put(id, make_node(1), true);
 
         // Hit
-        cache.get(id).await;
-        cache.get(id).await;
+        cache.get(id);
+        cache.get(id);
 
-        let stats = cache.stats().await;
+        let stats = cache.stats();
         assert_eq!(stats.hits, 2);
         assert_eq!(stats.misses, 1);
         assert_eq!(stats.writes, 1);
     }
 
-    #[tokio::test]
-    async fn cache_hit_rate() {
+    #[test]
+    fn cache_hit_rate() {
         let cache = PageCache::new(10);
         let id = PageId::from_page_num(1).unwrap();
 
         // Empty cache, no operations
-        assert_eq!(cache.hit_rate().await, 0.0);
+        assert_eq!(cache.hit_rate(), 0.0);
 
         // 1 miss
-        cache.get(id).await;
-        assert_eq!(cache.hit_rate().await, 0.0);
+        cache.get(id);
+        assert_eq!(cache.hit_rate(), 0.0);
 
-        cache.put(id, make_node(1), false).await;
+        cache.put(id, make_node(1), false);
 
         // 1 hit
-        cache.get(id).await;
+        cache.get(id);
         // 1 hit, 1 miss = 50%
-        assert!((cache.hit_rate().await - 0.5).abs() < 0.01);
+        assert!((cache.hit_rate() - 0.5).abs() < 0.01);
 
         // 2 more hits
-        cache.get(id).await;
-        cache.get(id).await;
+        cache.get(id);
+        cache.get(id);
         // 3 hits, 1 miss = 75%
-        assert!((cache.hit_rate().await - 0.75).abs() < 0.01);
+        assert!((cache.hit_rate() - 0.75).abs() < 0.01);
     }
 
-    #[tokio::test]
-    async fn cache_update_existing() {
+    #[test]
+    fn cache_update_existing() {
         let cache = PageCache::new(10);
         let id = PageId::from_page_num(1).unwrap();
 
-        cache.put(id, make_node(1), false).await;
+        cache.put(id, make_node(1), false);
 
         // Update with new node
         let new_node = make_node(999);
-        cache.put(id, new_node.clone(), true).await;
+        cache.put(id, new_node.clone(), true);
 
-        let retrieved = cache.get(id).await.expect("should be in cache");
+        let retrieved = cache.get(id).expect("should be in cache");
         assert_eq!(*retrieved, *new_node);
-        assert!(cache.is_dirty(id).await);
+        assert!(cache.is_dirty(id));
     }
 
-    #[tokio::test]
-    async fn cache_mark_dirty_nonexistent() {
+    #[test]
+    fn cache_mark_dirty_nonexistent() {
         let cache = PageCache::new(10);
         let id = PageId::from_page_num(1).unwrap();
 
-        assert_eq!(cache.mark_dirty(id).await, MarkDirtyResult::NotInCache);
+        assert_eq!(cache.mark_dirty(id), MarkDirtyResult::NotInCache);
     }
 
-    #[tokio::test]
-    async fn cache_eviction_dirty_page() {
+    #[test]
+    fn cache_eviction_dirty_page() {
         let cache = PageCache::new(2);
 
         // Insert a dirty page
-        cache
-            .put(PageId::from_page_num(1).unwrap(), make_node(1), true)
-            .await;
-        cache
-            .put(PageId::from_page_num(2).unwrap(), make_node(2), false)
-            .await;
+        cache.put(PageId::from_page_num(1).unwrap(), make_node(1), true);
+        cache.put(PageId::from_page_num(2).unwrap(), make_node(2), false);
 
         // Evict page 1 (dirty)
-        let evicted = cache
-            .put(PageId::from_page_num(3).unwrap(), make_node(3), false)
-            .await;
+        let evicted =
+            cache.put(PageId::from_page_num(3).unwrap(), make_node(3), false);
 
         let ev = evicted.unwrap();
         assert_eq!(ev.id, PageId::from_page_num(1).unwrap());
         assert!(ev.dirty); // Should indicate the evicted page was dirty
     }
 
-    #[tokio::test]
-    async fn cache_put_clean_clears_dirty() {
+    #[test]
+    fn cache_put_clean_clears_dirty() {
         let cache = PageCache::new(10);
         let id = PageId::from_page_num(1).unwrap();
 
         // Insert as dirty
-        cache.put(id, make_node(1), true).await;
-        assert!(cache.is_dirty(id).await);
+        cache.put(id, make_node(1), true);
+        assert!(cache.is_dirty(id));
 
         // Update with dirty=false should clear the dirty flag
-        cache.put(id, make_node(2), false).await;
-        assert!(!cache.is_dirty(id).await);
+        cache.put(id, make_node(2), false);
+        assert!(!cache.is_dirty(id));
     }
 
-    #[tokio::test]
-    async fn cache_capacity_zero_becomes_one() {
+    #[test]
+    fn cache_capacity_zero_becomes_one() {
         let cache = PageCache::new(0);
 
         // Should be treated as capacity 1
         assert_eq!(cache.capacity(), 1);
 
         // Can insert one page
-        cache
-            .put(PageId::from_page_num(1).unwrap(), make_node(1), false)
-            .await;
-        assert_eq!(cache.len().await, 1);
+        cache.put(PageId::from_page_num(1).unwrap(), make_node(1), false);
+        assert_eq!(cache.len(), 1);
 
         // Second insert should evict the first
-        let evicted = cache
-            .put(PageId::from_page_num(2).unwrap(), make_node(2), false)
-            .await;
+        let evicted =
+            cache.put(PageId::from_page_num(2).unwrap(), make_node(2), false);
         assert!(evicted.is_some());
         assert_eq!(evicted.unwrap().id, PageId::from_page_num(1).unwrap());
-        assert_eq!(cache.len().await, 1);
+        assert_eq!(cache.len(), 1);
     }
 
-    #[tokio::test]
-    async fn cache_mark_flushed_only_counts_dirty() {
+    #[test]
+    fn cache_mark_flushed_only_counts_dirty() {
         let cache = PageCache::new(10);
 
-        cache
-            .put(PageId::from_page_num(1).unwrap(), make_node(1), true)
-            .await;
+        cache.put(PageId::from_page_num(1).unwrap(), make_node(1), true);
 
         // Flush both existing and non-existing pages
-        cache
-            .mark_flushed(&[
-                PageId::from_page_num(1).unwrap(),
-                PageId::from_page_num(999).unwrap(), // doesn't exist
-            ])
-            .await;
+        cache.mark_flushed(&[
+            PageId::from_page_num(1).unwrap(),
+            PageId::from_page_num(999).unwrap(), // doesn't exist
+        ]);
 
-        let stats = cache.stats().await;
+        let stats = cache.stats();
         // Should only count the one that was actually dirty
         assert_eq!(stats.flushes, 1);
     }
 
-    #[tokio::test]
-    async fn cache_get_miss_explicit() {
+    #[test]
+    fn cache_get_miss_explicit() {
         let cache = PageCache::new(10);
 
         // Explicit test that get on non-existent page returns None
-        let result = cache.get(PageId::from_page_num(999).unwrap()).await;
+        let result = cache.get(PageId::from_page_num(999).unwrap());
         assert!(result.is_none());
 
         // Stats should show a miss
-        let stats = cache.stats().await;
+        let stats = cache.stats();
         assert_eq!(stats.misses, 1);
         assert_eq!(stats.hits, 0);
     }
 
-    #[tokio::test]
-    async fn cache_put_update_at_capacity_no_eviction() {
+    #[test]
+    fn cache_put_update_at_capacity_no_eviction() {
         let cache = PageCache::new(2);
 
         let id1 = PageId::from_page_num(1).unwrap();
         let id2 = PageId::from_page_num(2).unwrap();
 
         // Fill cache
-        cache.put(id1, make_node(1), false).await;
-        cache.put(id2, make_node(2), false).await;
+        cache.put(id1, make_node(1), false);
+        cache.put(id2, make_node(2), false);
 
-        assert_eq!(cache.len().await, 2);
+        assert_eq!(cache.len(), 2);
 
         // Update existing page - should NOT evict
-        let evicted = cache.put(id1, make_node(100), true).await;
+        let evicted = cache.put(id1, make_node(100), true);
         assert!(evicted.is_none());
-        assert_eq!(cache.len().await, 2);
+        assert_eq!(cache.len(), 2);
 
         // Verify update happened
-        let node = cache.get(id1).await.unwrap();
+        let node = cache.get(id1).unwrap();
         assert_eq!(node.values.len(), 1);
     }
 
-    #[tokio::test]
-    async fn cache_put_same_page_twice() {
+    #[test]
+    fn cache_put_same_page_twice() {
         let cache = PageCache::new(10);
         let id = PageId::from_page_num(1).unwrap();
 
-        cache.put(id, make_node(1), true).await;
-        cache.put(id, make_node(2), false).await;
+        cache.put(id, make_node(1), true);
+        cache.put(id, make_node(2), false);
 
         // Should still only have 1 entry
-        assert_eq!(cache.len().await, 1);
+        assert_eq!(cache.len(), 1);
 
         // Second put with dirty=false should clear dirty
-        assert!(!cache.is_dirty(id).await);
+        assert!(!cache.is_dirty(id));
     }
 
-    #[tokio::test]
-    async fn cache_mark_dirty_already_dirty() {
+    #[test]
+    fn cache_mark_dirty_already_dirty() {
         let cache = PageCache::new(10);
         let id = PageId::from_page_num(1).unwrap();
 
-        cache.put(id, make_node(1), true).await;
-        assert!(cache.is_dirty(id).await);
+        cache.put(id, make_node(1), true);
+        assert!(cache.is_dirty(id));
 
         // Mark dirty again - should be idempotent
-        let result = cache.mark_dirty(id).await;
+        let result = cache.mark_dirty(id);
         assert_eq!(result, MarkDirtyResult::Marked);
-        assert!(cache.is_dirty(id).await);
+        assert!(cache.is_dirty(id));
 
         // Dirty count should still be 1
-        assert_eq!(cache.dirty_count().await, 1);
+        assert_eq!(cache.dirty_count(), 1);
     }
 
-    #[tokio::test]
-    async fn cache_mark_flushed_empty_slice() {
+    #[test]
+    fn cache_mark_flushed_empty_slice() {
         let cache = PageCache::new(10);
-        cache
-            .put(PageId::from_page_num(1).unwrap(), make_node(1), true)
-            .await;
+        cache.put(PageId::from_page_num(1).unwrap(), make_node(1), true);
 
         // Flush with empty slice - should be no-op
-        cache.mark_flushed(&[]).await;
+        cache.mark_flushed(&[]);
 
         // Original page should still be dirty
-        assert!(cache.is_dirty(PageId::from_page_num(1).unwrap()).await);
-        assert_eq!(cache.stats().await.flushes, 0);
+        assert!(cache.is_dirty(PageId::from_page_num(1).unwrap()));
+        assert_eq!(cache.stats().flushes, 0);
     }
 
-    #[tokio::test]
-    async fn cache_mark_flushed_duplicate_in_slice() {
+    #[test]
+    fn cache_mark_flushed_duplicate_in_slice() {
         let cache = PageCache::new(10);
         let id = PageId::from_page_num(1).unwrap();
-        cache.put(id, make_node(1), true).await;
+        cache.put(id, make_node(1), true);
 
         // Flush same page twice in one call
-        cache.mark_flushed(&[id, id]).await;
+        cache.mark_flushed(&[id, id]);
 
         // Should only count as 1 flush (second one wasn't dirty anymore)
-        let stats = cache.stats().await;
+        let stats = cache.stats();
         assert_eq!(stats.flushes, 1);
     }
 
-    #[tokio::test]
-    async fn cache_remove_nonexistent() {
+    #[test]
+    fn cache_remove_nonexistent() {
         let cache = PageCache::new(10);
 
         // Remove page that doesn't exist
-        let result = cache.remove(PageId::from_page_num(999).unwrap()).await;
+        let result = cache.remove(PageId::from_page_num(999).unwrap());
         assert!(result.is_none());
     }
 
-    #[tokio::test]
-    async fn cache_clear_empty() {
+    #[test]
+    fn cache_clear_empty() {
         let cache = PageCache::new(10);
 
         // Clear empty cache
-        let discarded = cache.clear().await;
+        let discarded = cache.clear();
         assert!(discarded.is_empty());
     }
 
-    #[tokio::test]
-    async fn cache_clear_only_clean_pages() {
+    #[test]
+    fn cache_clear_only_clean_pages() {
         let cache = PageCache::new(10);
 
         // Add only clean pages
-        cache
-            .put(PageId::from_page_num(1).unwrap(), make_node(1), false)
-            .await;
-        cache
-            .put(PageId::from_page_num(2).unwrap(), make_node(2), false)
-            .await;
+        cache.put(PageId::from_page_num(1).unwrap(), make_node(1), false);
+        cache.put(PageId::from_page_num(2).unwrap(), make_node(2), false);
 
-        assert_eq!(cache.len().await, 2);
-        assert_eq!(cache.dirty_count().await, 0);
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.dirty_count(), 0);
 
         // Clear should return empty (no dirty pages to report)
-        let discarded = cache.clear().await;
+        let discarded = cache.clear();
         assert!(discarded.is_empty());
-        assert!(cache.is_empty().await);
+        assert!(cache.is_empty());
     }
 
-    #[tokio::test]
-    async fn cache_dirty_pages_empty_when_none() {
+    #[test]
+    fn cache_dirty_pages_empty_when_none() {
         let cache = PageCache::new(10);
 
         // Add only clean pages
-        cache
-            .put(PageId::from_page_num(1).unwrap(), make_node(1), false)
-            .await;
-        cache
-            .put(PageId::from_page_num(2).unwrap(), make_node(2), false)
-            .await;
+        cache.put(PageId::from_page_num(1).unwrap(), make_node(1), false);
+        cache.put(PageId::from_page_num(2).unwrap(), make_node(2), false);
 
-        let dirty = cache.dirty_pages().await;
+        let dirty = cache.dirty_pages();
         assert!(dirty.is_empty());
     }
 
-    #[tokio::test]
-    async fn cache_is_dirty_after_eviction() {
+    #[test]
+    fn cache_is_dirty_after_eviction() {
         let cache = PageCache::new(2);
 
         let id1 = PageId::from_page_num(1).unwrap();
-        cache.put(id1, make_node(1), true).await;
-        cache
-            .put(PageId::from_page_num(2).unwrap(), make_node(2), false)
-            .await;
+        cache.put(id1, make_node(1), true);
+        cache.put(PageId::from_page_num(2).unwrap(), make_node(2), false);
 
         // Evict id1 (dirty)
-        cache
-            .put(PageId::from_page_num(3).unwrap(), make_node(3), false)
-            .await;
+        cache.put(PageId::from_page_num(3).unwrap(), make_node(3), false);
 
         // Evicted page should not be in dirty set
-        assert!(!cache.is_dirty(id1).await);
+        assert!(!cache.is_dirty(id1));
     }
 
-    #[tokio::test]
-    async fn cache_stats_evictions_accurate() {
+    #[test]
+    fn cache_stats_evictions_accurate() {
         let cache = PageCache::new(2);
 
-        cache
-            .put(PageId::from_page_num(1).unwrap(), make_node(1), false)
-            .await;
-        cache
-            .put(PageId::from_page_num(2).unwrap(), make_node(2), false)
-            .await;
+        cache.put(PageId::from_page_num(1).unwrap(), make_node(1), false);
+        cache.put(PageId::from_page_num(2).unwrap(), make_node(2), false);
 
         // This should evict
-        cache
-            .put(PageId::from_page_num(3).unwrap(), make_node(3), false)
-            .await;
-        cache
-            .put(PageId::from_page_num(4).unwrap(), make_node(4), false)
-            .await;
+        cache.put(PageId::from_page_num(3).unwrap(), make_node(3), false);
+        cache.put(PageId::from_page_num(4).unwrap(), make_node(4), false);
 
-        let stats = cache.stats().await;
+        let stats = cache.stats();
         assert_eq!(stats.evictions, 2);
     }
 
-    #[tokio::test]
-    async fn cache_remove_dirty_page() {
+    #[test]
+    fn cache_remove_dirty_page() {
         let cache = PageCache::new(10);
         let id = PageId::from_page_num(1).unwrap();
 
-        cache.put(id, make_node(1), true).await;
-        assert!(cache.is_dirty(id).await);
-        assert_eq!(cache.dirty_count().await, 1);
+        cache.put(id, make_node(1), true);
+        assert!(cache.is_dirty(id));
+        assert_eq!(cache.dirty_count(), 1);
 
         // Remove should also clear from dirty set
-        cache.remove(id).await;
+        cache.remove(id);
 
-        assert!(!cache.is_dirty(id).await);
-        assert_eq!(cache.dirty_count().await, 0);
+        assert!(!cache.is_dirty(id));
+        assert_eq!(cache.dirty_count(), 0);
     }
 }

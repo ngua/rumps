@@ -54,11 +54,9 @@ Methods removed. Split decisions use key count (`keys.len() == max_keys`), not s
 
 `NodeRaw` deleted. `Node` now derives `Serialize`/`Deserialize` directly; `SmallVec` fields use their native serde support, and the `Arc<NodeData>` values field uses custom `ser_values`/`de_values` helpers that serialize through the `Arc` and wrap on deserialize. No intermediate `Vec` allocations.
 
-### 5. Page cache: `get()` takes a write lock for reads
+### ~~5. Page cache: `get()` takes a write lock for reads~~ DONE
 
-`PageCache::get()` acquires `self.cache.write().await` just to update LRU order. This serializes all reads behind a single writer.
-
-**Note**: `moka::sync::Cache` was tried and reverted; it caused +43% regression on `get_existing` and widespread slowdowns across all benchmarks. Moka's TinyLFU frequency counting, `run_pending_tasks()` on every `put()`, and `Mutex`-guarded eviction buffer add overhead that far outweighs the lock-free-read benefit for a B-tree page cache with strong temporal locality and low contention. A simpler approach: make the cache sync (drop the `tokio::sync::RwLock` for a `std::sync::RwLock` or `parking_lot::RwLock`) and use `AtomicU64` for stats. The cache is purely in-memory; it does not need to be `async`.
+Replaced `tokio::sync::RwLock` with `parking_lot::RwLock` for the LRU cache and `RwLock<PageCacheStats>` with `AtomicU64` counters. All `PageCache` methods are now synchronous. Batch writes improved ~15-25%, `kill_subtree` ~25%, reads ~6%.
 
 ### 6. Two-layer cache redundancy
 
@@ -88,11 +86,9 @@ Fix: use `pread`/`pwrite` (positional I/O) which don't need seeking and can run 
 
 When compression is added (per your TODO), this becomes critical: store the compressed length in a small header, read only the compressed bytes, decompress on demand. Without compression, at least consider variable-length records with a page directory for multi-record pages, or prefix compression for keys that share common prefixes (which is the norm in RUMPS's hierarchical key model).
 
-### 11. `Node::clone()` is expensive and pervasive (high priority)
+### ~~11. `Node::clone()` is expensive and pervasive~~ DONE
 
-`Node` contains `SmallVec<[Key; 8]>`, `SmallVec<[Arc<NodeData>; 8]>`, `SmallVec<[NodeId; 8]>`. Cloning a `Node` deep-copies all the `SmallVec`s (though `NodeData` is behind `Arc`). `btree.rs` clones nodes frequently: `Arc::try_unwrap(...).unwrap_or_else(|arc| (*arc).clone())` appears 4 times. The engine's `read()` also clones: it returns `Ok((*cached).clone())` from the cache hit path.
-
-Fix: return `Arc<Node>` from reads instead of cloned `Node`. For mutations, use copy-on-write; only clone when `Arc::strong_count() > 1`.
+Wrapped `Node` in `Arc` throughout; reads return `Arc<Node>` instead of cloning. Copy-on-write via `Arc::try_unwrap`/`Arc::make_mut`.
 
 ### ~~12. WAL writer serializes with `bincode::serialize_into` but could use zero-copy~~ DELETED
 
@@ -102,6 +98,6 @@ Not a real issue. `WalRecord::Set` carries `NodeData` (one key's value), not a f
 
 `flush()` uses `FuturesUnordered` to write dirty pages, but the writes still contend on the single `RwLock<File>` (see #9), so concurrency is illusory. Once #9 is resolved with lock-free positional I/O, the `FuturesUnordered` path becomes truly concurrent. Remaining opportunity: vectored I/O (`writev`) to batch multiple page writes into fewer syscalls.
 
-### 14. Dirty set uses separate `RwLock<HashSet>`
+### ~~14. Dirty set uses separate `RwLock<HashSet>`~~ DONE
 
-`PageCache` tracks dirty pages in a `RwLock<HashSet<PageId>>` separate from the LRU cache. This means every `put()` acquires three locks: cache, dirty_set, and stats. Fold the dirty bit into the `CachedPage` entry itself (it's already a struct; add a `dirty: bool` field) to eliminate the separate lock.
+Folded dirty bit into `CachedPage` entry, eliminated the separate `RwLock<HashSet<PageId>>`.

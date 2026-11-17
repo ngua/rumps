@@ -555,7 +555,7 @@ impl FileStorageEngine {
         let page_id = PageId::from(id);
 
         // Check cache first
-        if let Some(cached) = self.cache.get(page_id).await {
+        if let Some(cached) = self.cache.get(page_id) {
             Ok(cached)
         } else {
             // Cache miss - read from disk
@@ -588,8 +588,7 @@ impl FileStorageEngine {
                 })?);
 
             // Add to cache (clean, since it came from disk)
-            let evicted =
-                self.cache.put(page_id, Arc::clone(&node), false).await;
+            let evicted = self.cache.put(page_id, Arc::clone(&node), false);
 
             // Handle evicted dirty page
             if let Some(ev) = evicted {
@@ -610,7 +609,7 @@ impl FileStorageEngine {
         let page_id = PageId::from(id);
 
         // Put in cache as dirty
-        let evicted = self.cache.put(page_id, node, true).await;
+        let evicted = self.cache.put(page_id, node, true);
 
         // Handle evicted dirty page - write to disk
         if let Some(ev) = evicted {
@@ -632,7 +631,7 @@ impl FileStorageEngine {
         let page_id = PageId::from(id);
 
         // Remove from cache if present
-        self.cache.remove(page_id).await;
+        self.cache.remove(page_id);
 
         // Free in allocator
         self.page_alloc.free(page_id).await?;
@@ -642,7 +641,7 @@ impl FileStorageEngine {
 
     pub(crate) async fn flush(&self) -> Result<()> {
         // Get all dirty pages
-        let dirty = self.cache.dirty_pages().await;
+        let dirty = self.cache.dirty_pages();
 
         // Write each dirty page to disk
         // (sequential for now; could parallelize with FuturesUnordered)
@@ -656,7 +655,7 @@ impl FileStorageEngine {
             .await?;
 
         // Mark all as flushed
-        self.cache.mark_flushed(&ids).await;
+        self.cache.mark_flushed(&ids);
 
         // Write bitmap pages and superblock (v2 format only)
         self.flush_metadata().await?;
@@ -682,16 +681,16 @@ impl FileStorageEngine {
         StorageMetadata {
             allocated_pages: self.page_alloc.allocated_count().await,
             free_pages: self.page_alloc.free_count().await,
-            cached_pages: self.cache.len().await,
-            dirty_pages: self.cache.dirty_count().await,
-            cache_hit_rate: self.cache.hit_rate().await,
+            cached_pages: self.cache.len(),
+            dirty_pages: self.cache.dirty_count(),
+            cache_hit_rate: self.cache.hit_rate(),
             data_dir: self.data_dir.clone(),
         }
     }
 
     /// Returns page cache statistics.
     pub(crate) async fn cache_stats(&self) -> page::PageCacheStats {
-        self.cache.stats().await
+        self.cache.stats()
     }
 
     /// Returns the stored B-tree min_degree from the metadata page.

@@ -1075,6 +1075,7 @@ dependencies = [
  "fs2",
  "futures",
  "lru",
+ "parking_lot",
  "rumps-types",
  "serde",
  "serde_json",
