@@ -12,7 +12,7 @@ dashmap = "5"
 smallvec = { workspace = true }
 fs2 = "0.4"
 futures = { workspace = true }
-moka = { version = "0.12", features = ["sync"] }
+lru = "0.12"
 serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

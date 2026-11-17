@@ -551,26 +551,14 @@ impl FileStorageEngine {
 }
 
 impl FileStorageEngine {
-    async fn flush_evicted(
-        &self,
-        evicted: Vec<page::EvictedPage>,
-    ) -> Result<()> {
-        evicted
-            .iter()
-            .filter(|ev| ev.dirty)
-            .map(|ev| self.write_page_to_disk(ev.id, &ev.node))
-            .collect::<futures::stream::FuturesUnordered<_>>()
-            .try_collect()
-            .await
-    }
-
     pub(crate) async fn read(&self, id: NodeId) -> Result<Node> {
         let page_id = PageId::from(id);
 
-        if let Some(cached) = self.cache.get(page_id) {
+        // Check cache first
+        if let Some(cached) = self.cache.get(page_id).await {
             Ok((*cached).clone())
         } else {
-            // Cache miss; read from disk
+            // Cache miss - read from disk
             let offset = page_id.byte_offset();
             let mut buf = vec![0u8; page::PAGE_SIZE];
             let mut file = self.data_file.write().await;
@@ -591,12 +579,20 @@ impl FileStorageEngine {
                 })?;
             drop(file);
 
+            // Deserialize
             let node: Node = bincode::deserialize(&buf).map_err(|e| {
                 StorageError::Serialization(format!("deserialize node: {e}"))
             })?;
 
-            let evicted = self.cache.put(page_id, node.clone(), false);
-            self.flush_evicted(evicted).await?;
+            // Add to cache (clean, since it came from disk)
+            let evicted = self.cache.put(page_id, node.clone(), false).await;
+
+            // Handle evicted dirty page
+            if let Some(ev) = evicted {
+                if ev.dirty {
+                    self.write_page_to_disk(ev.id, &ev.node).await?;
+                }
+            }
 
             Ok(node)
         }
@@ -608,8 +604,18 @@ impl FileStorageEngine {
         node: &Node,
     ) -> Result<()> {
         let page_id = PageId::from(id);
-        let evicted = self.cache.put(page_id, node.clone(), true);
-        self.flush_evicted(evicted).await
+
+        // Put in cache as dirty
+        let evicted = self.cache.put(page_id, node.clone(), true).await;
+
+        // Handle evicted dirty page - write to disk
+        if let Some(ev) = evicted {
+            if ev.dirty {
+                self.write_page_to_disk(ev.id, &ev.node).await?;
+            }
+        }
+
+        Ok(())
     }
 
     pub(crate) async fn allocate(&self) -> Result<NodeId> {
@@ -621,7 +627,8 @@ impl FileStorageEngine {
     pub(crate) async fn deallocate(&self, id: NodeId) -> Result<()> {
         let page_id = PageId::from(id);
 
-        self.cache.remove(page_id);
+        // Remove from cache if present
+        self.cache.remove(page_id).await;
 
         // Free in allocator
         self.page_alloc.free(page_id).await?;
@@ -630,11 +637,11 @@ impl FileStorageEngine {
     }
 
     pub(crate) async fn flush(&self) -> Result<()> {
-        // Flush any dirty pages that were evicted since last drain
-        self.flush_evicted(self.cache.drain_evicted()).await?;
+        // Get all dirty pages
+        let dirty = self.cache.dirty_pages().await;
 
-        let dirty = self.cache.dirty_pages();
-
+        // Write each dirty page to disk
+        // (sequential for now; could parallelize with FuturesUnordered)
         let ids: Vec<_> = dirty
             .iter()
             .map(|(id, node)| async move {
@@ -644,7 +651,8 @@ impl FileStorageEngine {
             .try_collect()
             .await?;
 
-        self.cache.mark_flushed(&ids);
+        // Mark all as flushed
+        self.cache.mark_flushed(&ids).await;
 
         // Write bitmap pages and superblock (v2 format only)
         self.flush_metadata().await?;
@@ -670,16 +678,16 @@ impl FileStorageEngine {
         StorageMetadata {
             allocated_pages: self.page_alloc.allocated_count().await,
             free_pages: self.page_alloc.free_count().await,
-            cached_pages: self.cache.len(),
-            dirty_pages: self.cache.dirty_count(),
-            cache_hit_rate: self.cache.hit_rate(),
+            cached_pages: self.cache.len().await,
+            dirty_pages: self.cache.dirty_count().await,
+            cache_hit_rate: self.cache.hit_rate().await,
             data_dir: self.data_dir.clone(),
         }
     }
 
     /// Returns page cache statistics.
-    pub(crate) fn cache_stats(&self) -> page::PageCacheStats {
-        self.cache.stats()
+    pub(crate) async fn cache_stats(&self) -> page::PageCacheStats {
+        self.cache.stats().await
     }
 
     /// Returns the stored B-tree min_degree from the metadata page.
