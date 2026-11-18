@@ -1,13 +1,13 @@
 //! File-based storage engine with WAL and page cache.
 
-use std::fmt;
+use std::fs::{File, OpenOptions};
+use std::os::unix::fs::FileExt;
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::{fmt, io, iter};
 
-use futures::future::BoxFuture;
-use futures::stream::TryStreamExt;
-use tokio::fs::{self, File, OpenOptions};
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
+use tokio::fs;
 use tokio::sync::RwLock;
 
 use super::{
@@ -56,7 +56,7 @@ struct LoadedIndirectPages {
 /// [`create`]: Self::create
 pub(crate) struct FileStorageEngine {
     /// Data file handle for page I/O.
-    data_file: Arc<RwLock<File>>,
+    data_file: Arc<File>,
 
     /// Write-ahead log for durability.
     wal: Arc<WalWriter>,
@@ -230,21 +230,19 @@ impl FileStorageEngine {
         let wal_dir = dir.join(Self::WAL_DIR_NAME);
 
         // Open data file (must exist)
-        let mut file = OpenOptions::new()
+        let file = OpenOptions::new()
             .read(true)
             .write(true)
             .open(&data_path)
-            .await
             .map_err(|e| StorageError::Io {
-                op: "open data file".into(),
-                path: data_path.clone(),
-                source: e,
-            })?;
+            op: "open data file".into(),
+            path: data_path.clone(),
+            source: e,
+        })?;
 
         // Read file size to determine allocated pages
         let file_len = file
             .metadata()
-            .await
             .map_err(|e| StorageError::Io {
                 op: "get file metadata".into(),
                 path: data_path.clone(),
@@ -262,15 +260,7 @@ impl FileStorageEngine {
         // Read page 0 (header/superblock)
         let mut hdr = vec![0u8; page::PAGE_SIZE];
 
-        file.seek(SeekFrom::Start(0))
-            .await
-            .map_err(|e| StorageError::Io {
-                op: "seek to header".into(),
-                path: data_path.clone(),
-                source: e,
-            })?;
-        file.read_exact(&mut hdr)
-            .await
+        file.read_exact_at(&mut hdr, 0)
             .map_err(|e| StorageError::Io {
                 op: "read header".into(),
                 path: data_path.clone(),
@@ -282,12 +272,8 @@ impl FileStorageEngine {
 
         let metadata = match superblock_raw.metadata_root {
             Some(pid) => {
-                let buf = Self::read_page_at(
-                    &mut file,
-                    pid.byte_offset(),
-                    &data_path,
-                )
-                .await?;
+                let buf =
+                    Self::read_page_at(&file, pid.byte_offset(), &data_path)?;
                 let meta = MetadataPage::deserialize(&buf)?;
                 meta.validate_runtime()?;
                 meta
@@ -309,13 +295,11 @@ impl FileStorageEngine {
 
         // Parse superblock and load bitmap pages (including indirect)
         let (page_alloc, superblock, indirect) =
-            Self::load_superblock(&mut file, &hdr, &cfg, &data_path).await?;
+            Self::load_superblock(&file, &hdr, &cfg, &data_path)?;
 
         // Load registry chain (follows next_page links)
         let registry_chain = match superblock.registry_root {
-            Some(pid) => {
-                Self::load_registry_chain(&mut file, pid, &data_path).await?
-            }
+            Some(pid) => Self::load_registry_chain(&file, pid, &data_path)?,
             None => Vec::new(),
         };
 
@@ -340,7 +324,7 @@ impl FileStorageEngine {
             Self::maybe_spawn_sync_task(&cfg, Arc::clone(&wal));
 
         Ok(Self {
-            data_file: Arc::new(RwLock::new(file)),
+            data_file: Arc::new(file),
             wal,
             cache: Arc::new(cache),
             page_alloc: Arc::new(page_alloc),
@@ -444,55 +428,34 @@ impl FileStorageEngine {
             let sb_data = superblock.serialize();
 
             // Write pages to data file
-            let mut file = OpenOptions::new()
+            let file = OpenOptions::new()
                 .read(true)
                 .write(true)
                 .create_new(true)
                 .open(&data_path)
-                .await
                 .map_err(|e| StorageError::Io {
                     op: "create data file".into(),
                     path: data_path.clone(),
                     source: e,
                 })?;
 
-            // Page 0: superblock
-            file.write_all(&sb_data)
-                .await
-                .map_err(|e| StorageError::Io {
-                    op: "write superblock".into(),
+            let psz = page::PAGE_SIZE as u64;
+            [
+                (&sb_data[..], 0, "write superblock"),
+                (&bm_page[..], psz, "write bitmap page"),
+                (&meta_data[..], 2 * psz, "write metadata page"),
+                (&reg_data[..], 3 * psz, "write registry page"),
+            ]
+            .into_iter()
+            .try_for_each(|(d, off, op)| {
+                file.write_all_at(d, off).map_err(|e| StorageError::Io {
+                    op: op.into(),
                     path: data_path.clone(),
                     source: e,
-                })?;
+                })
+            })?;
 
-            // Page 1: first bitmap page
-            file.write_all(&bm_page)
-                .await
-                .map_err(|e| StorageError::Io {
-                    op: "write bitmap page".into(),
-                    path: data_path.clone(),
-                    source: e,
-                })?;
-
-            // Page 2: metadata page
-            file.write_all(&meta_data)
-                .await
-                .map_err(|e| StorageError::Io {
-                    op: "write metadata page".into(),
-                    path: data_path.clone(),
-                    source: e,
-                })?;
-
-            // Page 3: registry page
-            file.write_all(&reg_data)
-                .await
-                .map_err(|e| StorageError::Io {
-                    op: "write registry page".into(),
-                    path: data_path.clone(),
-                    source: e,
-                })?;
-
-            file.sync_all().await.map_err(|e| StorageError::Io {
+            file.sync_all().map_err(|e| StorageError::Io {
                 op: "sync data file".into(),
                 path: data_path,
                 source: e,
@@ -513,7 +476,7 @@ impl FileStorageEngine {
                 Self::maybe_spawn_sync_task(&cfg, Arc::clone(&wal));
 
             Ok(Self {
-                data_file: Arc::new(RwLock::new(file)),
+                data_file: Arc::new(file),
                 wal,
                 cache: Arc::new(cache),
                 page_alloc: Arc::new(page_alloc),
@@ -622,23 +585,13 @@ impl FileStorageEngine {
             // Cache miss - read from disk
             let offset = page_id.byte_offset();
             let mut buf = vec![0u8; page::PAGE_SIZE];
-            let mut file = self.data_file.write().await;
-
-            file.seek(SeekFrom::Start(offset)).await.map_err(|e| {
-                StorageError::Io {
-                    op: "seek for read".into(),
-                    path: self.data_dir.join(Self::DATA_FILE_NAME),
-                    source: e,
-                }
-            })?;
-            file.read_exact(&mut buf)
-                .await
+            self.data_file
+                .read_exact_at(&mut buf, offset)
                 .map_err(|e| StorageError::Io {
                     op: "read page".into(),
                     path: self.data_dir.join(Self::DATA_FILE_NAME),
                     source: e,
                 })?;
-            drop(file);
 
             let node: Arc<Node> = Arc::new(Self::decode_node(&buf)?);
 
@@ -648,7 +601,7 @@ impl FileStorageEngine {
             // Handle evicted dirty page
             if let Some(ev) = evicted {
                 if ev.dirty {
-                    self.write_page_to_disk(ev.id, &ev.node).await?;
+                    self.write_page_to_disk(ev.id, &ev.node)?;
                 }
             }
 
@@ -669,7 +622,7 @@ impl FileStorageEngine {
         // Handle evicted dirty page - write to disk
         if let Some(ev) = evicted {
             if ev.dirty {
-                self.write_page_to_disk(ev.id, &ev.node).await?;
+                self.write_page_to_disk(ev.id, &ev.node)?;
             }
         }
 
@@ -695,24 +648,22 @@ impl FileStorageEngine {
     }
 
     pub(crate) async fn flush(&self) -> Result<()> {
-        // Get all dirty pages
         let dirty = self.cache.dirty_pages();
 
-        // Write each dirty page to disk
-        // (sequential for now; could parallelize with FuturesUnordered)
-        let ids: Vec<_> = dirty
+        let mut pages: Vec<(PageId, Vec<u8>)> = dirty
             .iter()
-            .map(|(id, node)| async move {
-                self.write_page_to_disk(*id, node).await.map(|_| *id)
-            })
-            .collect::<futures::stream::FuturesUnordered<_>>()
-            .try_collect()
-            .await?;
+            .map(|(id, node)| Self::encode_node(node).map(|buf| (*id, buf)))
+            .collect::<Result<_>>()?;
 
-        // Mark all as flushed
+        // Sort by page offset for sequential I/O and contiguous grouping
+        pages.sort_unstable_by_key(|(id, _)| id.page_num());
+
+        Self::flush_pages(&self.data_file, &pages, &self.data_dir)?;
+
+        let ids: Vec<_> = pages.iter().map(|(id, _)| *id).collect();
         self.cache.mark_flushed(&ids);
 
-        // Write bitmap pages and superblock (v2 format only)
+        // Write bitmap pages and superblock
         self.flush_metadata().await?;
 
         // Write registry chain pages
@@ -720,9 +671,7 @@ impl FileStorageEngine {
 
         // Sync data file (skip in Relaxed mode)
         if self.cfg.wal_config.sync_mode != SyncMode::Relaxed {
-            let file = self.data_file.read().await;
-
-            file.sync_all().await.map_err(|e| StorageError::Io {
+            self.data_file.sync_all().map_err(|e| StorageError::Io {
                 op: "sync data file".into(),
                 path: self.data_dir.join(Self::DATA_FILE_NAME),
                 source: e,
@@ -770,8 +719,8 @@ impl FileStorageEngine {
     /// Load superblock and bitmap pages (including indirect pages).
     ///
     /// Returns `(allocator, superblock, single_indirect, double_indirect)`.
-    async fn load_superblock(
-        file: &mut File,
+    fn load_superblock(
+        file: &File,
         hdr: &[u8],
         cfg: &StorageConfig,
         data_path: &Path,
@@ -780,11 +729,10 @@ impl FileStorageEngine {
 
         // Resolve all bitmap page IDs (direct + indirect)
         let (bm_page_ids, reserved, indirect_pages) =
-            Self::resolve_bitmap_pages_full(file, &superblock, data_path)
-                .await?;
+            Self::resolve_bitmap_pages_full(file, &superblock, data_path)?;
 
         // Read all bitmap pages and concatenate
-        let bm_data = Self::read_pages(file, &bm_page_ids, data_path).await?;
+        let bm_data = Self::read_pages(file, &bm_page_ids, data_path)?;
 
         let page_alloc =
             PageAllocator::from_bytes(&bm_data, cfg.max_pages, &reserved)?;
@@ -796,8 +744,8 @@ impl FileStorageEngine {
     ///
     /// Returns `(bitmap_page_ids, reserved_page_nums, indirect_pages)` where
     /// reserved includes superblock, all bitmap pages, and all indirect pages.
-    async fn resolve_bitmap_pages_full(
-        file: &mut File,
+    fn resolve_bitmap_pages_full(
+        file: &File,
         sb: &Superblock,
         path: &Path,
     ) -> Result<(Vec<PageId>, Vec<u64>, LoadedIndirectPages)> {
@@ -809,8 +757,7 @@ impl FileStorageEngine {
         let single_indirect = match sb.single_indirect {
             Some(single_pid) => {
                 let buf =
-                    Self::read_page_at(file, single_pid.byte_offset(), path)
-                        .await?;
+                    Self::read_page_at(file, single_pid.byte_offset(), path)?;
                 let indirect = IndirectPage::deserialize(&buf)?;
 
                 // Add single-indirect bitmap pages to reserved and bm_ids
@@ -828,8 +775,7 @@ impl FileStorageEngine {
         let double_indirect = match sb.double_indirect {
             Some(double_pid) => {
                 let buf =
-                    Self::read_page_at(file, double_pid.byte_offset(), path)
-                        .await?;
+                    Self::read_page_at(file, double_pid.byte_offset(), path)?;
                 let double_page = IndirectPage::deserialize(&buf)?;
 
                 // Read each sub-indirect page
@@ -839,8 +785,7 @@ impl FileStorageEngine {
                     path,
                     &mut bm_ids,
                     &mut reserved,
-                )
-                .await?;
+                )?;
 
                 Some((double_page, sub_pages))
             }
@@ -855,86 +800,50 @@ impl FileStorageEngine {
         Ok((bm_ids, reserved, indirect))
     }
 
-    /// Load double-indirect entries recursively.
-    fn load_double_indirect_entries<'a>(
-        file: &'a mut File,
-        entries: &'a [PageId],
-        path: &'a Path,
-        bm_ids: &'a mut Vec<PageId>,
-        reserved: &'a mut Vec<u64>,
-    ) -> BoxFuture<'a, Result<Vec<IndirectPage>>> {
-        Box::pin(async move {
-            match entries.split_first() {
-                None => Ok(Vec::new()),
-                Some((&sub_pid, rest)) => {
-                    // This entry is a sub-indirect page within double-indirect
-                    reserved.push(sub_pid.page_num());
+    fn load_double_indirect_entries(
+        file: &File,
+        entries: &[PageId],
+        path: &Path,
+        bm_ids: &mut Vec<PageId>,
+        reserved: &mut Vec<u64>,
+    ) -> Result<Vec<IndirectPage>> {
+        entries.iter().try_fold(Vec::new(), |mut acc, &sub_pid| {
+            // Each entry is a sub-indirect page within double-indirect
+            reserved.push(sub_pid.page_num());
 
-                    let buf =
-                        Self::read_page_at(file, sub_pid.byte_offset(), path)
-                            .await?;
-                    let sub_page = IndirectPage::deserialize(&buf)?;
+            let buf = Self::read_page_at(file, sub_pid.byte_offset(), path)?;
+            let sub_page = IndirectPage::deserialize(&buf)?;
 
-                    // Add all bitmap pages from this indirect page
-                    sub_page.entries.iter().for_each(|&pid| {
-                        reserved.push(pid.page_num());
-                        bm_ids.push(pid);
-                    });
+            sub_page.entries.iter().for_each(|&pid| {
+                reserved.push(pid.page_num());
+                bm_ids.push(pid);
+            });
 
-                    let mut rest_pages = Self::load_double_indirect_entries(
-                        file, rest, path, bm_ids, reserved,
-                    )
-                    .await?;
-
-                    // Prepend this page
-                    let mut result = vec![sub_page];
-                    result.append(&mut rest_pages);
-                    Ok(result)
-                }
-            }
+            acc.push(sub_page);
+            Ok(acc)
         })
     }
 
     /// Read multiple pages and concatenate their contents.
-    fn read_pages<'a>(
-        file: &'a mut File,
-        page_ids: &'a [PageId],
-        path: &'a Path,
-    ) -> BoxFuture<'a, Result<Vec<u8>>> {
-        Box::pin(async move {
-            match page_ids.split_first() {
-                None => Ok(Vec::new()),
-                Some((&pid, rest)) => {
-                    let buf = Self::read_page_at(file, pid.byte_offset(), path)
-                        .await?;
-                    let mut data = Self::read_pages(file, rest, path).await?;
-                    // Prepend this page's data
-                    let mut result = buf;
-                    result.append(&mut data);
-                    Ok(result)
-                }
-            }
+    fn read_pages(
+        file: &File,
+        page_ids: &[PageId],
+        path: &Path,
+    ) -> Result<Vec<u8>> {
+        page_ids.iter().try_fold(Vec::new(), |mut acc, &pid| {
+            acc.extend_from_slice(&Self::read_page_at(
+                file,
+                pid.byte_offset(),
+                path,
+            )?);
+            Ok(acc)
         })
     }
 
     /// Read a page at a specific offset.
-    async fn read_page_at(
-        file: &mut File,
-        offset: u64,
-        path: &Path,
-    ) -> Result<Vec<u8>> {
-        use tokio::io::AsyncReadExt;
-
+    fn read_page_at(file: &File, offset: u64, path: &Path) -> Result<Vec<u8>> {
         let mut buf = vec![0u8; page::PAGE_SIZE];
-        file.seek(SeekFrom::Start(offset)).await.map_err(|e| {
-            StorageError::Io {
-                op: "seek".into(),
-                path: path.to_path_buf(),
-                source: e,
-            }
-        })?;
-        file.read_exact(&mut buf)
-            .await
+        file.read_exact_at(&mut buf, offset)
             .map_err(|e| StorageError::Io {
                 op: "read".into(),
                 path: path.to_path_buf(),
@@ -946,35 +855,27 @@ impl FileStorageEngine {
     /// Load the entire registry chain by following `next_page` links.
     ///
     /// Returns a vector of `(PageId, GlobalRegistry)` pairs in chain order.
-    fn load_registry_chain<'a>(
-        file: &'a mut File,
+    fn load_registry_chain(
+        file: &File,
         start_pid: PageId,
-        path: &'a Path,
-    ) -> BoxFuture<'a, Result<Vec<(PageId, GlobalRegistry)>>> {
-        Box::pin(async move {
-            let buf =
-                Self::read_page_at(file, start_pid.byte_offset(), path).await?;
-            let reg = GlobalRegistry::deserialize(&buf)?;
+        path: &Path,
+    ) -> Result<Vec<(PageId, GlobalRegistry)>> {
+        let buf = Self::read_page_at(file, start_pid.byte_offset(), path)?;
+        let reg = GlobalRegistry::deserialize(&buf)?;
 
-            match reg.next_page {
-                None => Ok(vec![(start_pid, reg)]),
-                Some(next_pid) => {
-                    let mut rest =
-                        Self::load_registry_chain(file, next_pid, path).await?;
-                    // Prepend this page at the front
-                    let mut result = vec![(start_pid, reg)];
-                    result.append(&mut rest);
-                    Ok(result)
-                }
+        match reg.next_page {
+            None => Ok(vec![(start_pid, reg)]),
+            Some(next_pid) => {
+                let rest = Self::load_registry_chain(file, next_pid, path)?;
+                Ok(iter::once((start_pid, reg)).chain(rest).collect())
             }
-        })
+        }
     }
 
     // Private Helpers for write operations
 
-    /// Write a page to disk at its designated offset.
-    async fn write_page_to_disk(&self, id: PageId, node: &Node) -> Result<()> {
-        let offset = id.byte_offset();
+    /// Serialize (and compress if useful) a node into a `PAGE_SIZE` buffer.
+    fn encode_node(node: &Node) -> Result<Vec<u8>> {
         let err = |e: String| StorageError::Serialization(format!("node: {e}"));
 
         let data = bincode::serialize(node).map_err(|e| err(e.to_string()))?;
@@ -1004,23 +905,19 @@ impl FileStorageEngine {
         // `payload.len() <= cap == rest.len()`, so this slice is in bounds.
         rest[..payload.len()].copy_from_slice(&payload);
 
-        // Write to file
-        let mut file = self.data_file.write().await;
+        Ok(buf)
+    }
 
-        file.seek(SeekFrom::Start(offset)).await.map_err(|e| {
-            StorageError::Io {
-                op: "seek for write".into(),
+    /// Write a page to disk at its designated offset.
+    fn write_page_to_disk(&self, id: PageId, node: &Node) -> Result<()> {
+        let buf = Self::encode_node(node)?;
+        self.data_file
+            .write_all_at(&buf, id.byte_offset())
+            .map_err(|e| StorageError::Io {
+                op: "write page".into(),
                 path: self.data_dir.join(Self::DATA_FILE_NAME),
                 source: e,
-            }
-        })?;
-        file.write_all(&buf).await.map_err(|e| StorageError::Io {
-            op: "write page".into(),
-            path: self.data_dir.join(Self::DATA_FILE_NAME),
-            source: e,
-        })?;
-
-        Ok(())
+            })
     }
 
     /// Flush metadata (bitmap pages + indirect pages + superblock) to disk.
@@ -1061,7 +958,7 @@ impl FileStorageEngine {
             .collect();
 
         // Write bitmap pages sequentially
-        Self::write_pages(&self.data_file, &bm_pages, &data_path).await?;
+        Self::write_pages(&self.data_file, &bm_pages, &data_path)?;
 
         // Write indirect pages if present
         self.flush_indirect_pages(&data_path).await?;
@@ -1072,7 +969,7 @@ impl FileStorageEngine {
         let sb_data = superblock.serialize();
         drop(superblock);
 
-        Self::write_page_at(&self.data_file, 0, &sb_data, &data_path).await
+        Self::write_page_at(&self.data_file, 0, &sb_data, &data_path)
     }
 
     /// Collect all bitmap page IDs from direct slots and indirect pages.
@@ -1113,8 +1010,7 @@ impl FileStorageEngine {
                 single_pid.byte_offset(),
                 &buf,
                 data_path,
-            )
-            .await?;
+            )?;
         }
 
         // Write double-indirect page and sub-pages if present
@@ -1128,8 +1024,7 @@ impl FileStorageEngine {
                 double_pid.byte_offset(),
                 &double_buf,
                 data_path,
-            )
-            .await?;
+            )?;
 
             // Write each sub-indirect page
             Self::write_sub_indirect_pages(
@@ -1137,74 +1032,151 @@ impl FileStorageEngine {
                 &double_page.entries,
                 sub_pages,
                 data_path,
-            )
-            .await?;
+            )?;
         }
 
         Ok(())
     }
 
-    /// Write sub-indirect pages recursively.
-    fn write_sub_indirect_pages<'a>(
-        file: &'a RwLock<File>,
-        pids: &'a [PageId],
-        pages: &'a [IndirectPage],
-        path: &'a Path,
-    ) -> BoxFuture<'a, Result<()>> {
-        Box::pin(async move {
-            match (pids.split_first(), pages.split_first()) {
-                (Some((&pid, rest_pids)), Some((page, rest_pages))) => {
-                    let buf = page.serialize();
-                    Self::write_page_at(file, pid.byte_offset(), &buf, path)
-                        .await?;
-                    Self::write_sub_indirect_pages(
-                        file, rest_pids, rest_pages, path,
-                    )
-                    .await
-                }
-                _ => Ok(()),
-            }
+    fn write_sub_indirect_pages(
+        file: &File,
+        pids: &[PageId],
+        pages: &[IndirectPage],
+        path: &Path,
+    ) -> Result<()> {
+        pids.iter().zip(pages).try_for_each(|(pid, page)| {
+            Self::write_page_at(
+                file,
+                pid.byte_offset(),
+                &page.serialize(),
+                path,
+            )
         })
     }
 
-    /// Write a sequence of pages to disk.
-    fn write_pages<'a>(
-        file: &'a RwLock<File>,
-        pages: &'a [(PageId, Vec<u8>)],
-        path: &'a Path,
-    ) -> BoxFuture<'a, Result<()>> {
-        Box::pin(async move {
-            match pages.split_first() {
-                None => Ok(()),
-                Some(((pid, buf), rest)) => {
-                    Self::write_page_at(file, pid.byte_offset(), buf, path)
-                        .await?;
-                    Self::write_pages(file, rest, path).await
-                }
-            }
+    fn write_pages(
+        file: &File,
+        pages: &[(PageId, Vec<u8>)],
+        path: &Path,
+    ) -> Result<()> {
+        pages.iter().try_for_each(|(pid, buf)| {
+            Self::write_page_at(file, pid.byte_offset(), buf, path)
         })
     }
 
-    /// Write data at a specific offset.
-    async fn write_page_at(
-        file: &RwLock<File>,
+    fn write_page_at(
+        file: &File,
         offset: u64,
         data: &[u8],
         path: &Path,
     ) -> Result<()> {
-        let mut f = file.write().await;
-        f.seek(SeekFrom::Start(offset)).await.map_err(|e| {
-            StorageError::Io {
-                op: "seek".into(),
+        file.write_all_at(data, offset)
+            .map_err(|e| StorageError::Io {
+                op: "write".into(),
                 path: path.to_path_buf(),
                 source: e,
-            }
+            })
+    }
+
+    /// Maximum iovec count per `pwritev` call (POSIX `IOV_MAX` is typically `1024`).
+    const IOV_MAX: usize = 1024;
+
+    /// Flush encoded pages to disk, using `pwritev` for contiguous runs.
+    fn flush_pages(
+        file: &File,
+        pages: &[(PageId, Vec<u8>)],
+        dir: &Path,
+    ) -> Result<()> {
+        pages
+            .chunk_by(|a, b| b.0.page_num() == a.0.page_num() + 1)
+            .try_for_each(|group| Self::write_page_group(file, group, dir))
+    }
+
+    fn write_page_group(
+        file: &File,
+        group: &[(PageId, Vec<u8>)],
+        dir: &Path,
+    ) -> Result<()> {
+        let path = dir.join(Self::DATA_FILE_NAME);
+        let first = group.first().ok_or_else(|| {
+            StorageError::InvalidOperation("empty page group".into())
         })?;
-        f.write_all(data).await.map_err(|e| StorageError::Io {
-            op: "write".into(),
-            path: path.to_path_buf(),
-            source: e,
-        })
+
+        if group.len() == 1 {
+            file.write_all_at(&first.1, first.0.byte_offset())
+                .map_err(|e| StorageError::Io {
+                    op: "write page".into(),
+                    path,
+                    source: e,
+                })
+        } else {
+            group.chunks(Self::IOV_MAX).try_for_each(|chunk| {
+                let off = chunk
+                    .first()
+                    .ok_or_else(|| {
+                        StorageError::InvalidOperation(
+                            "empty pwritev chunk".into(),
+                        )
+                    })?
+                    .0
+                    .byte_offset();
+                Self::pwritev_pages(file, chunk, off, &path)
+            })
+        }
+    }
+
+    fn pwritev_pages(
+        file: &File,
+        pages: &[(PageId, Vec<u8>)],
+        offset: u64,
+        path: &Path,
+    ) -> Result<()> {
+        let iovecs: Vec<libc::iovec> = pages
+            .iter()
+            .map(|(_, buf)| libc::iovec {
+                iov_base: buf.as_ptr() as *mut libc::c_void,
+                iov_len: buf.len(),
+            })
+            .collect();
+
+        let total = pages.len() * page::PAGE_SIZE;
+
+        // SAFETY: iovecs point to valid page buffers that outlive this call;
+        // fd is a valid open file descriptor.
+        let n = unsafe {
+            libc::pwritev(
+                file.as_raw_fd(),
+                iovecs.as_ptr(),
+                iovecs.len() as libc::c_int,
+                offset as libc::off_t,
+            )
+        };
+
+        if n < 0 {
+            Err(StorageError::Io {
+                op: "pwritev".into(),
+                path: path.to_path_buf(),
+                source: io::Error::last_os_error(),
+            })
+        } else if (n as usize) >= total {
+            Ok(())
+        } else {
+            // Partial write; fall back to `write_all_at` for remaining pages
+            let done = n as usize / page::PAGE_SIZE;
+            pages
+                .get(done..)
+                .unwrap_or(&[])
+                .iter()
+                .try_for_each(|(id, buf)| {
+                    file.write_all_at(buf, id.byte_offset()).map_err(|e| {
+                        StorageError::Io {
+                            op: "write page".into(),
+                            path: path.to_path_buf(),
+                            source: e,
+                        }
+                    })
+                })
+        }
     }
 
     /// Ensure the bitmap has capacity for at least one more page allocation.
@@ -1283,25 +1255,7 @@ impl FileStorageEngine {
         drop(superblock);
 
         // Initialize the new bitmap page with zeros
-        let data_path = self.data_dir.join(Self::DATA_FILE_NAME);
-        let mut file = self.data_file.write().await;
-        let zeros = vec![0u8; page::PAGE_SIZE];
-
-        file.seek(SeekFrom::Start(new_bm_page.byte_offset()))
-            .await
-            .map_err(|e| StorageError::Io {
-                op: "seek to new bitmap page".into(),
-                path: data_path.clone(),
-                source: e,
-            })?;
-
-        file.write_all(&zeros).await.map_err(|e| StorageError::Io {
-            op: "initialize bitmap page".into(),
-            path: data_path,
-            source: e,
-        })?;
-
-        Ok(())
+        self.initialize_page(new_bm_page)
     }
 
     /// Add a bitmap page to indirect slots.
@@ -1342,8 +1296,8 @@ impl FileStorageEngine {
                 drop(single_indirect);
 
                 // Initialize pages with zeros
-                self.initialize_page(new_bm_page).await?;
-                self.initialize_page(single_page_id).await
+                self.initialize_page(new_bm_page)?;
+                self.initialize_page(single_page_id)
             }
             Some(page) if !page.is_full() => {
                 // Add to existing single-indirect
@@ -1360,7 +1314,7 @@ impl FileStorageEngine {
                 drop(single_indirect);
 
                 // Initialize the new bitmap page
-                self.initialize_page(new_bm_page).await
+                self.initialize_page(new_bm_page)
             }
             _ => {
                 // Single-indirect is full (or inconsistent state), need double-indirect
@@ -1415,9 +1369,9 @@ impl FileStorageEngine {
             drop(double_indirect);
 
             // Initialize all pages
-            self.initialize_page(double_page_id).await?;
-            self.initialize_page(sub_page_id).await?;
-            self.initialize_page(new_bm_page).await
+            self.initialize_page(double_page_id)?;
+            self.initialize_page(sub_page_id)?;
+            self.initialize_page(new_bm_page)
         } else {
             // Double-indirect exists, check sub-indirects
             let (double_page, sub_pages): &mut (
@@ -1451,7 +1405,7 @@ impl FileStorageEngine {
                     .push(new_bm_page)?;
 
                 drop(double_indirect);
-                self.initialize_page(new_bm_page).await
+                self.initialize_page(new_bm_page)
             } else if !double_page.is_full() {
                 // Create new sub-indirect
                 let sub_page_id = self.page_alloc.allocate().await?;
@@ -1473,8 +1427,8 @@ impl FileStorageEngine {
 
                 drop(double_indirect);
 
-                self.initialize_page(sub_page_id).await?;
-                self.initialize_page(new_bm_page).await
+                self.initialize_page(sub_page_id)?;
+                self.initialize_page(new_bm_page)
             } else {
                 // Both double-indirect and all sub-indirects are full
                 let max = Superblock::MAX_DIRECT_BITMAP_PAGES
@@ -1490,26 +1444,15 @@ impl FileStorageEngine {
     }
 
     /// Initialize a page with zeros on disk.
-    async fn initialize_page(&self, pid: PageId) -> Result<()> {
-        let data_path = self.data_dir.join(Self::DATA_FILE_NAME);
-        let mut file = self.data_file.write().await;
+    fn initialize_page(&self, pid: PageId) -> Result<()> {
         let zeros = vec![0u8; page::PAGE_SIZE];
-
-        file.seek(SeekFrom::Start(pid.byte_offset()))
-            .await
+        self.data_file
+            .write_all_at(&zeros, pid.byte_offset())
             .map_err(|e| StorageError::Io {
-                op: "seek to initialize page".into(),
-                path: data_path.clone(),
+                op: "initialize page".into(),
+                path: self.data_dir.join(Self::DATA_FILE_NAME),
                 source: e,
-            })?;
-
-        file.write_all(&zeros).await.map_err(|e| StorageError::Io {
-            op: "initialize page".into(),
-            path: data_path,
-            source: e,
-        })?;
-
-        Ok(())
+            })
     }
 
     // Registry Chain Operations
@@ -1593,7 +1536,7 @@ impl FileStorageEngine {
         let new_pid = self.page_alloc.allocate().await?;
 
         // Initialize the page on disk
-        self.initialize_page(new_pid).await?;
+        self.initialize_page(new_pid)?;
 
         // Re-acquire the lock and check if another thread beat us
         let mut chain = self.registry_chain.write().await;
@@ -1751,25 +1694,16 @@ impl FileStorageEngine {
         let data_path = self.data_dir.join(Self::DATA_FILE_NAME);
 
         // Write each registry page
-        Self::write_registry_pages(&self.data_file, &chain, &data_path).await
+        Self::write_registry_pages(&self.data_file, &chain, &data_path)
     }
 
-    /// Write registry pages recursively.
-    fn write_registry_pages<'a>(
-        file: &'a RwLock<File>,
-        pages: &'a [(PageId, GlobalRegistry)],
-        path: &'a Path,
-    ) -> BoxFuture<'a, Result<()>> {
-        Box::pin(async move {
-            match pages.split_first() {
-                None => Ok(()),
-                Some(((pid, reg), rest)) => {
-                    let buf = reg.serialize();
-                    Self::write_page_at(file, pid.byte_offset(), &buf, path)
-                        .await?;
-                    Self::write_registry_pages(file, rest, path).await
-                }
-            }
+    fn write_registry_pages(
+        file: &File,
+        pages: &[(PageId, GlobalRegistry)],
+        path: &Path,
+    ) -> Result<()> {
+        pages.iter().try_for_each(|(pid, reg)| {
+            Self::write_page_at(file, pid.byte_offset(), &reg.serialize(), path)
         })
     }
 }
@@ -1844,14 +1778,11 @@ mod tests {
     }
 
     async fn raw_page(path: &Path, id: NodeId) -> Vec<u8> {
-        let mut f = File::open(path.join(FileStorageEngine::DATA_FILE_NAME))
-            .await
+        let f = File::open(path.join(FileStorageEngine::DATA_FILE_NAME))
             .expect("open data");
         let mut buf = vec![0u8; page::PAGE_SIZE];
-        f.seek(SeekFrom::Start(PageId::from(id).byte_offset()))
-            .await
-            .expect("seek");
-        f.read_exact(&mut buf).await.expect("read");
+        f.read_exact_at(&mut buf, PageId::from(id).byte_offset())
+            .expect("read");
         buf
     }
 
@@ -2053,8 +1984,6 @@ mod tests {
 
     #[tokio::test]
     async fn create_uses_superblock() {
-        use tokio::io::AsyncReadExt;
-
         let dir = TempDir::new().expect("temp dir");
         let db_path = dir.path().join("testdb");
 
@@ -2064,9 +1993,9 @@ mod tests {
 
         // Read page 0 directly and check it's a v2 superblock
         let data_path = db_path.join("data.db");
-        let mut file = tokio::fs::File::open(&data_path).await.unwrap();
+        let file = File::open(&data_path).unwrap();
         let mut buf = vec![0u8; 4096];
-        file.read_exact(&mut buf).await.unwrap();
+        file.read_exact_at(&mut buf, 0).unwrap();
 
         // Check magic
         assert_eq!(&buf[0..4], b"RUMP");

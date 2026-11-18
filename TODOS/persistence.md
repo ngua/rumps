@@ -36,7 +36,7 @@ These are future considerations not yet planned:
   - Batch node reads and read-ahead buffering for performance
   - Range queries with end bounds (inclusive/exclusive)
 
-## Fixes
+## Fixes + Notes
 
 ### 6. Two-layer cache redundancy
 
@@ -46,17 +46,38 @@ There are two caches: `DashMap<NodeId, Arc<Node>>` (`NodeCache` in btree.rs, use
 
 **Correct approach**: Introduce a `NodeStore` enum that routes by tree kind. In-memory trees use `DashMap` directly (as today). Persistent trees use `PageCache` exclusively and skip `DashMap` entirely. This eliminates the sync overhead instead of doubling the write cost; reads, writes, and dirty tracking all go through one cache per tree kind. The `modify`/`try_modify` correctness bug goes away because there is no second cache to fall out of sync with.
 
-### 9. ~~File I/O: single `RwLock<File>` for all reads and writes~~ NEED RECONSIDERATION
+### 9. ~~File I/O: single `RwLock<File>` for all reads and writes~~ DONE
 
-`FileStorageEngine` wraps the data file in `Arc<RwLock<File>>`. Every page read acquires a write lock (because `seek` + `read_exact` must be atomic). This serializes all disk I/O.
+Replaced `Arc<RwLock<tokio::fs::File>>` with `Arc<std::fs::File>` using synchronous positional I/O (`read_exact_at`/`write_all_at` from `std::os::unix::fs::FileExt`). No lock, no seek, no `spawn_blocking`.
 
-Fix: use `pread`/`pwrite` (positional I/O) which don't need seeking and can run concurrently. On Linux, `pread64`/`pwrite64` are atomic at the page level.
+### Approach + bench results
+`pread`/`pwrite` on a 4K page takes ~1us, well under the threshold where blocking the tokio runtime matters (tokio's guidance is roughly 10-100us+). The `PageCache` already uses synchronous `parking_lot::RwLock` for the same reason. Calling these directly on the runtime thread avoids the `spawn_blocking` overhead (~2-5us per call) that dominated the syscall cost in the previous attempt.
 
-**Note**: `pread`/`pwrite` via `spawn_blocking` + `std::os::unix::fs::FileExt` was tried and reverted. The `spawn_blocking` overhead per call (~2-5 us for thread pool scheduling + context switch) dominates the actual `pwrite` syscall time (~1 us). For batch flushes with hundreds of dirty pages, this overhead compounds: `set_batch/10000` regressed +63%, `set_batch_large/100000` regressed +58%. Single-op benchmarks improved (e.g. `set_single` -35%) because the overhead is amortized. The `RwLock` has zero contention in the current single-threaded model, so removing it provides no benefit. Revisit when parallel transactions are implemented; the contention-free `pread`/`pwrite` path will pay off once multiple transactions do I/O concurrently.
+Positional I/O is also inherently thread-safe on the same fd (`pread`/`pwrite` are atomic at the page level on Linux), so this naturally supports parallel transactions if they are ever added, with no code changes needed to unlock concurrency.
 
-### 13. ~~Flush writes dirty pages sequentially then syncs~~ NEED RECONSIDERATION
+**Benchmark results** (vs the `RwLock<tokio::fs::File>` + `seek` + async read/write baseline):
 
-**NOTE**: See #9 above
+| Benchmark                | Change        |
+|--------------------------|---------------|
+| `transaction_empty`      | -54%          |
+| `set_single`             | -46%          |
+| `set_batch/100`          | -39%          |
+| `set_batch/1000`         | -38%          |
+| `set_batch/10000`        | -22%          |
+| `set_batch_large/100000` | -16%          |
+| `set_multi_global/1000`  | -60%          |
+| `get_existing`           | -53%          |
+| `query_next_100`         | -25%          |
+| `order_next_100`         | -21%          |
+| `collects_1000`          | +4.5% (noise) |
+| `collects_10000`         | +1.9% (noise) |
+| `kill_subtree_100`       | no change     |
 
-`flush()` uses `FuturesUnordered` to write dirty pages, but the writes still contend on the single `RwLock<File>` (see #9), so concurrency is illusory. Once #9 is resolved with lock-free positional I/O, the `FuturesUnordered` path becomes truly concurrent. Remaining opportunity: vectored I/O (`writev`) to batch multiple page writes into fewer syscalls.
+**Failed attempt (reverted, preserved for reference)**: `pread`/`pwrite` via `spawn_blocking` + `std::os::unix::fs::FileExt`. The `spawn_blocking` overhead per call (~2-5us for thread pool scheduling + context switch) dominated the actual `pwrite` syscall time (~1us). For batch flushes with hundreds of dirty pages, this overhead compounded: `set_batch/10000` regressed +63%, `set_batch_large/100000` regressed +58%.
+
+### 13. ~~Flush writes dirty pages sequentially then syncs~~ DONE
+
+Flush now encodes all dirty pages, sorts them by page number, groups contiguous runs with `slice::chunk_by`, and writes each group via `pwritev` (falling back to individual `write_all_at` for singletons or partial writes). The `IOV_MAX` cap is `1024` per `pwritev` call.
+
+This replaced the `FuturesUnordered` approach, which provided no real concurrency since all writes contended on the same `RwLock<File>` (now removed; see #9).
 
