@@ -7,7 +7,7 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 use futures::stream::TryStreamExt;
 use tokio::fs::{self, File, OpenOptions};
-use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use tokio::sync::RwLock;
 
 use super::{
@@ -119,6 +119,27 @@ impl fmt::Debug for FileStorageEngine {
 impl FileStorageEngine {
     /// Magic bytes for identifying RUMPS data files.
     const MAGIC: [u8; 4] = *b"RUMP";
+
+    /// Magic bytes at the start of a node page with a header.
+    const HEADER_MAGIC: [u8; 2] = [0xC0, 0xDA];
+
+    /// Node page header: magic (2), `data_len` u16 LE (2), flags (1).
+    const HEADER_SIZE: usize = 5;
+
+    /// Header flag bit marking an LZ4-compressed payload.
+    const FLAG_LZ4: u8 = 1;
+
+    /// Maximum decompressed node size; caps the allocation
+    /// `lz4_flex::decompress_size_prepended` performs from the in-band length
+    /// prefix so a corrupted page cannot trigger an unbounded allocation.
+    /// `8 * PAGE_SIZE` is generous; a node that large would never have been
+    /// written.
+    const MAX_DECOMPRESSED: usize = 8 * page::PAGE_SIZE;
+
+    /// Compile-time guarantee that a full page payload fits in the `u16`
+    /// `data_len` header field.
+    const _ASSERT_PAGE_FITS_U16: () =
+        assert!(page::PAGE_SIZE - Self::HEADER_SIZE <= u16::MAX as usize);
 
     /// Data file name within the data directory.
     const DATA_FILE_NAME: &'static str = "data.db";
@@ -352,8 +373,6 @@ impl FileStorageEngine {
         min_degree: u16,
         max_memory_bytes: Option<usize>,
     ) -> Result<Self> {
-        use tokio::io::AsyncWriteExt;
-
         // Validate path is not an existing file
         if dir.exists() && !dir.is_dir() {
             Err(StorageError::InvalidOperation(format!(
@@ -551,6 +570,48 @@ impl FileStorageEngine {
 }
 
 impl FileStorageEngine {
+    /// Decodes a node page from the on-disk format:
+    /// `[HEADER_MAGIC (2) | data_len LE (2) | flags (1) | payload...]`.
+    fn decode_node(buf: &[u8]) -> Result<Node> {
+        let err = |e: String| StorageError::Serialization(format!("node: {e}"));
+        let de =
+            |b: &[u8]| bincode::deserialize(b).map_err(|e| err(e.to_string()));
+
+        let (hdr, rest) = buf
+            .split_at_checked(Self::HEADER_SIZE)
+            .filter(|(h, _)| h.starts_with(&Self::HEADER_MAGIC))
+            .ok_or_else(|| err("missing page header".into()))?;
+
+        let len = hdr
+            .get(2..4)
+            .and_then(|b| <[u8; 2]>::try_from(b).ok())
+            .map(|b| usize::from(u16::from_le_bytes(b)))
+            .ok_or_else(|| err("bad page header".into()))?;
+
+        // `split_at_checked(HEADER_SIZE)` guarantees `hdr` is exactly
+        // `HEADER_SIZE` (5) bytes, so index 4 is always in bounds.
+        let flags = hdr[4];
+
+        let payload = rest
+            .get(..len)
+            .ok_or_else(|| err("payload length".into()))?;
+
+        if flags & Self::FLAG_LZ4 != 0 {
+            let raw = lz4_flex::decompress_size_prepended(payload)
+                .map_err(|e| err(format!("lz4: {e}")))?;
+            if raw.len() > Self::MAX_DECOMPRESSED {
+                Err(err(format!(
+                    "decompressed size {} exceeds limit",
+                    raw.len()
+                )))
+            } else {
+                de(&raw)
+            }
+        } else {
+            de(payload)
+        }
+    }
+
     pub(crate) async fn read(&self, id: NodeId) -> Result<Arc<Node>> {
         let page_id = PageId::from(id);
 
@@ -579,13 +640,7 @@ impl FileStorageEngine {
                 })?;
             drop(file);
 
-            // Deserialize
-            let node: Arc<Node> =
-                Arc::new(bincode::deserialize(&buf).map_err(|e| {
-                    StorageError::Serialization(format!(
-                        "deserialize node: {e}"
-                    ))
-                })?);
+            let node: Arc<Node> = Arc::new(Self::decode_node(&buf)?);
 
             // Add to cache (clean, since it came from disk)
             let evicted = self.cache.put(page_id, Arc::clone(&node), false);
@@ -919,23 +974,35 @@ impl FileStorageEngine {
 
     /// Write a page to disk at its designated offset.
     async fn write_page_to_disk(&self, id: PageId, node: &Node) -> Result<()> {
-        use tokio::io::AsyncWriteExt;
-
         let offset = id.byte_offset();
+        let err = |e: String| StorageError::Serialization(format!("node: {e}"));
 
-        // Serialize node
-        let data = bincode::serialize(node).map_err(|e| {
-            StorageError::InvalidOperation(format!("serialize node: {e}"))
-        })?;
+        let data = bincode::serialize(node).map_err(|e| err(e.to_string()))?;
 
-        // Pad to page size
+        // Try LZ4; fall back to raw bincode if compression does not help.
+        let comp = lz4_flex::compress_prepend_size(&data);
+        let cap = page::PAGE_SIZE - Self::HEADER_SIZE;
+
+        let (payload, flags) = if comp.len() < data.len() && comp.len() <= cap {
+            Ok((comp, Self::FLAG_LZ4))
+        } else if data.len() <= cap {
+            Ok((data, 0u8))
+        } else {
+            Err(err("node too large for page".into()))
+        }?;
+
+        // `_ASSERT_PAGE_FITS_U16` guarantees `cap <= u16::MAX`, so a payload
+        // that passed the `<= cap` check above always fits.
+        let len = payload.len() as u16;
+
+        // Build the page: [HEADER_MAGIC (2) | data_len LE (2) | flags (1) | payload... | zero-pad]
         let mut buf = vec![0u8; page::PAGE_SIZE];
-
-        buf.get_mut(..data.len())
-            .ok_or_else(|| {
-                StorageError::InvalidOperation("node too large for page".into())
-            })?
-            .copy_from_slice(&data);
+        let (hdr, rest) = buf.split_at_mut(Self::HEADER_SIZE);
+        hdr[..2].copy_from_slice(&Self::HEADER_MAGIC);
+        hdr[2..4].copy_from_slice(&len.to_le_bytes());
+        hdr[4] = flags;
+        // `payload.len() <= cap == rest.len()`, so this slice is in bounds.
+        rest[..payload.len()].copy_from_slice(&payload);
 
         // Write to file
         let mut file = self.data_file.write().await;
@@ -1125,8 +1192,6 @@ impl FileStorageEngine {
         data: &[u8],
         path: &Path,
     ) -> Result<()> {
-        use tokio::io::AsyncWriteExt;
-
         let mut f = file.write().await;
         f.seek(SeekFrom::Start(offset)).await.map_err(|e| {
             StorageError::Io {
@@ -1200,8 +1265,6 @@ impl FileStorageEngine {
 
     /// Add a bitmap page to direct slots.
     async fn grow_bitmap_direct(&self) -> Result<()> {
-        use tokio::io::AsyncWriteExt;
-
         // Allocate a new page for the bitmap
         let new_bm_page = self.page_alloc.allocate().await?;
 
@@ -1428,8 +1491,6 @@ impl FileStorageEngine {
 
     /// Initialize a page with zeros on disk.
     async fn initialize_page(&self, pid: PageId) -> Result<()> {
-        use tokio::io::AsyncWriteExt;
-
         let data_path = self.data_dir.join(Self::DATA_FILE_NAME);
         let mut file = self.data_file.write().await;
         let zeros = vec![0u8; page::PAGE_SIZE];
@@ -1717,9 +1778,12 @@ impl FileStorageEngine {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use futures::stream::{self, StreamExt};
+    use rumps_types::{key, value};
+    use smallvec::smallvec;
     use tempfile::TempDir;
 
     use super::*;
+    use crate::node::NodeData;
 
     // Test Helpers
 
@@ -1758,6 +1822,104 @@ mod tests {
         } else {
             None
         }
+    }
+
+    fn test_node(n: usize, pad: &str) -> Node {
+        Node {
+            keys: (0..n).map(|i| key![i as i64, "NAME"]).collect(),
+            children: smallvec![],
+            values: (0..n)
+                .map(|i| {
+                    Arc::new(NodeData::with_value(value!(format!("{pad}{i}"))))
+                })
+                .collect(),
+            is_leaf: true,
+        }
+    }
+
+    async fn new_engine(path: &Path) -> FileStorageEngine {
+        FileStorageEngine::create(path, StorageConfig::default(), 3, None)
+            .await
+            .expect("create")
+    }
+
+    async fn raw_page(path: &Path, id: NodeId) -> Vec<u8> {
+        let mut f = File::open(path.join(FileStorageEngine::DATA_FILE_NAME))
+            .await
+            .expect("open data");
+        let mut buf = vec![0u8; page::PAGE_SIZE];
+        f.seek(SeekFrom::Start(PageId::from(id).byte_offset()))
+            .await
+            .expect("seek");
+        f.read_exact(&mut buf).await.expect("read");
+        buf
+    }
+
+    #[tokio::test]
+    async fn compressed_write_read_roundtrip() {
+        let dir = TempDir::new().expect("temp dir");
+        let path = dir.path().join("testdb");
+        let node = test_node(20, "some repetitive value ");
+
+        let id = {
+            let engine = new_engine(&path).await;
+            let id = engine.allocate().await.unwrap();
+            engine.mark_dirty(id, Arc::new(node.clone())).await.unwrap();
+            engine.flush().await.unwrap();
+            id
+        };
+
+        let buf = raw_page(&path, id).await;
+        assert_eq!(buf.get(..2), Some(&FileStorageEngine::HEADER_MAGIC[..]));
+        assert_eq!(buf.get(4).copied(), Some(FileStorageEngine::FLAG_LZ4));
+
+        let engine = FileStorageEngine::open(&path).await.expect("open");
+        assert_eq!(*engine.read(id).await.unwrap(), node);
+    }
+
+    #[test]
+    fn raw_flagged_page_decodes() {
+        let node = test_node(3, "raw ");
+        let data = bincode::serialize(&node).unwrap();
+        let mut buf = vec![0u8; page::PAGE_SIZE];
+        let (h, rest) = buf.split_at_mut(FileStorageEngine::HEADER_SIZE);
+        h.get_mut(..2)
+            .unwrap()
+            .copy_from_slice(&FileStorageEngine::HEADER_MAGIC);
+        h.get_mut(2..4)
+            .unwrap()
+            .copy_from_slice(&(data.len() as u16).to_le_bytes());
+        rest.get_mut(..data.len()).unwrap().copy_from_slice(&data);
+
+        assert_eq!(FileStorageEngine::decode_node(&buf).unwrap(), node);
+    }
+
+    #[tokio::test]
+    async fn compression_fallback_to_uncompressed() {
+        let dir = TempDir::new().expect("temp dir");
+        let path = dir.path().join("testdb");
+        let mut s = 0x9E3779B97F4A7C15u64;
+        let rnd: String = (0..300)
+            .map(|_| {
+                s = s
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                char::from_u32(0x800 + ((s >> 33) % 0xD000) as u32)
+                    .unwrap_or('x')
+            })
+            .collect();
+        let node = test_node(1, &rnd);
+
+        let id = {
+            let engine = new_engine(&path).await;
+            let id = engine.allocate().await.unwrap();
+            engine.mark_dirty(id, Arc::new(node.clone())).await.unwrap();
+            engine.flush().await.unwrap();
+            id
+        };
+
+        let engine = FileStorageEngine::open(&path).await.expect("open");
+        assert_eq!(*engine.read(id).await.unwrap(), node);
     }
 
     #[tokio::test]

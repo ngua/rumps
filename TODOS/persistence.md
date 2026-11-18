@@ -13,7 +13,7 @@ These are the current next steps (post persistence and basic DB):
 
 These are the potential next steps (post networking):
 
-- **Compression**: Compress nodes/pages to save disk space (see [persistence/compression.md](persistence/compression.md))
+- **Compression**: Single-page LZ4 compression is implemented; multi-page or alternative codecs are not yet planned
 - **Encryption**: Optional encryption at rest (see [persistence/encryption.md](persistence/encryption.md))
 
 These are future considerations not yet planned:
@@ -53,12 +53,6 @@ There are two caches: `DashMap<NodeId, Arc<Node>>` (`NodeCache` in btree.rs, use
 Fix: use `pread`/`pwrite` (positional I/O) which don't need seeking and can run concurrently. On Linux, `pread64`/`pwrite64` are atomic at the page level.
 
 **Note**: `pread`/`pwrite` via `spawn_blocking` + `std::os::unix::fs::FileExt` was tried and reverted. The `spawn_blocking` overhead per call (~2-5 us for thread pool scheduling + context switch) dominates the actual `pwrite` syscall time (~1 us). For batch flushes with hundreds of dirty pages, this overhead compounds: `set_batch/10000` regressed +63%, `set_batch_large/100000` regressed +58%. Single-op benchmarks improved (e.g. `set_single` -35%) because the overhead is amortized. The `RwLock` has zero contention in the current single-threaded model, so removing it provides no benefit. Revisit when parallel transactions are implemented; the contention-free `pread`/`pwrite` path will pay off once multiple transactions do I/O concurrently.
-
-### 10. Full-page reads and writes (always `PAGE_SIZE` bytes; high priority)
-
-`read()` always reads `PAGE_SIZE` bytes and deserializes the whole buffer. `write_page_to_disk()` serializes then pads to `PAGE_SIZE`. A small leaf node that serializes to 200 bytes still reads/writes 4096 bytes.
-
-When compression is added (per TODO), this becomes critical: store the compressed length in a small header, read only the compressed bytes, decompress on demand. Without compression, at least consider variable-length records with a page directory for multi-record pages, or prefix compression for keys that share common prefixes (which is the norm in RUMPS's hierarchical key model).
 
 ### 13. ~~Flush writes dirty pages sequentially then syncs~~ NEED RECONSIDERATION
 

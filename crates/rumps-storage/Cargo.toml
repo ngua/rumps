@@ -13,6 +13,7 @@ smallvec = { workspace = true }
 fs2 = "0.4"
 futures = { workspace = true }
 lru = "0.12"
+lz4_flex = "0.11"
 parking_lot = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
