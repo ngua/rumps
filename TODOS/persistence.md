@@ -38,41 +38,15 @@ These are future considerations not yet planned:
 
 ## Fixes
 
-### ~~1. Eliminate all `async_recursion`~~ DONE
-
-All 27 `#[async_recursion]` sites converted to iterative loops with explicit stacks. `async_recursion` crate removed. Three subtree-walking methods (`delete_subtree`, `collect_keys_from_node`, `check_descendants_from_node`) use `FuturesUnordered` for concurrent child loads.
-
-### ~~2. Replace `async_trait` with native async / remove trait objects~~ DONE
-
-`AsyncStorageEngine` trait deleted; methods are now inherent on `FileStorageEngine`. `NodeAllocator` trait replaced with an enum (`InMemory` / `Disk`). `async-trait` crate removed. No more `dyn` dispatch or boxed futures on the storage hot path.
-
-### ~~3. Fix `serialized_size()` and `would_fit()`~~ DELETED
-
-Methods removed. Split decisions use key count (`keys.len() == max_keys`), not serialized size, so these were dead code. When page-size-based splitting is needed (e.g. for compression or variable-length pages), implement it with incremental size tracking from the start rather than serialize-to-measure.
-
-### ~~4. Eliminate `NodeRaw` serde intermediary~~ DONE
-
-`NodeRaw` deleted. `Node` now derives `Serialize`/`Deserialize` directly; `SmallVec` fields use their native serde support, and the `Arc<NodeData>` values field uses custom `ser_values`/`de_values` helpers that serialize through the `Arc` and wrap on deserialize. No intermediate `Vec` allocations.
-
-### ~~5. Page cache: `get()` takes a write lock for reads~~ DONE
-
-Replaced `tokio::sync::RwLock` with `parking_lot::RwLock` for the LRU cache and `RwLock<PageCacheStats>` with `AtomicU64` counters. All `PageCache` methods are now synchronous. Batch writes improved ~15-25%, `kill_subtree` ~25%, reads ~6%.
-
 ### 6. Two-layer cache redundancy
 
 There are two caches: `DashMap<NodeId, Arc<Node>>` (`NodeCache` in btree.rs, used for locals) and `PageCache` (LRU with `RwLock`, used by `FileStorageEngine` for globals). They serve different populations (locals vs globals), but the `BTree` also calls into the engine's `read()` which hits `PageCache`. The `BTree` then separately caches the result in `NodeCache`. This means globals get double-cached. Unify or clearly separate the responsibilities.
 
-### 7. `kill_internal` collects all keys then deletes one-by-one
+**Failed attempt (reverted)**: Added `modify_node`/`try_modify_node` wrappers that synced every mutation to both caches via a `sync_dirty` step (read node back from `DashMap`, then `put` into `PageCache` as dirty). This fixed the correctness bug (`modify`/`try_modify` only updating `NodeCache` without marking pages dirty) but caused 50%+ regressions across the board. The problem: every B-tree mutation (splits, merges, borrows, inserts, deletes) acquired three locks instead of one; the `DashMap` write for the modification itself, a `DashMap` read to retrieve the node, then a global `PageCache` `RwLock` write to sync it. The `PageCache` write lock is unsharded, so it serialized all mutations.
 
-`kill_internal` calls `collects_internal` to gather ALL matching keys into a `Vec`, sorts them in reverse, then deletes each key individually (each deletion is a full tree traversal + rebalance). For a subtree with N keys, this is O(N * log(N)) tree operations.
+**Correct approach**: Introduce a `NodeStore` enum that routes by tree kind. In-memory trees use `DashMap` directly (as today). Persistent trees use `PageCache` exclusively and skip `DashMap` entirely. This eliminates the sync overhead instead of doubling the write cost; reads, writes, and dirty tracking all go through one cache per tree kind. The `modify`/`try_modify` correctness bug goes away because there is no second cache to fall out of sync with.
 
-Fix: implement a subtree-drop operation that removes an entire subtree in one pass, deallocating child pages directly without individually searching for each key.
-
-### ~~8. `get_next_internal` does two tree traversals~~ DONE
-
-Fused into a single traversal by calling `find_leftmost_entry`/`find_successor_entry` directly (which already return key + data). `collects` benchmarks improved ~33%.
-
-### 9. File I/O: single `RwLock<File>` for all reads and writes
+### 9. ~~File I/O: single `RwLock<File>` for all reads and writes~~ NEED RECONSIDERATION
 
 `FileStorageEngine` wraps the data file in `Arc<RwLock<File>>`. Every page read acquires a write lock (because `seek` + `read_exact` must be atomic). This serializes all disk I/O.
 
@@ -84,20 +58,11 @@ Fix: use `pread`/`pwrite` (positional I/O) which don't need seeking and can run 
 
 `read()` always reads `PAGE_SIZE` bytes and deserializes the whole buffer. `write_page_to_disk()` serializes then pads to `PAGE_SIZE`. A small leaf node that serializes to 200 bytes still reads/writes 4096 bytes.
 
-When compression is added (per your TODO), this becomes critical: store the compressed length in a small header, read only the compressed bytes, decompress on demand. Without compression, at least consider variable-length records with a page directory for multi-record pages, or prefix compression for keys that share common prefixes (which is the norm in RUMPS's hierarchical key model).
+When compression is added (per TODO), this becomes critical: store the compressed length in a small header, read only the compressed bytes, decompress on demand. Without compression, at least consider variable-length records with a page directory for multi-record pages, or prefix compression for keys that share common prefixes (which is the norm in RUMPS's hierarchical key model).
 
-### ~~11. `Node::clone()` is expensive and pervasive~~ DONE
+### 13. ~~Flush writes dirty pages sequentially then syncs~~ NEED RECONSIDERATION
 
-Wrapped `Node` in `Arc` throughout; reads return `Arc<Node>` instead of cloning. Copy-on-write via `Arc::try_unwrap`/`Arc::make_mut`.
-
-### ~~12. WAL writer serializes with `bincode::serialize_into` but could use zero-copy~~ DELETED
-
-Not a real issue. `WalRecord::Set` carries `NodeData` (one key's value), not a full serialized `Node`. The WAL logs the logical operation while the page write serializes the entire B-tree node; different data at different granularities. No double serialization.
-
-### 13. Flush writes dirty pages sequentially then syncs
+**NOTE**: See #9 above
 
 `flush()` uses `FuturesUnordered` to write dirty pages, but the writes still contend on the single `RwLock<File>` (see #9), so concurrency is illusory. Once #9 is resolved with lock-free positional I/O, the `FuturesUnordered` path becomes truly concurrent. Remaining opportunity: vectored I/O (`writev`) to batch multiple page writes into fewer syscalls.
 
-### ~~14. Dirty set uses separate `RwLock<HashSet>`~~ DONE
-
-Folded dirty bit into `CachedPage` entry, eliminated the separate `RwLock<HashSet<PageId>>`.

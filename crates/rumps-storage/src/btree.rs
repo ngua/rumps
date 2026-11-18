@@ -1,4 +1,5 @@
 use std::mem;
+use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -11,7 +12,7 @@ use tokio::sync::RwLock;
 
 use crate::engine;
 use crate::error::{Result, StorageError};
-use crate::node::{Node, NodeData, NodeId};
+use crate::node::{ChildVec, KeyVec, Node, NodeData, NodeId, ValueVec};
 
 /// Conditionally updates B-tree statistics when the `debug` feature is enabled.
 ///
@@ -932,46 +933,546 @@ impl BTree {
     /// Returns the (possibly new) root `NodeId`, or `None` if the tree
     /// became empty after the deletion.
     ///
-    /// This method implements MUMPS `KILL` semantics:
-    /// 1. Deletes the specified key (if it exists)
-    /// 2. Deletes all descendants (keys that start with the given key as prefix)
-    /// 3. Updates ancestor `has_descendants` flags
-    /// 4. Handles tree rebalancing (node merging when underfull)
-    // Internal method for tests/benchmarks - not part of public API
+    /// Implements MUMPS `KILL` semantics via single-pass subtree drop.
+    ///
+    /// # Previous implementation
+    ///
+    /// Collected every prefix-matching key into a `Vec`, sorted deepest-first,
+    /// then called `delete_key` per key; each deletion was a full root-to-leaf
+    /// traversal plus rebalance. For N matching keys: O(N * log N) tree ops.
+    ///
+    /// # Current approach
+    ///
+    /// A single top-down walk (`remove_prefix_range`) that exploits the fact
+    /// that prefix-matching keys form a **contiguous range** in the B-tree's
+    /// sorted key space:
+    ///
+    /// 1. At each internal node, identify matching keys `[start, end)`.
+    /// 2. Children `c[start+1..end]` lie entirely within the range; deallocate
+    ///    their whole subtrees via `delete_subtree` (no per-key work).
+    /// 3. The two **boundary** children `c[start]` and `c[end]` may partially
+    ///    overlap the range; descend into them (iterative explicit stack).
+    /// 4. At leaves, batch-drain the matching slice in one operation.
+    /// 5. On the way back up (`Fixup`), merge the two boundary children
+    ///    (separators between them were removed) and rebalance.
+    ///
+    /// Complexity: O(height * t) individual key removals for the boundary
+    /// nodes at each level, plus O(M) to deallocate M interior B-tree nodes
+    /// wholesale. The bulk of the keys (those inside interior subtrees) are
+    /// never individually traversed.
+    ///
+    /// After removal, `shrink_root_chain` collapses any empty root chain, and
+    /// `update_ancestors_after_kill` fixes `has_descendants` flags on the
+    /// MUMPS-level ancestors (O(key_depth) lookups).
     async fn kill_internal(
         &self,
         root: NodeId,
         key: &Key,
     ) -> Result<Option<NodeId>> {
-        // Step 1: Collect all keys to delete (the key and its descendants)
-        let mut keys_to_delete =
-            self.collect_keys_with_prefix(root, key).await?;
+        let removed = self.remove_prefix_range(root, key).await?;
 
-        if keys_to_delete.is_empty() {
+        if removed == 0 {
             Ok(Some(root))
         } else {
-            // Step 2: Delete each key from the tree
-            // We delete in reverse order (deepest first) to minimize rebalancing
-            keys_to_delete
-                .sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| b.cmp(a)));
-
-            // Use fold to process deletions sequentially, tracking root changes
-            let final_root = futures::stream::iter(
-                keys_to_delete.iter().map(Ok::<_, StorageError>),
-            )
-            .try_fold(Some(root), |cur_root, k| async move {
-                match cur_root {
-                    None => Ok(None),
-                    Some(r) => self.delete_key(r, k).await,
-                }
-            })
-            .await?;
-
-            // Step 3: Update ancestor has_descendants flags
-            match final_root {
+            let new_root = self.shrink_root_chain(root).await?;
+            match new_root {
                 None => Ok(None),
                 Some(r) => self.update_ancestors_after_kill(r, key).await,
             }
+        }
+    }
+
+    /// Removes all keys matching `prefix` from the subtree rooted at `node_id`.
+    /// Returns the total number of keys removed.
+    ///
+    /// # Algorithm (iterative explicit-stack DFS)
+    ///
+    /// Two stack-frame types mirror the "descend / return" phases of the
+    /// conceptual recursion:
+    ///
+    /// **`Visit(nid)`** (descend phase):
+    ///   Binary-search the node's keys to find the contiguous matching range
+    ///   `keys[start..end]`. Three child categories follow from B-tree ordering:
+    ///
+    ///   - **Boundary left** `c[start]`: contains keys `< keys[start]`, some of
+    ///     which may still match the prefix (e.g. prefix `[1]` with separator
+    ///     `[1,"a"]`; child may hold `[1]` itself). Must descend.
+    ///   - **Interior** `c[start+1..end]`: sandwiched between two matching
+    ///     separators, so *every* key in these subtrees matches the prefix.
+    ///     Deallocated wholesale via `delete_subtree`; no per-key work.
+    ///   - **Boundary right** `c[end]`: contains keys `> keys[end-1]`, some of
+    ///     which may still match. Must descend. Only exists when `n_match > 0`.
+    ///
+    ///   Pushes `[Fixup, Visit(right), Visit(left)]` so LIFO order processes
+    ///   left first, right second, fixup last.
+    ///
+    /// **`Fixup { .. }`** (return phase):
+    ///   Runs after both boundary children are clean. Removes the matching
+    ///   separators from this node and merges the two boundary children (whose
+    ///   separators were just removed, leaving them adjacent with no key between
+    ///   them) via `merge_boundary_pair`. Then rebalances the merged child if
+    ///   it ended up underfull.
+    async fn remove_prefix_range(
+        &self,
+        node_id: NodeId,
+        prefix: &Key,
+    ) -> Result<usize> {
+        enum Op {
+            Visit(NodeId),
+            Fixup {
+                id: NodeId,
+                start: usize,
+                end: usize,
+                n_match: usize,
+                left: NodeId,
+                right: Option<NodeId>,
+            },
+        }
+
+        let mut stack = vec![Op::Visit(node_id)];
+        let mut total = 0usize;
+
+        while let Some(op) = stack.pop() {
+            match op {
+                Op::Visit(nid) => {
+                    let node = self.load_node(nid).await?;
+                    let start =
+                        node.keys.binary_search(prefix).unwrap_or_else(|p| p);
+                    let n_match = node
+                        .keys
+                        .iter()
+                        .skip(start)
+                        .take_while(|k| k.starts_with(prefix))
+                        .count();
+                    let end = start + n_match;
+
+                    if node.is_leaf {
+                        if n_match > 0 {
+                            self.nodes.modify(nid, |n| {
+                                n.keys.drain(start..end);
+                                n.values.drain(start..end);
+                            })?;
+                            update_stats!(self, |stats| {
+                                stats.key_count =
+                                    stats.key_count.saturating_sub(n_match);
+                            });
+                            total += n_match;
+                        }
+                    } else {
+                        let left =
+                            *node.children.get(start).ok_or_else(|| {
+                                StorageError::InvalidOperation(
+                                    "Left boundary child missing".into(),
+                                )
+                            })?;
+                        let right = (n_match > 0)
+                            .then(|| {
+                                node.children.get(end).copied().ok_or_else(
+                                    || {
+                                        StorageError::InvalidOperation(
+                                            "Right boundary child missing"
+                                                .into(),
+                                        )
+                                    },
+                                )
+                            })
+                            .transpose()?;
+                        let interior: Vec<NodeId> = ((start + 1)..end)
+                            .filter_map(|i| node.children.get(i).copied())
+                            .collect();
+                        drop(node);
+
+                        // All keys in interior subtrees match the prefix
+                        // (they sit between two matching separators in the
+                        // parent), so we can deallocate them wholesale.
+                        total += futures::stream::iter(
+                            interior.into_iter().map(Ok::<_, StorageError>),
+                        )
+                        .try_fold(0usize, |acc, c| async move {
+                            self.delete_subtree(c).await.map(|n| acc + n)
+                        })
+                        .await?;
+
+                        // LIFO: left visits first, then right, then fixup
+                        stack.push(Op::Fixup {
+                            id: nid,
+                            start,
+                            end,
+                            n_match,
+                            left,
+                            right,
+                        });
+                        if let Some(rc) = right {
+                            stack.push(Op::Visit(rc));
+                        }
+                        stack.push(Op::Visit(left));
+                    }
+                }
+                Op::Fixup {
+                    id,
+                    start,
+                    end,
+                    n_match,
+                    left,
+                    right,
+                } => {
+                    if n_match > 0 {
+                        // Matching separators and their (now-deallocated)
+                        // interior children must be removed from this node.
+                        // The two boundary children, stripped of matching
+                        // keys by the visits above, are merged back together.
+                        match right {
+                            Some(rc) => {
+                                self.merge_boundary_pair(
+                                    id, start, end, left, rc,
+                                )
+                                .await?;
+                            }
+                            None => {
+                                // `right` is `None` only when `n_match == 0`,
+                                // which this branch doesn't reach. Defensive
+                                // fallback: remove keys + interior children.
+                                self.nodes.modify(id, |n| {
+                                    n.keys.drain(start..end);
+                                    n.values.drain(start..end);
+                                    if end > start + 1 {
+                                        n.children.drain((start + 1)..end);
+                                    }
+                                })?;
+                            }
+                        }
+
+                        update_stats!(self, |stats| {
+                            stats.key_count =
+                                stats.key_count.saturating_sub(n_match);
+                        });
+                        total += n_match;
+                    }
+
+                    // The merged (or sole boundary) child at `start` may be
+                    // underfull after losing its prefix-matching keys. Fix it
+                    // now so the invariant holds when our caller inspects us.
+                    let parent = self.load_node(id).await?;
+                    if let Some(&cid) = parent.children.get(start) {
+                        let underfull = self.load_node(cid).await?.keys.len()
+                            < self.min_degree - 1;
+                        let has_keys = !parent.keys.is_empty();
+                        drop(parent);
+                        if underfull && has_keys {
+                            self.fix_underfull_node(id, start).await?;
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(total)
+    }
+
+    /// Merges two boundary children after prefix-range removal from their parent.
+    ///
+    /// When a contiguous range of separators `keys[start..end]` is removed from
+    /// an internal node, the boundary children `c[start]` and `c[end]` become
+    /// adjacent with no separator between them; that violates the B-tree
+    /// invariant (N+1 children for N keys). This function restores it.
+    ///
+    /// **Leaf case**: direct concatenation (or median split on overflow).
+    ///
+    /// **Internal case**: delegates to `merge_inner_boundary`, which descends
+    /// along the inner boundary (left's rightmost child, right's leftmost child)
+    /// to the leaf level, concatenates there, then absorbs each right node into
+    /// its left counterpart on the way back up. At each internal level, right's
+    /// first key provides the separator; passthroughs (0 keys, 1 child left
+    /// after prefix removal) contribute nothing and are simply deallocated.
+    /// If any level overflows, it is split and the extra child propagated up.
+    async fn merge_boundary_pair(
+        &self,
+        parent_id: NodeId,
+        start: usize,
+        end: usize,
+        left_id: NodeId,
+        right_id: NodeId,
+    ) -> Result<()> {
+        let l = Arc::unwrap_or_clone(self.load_node(left_id).await?);
+
+        if !l.is_leaf {
+            // Internal nodes cannot be concatenated directly: N keys on
+            // each side give (N+1)+(N+1) children for only 2N keys,
+            // violating the B-tree invariant.  Instead, descend to the
+            // inner boundary (left's rightmost child, right's leftmost
+            // child) until reaching leaves, merge there, then absorb
+            // right into left at each level going back up.
+            drop(l);
+            let pending = self.merge_inner_boundary(left_id, right_id).await?;
+
+            self.nodes.modify(parent_id, |p| {
+                p.keys.drain(start..end);
+                p.values.drain(start..end);
+                p.children.drain((start + 1)..=end);
+                if let Some((sk, sv, nr)) = pending {
+                    p.keys.insert(start, sk);
+                    p.values.insert(start, sv);
+                    p.children.insert(start + 1, nr);
+                }
+            })?;
+
+            Ok(())
+        } else {
+            // Leaves: direct concatenation (or split on overflow).
+            let r = Arc::unwrap_or_clone(self.load_node(right_id).await?);
+            let max = 2 * self.min_degree - 1;
+            let total = l.keys.len() + r.keys.len();
+
+            if total <= max {
+                let Node {
+                    keys: rk,
+                    values: rv,
+                    ..
+                } = r;
+
+                self.nodes.modify(left_id, |n| {
+                    n.keys.extend(rk);
+                    n.values.extend(rv);
+                })?;
+                self.nodes.remove(right_id);
+                self.allocator.deallocate(right_id).await?;
+
+                update_stats!(self, |stats| {
+                    stats.node_count = stats.node_count.saturating_sub(1);
+                });
+
+                self.nodes.modify(parent_id, |p| {
+                    p.keys.drain(start..end);
+                    p.values.drain(start..end);
+                    p.children.drain((start + 1)..=end);
+                })?;
+
+                Ok(())
+            } else {
+                let mut keys: KeyVec = l.keys;
+                keys.extend(r.keys);
+                let mut vals: ValueVec = l.values;
+                vals.extend(r.values);
+
+                let mid = keys.len() / 2;
+
+                let rk: KeyVec = keys.drain((mid + 1)..).collect();
+                let rv: ValueVec = vals.drain((mid + 1)..).collect();
+
+                let sep_key = keys.pop().ok_or_else(|| {
+                    StorageError::InvalidOperation(
+                        "Empty keys during boundary split".into(),
+                    )
+                })?;
+                let sep_val = vals.pop().ok_or_else(|| {
+                    StorageError::InvalidOperation(
+                        "Empty vals during boundary split".into(),
+                    )
+                })?;
+
+                self.save_node(
+                    left_id,
+                    Node {
+                        keys,
+                        children: ChildVec::new(),
+                        values: vals,
+                        is_leaf: true,
+                    },
+                )
+                .await?;
+                self.save_node(
+                    right_id,
+                    Node {
+                        keys: rk,
+                        children: ChildVec::new(),
+                        values: rv,
+                        is_leaf: true,
+                    },
+                )
+                .await?;
+
+                self.nodes.modify(parent_id, |p| {
+                    p.keys.drain(start..end);
+                    p.values.drain(start..end);
+                    if end > start + 1 {
+                        p.children.drain((start + 1)..end);
+                    }
+                    p.keys.insert(start, sep_key);
+                    p.values.insert(start, sep_val);
+                })?;
+
+                Ok(())
+            }
+        }
+    }
+
+    /// Merges two internal boundary nodes by descending their inner
+    /// boundary (left's rightmost child, right's leftmost child) to
+    /// the leaf level, concatenating there, then absorbing each right
+    /// node into its left counterpart on the way back up.
+    ///
+    /// At each internal level the right node's first key serves as the
+    /// separator between the two children sets; passthroughs (0 keys,
+    /// 1 child) contribute nothing and are simply deallocated.
+    ///
+    /// Returns `Some(sep, val, new_right)` if the top-level result
+    /// overflowed and was split; `None` if everything fit into `left`.
+    async fn merge_inner_boundary(
+        &self,
+        left_id: NodeId,
+        right_id: NodeId,
+    ) -> Result<Option<(Key, Arc<NodeData>, NodeId)>> {
+        let max = 2 * self.min_degree - 1;
+
+        // Collect the descent spine: (left, right) at each internal level.
+        let mut spine: Vec<(NodeId, NodeId)> = Vec::new();
+        let mut cur_l = Some(left_id);
+        let mut cur_r = Some(right_id);
+        let mut leaf_pair = None;
+
+        while let (Some(lid), Some(rid)) = (cur_l.take(), cur_r.take()) {
+            let ln = self.load_node(lid).await?;
+            if ln.is_leaf {
+                leaf_pair = Some((lid, rid));
+            } else {
+                let rn = self.load_node(rid).await?;
+                cur_l = ln.children.last().copied();
+                cur_r = rn.children.first().copied();
+                spine.push((lid, rid));
+            }
+        }
+
+        let (ll, rl) = leaf_pair.ok_or_else(|| {
+            StorageError::InvalidOperation(
+                "Inner boundary descent found no leaves".into(),
+            )
+        })?;
+
+        // Leaf level: left absorbs right.
+        {
+            let r = Arc::unwrap_or_clone(self.load_node(rl).await?);
+            self.nodes.modify(ll, |n| {
+                n.keys.extend(r.keys);
+                n.values.extend(r.values);
+            })?;
+        }
+        self.nodes.remove(rl);
+        self.allocator.deallocate(rl).await?;
+        update_stats!(self, |stats| {
+            stats.node_count = stats.node_count.saturating_sub(1);
+        });
+
+        // Split the merged leaf if it overflowed.
+        let mut pending: Option<(Key, Arc<NodeData>, NodeId)> = {
+            let n = self.load_node(ll).await?;
+            if n.keys.len() > max {
+                drop(n);
+                Some(self.split_node(ll).await?)
+            } else {
+                None
+            }
+        };
+
+        // Walk back up the spine, absorbing right into left at each
+        // level.  Right's first child was merged at the level below,
+        // so its first key becomes the separator between the two
+        // children sets; the remaining keys and children are appended.
+        while let Some((lid, rid)) = spine.pop() {
+            let r = Arc::unwrap_or_clone(self.load_node(rid).await?);
+
+            let absorb = if r.keys.is_empty() {
+                None
+            } else {
+                let Node {
+                    mut keys,
+                    mut values,
+                    mut children,
+                    ..
+                } = r;
+                let sk = keys.remove(0);
+                let sv = values.remove(0);
+                if !children.is_empty() {
+                    children.remove(0);
+                }
+                Some((sk, sv, keys, values, children))
+            };
+
+            let p = pending.take();
+            self.nodes.modify(lid, |l| {
+                if let Some((pk, pv, pc)) = p {
+                    l.keys.push(pk);
+                    l.values.push(pv);
+                    l.children.push(pc);
+                }
+                if let Some((sk, sv, rk, rv, rc)) = absorb {
+                    l.keys.push(sk);
+                    l.values.push(sv);
+                    l.keys.extend(rk);
+                    l.values.extend(rv);
+                    l.children.extend(rc);
+                }
+            })?;
+
+            self.nodes.remove(rid);
+            self.allocator.deallocate(rid).await?;
+            update_stats!(self, |stats| {
+                stats.node_count = stats.node_count.saturating_sub(1);
+            });
+
+            let n = self.load_node(lid).await?;
+            pending = if n.keys.len() > max {
+                drop(n);
+                Some(self.split_node(lid).await?)
+            } else {
+                None
+            };
+        }
+
+        Ok(pending)
+    }
+
+    /// Repeatedly promotes single-child empty root until the root has keys
+    /// or the tree is empty.
+    ///
+    /// Unlike `check_and_shrink_root` (which handles one level), this loops
+    /// because `remove_prefix_range` can leave multiple levels of empty
+    /// passthrough roots when a large prefix range spans the full width of
+    /// several tree levels.
+    async fn shrink_root_chain(&self, root: NodeId) -> Result<Option<NodeId>> {
+        let mut flow = ControlFlow::Continue(root);
+
+        while let ControlFlow::Continue(cur) = flow {
+            let node = self.load_node(cur).await?;
+            flow = match (
+                node.keys.is_empty(),
+                node.is_leaf,
+                node.children.first().copied(),
+            ) {
+                (true, true, _) => {
+                    self.nodes.remove(cur);
+                    self.allocator.deallocate(cur).await?;
+                    update_stats!(self, |stats| {
+                        stats.height = 0;
+                        stats.node_count = stats.node_count.saturating_sub(1);
+                    });
+                    ControlFlow::Break(None)
+                }
+                (true, false, Some(child)) => {
+                    self.nodes.remove(cur);
+                    self.allocator.deallocate(cur).await?;
+                    update_stats!(self, |stats| {
+                        stats.height = stats.height.saturating_sub(1);
+                        stats.node_count = stats.node_count.saturating_sub(1);
+                    });
+                    ControlFlow::Continue(child)
+                }
+                _ => ControlFlow::Break(Some(cur)),
+            };
+        }
+
+        match flow {
+            ControlFlow::Break(result) => Ok(result),
+            ControlFlow::Continue(_) => unreachable!(),
         }
     }
 
@@ -1823,68 +2324,6 @@ impl BTree {
         });
 
         Ok(new_root)
-    }
-
-    /// Collects all keys that start with the given prefix.
-    ///
-    /// Returns a vector of all keys (including the prefix itself if it exists)
-    /// that have the prefix as their starting subscripts.
-    async fn collect_keys_with_prefix(
-        &self,
-        root: NodeId,
-        prefix: &Key,
-    ) -> Result<Vec<Key>> {
-        self.collect_keys_from_node(root, prefix).await
-    }
-
-    /// Recursively collects keys from a node that match the prefix.
-    async fn collect_keys_from_node(
-        &self,
-        node_id: NodeId,
-        prefix: &Key,
-    ) -> Result<Vec<Key>> {
-        let mut cur = vec![node_id];
-        let mut out = Vec::new();
-
-        while let Some(batch) =
-            Some(mem::take(&mut cur)).filter(|b| !b.is_empty())
-        {
-            let loads: FuturesUnordered<_> = batch
-                .iter()
-                .enumerate()
-                .map(|(i, &id)| async move { (i, self.load_node(id).await) })
-                .collect();
-
-            let mut results: Vec<_> = loads.collect().await;
-            results.sort_unstable_by_key(|(i, _)| *i);
-
-            results.into_iter().try_for_each(|(_, res)| {
-                let node = res?;
-                let start =
-                    node.keys.binary_search(prefix).unwrap_or_else(|p| p);
-
-                let before = out.len();
-                out.extend(
-                    node.keys
-                        .iter()
-                        .skip(start)
-                        .take_while(|k| k.starts_with(prefix))
-                        .cloned(),
-                );
-
-                if !node.is_leaf {
-                    let end = start + (out.len() - before) + 1;
-                    cur.extend(
-                        (start..end)
-                            .filter_map(|i| node.children.get(i).copied()),
-                    );
-                }
-
-                Ok::<_, StorageError>(())
-            })?;
-        }
-
-        Ok(out)
     }
 
     /// Deletes a single key from the tree.

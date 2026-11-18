@@ -642,6 +642,24 @@ mod tests {
     mod kill_internal_tests {
         use super::*;
 
+        async fn dump_tree(bt: &BTree, nid: NodeId, depth: usize) {
+            let pad = "  ".repeat(depth);
+            let node = bt.load_node(nid).await.unwrap();
+            eprintln!(
+                "{}{:?} leaf={} keys={:?}",
+                pad, nid, node.is_leaf, node.keys
+            );
+            if !node.is_leaf {
+                let ch: Vec<_> = node.children.iter().copied().collect();
+                drop(node);
+                futures::stream::iter(ch)
+                    .fold((), |(), c| async move {
+                        Box::pin(dump_tree(bt, c, depth + 1)).await;
+                    })
+                    .await;
+            }
+        }
+
         #[tokio::test]
         async fn kill_single_key() {
             let btree = BTreeBuilder::default().build().unwrap();
@@ -739,6 +757,240 @@ mod tests {
             assert!(result.is_some());
             let r = result.unwrap();
             assert!(btree.get_internal(r, &key![1]).await.unwrap().is_some());
+        }
+
+        /// Helper: sequential bulk insert via `try_fold`.
+        async fn bulk_insert(
+            bt: &BTree,
+            root: NodeId,
+            keys: impl IntoIterator<Item = (rumps_types::Key, NodeData)>,
+        ) -> NodeId {
+            futures::stream::iter(keys.into_iter().map(Ok::<_, StorageError>))
+                .try_fold(root, |r, (k, v)| async move {
+                    bt.set_internal(r, &k, v).await
+                })
+                .await
+                .unwrap()
+        }
+
+        /// Helper: assert a list of keys are absent.
+        async fn assert_all_gone(
+            bt: &BTree,
+            root: NodeId,
+            keys: impl IntoIterator<Item = rumps_types::Key>,
+        ) {
+            futures::stream::iter(keys)
+                .fold((), |(), k| async move {
+                    assert!(
+                        bt.get_internal(root, &k).await.unwrap().is_none(),
+                        "{:?} should be gone",
+                        k,
+                    );
+                })
+                .await;
+        }
+
+        /// Helper: assert a list of keys are present.
+        async fn assert_all_present(
+            bt: &BTree,
+            root: NodeId,
+            keys: impl IntoIterator<Item = rumps_types::Key>,
+        ) {
+            futures::stream::iter(keys)
+                .fold((), |(), k| async move {
+                    assert!(
+                        bt.get_internal(root, &k).await.unwrap().is_some(),
+                        "{:?} should be present",
+                        k,
+                    );
+                })
+                .await;
+        }
+
+        #[tokio::test]
+        async fn kill_small_with_neighbors() {
+            let btree = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let root = btree.create_tree().await.unwrap();
+
+            let r = bulk_insert(
+                &btree,
+                root,
+                (0..10i64)
+                    .map(|i| (key![1, i], NodeData::with_value(value!(i)))),
+            )
+            .await;
+            let r = btree
+                .set_internal(
+                    r,
+                    &key![0],
+                    NodeData::with_value(value!("before")),
+                )
+                .await
+                .unwrap();
+            let r = btree
+                .set_internal(
+                    r,
+                    &key![2],
+                    NodeData::with_value(value!("after")),
+                )
+                .await
+                .unwrap();
+
+            eprintln!("=== BEFORE KILL ===");
+            dump_tree(&btree, r, 0).await;
+
+            let result = btree.kill_internal(r, &key![1]).await.unwrap();
+
+            match result {
+                Some(r2) => {
+                    eprintln!("=== AFTER KILL ===");
+                    dump_tree(&btree, r2, 0).await;
+                    let has0 = btree
+                        .get_internal(r2, &key![0])
+                        .await
+                        .unwrap()
+                        .is_some();
+                    let has2 = btree
+                        .get_internal(r2, &key![2])
+                        .await
+                        .unwrap()
+                        .is_some();
+                    assert!(has0, "key![0] should survive");
+                    assert!(has2, "key![2] should survive");
+                }
+                None => panic!("tree should not be empty"),
+            }
+        }
+
+        /// Exercises interior-subtree wholesale deletion: enough keys to
+        /// force splits (tree height > 1), then kill a prefix that spans
+        /// entire interior B-tree subtrees.
+        #[tokio::test]
+        async fn kill_large_subtree() {
+            let btree = BTreeBuilder::default().min_degree(3).build().unwrap();
+            let root = btree.create_tree().await.unwrap();
+
+            let r = bulk_insert(
+                &btree,
+                root,
+                (0..50).map(|i| (key![1, i], NodeData::with_value(value!(i)))),
+            )
+            .await;
+            let r = btree
+                .set_internal(
+                    r,
+                    &key![0],
+                    NodeData::with_value(value!("before")),
+                )
+                .await
+                .unwrap();
+            let r = btree
+                .set_internal(
+                    r,
+                    &key![2],
+                    NodeData::with_value(value!("after")),
+                )
+                .await
+                .unwrap();
+
+            let result = btree.kill_internal(r, &key![1]).await.unwrap();
+            let r = result.unwrap();
+
+            assert_all_gone(&btree, r, (0..50).map(|i| key![1, i])).await;
+            assert_all_present(&btree, r, [key![0], key![2]]).await;
+        }
+
+        /// Kill the only prefix, leaving the tree empty.
+        #[tokio::test]
+        async fn kill_entire_tree() {
+            let btree = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let root = btree.create_tree().await.unwrap();
+
+            let r = bulk_insert(
+                &btree,
+                root,
+                (0..20).map(|i| (key![1, i], NodeData::with_value(value!(i)))),
+            )
+            .await;
+            let r = btree
+                .set_internal(r, &key![1], NodeData::with_value(value!("root")))
+                .await
+                .unwrap();
+
+            let result = btree.kill_internal(r, &key![1]).await.unwrap();
+            assert!(result.is_none(), "tree should be empty");
+        }
+
+        /// Kill a middle prefix, keeping keys on both sides.
+        /// Exercises the boundary-merge overflow path (both boundary
+        /// children may remain full when the prefix sits in separators).
+        #[tokio::test]
+        async fn kill_middle_prefix_keeps_neighbors() {
+            let btree = BTreeBuilder::default().min_degree(3).build().unwrap();
+            let root = btree.create_tree().await.unwrap();
+
+            let r = bulk_insert(
+                &btree,
+                root,
+                (0..3i64).flat_map(|g| {
+                    (0..20i64).map(move |i| {
+                        (key![g, i], NodeData::with_value(value!(g * 100 + i)))
+                    })
+                }),
+            )
+            .await;
+
+            let result = btree.kill_internal(r, &key![1]).await.unwrap();
+            let r = result.unwrap();
+
+            assert_all_gone(&btree, r, (0..20i64).map(|i| key![1, i])).await;
+            assert_all_present(
+                &btree,
+                r,
+                [0i64, 2]
+                    .iter()
+                    .flat_map(|&g| (0..20i64).map(move |i| key![g, i])),
+            )
+            .await;
+        }
+
+        /// Deeply nested descendants (`[1], [1,1], [1,1,1], ...`)
+        /// to exercise multiple tree levels of boundary-only removal.
+        #[tokio::test]
+        async fn kill_deep_chain() {
+            let btree = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let root = btree.create_tree().await.unwrap();
+
+            let depth = 15usize;
+            let mk = |d: usize| {
+                rumps_types::Key::from(
+                    (0..d)
+                        .map(|_| rumps_types::Subscript::from(1))
+                        .collect::<Vec<_>>(),
+                )
+            };
+
+            let r = bulk_insert(
+                &btree,
+                root,
+                (1..=depth)
+                    .map(|d| (mk(d), NodeData::with_value(value!(d as i64)))),
+            )
+            .await;
+            let r = btree
+                .set_internal(
+                    r,
+                    &key![2],
+                    NodeData::with_value(value!("other")),
+                )
+                .await
+                .unwrap();
+
+            let result = btree.kill_internal(r, &key![1]).await.unwrap();
+            let r = result.unwrap();
+
+            assert_all_gone(&btree, r, (1..=depth).map(mk)).await;
+            assert_all_present(&btree, r, [key![2]]).await;
         }
     }
 
