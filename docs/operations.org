@@ -1,0 +1,244 @@
+#+TITLE: RUMPS Core Operations
+
+These are the fundamental building blocks for working with RUMPS data. All operations work on /keys/ within a /variable/ (global or local).
+
+In the following "transaction context" means if the operation works outside of a transaction or not. /All/ read-only operations work within and outside transactions; i.e. "not required" does not imply that they do not /work/ inside transactions (they do).
+
+* Table of Contents :toc@2@gh:
+- [[#get][=get= (=$GET=)]]
+- [[#set][=set= (=$SET=)]]
+- [[#kill][=kill= (=$KILL=)]]
+- [[#data][=data= (=$DATA=)]]
+- [[#order][=order= (=$ORDER=)]]
+- [[#query][=query= (=$QUERY=)]]
+- [[#collects][=collects=]]
+  - [[#collecting-all-keys][Collecting all keys]]
+  - [[#filtering-by-key-structure][Filtering by key structure]]
+  - [[#filtering-and-transformation][Filtering and transformation]]
+  - [[#collecting-into-a-vec-directly][Collecting into a Vec directly]]
+  - [[#streaming-with-early-termination][Streaming with early termination]]
+
+* =get= (=$GET=)
+Retrieves the value at a specific key. Returns =None= if the key doesn't exist.
+
+*Transaction context*: Not required for reads. Works outside transactions.
+
+#+begin_src rust
+// Assuming ^PATIENT{123,"NAME"} = "Alice" exists
+let name = db.get(&global!("PATIENT"), &key![123, "NAME"]).await?;
+assert_eq!(name, Some(value!("Alice")));
+
+// Non-existent keys return None
+let missing = db.get(&global!("PATIENT"), &key![999]).await?;
+assert_eq!(missing, None);
+#+end_src
+* =set= (=$SET=)
+Stores a value at a specific key. Creates the key if it doesn't exist, overwrites if it does.
+
+*Transaction context*: *Required* for globals. Locals can be set directly.
+
+#+begin_src rust
+// Globals require a transaction
+db.transaction(|txn| async move {
+    txn.set(&global!("PATIENT"), &key![123, "NAME"], value!("Alice")).await?;
+    txn.set(&global!("PATIENT"), &key![123, "AGE"], value!(30)).await?;
+    Ok(())
+}).await?;
+
+// Locals can be set directly (no persistence)
+db.set(&local!("TEMP"), &key![1], value!("scratch")).await?;
+#+end_src
+* =kill= (=$KILL=)
+Deletes a key /and all its descendants/. This is a subtree deletion. If you =kill= =^P{1}=, then =^P{1,"A"}=, =^P{1,"B","C"}=, etc..., are all gone.
+
+*Transaction context*: *Required* for globals. Locals can be killed directly.
+
+#+begin_src rust
+// Assuming ^DATA{1,"A"}, ^DATA{1,"B"}, ^DATA{1,"B","C"} exist
+db.transaction(|txn| async move {
+    txn.kill(&global!("DATA"), &key![1]).await?;
+    Ok(())
+}).await?;
+
+// All descendants of [1] are now gone
+assert_eq!(db.get(&global!("DATA"), &key![1, "A"]).await?, None);
+assert_eq!(db.get(&global!("DATA"), &key![1, "B"]).await?, None);
+assert_eq!(db.get(&global!("DATA"), &key![1, "B", "C"]).await?, None);
+#+end_src
+* =data= (=$DATA=)
+Checks the /existence status/ of a node: does it have a value? Does it have descendants? Both? Neither? This corresponds to MUMPS's =@DATA= function and returns one of four states:
+| Status                  | Meaning                              |
+|-------------------------+--------------------------------------|
+| =NoData= (~0~)          | Key doesn't exist                    |
+| =HasValue= (~1~)        | Key has a value but no children      |
+| =HasDescendants= (~10~) | Key has children but no value itself |
+| =Both= (~11~)           | Key has both a value and children    |
+
+(The numeric codes are what MUMPS traditionally used; RUMPS uses a proper =DataStatus= enum instead.)
+
+*Transaction context*: Not required. Works outside transactions.
+
+#+begin_src rust
+// Assuming ^P{1,"NAME"} = "Alice" exists
+let status = db.data(&global!("P"), &key![1]).await?;
+assert_eq!(status, DataStatus::HasDescendants);  // [1] has children but no value
+
+let status = db.data(&global!("P"), &key![1, "NAME"]).await?;
+assert_eq!(status, DataStatus::HasValue);  // [1,"NAME"] has a value
+
+let status = db.data(&global!("P"), &key![999]).await?;
+assert_eq!(status, DataStatus::NoData);  // doesn't exist
+#+end_src
+* =order= (=$ORDER=)
+Returns the /next subscript/ at a specific level. This matches traditional MUMPS =@ORDER= semantics: given a prefix and a subscript, it returns the next subscript that exists at that level.
+
+*Transaction context*: Not required. Works outside transactions.
+
+#+begin_src rust
+use rumps_types::Subscript;
+
+// Assuming ^X{1,"A"}, ^X{1,"B"}, ^X{2,"C"} exist
+let first = db.order(&global!("X"), &key![], None).await?;
+assert_eq!(first, Some(Subscript::from(1)));  // first subscript at root
+
+let next = db.order(&global!("X"), &key![], Some(&Subscript::from(1))).await?;
+assert_eq!(next, Some(Subscript::from(2)));  // next subscript at root
+
+// Iterate subscripts under [1]
+let sub = db.order(&global!("X"), &key![1], None).await?;
+assert_eq!(sub, Some(Subscript::from("A")));  // first under [1]
+
+let sub = db.order(&global!("X"), &key![1], Some(&Subscript::from("A"))).await?;
+assert_eq!(sub, Some(Subscript::from("B")));  // next under [1]
+
+let sub = db.order(&global!("X"), &key![1], Some(&Subscript::from("B"))).await?;
+assert_eq!(sub, None);  // no more under [1]
+#+end_src
+* =query= (=$QUERY=)
+Returns the /next full key/ in sorted order after a given key. Pass =None= to get the first key. Unlike =order= which returns just the next subscript at a level, =query= returns the complete key path to the next node.
+
+*Transaction context*: Not required. Works outside transactions.
+
+#+begin_src rust
+// Assuming ^X{1}, ^X{2}, ^X{10} exist (inserted in any order)
+let first = db.query(&global!("X"), None).await?;
+assert_eq!(first, Some(key![1]));  // first key
+
+let next = db.query(&global!("X"), Some(&key![1])).await?;
+assert_eq!(next, Some(key![2]));  // next after [1]
+
+let next = db.query(&global!("X"), Some(&key![2])).await?;
+assert_eq!(next, Some(key![10]));  // 2 < 10 numerically
+
+let next = db.query(&global!("X"), Some(&key![10])).await?;
+assert_eq!(next, None);  // no more keys
+#+end_src
+
+To iterate /all/ keys, you /could/ call =query= repeatedly until =None=:
+
+#+begin_src rust
+let mut cur = db.query(&global!("X"), None).await?;
+
+while let Some(k) = cur {
+    println!("Key: {:?}", k);
+    cur = db.query(&global!("X"), Some(&k)).await?;
+}
+#+end_src
+
+This mimics traditional MUMPS iteration. However, for most use cases, =collects= (below) is cleaner and more idiomatic.
+* =collects=
+=collects= takes a predicate (which entries to include) and an extractor (how to transform them), then produces a stream of results. Results are /always/ in sorted key order.
+
+*This is a RUMPS extension*; traditional MUMPS doesn't have this. Instead, you'd write imperative loops with =@ORDER=. RUMPS provides =collects= as a declarative, stream-based alternative that's more idiomatic for Rust and modern programming.
+
+Why the extension? A few reasons:
+1. *Composability*: Streams chain naturally with =.map()=, =.filter()=, =.take()=, etc.
+2. *Laziness*: Doesn't load everything into memory; yields entries on demand
+3. *Async-native*: Works seamlessly with Rust's async ecosystem
+4. *Functional style*: Separates "what to collect" from "how to process it"
+
+*Transaction context*: Not required. Works outside transactions as it is read-only.
+
+** Collecting all keys
+The simplest use: get all key-value pairs from a variable.
+
+#+begin_src rust
+// Stream-based
+let mut stream = db.collects(
+    &global!("X"),
+    None,
+    |_, _| true,  // include all
+    |k, v| Some((k.clone(), v.clone())),
+).await?;
+
+while let Some(item) = stream.next().await {
+    let (key, val) = item?;
+    println!("{:?} = {:?}", key, val);
+}
+
+// Or collect to Vec directly
+let all: Vec<(Key, Option<Value>)> = db
+    .collects_vec(&global!("X"), None, |_, _| true, |k, v| Some((k.clone(), v.clone())))
+    .await?;
+#+end_src
+
+** Filtering by key structure
+#+begin_src rust
+// Assuming ^P{1,"NAME"}="Alice", ^P{2,"NAME"}="Bob", ^P{3,"NAME"}="Carol"
+use futures::TryStreamExt;
+
+let names: Vec<String> = db
+    .collects(
+        &global!("P"),
+        None,
+        |k, _| k.len() == 2 && k.get(1) == Some(&subscript!("NAME")),
+        |_, v| v.as_ref()?.as_str().map(str::to_owned),
+    )
+    .await?
+    .try_collect()
+    .await?;
+
+assert_eq!(names, vec!["Alice", "Bob", "Carol"]);  // sorted by key
+#+end_src
+
+** Filtering and transformation
+#+begin_src rust
+// Same data as above; get patients with ID > 1, uppercase names
+let names: Vec<String> = db
+    .collects(
+        &global!("P"),
+        None,
+        |k, _| {
+            k.len() == 2
+                && k.get(0).and_then(|s| s.as_i64()).is_some_and(|id| id > 1)
+                && k.get(1) == Some(&subscript!("NAME"))
+        },
+        |_, v| v.as_ref()?.as_str().map(|s| s.to_uppercase()),
+    )
+    .await?
+    .try_collect()
+    .await?;
+
+assert_eq!(names, vec!["BOB", "CAROL"]);
+#+end_src
+
+** Collecting into a Vec directly
+#+begin_src rust
+// collects_vec is a convenience wrapper
+let vals: Vec<Value> = db
+    .collects_vec(&global!("P"), None, |k, _| k.len() == 2, |_, v| v.clone())
+    .await?;
+#+end_src
+
+** Streaming with early termination
+#+begin_src rust
+use futures::StreamExt;
+
+// Standard stream combinators work
+let first_two: Vec<String> = db
+    .collects(&global!("P"), None, |_, _| true, |k, _| Some(format!("{:?}", k)))
+    .await?
+    .take(2)
+    .try_collect()
+    .await?;
+#+end_src

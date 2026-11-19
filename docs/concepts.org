@@ -1,0 +1,291 @@
+#+TITLE: RUMPS Concepts
+
+* Table of Contents :toc@2@gh:
+- [[#mumps-background][MUMPS Background]]
+- [[#core-concepts][Core concepts]]
+  - [[#variables][Variables]]
+  - [[#keys-and-subscripts][Keys and subscripts]]
+  - [[#value-types][Value types]]
+  - [[#collation][Collation]]
+- [[#rumps-specific][RUMPS-specific]]
+  - [[#async-first][Async first]]
+  - [[#acid-guarantees][ACID guarantees]]
+
+* MUMPS Background
+RUMPS is born from the MUMPS database system and programming language (RUMPS has not yet implemented the latter). MUMPS was essentially NoSQL before NoSQL (making RUMPS NoSQL ...after NoSQL). Rather than store relational tables as SQL does, MUMPS and RUMPS store *sparse*, *sorted*, *hierarchical trees* of data (these are called "global" variables, see below for what a "variable" in MUMPS and RUMPS is). Data is addressed by /key/: each /key/ is a list of /subscripts/ in the tree:
+
+#+HTML: <p align="center">
+#+HTML:   <img src="../stuff/storage-diagram.svg" alt="RUMPS storage model">
+#+HTML: </p>
+
+(For what things like =^PATIENT{}= mean, again, see below on "variables".)
+
+This storage model is essentially the same between MUMPS and RUMPS. MUMPS traditionally used a B+-tree for its physical storage, but RUMPS uses a pure B-tree (i.e. nodes can hold values directly as well as descendants).
+
+What I find so fascinating about this, and what inspired me to make RUMPS, is that the /logical model/ (hierarchical sparse trees and their operations) and the /physical model/ (B-tree) are essentially the same shape. Operations like =order= (=$ORDER=; "next key in sorted order", see below) are /literally/ what B-trees do. That is, the user thinks in /tree traversal/. Whereas with SQL, the logical and physical models are totally decoupled. This is also why hierarchical or document-like data is suitable and typically fast for MUMPS or RUMPS; there's no impedance mismatch between the user's thought and storage operations.
+
+There are additional essential properties of RUMPS that are inherited from MUMPS:
+- Sparse :: There is no need to fill gaps, pad, etc...; for example, if /only/ keys =1=, =2=, =10= are set, there is no padding for =3= through =9=
+- Sorted :: Iteration always yields keys /in order/ and there is no need for post-hoc sorting, ever; this is based on the /collation order/, explained below
+- Hierarchical :: Theoretically unlimited nesting depth (although limited in practice; keys consisting of one million subscripts may not be the best idea)
+* Core concepts
+These concepts are borrowed from MUMPS; where RUMPS differs explicitly from MUMPS, I will note it. Otherwise, read "RUMPS" as "RUMPS (as with MUMPS)".
+** Variables
+In most languages, a "variable" is a name bound to a single value. In RUMPS, a variable is a /name bound to an entire tree/. The name (=^PATIENT{}= or =TEMP{}=) identifies the tree root; subscripts (={123, "NAME"}=) navigate to /nodes/ within it. A variable can be bound at the root node or any arbitrary key path under it. Using the query language syntax:
+
+#+begin_src rumps
+@SET ^P{} = "root"              ; value at root node (empty path)
+@SET ^P{1} = "child"            ; value at node [1]
+@SET ^P{1,"A"} = "deeper"       ; value at node [1, "A"]
+#+end_src
+
+All three are "the variable =^P{}=", i.e. nodes in the same tree. A node can hold a value /and/ have children simultaneously (=^P{1}= stores ="child"= while =^P{1,"A"}= exists beneath it).
+
+As an /extremely/ loose comparison, a global variable is something like a table in SQL: i.e. a namespace for storing data. However, it has no predefined schema, no rows, etc... Instead, it holds hierarchical key addresses.
+*** Globals vs. locals
+RUMPS distinguishes between two types of variables, locals and globals. A global variable is persisted to the database, while locals are ephemeral, i.e. held in memory only and disappear once the session ends. In the query language, globals and locals are distinguished by a preceding caret on the former, e.g. =^PATIENT{}= is a global, while =PATIENT{}= is a local.
+
+In most examples, variables are upper-case; however, lowercase, camel-case, etc..., all work as well.
+
+For RUMPS specifically:
+- *Globals* (=^NAME{}=)
+  - are persisted to disk via WAL + page cache
+  - MUST be called from a =Transaction= context, i.e. you cannot write to globals outside of a transaction
+- *Locals* (=NAME{}=)
+  - exist in memory only and are discarded when the database is dropped
+  - can be written to outside of transactions
+
+Otherwise, both types of variables use the /same/ B-tree implementation and support identical operations (with the caveat that global operations occur within a =Database::transaction= context; however, the underlying B-tree operations are the same).
+** Keys and subscripts
+A *key* is a path through the tree, i.e. how you /address/ it starting from its root (a local or global variable). It's a sequence of *subscripts* that address a specific node. For example, in =^PATIENT{123, "NAME"}=, the *key* is ={123, "NAME"}=, which consists of two *subscripts*: the number =123= and the string ="NAME"=.
+
+In the Rust API, keys are built using the =key!= macro:
+
+#+begin_src rust
+use rumps::*;
+
+// A key with two subscripts: integer 123, then string "NAME"
+let k = key![123, "NAME"];
+
+// Keys can have any number of subscripts
+let deep = key![1, "CONTACT", "ADDRESS", "CITY"];
+
+// Empty keys address the root node of a variable
+let root = key![];
+#+end_src
+
+Keys are ordered lexicographically by their subscripts, which means iteration (via =order= or =collects=) yields keys in a predictable, sorted order.
+*** Subscript types
+RUMPS subscripts are represented by the =Subscript= enum. Unlike traditional MUMPS where everything was stringly-typed, RUMPS supports explicit types:
+
+| *Type*               | *Rust API*                           | *Notes*                                  |
+|--------------------+------------------------------------+----------------------------------------|
+| =Subscript::Boolean= | =subscript!(true)=                   | =false= < =true=                           |
+| =Subscript::Number=  | =subscript!(123)= or =subscript!(1.5)= | Integers and floats; numeric ordering  |
+| =Subscript::Char=    | =subscript!('A')=                    | Single UTF-8 character                 |
+| =Subscript::String=  | =subscript!("foo")=                  | UTF-8 string; lexicographic ordering   |
+| =Subscript::Json=    | =subscript!(json!(...))=             | Arbitrary JSON; ordered by string repr |
+
+Although subscripts can be constructed via the =subscript!= macro, it's easier to use the =key!= macro for building keys, since all operations on the DB (see below) require or reference /keys/, not individual subscripts.
+
+The =key!= macro will also handle type conversions automatically:
+
+#+begin_src rust
+// These all work heterogeneously with the `key!` macro
+//
+// Equivalent to query language: `^P{true, 123, 'X', "NAME", '{"active": true}'}`
+let k = key![true, 123, 'X', "NAME", json!({"active": true})];
+#+end_src
+*** Subscript vs. node value
+This distinction may confuse people used to other DB systems: subscripts and values /look similar/ but /serve different purposes/.
+
+- Subscripts :: Components of a /key/; they define /where/ data lives in the tree. Think of them as the "address" or "path"
+- Values :: The actual data stored /at/ a node. Think of them as the "payload"
+
+Both support similar types (booleans, numbers, strings, JSON, etc...), but they're used differently:
+
+#+begin_src rust
+use rumps::*;
+
+db.transaction(|txn| async move {
+    // The _KEY_ is [123, "NAME"]; consists of two _SUBSCRIPTS_
+    // The _VALUE_ is "Alice"; what's stored at that location
+    txn.set(
+        &global!("PATIENT"),
+        &key![123, "NAME"],  // subscripts: 123 and "NAME"
+        value!("Alice"),     // value: the string "Alice"
+    ).await?;
+    Ok(())
+}).await?;
+#+end_src
+
+Because subscripts participate in /ordering and traversal/, we require this distinction. When you call =order= or =collects=, RUMPS walks through keys in sorted subscript order. Values just exist at the node; they don't affect iteration order.
+
+Another way to think about it: in a filesystem analogy, subscripts are like directory and file names (they form the path, or /key/), while values are like file contents (what's stored there).
+
+#+begin_src rumps
+@set ^PATIENT{1,"NAME"} = "Alice"
+;
+;            ^^^^^^^^^^   ^^^^^^^
+;            subscripts   value
+;            (the path)   (the data)
+#+end_src
+** Value types
+As noted above, nodes hold /values/. This is the actual data stored in the DB and has no bearing on traversal semantics.
+
+RUMPS supports several =Value= types that can be stored at nodes. Unlike MUMPS, values are /not/ stored as strings and coerced, but serialized and deserialized as natively supported types:
+- =Value::Boolean=
+- =Value::Integer=
+- =Value::Float= (as an =OrderedFloat=, i.e. NaN cannot be represented)
+- =Value::Char=
+- =Value::String=
+- =Value::Json=
+
+RUMPS adds support for a few =Value= types that don't exist in MUMPS:
+- =Value::Boolean=: fairly self-explanatory for why this might be desirable
+- =Value::Char=: figured it might be nice for e.g. single-character flags and storage is very cheap (vs. storing a whole =Value::String= with one character)
+- =Value::Json=: this one might seem a bit stranger, but it allows for storing chunks of data at paths if you want to; for example, storing an entire array or object at a node
+** Collation
+/Collation order/ is the rule that determines how keys are sorted. Since RUMPS stores all data in *sorted* B-trees, iteration primitives (i.e. =order=, =collects=) always yields keys *in this order*, so no explicit sorting is needed.
+
+Traditional MUMPS treats everything as strings with quirky numeric coercion. RUMPS uses proper types with a well-defined collation:
+
+| *Type*    | *Collation*                               |
+|---------+-----------------------------------------|
+| =Boolean= | =false= < =true=                            |
+| =Number=  | Numeric order: =-10= < =0= < =1.5= < =10= < =100= |
+| =Char=    | Unicode code point order                |
+| =String=  | Lexicographic (dictionary) order        |
+| =Json=    | By JSON string representation           |
+
+This first column follows the order of cross-type collation, i.e. =Boolean= < =Number= < =Char= < =String= < =Json=.
+
+So =key![false]= sorts before =key![0]=, which sorts before =key!['a']=, which sorts before =key!["a"]=.
+
+This makes numeric subscripts sort correctly. =^VAR{10}= comes /before/ =^VAR{100}= because =10 < 100= numerically. In string-based systems like traditional MUMPS (where everything was essentially stringly-typed), ="100"= < ="10"= lexicographically (the character ='0'= comes before ='1'=). This makes range queries on numeric IDs, timestamps, etc..., work more intuitively in RUMPS.
+
+#+begin_src rust
+// Numeric collation makes range queries intuitive
+db.transaction(|txn| async move {
+    txn.set(&global!("X"), &key![100], value!("c")).await?;
+    txn.set(&global!("X"), &key![2], value!("a")).await?;
+    txn.set(&global!("X"), &key![10], value!("b")).await?;
+    Ok(())
+}).await?;
+
+// query returns: 2, then 10, then 100 (numeric order, not "10" < "100" < "2")
+let first = db.query(&global!("X"), None).await?;
+assert_eq!(first, Some(key![2]));
+#+end_src
+* RUMPS-specific
+** Async first
+RUMPS is built on Rust's async ecosystem (=tokio=) from the ground up. All I/O operations; reads, writes, WAL flushes; are non-blocking. The asynchronous nature of RUMPS isn't a bolted-on async wrapper or afterthought: it's baked in from the page cache to transaction commit, i.e. the entire process.
+
+This may or may not suit your needs. For one, =tokio= *is required* to run RUMPS. I might try to make it runtime-agnostic in the future, but for now, you'd need to use =tokio= to use RUMPS.
+** ACID guarantees
+RUMPS provides ACID semantics for writes to globals. I'm not going to try to guarantee that RUMPS will not destroy your data, and there are definitely bugs in implementation, etc..., but I have designed it to provide ACID semantics:
+
+- *Atomicity*: All operations within a transaction succeed together or fail together. Writes are buffered until commit; on rollback, changes are discarded. No partial writes are ever visible.
+- *Consistency*: Conflict detection prevents write-write conflicts between concurrent transactions. B-tree invariants are maintained through all operations.
+- *Isolation*: Snapshot isolation by default: each transaction sees a consistent snapshot as of transaction start. Readers never block writers; writers never block readers.
+- *Durability*: Write-Ahead Logging (WAL) ensures committed transactions survive crashes. The sequence is:
+  - WAL write
+  - =fsync=
+  - commit acknowledged
+  - flush to data file
+
+Note that WAL is currently the only option for durability.
+
+There are configurable WAL sync modes that trade durability for performance:
+| *Mode*        | *Behavior*                       | *Durability*     |
+|-------------+--------------------------------+----------------|
+| =Immediate=   | an =fsync= after every WAL write | Highest        |
+| =OnCommit=    | an =fsync= on transaction commit | Good (*default*) |
+| =Periodic(n)= | an =fsync= every =n= ms            | Lower          |
+| =Relaxed=     | no =fsync=; relies on OS cache   | *None*           |
+
+=rumps::SyncMode::OnCommit= is the default setting. However, you can create a database with different options:
+
+#+begin_src rust
+use rumps::{Database, SyncMode};
+
+// Configure sync mode at creation time
+let db = Database::builder()
+    .sync_mode(SyncMode::Immediate)  // Maximum durability
+    .create("./data")  // path is a directory
+    .await?;
+#+end_src
+
+Note that =SyncMode::Relaxed= does /not/ follow the durability sequence outlined above as it skips =fsync=.
+*** Performance and durability
+RUMPS achieves solid write throughput with full durability guarantees (with NVMe, ZFS, =SyncMode::OnCommit=):
+
+| *Workload*                                   | *Throughput*     |
+|--------------------------------------------+----------------|
+| Single global, batched (100-1000 ops/txn)  | ~90-95 Kelem/s |
+| Multi-global (1000 ops across 100 globals) | ~300 Kelem/s   |
+
+These numbers are with =SyncMode::OnCommit= (the default), meaning every transaction commit includes an =fsync= to the WAL. Using RUMPS' default settings, when =transaction()= returns =Ok=, /the data is really on disk/.
+
+Multi-global writes benefit from RUMPS's sharded node cache: writes to different globals can proceed in parallel with reduced lock contention.
+
+*NOTE*: Generally speaking, the larger the batches, the better throughput will be. Fixed I/O cost is amortized better over larger write batches (this is a general property of MUMPS-like DBs where the =O(n log n)= time complexity of the B-tree is amortized by disk I/O overhead). So, for example, it is better to write to 1,000 key addresses in single transaction than 100 addresses spread across 10 transactions. Bear in mind that all read-only operations also work inside transactions, so no need to break transactions up to insert reads in between (unless this is explicitly desirable).
+
+*NOTE*: Benchmarks are run on NVMe SSD with ZFS. Actual speed and throughput may vary based on storage hardware and filesystem.
+**** Relaxed mode
+=SyncMode::Relaxed= skips *all* =fsync= calls on both the WAL and data file, relying entirely on the OS page cache. This means *committed transactions may be lost on crash*; when =transaction()= returns =Ok=, the data is in memory but not necessarily on disk. This is fundamentally different from the three other =SyncMode= options and should only be used when durability is not a primary concern.
+
+Whether =Relaxed= improves throughput depends on your environment. On fast NVMe drives, =fsync= can complete in microseconds, making =Relaxed= indistinguishable from =OnCommit=. On slower storage (HDDs, network-attached storage, cloud block devices), the difference can be significant.
+
+You may want to use =Relaxed= when:
+- *Batch imports*: Loading data from an authoritative source you can replay if needed (e.g. see [[../crates/rumps/examples/financial.rs][this example]])
+- *Rebuild-able indices*: Secondary data derived from a durable primary
+- *Dev/test environments*: Speed matters more than crash safety
+- *Analytics workloads*: Read-heavy with occasional writes you can afford to lose
+- *Ephemeral processing*: Intermediate results that will be discarded anyway (although locals might be more appropriate for this in RUMPS)
+
+#+begin_src rust
+let db = Database::builder()
+    .sync_mode(SyncMode::Relaxed)  // No fsync; not crash-safe
+    .create("./scratch")
+    .await?;
+#+end_src
+*** In-memory performance
+When using =Database::in_memory()=, there's no WAL, =fsync=, or disk I/O. Throughput /can be/ substantially higher but see the caveat below regarding I/O amortization relative to normal on-disk DBs:
+
+| *Workload*                                 | *Throughput*     |
+|--------------------------------------------+------------------|
+| Single global, batched (100-1000 ops/txn)  | ~580-680 Kelem/s |
+| Multi-global (1000 ops across 100 globals) | ~800 Kelem/s     |
+
+If you want transactional semantics (atomicity, conflict detection, snapshot isolation) but don't need persistence, in-memory mode is a solid option for caching or scratch workspaces. See the next subsection on using =Database::in_memory= more generally.
+
+One quirk of in-memory mode: per-element throughput /decreases/ for larger batches, which is the opposite of on-disk behavior. With disk-backed storage, the fixed I/O cost (=fsync=, WAL flush) is amortized over more operations, so bigger batches means better throughput. In-memory has no I/O to amortize; you're left with raw B-tree insertion cost, which is =O(n log n)= for =n= sequential inserts. As the tree grows, each insert traverses more levels. This is normal B-tree behavior that's usually hidden behind disk latency.
+*** In-memory: ACI
+When using =Database::in_memory()=, writes to globals still require transactions and provide full *ACI* guarantees. The only difference is no durability (data is lost when the database is dropped).
+
+- *Atomicity*: Writes are still buffered until commit; rollback discards all changes
+- *Consistency*: Conflict detection still prevents write-write conflicts
+- *Isolation*: Snapshot isolation still ensures transactions see consistent state
+
+This is useful for:
+- *Testing*: Fast, isolated tests without disk cleanup
+- *Caching*: Transactional semantics for in-memory data with hierarchical structure
+- *Temporary workspaces*: Scratch space that doesn't need persistence
+- *Ephemeral data*: You might want very fast throughput (see notes above) and access to hierarchical data, but don't need persistence or durability
+
+#+begin_src rust
+let db = Database::in_memory()?;
+
+// Still need transactions for globals; you get proper multi-transaction
+// coordination, just without persistence
+db.transaction(|txn| async move {
+    txn.set(&global!("CACHE"), &key!["user", 123], value!("data")).await?;
+    Ok(())
+}).await?;
+
+// Locals never need transactions, regardless
+db.set(&local!("TEMP"), &key![1], value!("scratch")).await?;
+#+end_src
+
+Note that unlike e.g. Redis, structured, hierarchical, or nested data works well with RUMPS as a caching layer. For example, you don't need to encode data and store as e.g. ="user:1:foo:bar"= as a string and then re-parse it yourself; since this example is hierarchical, it would work well with RUMPS (e.g. ~USER{1, foo} = "bar"~).
