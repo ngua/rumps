@@ -683,27 +683,25 @@ impl BTree {
 
     /// Saves a node to the in-memory cache and marks it dirty.
     ///
-    /// **BTree is purely in-memory** - it does NOT write to disk directly.
+    /// **BTree is purely in-memory**; it does NOT write to disk directly.
     /// Disk writes happen during checkpoint/flush at the Database layer.
     ///
-    /// For disk-backed trees, the page is marked dirty in the storage cache.
+    /// For disk-backed trees, the page is marked dirty in the storage engine.
     /// For in-memory trees, just updates the node map.
     async fn save_node(&self, id: NodeId, node: Node) -> Result<()> {
         let node = Arc::new(node);
 
-        // Mark dirty in storage cache (if configured)
         if let Some(storage) = self.storage.as_ref() {
-            storage.mark_dirty(id, Arc::clone(&node)).await?;
+            storage.mark_dirty(id);
         }
 
         self.nodes.insert(id, node);
         Ok(())
     }
 
-    /// Resolves a node from the in-memory cache (DashMap).
+    /// Resolves a node from the in-memory cache (`DashMap`).
     ///
-    /// Used by the flush path to get the latest version of a node,
-    /// which may be more recent than the copy in `PageCache`.
+    /// Used by the flush path to get node data for dirty pages.
     pub(crate) fn resolve_node(&self, id: NodeId) -> Option<Arc<Node>> {
         self.nodes.get(id)
     }

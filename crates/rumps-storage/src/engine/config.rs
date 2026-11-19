@@ -54,14 +54,11 @@ pub struct StorageMetadata {
     /// Number of free pages available for allocation.
     pub free_pages: u64,
 
-    /// Number of pages currently in cache.
-    pub cached_pages: usize,
-
     /// Number of dirty pages pending flush.
     pub dirty_pages: usize,
 
-    /// Cache hit rate (`0.0` to `1.0`).
-    pub cache_hit_rate: f64,
+    /// Configured cache size (number of pages).
+    pub cache_size: usize,
 
     /// Path to the data directory.
     pub data_dir: PathBuf,
@@ -84,17 +81,15 @@ mod tests {
         let meta = StorageMetadata {
             allocated_pages: 100,
             free_pages: 50,
-            cached_pages: 25,
             dirty_pages: 5,
-            cache_hit_rate: 0.75,
+            cache_size: 1024,
             data_dir: PathBuf::from("/tmp/test"),
         };
 
         assert_eq!(meta.allocated_pages, 100);
         assert_eq!(meta.free_pages, 50);
-        assert_eq!(meta.cached_pages, 25);
         assert_eq!(meta.dirty_pages, 5);
-        assert!((meta.cache_hit_rate - 0.75).abs() < 0.001);
+        assert_eq!(meta.cache_size, 1024);
         assert_eq!(meta.data_dir, PathBuf::from("/tmp/test"));
     }
 }

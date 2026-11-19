@@ -52,11 +52,11 @@ pub use rumps_storage::{
     Database,
     DatabaseBuilder,
     DatabaseStats,
+    // Storage engine
+    DirtyPageStats,
     // Error handling
     Error,
     IsolationLevel,
-    // Storage engine
-    PageCacheStats,
     Result,
     StorageConfig,
     StorageError,

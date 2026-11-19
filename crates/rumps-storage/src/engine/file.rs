@@ -1,4 +1,4 @@
-//! File-based storage engine with WAL and page cache.
+//! File-based storage engine with WAL and dirty page tracking.
 
 use std::fs::{File, OpenOptions};
 use std::os::unix::fs::FileExt;
@@ -16,7 +16,7 @@ use super::{
 };
 use crate::error::{Result, StorageError};
 use crate::node::{Node, NodeId};
-use crate::page::{self, PageAllocator, PageCache, PageId};
+use crate::page::{self, DirtyPages, PageAllocator, PageId};
 use crate::wal::{SyncMode, WalReader, WalRecord, WalSequence, WalWriter};
 
 /// Indirect page data loaded from disk during superblock loading.
@@ -25,12 +25,12 @@ struct LoadedIndirectPages {
     double: Option<(IndirectPage, Vec<IndirectPage>)>,
 }
 
-/// File-based storage engine with WAL and page cache.
+/// File-based storage engine with WAL and dirty page tracking.
 ///
 /// `FileStorageEngine` persists B-tree nodes to disk using:
 ///
 /// - **Data file**: Fixed-size pages containing serialized nodes
-/// - **Page cache**: LRU cache for recently accessed pages
+/// - **Dirty tracker**: Tracks modified pages pending flush
 /// - **WAL**: Write-ahead log for crash recovery
 /// - **Page allocator**: Bitmap tracking free/allocated pages
 /// - **Superblock**: Page 0 containing metadata and bitmap page locations
@@ -61,8 +61,8 @@ pub(crate) struct FileStorageEngine {
     /// Write-ahead log for durability.
     wal: Arc<WalWriter>,
 
-    /// LRU cache of recently accessed pages.
-    cache: Arc<PageCache>,
+    /// Tracks which pages are dirty and need flushing to disk.
+    dirty: Arc<DirtyPages>,
 
     /// Bitmap-based page allocator.
     page_alloc: Arc<PageAllocator>,
@@ -313,8 +313,7 @@ impl FileStorageEngine {
         // Convert reader to writer using (possibly overridden) WAL config
         let wal = reader.into_writer(cfg.wal_config.clone()).await?;
 
-        // Create page cache using (possibly overridden) cache size
-        let cache = PageCache::new(cfg.cache_size);
+        let dirty = DirtyPages::new();
 
         // Wrap WAL in Arc for potential sharing with sync task
         let wal = Arc::new(wal);
@@ -326,7 +325,7 @@ impl FileStorageEngine {
         Ok(Self {
             data_file: Arc::new(file),
             wal,
-            cache: Arc::new(cache),
+            dirty: Arc::new(dirty),
             page_alloc: Arc::new(page_alloc),
             superblock: RwLock::new(superblock),
             single_indirect: RwLock::new(indirect.single),
@@ -465,8 +464,7 @@ impl FileStorageEngine {
             let reader = WalReader::open(&wal_dir).await?;
             let wal = reader.into_writer(cfg.wal_config.clone()).await?;
 
-            // Create page cache
-            let cache = PageCache::new(cfg.cache_size);
+            let dirty = DirtyPages::new();
 
             // Wrap WAL in Arc for potential sharing with sync task
             let wal = Arc::new(wal);
@@ -478,7 +476,7 @@ impl FileStorageEngine {
             Ok(Self {
                 data_file: Arc::new(file),
                 wal,
-                cache: Arc::new(cache),
+                dirty: Arc::new(dirty),
                 page_alloc: Arc::new(page_alloc),
                 superblock: RwLock::new(superblock),
                 single_indirect: RwLock::new(None),
@@ -577,56 +575,21 @@ impl FileStorageEngine {
 
     pub(crate) async fn read(&self, id: NodeId) -> Result<Arc<Node>> {
         let page_id = PageId::from(id);
+        let offset = page_id.byte_offset();
+        let mut buf = vec![0u8; page::PAGE_SIZE];
+        self.data_file
+            .read_exact_at(&mut buf, offset)
+            .map_err(|e| StorageError::Io {
+                op: "read page".into(),
+                path: self.data_dir.join(Self::DATA_FILE_NAME),
+                source: e,
+            })?;
 
-        // Check cache first
-        if let Some(cached) = self.cache.get(page_id) {
-            Ok(cached)
-        } else {
-            // Cache miss - read from disk
-            let offset = page_id.byte_offset();
-            let mut buf = vec![0u8; page::PAGE_SIZE];
-            self.data_file
-                .read_exact_at(&mut buf, offset)
-                .map_err(|e| StorageError::Io {
-                    op: "read page".into(),
-                    path: self.data_dir.join(Self::DATA_FILE_NAME),
-                    source: e,
-                })?;
-
-            let node: Arc<Node> = Arc::new(Self::decode_node(&buf)?);
-
-            // Add to cache (clean, since it came from disk)
-            let evicted = self.cache.put(page_id, Arc::clone(&node), false);
-
-            // Handle evicted dirty page
-            if let Some(ev) = evicted {
-                if ev.dirty {
-                    self.write_page_to_disk(ev.id, &ev.node)?;
-                }
-            }
-
-            Ok(node)
-        }
+        Ok(Arc::new(Self::decode_node(&buf)?))
     }
 
-    pub(crate) async fn mark_dirty(
-        &self,
-        id: NodeId,
-        node: Arc<Node>,
-    ) -> Result<()> {
-        let page_id = PageId::from(id);
-
-        // Put in cache as dirty
-        let evicted = self.cache.put(page_id, node, true);
-
-        // Handle evicted dirty page - write to disk
-        if let Some(ev) = evicted {
-            if ev.dirty {
-                self.write_page_to_disk(ev.id, &ev.node)?;
-            }
-        }
-
-        Ok(())
+    pub(crate) fn mark_dirty(&self, id: NodeId) {
+        self.dirty.mark_dirty(PageId::from(id));
     }
 
     pub(crate) async fn allocate(&self) -> Result<NodeId> {
@@ -637,37 +600,31 @@ impl FileStorageEngine {
 
     pub(crate) async fn deallocate(&self, id: NodeId) -> Result<()> {
         let page_id = PageId::from(id);
-
-        // Remove from cache if present
-        self.cache.remove(page_id);
-
-        // Free in allocator
+        self.dirty.remove(page_id);
         self.page_alloc.free(page_id).await?;
-
         Ok(())
     }
 
+    /// Flush metadata and registry only (no data pages).
     pub(crate) async fn flush(&self) -> Result<()> {
         self.flush_with_resolver(|_| None).await
     }
 
-    /// Flush dirty pages, resolving latest node data via `resolve`.
+    /// Flush dirty pages, resolving node data via `resolve`.
     ///
-    /// For each dirty page, `resolve` is called with its `NodeId`; if it
-    /// returns `Some`, that (fresher) node is written instead of the
-    /// potentially stale `PageCache` copy.
+    /// For each dirty page, `resolve` is called with its `NodeId` to obtain
+    /// the latest node data from `NodeCache` (`DashMap`).
     pub(crate) async fn flush_with_resolver<F>(&self, resolve: F) -> Result<()>
     where
         F: Fn(NodeId) -> Option<Arc<Node>>,
     {
-        let dirty = self.cache.dirty_pages();
+        let dirty_ids = self.dirty.dirty_page_ids();
 
-        let mut pages: Vec<(PageId, Vec<u8>)> = dirty
+        let mut pages: Vec<(PageId, Vec<u8>)> = dirty_ids
             .iter()
-            .map(|(id, cached)| {
-                let node = resolve(NodeId::from(*id))
-                    .unwrap_or_else(|| Arc::clone(cached));
-                Self::encode_node(&node).map(|buf| (*id, buf))
+            .filter_map(|id| {
+                resolve(NodeId::from(*id))
+                    .map(|node| Self::encode_node(&node).map(|buf| (*id, buf)))
             })
             .collect::<Result<_>>()?;
 
@@ -677,7 +634,7 @@ impl FileStorageEngine {
         Self::flush_pages(&self.data_file, &pages, &self.data_dir)?;
 
         let ids: Vec<_> = pages.iter().map(|(id, _)| *id).collect();
-        self.cache.mark_flushed(&ids);
+        self.dirty.mark_flushed(&ids);
 
         // Write bitmap pages and superblock
         self.flush_metadata().await?;
@@ -701,16 +658,15 @@ impl FileStorageEngine {
         StorageMetadata {
             allocated_pages: self.page_alloc.allocated_count().await,
             free_pages: self.page_alloc.free_count().await,
-            cached_pages: self.cache.len(),
-            dirty_pages: self.cache.dirty_count(),
-            cache_hit_rate: self.cache.hit_rate(),
+            dirty_pages: self.dirty.dirty_count(),
+            cache_size: self.cfg.cache_size,
             data_dir: self.data_dir.clone(),
         }
     }
 
-    /// Returns page cache statistics.
-    pub(crate) async fn cache_stats(&self) -> page::PageCacheStats {
-        self.cache.stats()
+    /// Returns dirty-page tracking statistics.
+    pub(crate) async fn dirty_stats(&self) -> page::DirtyPageStats {
+        self.dirty.stats()
     }
 
     /// Returns the stored B-tree min_degree from the metadata page.
@@ -922,18 +878,6 @@ impl FileStorageEngine {
         rest[..payload.len()].copy_from_slice(&payload);
 
         Ok(buf)
-    }
-
-    /// Write a page to disk at its designated offset.
-    fn write_page_to_disk(&self, id: PageId, node: &Node) -> Result<()> {
-        let buf = Self::encode_node(node)?;
-        self.data_file
-            .write_all_at(&buf, id.byte_offset())
-            .map_err(|e| StorageError::Io {
-                op: "write page".into(),
-                path: self.data_dir.join(Self::DATA_FILE_NAME),
-                source: e,
-            })
     }
 
     /// Flush metadata (bitmap pages + indirect pages + superblock) to disk.
@@ -1808,11 +1752,16 @@ mod tests {
         let path = dir.path().join("testdb");
         let node = test_node(20, "some repetitive value ");
 
+        let arc = Arc::new(node.clone());
         let id = {
             let engine = new_engine(&path).await;
             let id = engine.allocate().await.unwrap();
-            engine.mark_dirty(id, Arc::new(node.clone())).await.unwrap();
-            engine.flush().await.unwrap();
+            engine.mark_dirty(id);
+            let n = Arc::clone(&arc);
+            engine
+                .flush_with_resolver(|_| Some(Arc::clone(&n)))
+                .await
+                .unwrap();
             id
         };
 
@@ -1857,11 +1806,16 @@ mod tests {
             .collect();
         let node = test_node(1, &rnd);
 
+        let arc = Arc::new(node.clone());
         let id = {
             let engine = new_engine(&path).await;
             let id = engine.allocate().await.unwrap();
-            engine.mark_dirty(id, Arc::new(node.clone())).await.unwrap();
-            engine.flush().await.unwrap();
+            engine.mark_dirty(id);
+            let n = Arc::clone(&arc);
+            engine
+                .flush_with_resolver(|_| Some(Arc::clone(&n)))
+                .await
+                .unwrap();
             id
         };
 

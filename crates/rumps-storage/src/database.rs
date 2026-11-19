@@ -127,7 +127,7 @@ use crate::engine::{
 };
 use crate::error::StorageError;
 use crate::node::{NodeData, NodeId};
-use crate::page::{self, PageCacheStats};
+use crate::page::{self, DirtyPageStats};
 use crate::transaction::{
     Transaction, TransactionBuilder, TransactionContext, TransactionId,
     TransactionManager, TransactionTimestamp,
@@ -928,8 +928,8 @@ impl Database {
     /// # });
     /// ```
     pub async fn debug(&self) -> DatabaseStats {
-        let cache = match &self.storage {
-            Some(s) => Some(s.cache_stats().await),
+        let dirty = match &self.storage {
+            Some(s) => Some(s.dirty_stats().await),
             None => None,
         };
         let storage = match &self.storage {
@@ -939,7 +939,7 @@ impl Database {
         DatabaseStats {
             root_count: self.roots.read().await.len(),
             btree: self.btree.stats().await,
-            cache,
+            dirty,
             storage,
             active_txns: self.txn_manager.active_count().await,
             in_memory: self.storage.is_none(),
@@ -1487,8 +1487,8 @@ pub struct DatabaseStats {
     pub root_count: usize,
     /// B-tree statistics (requires `debug` feature; zeros otherwise).
     pub btree: BTreeStats,
-    /// Page cache statistics (persistent DBs only).
-    pub cache: Option<PageCacheStats>,
+    /// Dirty page statistics (persistent DBs only).
+    pub dirty: Option<DirtyPageStats>,
     /// Storage metadata (persistent DBs only).
     pub storage: Option<StorageMetadata>,
     /// Number of active transactions.
@@ -3363,7 +3363,7 @@ mod tests {
 
                 let stats = db.debug().await;
                 assert_eq!(
-                    stats.cache.as_ref().map(|c| c.max_capacity),
+                    stats.storage.as_ref().map(|s| s.cache_size),
                     Some(2048)
                 );
 
@@ -3375,7 +3375,7 @@ mod tests {
                 let db = Database::open(&path).await.unwrap();
                 let stats = db.debug().await;
                 assert_eq!(
-                    stats.cache.as_ref().map(|c| c.max_capacity),
+                    stats.storage.as_ref().map(|s| s.cache_size),
                     Some(1024)
                 );
                 db.close().await.unwrap();
@@ -3476,7 +3476,7 @@ mod tests {
 
                 let stats = db.debug().await;
                 assert_eq!(
-                    stats.cache.as_ref().map(|c| c.max_capacity),
+                    stats.storage.as_ref().map(|s| s.cache_size),
                     Some(512)
                 );
 
@@ -3584,7 +3584,7 @@ mod tests {
                 let db = Database::open(&path).await.unwrap();
                 let stats = db.debug().await;
                 assert_eq!(
-                    stats.cache.as_ref().map(|c| c.max_capacity),
+                    stats.storage.as_ref().map(|s| s.cache_size),
                     Some(2048)
                 );
                 db.close().await.unwrap();
@@ -3595,7 +3595,7 @@ mod tests {
                 let db = Database::open(&path).await.unwrap();
                 let stats = db.debug().await;
                 assert_eq!(
-                    stats.cache.as_ref().map(|c| c.max_capacity),
+                    stats.storage.as_ref().map(|s| s.cache_size),
                     Some(2048)
                 );
                 db.close().await.unwrap();
@@ -3741,7 +3741,7 @@ mod tests {
                 let db = Database::open(&path).await.unwrap();
                 let stats = db.debug().await;
                 assert_eq!(
-                    stats.cache.as_ref().map(|c| c.max_capacity),
+                    stats.storage.as_ref().map(|s| s.cache_size),
                     Some(512)
                 );
                 db.close().await.unwrap();
