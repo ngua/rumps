@@ -1078,7 +1078,10 @@ impl Database {
             storage.wal_append(&WalRecord::TxnCommit { txn_id }).await?;
 
             storage.wal_sync_if_needed().await?;
-            storage.flush().await?;
+            let bt = &self.btree;
+            storage
+                .flush_with_resolver(|nid| bt.resolve_node(nid))
+                .await?;
         }
         Ok(())
     }
@@ -1162,7 +1165,10 @@ impl Database {
     pub(crate) async fn flush(&self) -> crate::error::Result<()> {
         if let Some(storage) = self.storage.as_ref() {
             storage.wal_sync_if_needed().await?;
-            storage.flush().await?;
+            let bt = &self.btree;
+            storage
+                .flush_with_resolver(|nid| bt.resolve_node(nid))
+                .await?;
         }
         Ok(())
     }
@@ -1442,6 +1448,7 @@ impl Drop for Database {
                 .filter(|s| Arc::strong_count(s) == 1)
                 .into_iter()
                 .for_each(|storage| {
+                    let bt = &self.btree;
                     let result = tokio::runtime::Handle::try_current()
                         .map_err(|e| {
                             StorageError::InvalidOperation(e.to_string())
@@ -1450,7 +1457,11 @@ impl Drop for Database {
                             tokio::task::block_in_place(|| {
                                 handle.block_on(async {
                                     storage.wal_sync_if_needed().await?;
-                                    storage.flush().await
+                                    storage
+                                        .flush_with_resolver(|nid| {
+                                            bt.resolve_node(nid)
+                                        })
+                                        .await
                                 })
                             })
                         });

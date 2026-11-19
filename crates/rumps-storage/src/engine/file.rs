@@ -648,11 +648,27 @@ impl FileStorageEngine {
     }
 
     pub(crate) async fn flush(&self) -> Result<()> {
+        self.flush_with_resolver(|_| None).await
+    }
+
+    /// Flush dirty pages, resolving latest node data via `resolve`.
+    ///
+    /// For each dirty page, `resolve` is called with its `NodeId`; if it
+    /// returns `Some`, that (fresher) node is written instead of the
+    /// potentially stale `PageCache` copy.
+    pub(crate) async fn flush_with_resolver<F>(&self, resolve: F) -> Result<()>
+    where
+        F: Fn(NodeId) -> Option<Arc<Node>>,
+    {
         let dirty = self.cache.dirty_pages();
 
         let mut pages: Vec<(PageId, Vec<u8>)> = dirty
             .iter()
-            .map(|(id, node)| Self::encode_node(node).map(|buf| (*id, buf)))
+            .map(|(id, cached)| {
+                let node = resolve(NodeId::from(*id))
+                    .unwrap_or_else(|| Arc::clone(cached));
+                Self::encode_node(&node).map(|buf| (*id, buf))
+            })
             .collect::<Result<_>>()?;
 
         // Sort by page offset for sequential I/O and contiguous grouping

@@ -700,6 +700,14 @@ impl BTree {
         Ok(())
     }
 
+    /// Resolves a node from the in-memory cache (DashMap).
+    ///
+    /// Used by the flush path to get the latest version of a node,
+    /// which may be more recent than the copy in `PageCache`.
+    pub(crate) fn resolve_node(&self, id: NodeId) -> Option<Arc<Node>> {
+        self.nodes.get(id)
+    }
+
     /// Creates a new empty tree and returns its root `NodeId`.
     ///
     /// This allocates an empty leaf node that serves as the root of a new tree.
