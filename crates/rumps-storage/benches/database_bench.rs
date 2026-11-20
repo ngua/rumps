@@ -17,8 +17,8 @@ use criterion::{
     Throughput,
 };
 use futures::{StreamExt, TryStreamExt};
-use rumps_storage::{Database, SyncMode, Transaction};
-use rumps_types::{global, key, value, Name, Value};
+use rumps_storage::{Database, Increment, SyncMode, Transaction};
+use rumps_types::{global, key, local, value, Name, Value};
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
@@ -732,6 +732,213 @@ fn bench_sync_mode_multi_global(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark single `increment` on a local (no transaction overhead).
+fn bench_increment_local(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("increment_local");
+
+    group.bench_function("single_key", |b| {
+        let db = Database::in_memory().unwrap();
+        let name = local!("CTR");
+
+        b.iter(|| {
+            rt.block_on(async {
+                black_box(
+                    db.increment(&name, &key![1], Increment::from(1i64))
+                        .await
+                        .unwrap(),
+                );
+            })
+        })
+    });
+
+    group.finish();
+}
+
+/// Benchmark `increment` within a transaction (globals).
+fn bench_increment_txn(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("increment_txn");
+    group.measurement_time(std::time::Duration::from_secs(15));
+
+    MODES.iter().for_each(|&mode| {
+        let (_dir, db) = create_db(mode, &rt);
+        let name = global!("CTR");
+
+        group.bench_function(format!("{mode}"), |b| {
+            b.iter(|| {
+                rt.block_on(async {
+                    db.transaction(|txn| {
+                        let n = name.clone();
+                        async move {
+                            black_box(
+                                txn.increment(
+                                    &n,
+                                    &key![1],
+                                    Increment::from(1i64),
+                                )
+                                .await?,
+                            );
+                            Ok(())
+                        }
+                    })
+                    .await
+                    .unwrap();
+                })
+            })
+        });
+    });
+
+    group.finish();
+}
+
+/// Benchmark repeated increments on the same key (counter hot path).
+fn bench_increment_hot_key(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("increment_hot_key");
+    group.measurement_time(std::time::Duration::from_secs(15));
+
+    let n_ops = 1000i64;
+    group.throughput(Throughput::Elements(n_ops as u64));
+
+    MODES.iter().for_each(|&mode| {
+        group.bench_function(format!("{mode}/{n_ops}_ops"), |b| {
+            b.iter_batched(
+                || create_db(mode, &rt),
+                |(_dir, db)| {
+                    rt.block_on(async {
+                        let name = global!("CTR");
+                        db.transaction(|txn| {
+                            let n = name.clone();
+                            async move {
+                                futures::stream::iter(0..n_ops)
+                                    .then(|_| {
+                                        let t = &txn;
+                                        let n = &n;
+                                        async move {
+                                            t.increment(
+                                                n,
+                                                &key![1],
+                                                Increment::from(1i64),
+                                            )
+                                            .await
+                                        }
+                                    })
+                                    .try_collect::<Vec<_>>()
+                                    .await?;
+                                Ok(())
+                            }
+                        })
+                        .await
+                        .unwrap();
+                    })
+                },
+                BatchSize::SmallInput,
+            )
+        });
+    });
+
+    group.finish();
+}
+
+/// Benchmark increments across many distinct keys.
+fn bench_increment_spread(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("increment_spread");
+    group.measurement_time(std::time::Duration::from_secs(15));
+
+    let n_keys = 1000i64;
+    group.throughput(Throughput::Elements(n_keys as u64));
+
+    MODES.iter().for_each(|&mode| {
+        group.bench_function(format!("{mode}/{n_keys}_keys"), |b| {
+            b.iter_batched(
+                || create_db(mode, &rt),
+                |(_dir, db)| {
+                    rt.block_on(async {
+                        let name = global!("CTR");
+                        db.transaction(|txn| {
+                            let n = name.clone();
+                            async move {
+                                futures::stream::iter(0..n_keys)
+                                    .then(|i| {
+                                        let t = &txn;
+                                        let n = &n;
+                                        async move {
+                                            t.increment(
+                                                n,
+                                                &key![i],
+                                                Increment::from(1i64),
+                                            )
+                                            .await
+                                        }
+                                    })
+                                    .try_collect::<Vec<_>>()
+                                    .await?;
+                                Ok(())
+                            }
+                        })
+                        .await
+                        .unwrap();
+                    })
+                },
+                BatchSize::SmallInput,
+            )
+        });
+    });
+
+    group.finish();
+}
+
+/// Benchmark `increment` with float delta (type promotion path).
+fn bench_increment_float(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("increment_float");
+
+    MODES.iter().for_each(|&mode| {
+        let (_dir, db) = create_db(mode, &rt);
+        let name = global!("CTR");
+
+        // Seed with an integer value
+        rt.block_on(async {
+            db.transaction(|txn| {
+                let n = name.clone();
+                async move {
+                    txn.set(&n, &key![1], value!(0)).await?;
+                    Ok(())
+                }
+            })
+            .await
+            .unwrap();
+        });
+
+        group.bench_function(format!("{mode}"), |b| {
+            b.iter(|| {
+                rt.block_on(async {
+                    db.transaction(|txn| {
+                        let n = name.clone();
+                        async move {
+                            black_box(
+                                txn.increment(
+                                    &n,
+                                    &key![1],
+                                    Increment::from(0.5),
+                                )
+                                .await?,
+                            );
+                            Ok(())
+                        }
+                    })
+                    .await
+                    .unwrap();
+                })
+            })
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_transaction_overhead,
@@ -745,6 +952,11 @@ criterion_group!(
     bench_collects,
     bench_collects_10k,
     bench_kill,
+    bench_increment_local,
+    bench_increment_txn,
+    bench_increment_hot_key,
+    bench_increment_spread,
+    bench_increment_float,
 );
 
 criterion_group!(
