@@ -2,6 +2,12 @@
 
 **NOTE**: For storage layer architecture and implementation details, see `docs/storage.org`.
 
+CURRENT PRIORITIES
+- add `incr`
+- `collects` enhancements
+- networking
+- parallel txs
+
 ---
 
 ## Future Considerations (Post-Goal 1)
