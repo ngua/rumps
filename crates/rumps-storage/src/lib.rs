@@ -47,7 +47,7 @@ pub use database::{
 pub use engine::{StorageConfig, StorageMetadata};
 pub use error::{Error, StorageError};
 pub use page::DirtyPageStats;
-pub use rumps_types::{DataStatus, Result};
+pub use rumps_types::{DataStatus, Increment, Result};
 pub use transaction::{
     ConflictStrategy, IsolationLevel, Transaction, TransactionBuilder,
     TransactionContext,

@@ -116,7 +116,7 @@ use std::sync::Arc;
 
 use fs2::FileExt;
 use futures::stream::{self, Stream, StreamExt, TryStreamExt};
-use rumps_types::{DataStatus, Key, Name, Result, Subscript, Value};
+use rumps_types::{DataStatus, Increment, Key, Name, Result, Subscript, Value};
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::RwLock;
@@ -611,6 +611,80 @@ impl Database {
             }
 
             Ok(())
+        }
+    }
+
+    /// Atomically increments a numeric value at the given path.
+    ///
+    /// The read-modify-write is performed under the roots write lock,
+    /// so concurrent increments on the same local are serialized.
+    ///
+    /// If the key does not exist, it is treated as `Value::Integer(0)`.
+    /// Returns the new value after incrementing.
+    ///
+    /// **Note**: Writes to globals require a transaction. Direct calls for
+    /// globals will error with `GlobalRequiresTransaction`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # tokio_test::block_on(async {
+    /// use rumps_storage::Database;
+    /// use rumps_types::{local, key, value, Increment};
+    ///
+    /// let db = Database::in_memory()?;
+    ///
+    /// // Increment a nonexistent key (defaults to `0`)
+    /// let v = db.increment(&local!("CTR"), &key![1], Increment::from(5i64)).await?;
+    /// assert_eq!(v, value!(5));
+    ///
+    /// // Increment again
+    /// let v = db.increment(&local!("CTR"), &key![1], Increment::from(3i64)).await?;
+    /// assert_eq!(v, value!(8));
+    /// # Ok::<(), rumps_storage::Error>(())
+    /// # });
+    /// ```
+    pub async fn increment(
+        &self,
+        name: &Name,
+        key: &Key,
+        by: Increment,
+    ) -> Result<Value> {
+        if matches!(name, Name::Global(_)) {
+            Err(StorageError::GlobalRequiresTransaction.into())
+        } else {
+            // Inlines `get`/`set` to hold the roots write lock across the
+            // entire read-modify-write; calling them separately would release
+            // the lock between the read and write, allowing a concurrent
+            // increment to observe stale state. This is fine in practice
+            // since the entire operation is in-memory and short-lived.
+            let mut roots = self.roots.write().await;
+
+            let root = match roots.get(name).copied() {
+                Some(r) => r,
+                None => {
+                    let r = self.btree.create_tree().await?;
+                    roots.insert(name.clone(), r);
+                    r
+                }
+            };
+
+            let cur = self.btree.get_at(root, key, None).await?;
+            let val = cur.unwrap_or(Value::Integer(0));
+            let new = val.increment(&by)?;
+
+            let ctx = TransactionContext::new(
+                TransactionId::IMPLICIT,
+                TransactionTimestamp::from(0),
+            );
+            let new_root =
+                self.btree.set_at(root, key, new.clone(), &ctx).await?;
+
+            if new_root != root {
+                roots.insert(name.clone(), new_root);
+            }
+
+            Ok(new)
         }
     }
 

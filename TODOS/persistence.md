@@ -3,7 +3,7 @@
 **NOTE**: For storage layer architecture and implementation details, see `docs/storage.org`.
 
 CURRENT PRIORITIES
-- add `incr`
+- ~~add `increment`~~
 - `collects` enhancements
 - networking
 - parallel txs

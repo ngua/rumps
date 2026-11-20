@@ -85,6 +85,8 @@ use std::{cmp, fmt, mem};
 
 use ordered_float::OrderedFloat;
 
+use crate::StorageError;
+
 /// A scalar value stored in the RUMPS database.
 ///
 /// Each node in the RUMPS tree can store a single scalar value. Values are
@@ -218,6 +220,85 @@ impl Value {
             Self::Json(j) => Some(j),
             _ => None,
         }
+    }
+
+    /// Atomically increments this value by `by`, returning the new value.
+    ///
+    /// Numeric types are freely promoted: incrementing an `Integer` by a
+    /// `Double` (or vice versa) produces a `Double`. Incrementing an
+    /// `Integer` by an `Integer` stays `Integer` unless overflow occurs.
+    ///
+    /// Non-numeric values (`Boolean`, `Char`, `String`, `Json`) produce
+    /// a `WrongValueType` error.
+    pub fn increment(&self, by: &Increment) -> crate::Result<Self> {
+        match (self, by) {
+            (Self::Integer(n), Increment::Integer(d)) => {
+                n.checked_add(*d).map(Self::Integer).ok_or_else(|| {
+                    StorageError::IntegerOverflow {
+                        value: *n,
+                        target: "i64",
+                    }
+                    .into()
+                })
+            }
+            (Self::Integer(n), Increment::Double(d)) => {
+                Ok(Self::Double(OrderedFloat(*n as f64 + d.into_inner())))
+            }
+            (Self::Double(d), Increment::Integer(i)) => {
+                Ok(Self::Double(OrderedFloat(d.into_inner() + *i as f64)))
+            }
+            (Self::Double(d), Increment::Double(d2)) => {
+                Ok(Self::Double(*d + *d2))
+            }
+            _ => Err(StorageError::WrongValueType {
+                expected: "numeric",
+                actual: self.type_name().to_string(),
+            }
+            .into()),
+        }
+    }
+
+    /// Returns a short name for this value's type.
+    fn type_name(&self) -> &'static str {
+        match self {
+            Self::Boolean(_) => "boolean",
+            Self::Integer(_) => "integer",
+            Self::Double(_) => "double",
+            Self::Char(_) => "char",
+            Self::String(_) => "string",
+            Self::Json(_) => "json",
+        }
+    }
+}
+
+/// An increment delta for numeric `Value`s.
+///
+/// Used with [`Value::increment`] to atomically add to a stored numeric
+/// value. Both integer and floating-point deltas are supported; mixed
+/// operations promote the result to `Double`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Increment {
+    /// An integer delta.
+    Integer(i64),
+    /// A floating-point delta.
+    Double(OrderedFloat<f64>),
+}
+
+impl From<i64> for Increment {
+    fn from(i: i64) -> Self {
+        Self::Integer(i)
+    }
+}
+
+impl From<i32> for Increment {
+    fn from(i: i32) -> Self {
+        Self::Integer(i as i64)
+    }
+}
+
+impl From<f64> for Increment {
+    fn from(d: f64) -> Self {
+        Self::Double(OrderedFloat(d))
     }
 }
 
@@ -1429,5 +1510,57 @@ mod tests {
         let ch = 'X';
         let v = value!(ch);
         assert_eq!(v, Value::Char('X'));
+    }
+
+    #[test]
+    fn test_increment_integer_by_integer() {
+        let v = value!(10);
+        let r = v.increment(&Increment::from(5i64)).unwrap();
+        assert_eq!(r, value!(15));
+
+        let r = v.increment(&Increment::from(-3i64)).unwrap();
+        assert_eq!(r, value!(7));
+    }
+
+    #[test]
+    fn test_increment_integer_by_double() {
+        let v = value!(10);
+        let r = v.increment(&Increment::from(1.5)).unwrap();
+        assert_eq!(r, value!(11.5));
+    }
+
+    #[test]
+    fn test_increment_double_by_integer() {
+        let v = value!(2.5);
+        let r = v.increment(&Increment::from(3i64)).unwrap();
+        assert_eq!(r, value!(5.5));
+    }
+
+    #[test]
+    fn test_increment_double_by_double() {
+        let v = value!(1.5);
+        let r = v.increment(&Increment::from(2.5)).unwrap();
+        assert_eq!(r, value!(4.0));
+    }
+
+    #[test]
+    fn test_increment_integer_overflow() {
+        let v = value!(i64::MAX);
+        let r = v.increment(&Increment::from(1i64));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn test_increment_wrong_type() {
+        let cases = vec![
+            value!(true),
+            value!('A'),
+            value!("hello"),
+            value!(serde_json::json!({})),
+        ];
+
+        cases.iter().for_each(|v| {
+            assert!(v.increment(&Increment::from(1i64)).is_err());
+        });
     }
 }

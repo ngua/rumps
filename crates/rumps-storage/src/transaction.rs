@@ -51,7 +51,7 @@ use std::time::{Duration, Instant};
 use std::{fmt, future};
 
 use futures::stream::{self, BoxStream, StreamExt, TryStreamExt};
-use rumps_types::{DataStatus, Key, Name, Result, Subscript, Value};
+use rumps_types::{DataStatus, Increment, Key, Name, Result, Subscript, Value};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{OwnedRwLockReadGuard, RwLock};
 
@@ -1284,6 +1284,24 @@ impl Transaction {
         Ok(())
     }
 
+    /// Atomically increments a numeric value at the given path.
+    ///
+    /// If the key does not exist, it is treated as `Value::Integer(0)`.
+    /// Returns the new value after incrementing. Non-numeric values
+    /// produce a `WrongValueType` error.
+    pub async fn increment(
+        &self,
+        name: &Name,
+        key: &Key,
+        by: Increment,
+    ) -> Result<Value> {
+        let cur = self.get(name, key).await?;
+        let val = cur.unwrap_or(Value::Integer(0));
+        let new = val.increment(&by)?;
+        self.set(name, key, new.clone()).await?;
+        Ok(new)
+    }
+
     /// Sets multiple values in the transaction's write buffer with a single lock.
     ///
     /// More efficient than calling `set` multiple times when inserting
@@ -2508,6 +2526,135 @@ mod tests {
             })
             .await
             .unwrap();
+        }
+    }
+
+    /// Tests for `Transaction::increment`.
+    mod increment_tests {
+        use rumps_types::{global, key, value, Increment};
+
+        use crate::Database;
+
+        #[tokio::test]
+        async fn nonexistent_defaults_to_zero() {
+            let db = Database::in_memory().unwrap();
+            let name = global!("CTR");
+
+            db.transaction(|txn| {
+                let n = name.clone();
+                async move {
+                    let v = txn
+                        .increment(&n, &key![1], Increment::from(5i64))
+                        .await?;
+                    assert_eq!(v, value!(5));
+                    Ok(())
+                }
+            })
+            .await
+            .unwrap();
+
+            let v = db.get(&name, &key![1]).await.unwrap();
+            assert_eq!(v, Some(value!(5)));
+        }
+
+        #[tokio::test]
+        async fn increment_existing_integer() {
+            let db = Database::in_memory().unwrap();
+            let name = global!("CTR");
+
+            db.transaction(|txn| {
+                let n = name.clone();
+                async move {
+                    txn.set(&n, &key![1], value!(10)).await?;
+                    let v = txn
+                        .increment(&n, &key![1], Increment::from(7i64))
+                        .await?;
+                    assert_eq!(v, value!(17));
+                    Ok(())
+                }
+            })
+            .await
+            .unwrap();
+        }
+
+        #[tokio::test]
+        async fn increment_promotes_to_double() {
+            let db = Database::in_memory().unwrap();
+            let name = global!("CTR");
+
+            db.transaction(|txn| {
+                let n = name.clone();
+                async move {
+                    txn.set(&n, &key![1], value!(10)).await?;
+                    let v = txn
+                        .increment(&n, &key![1], Increment::from(0.5))
+                        .await?;
+                    assert_eq!(v, value!(10.5));
+                    Ok(())
+                }
+            })
+            .await
+            .unwrap();
+        }
+
+        #[tokio::test]
+        async fn increment_negative_delta() {
+            let db = Database::in_memory().unwrap();
+            let name = global!("CTR");
+
+            db.transaction(|txn| {
+                let n = name.clone();
+                async move {
+                    txn.set(&n, &key![1], value!(10)).await?;
+                    let v = txn
+                        .increment(&n, &key![1], Increment::from(-3i64))
+                        .await?;
+                    assert_eq!(v, value!(7));
+                    Ok(())
+                }
+            })
+            .await
+            .unwrap();
+        }
+
+        #[tokio::test]
+        async fn increment_zero_delta() {
+            let db = Database::in_memory().unwrap();
+            let name = global!("CTR");
+
+            db.transaction(|txn| {
+                let n = name.clone();
+                async move {
+                    txn.set(&n, &key![1], value!(42)).await?;
+                    let v = txn
+                        .increment(&n, &key![1], Increment::from(0i64))
+                        .await?;
+                    assert_eq!(v, value!(42));
+                    Ok(())
+                }
+            })
+            .await
+            .unwrap();
+        }
+
+        #[tokio::test]
+        async fn increment_non_numeric_errors() {
+            let db = Database::in_memory().unwrap();
+            let name = global!("CTR");
+
+            let r = db
+                .transaction(|txn| {
+                    let n = name.clone();
+                    async move {
+                        txn.set(&n, &key![1], value!("hello")).await?;
+                        txn.increment(&n, &key![1], Increment::from(1i64))
+                            .await?;
+                        Ok(())
+                    }
+                })
+                .await;
+
+            assert!(r.is_err());
         }
     }
 }
