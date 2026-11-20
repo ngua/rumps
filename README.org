@@ -247,16 +247,25 @@ All read operations work outside transactions. Traversal (=query=, =order=, =col
 |------------------------------+------------|
 | =kill= (=$KILL=), subtree (100 nodes)  | ~1.0 ms    |
 
+*** Increment (=$INCREMENT=)
+| *Workload*                                  | *Latency/Throughput*     |
+|-------------------------------------------+------------------------|
+| Single =increment=, 1 op/txn                | ~44 us                 |
+| Same key, 1000 ops/txn (counter hot path) | ~320 us (~3.1 Melem/s) |
+| 1000 distinct keys/txn                    | ~10.6 ms (~94 Kelem/s) |
+
+Float deltas (integer-to-double promotion) have no measurable overhead versus integer deltas. The hot-key path sustains ~3.1 Melem/s because every operation hits the same B-tree leaf; spreading across 1000 distinct keys drops to ~94 Kelem/s due to per-key traversal cost.
+
 *** In-memory (=Database::in_memory()=)
 No WAL, no =fsync=, no disk I/O. Useful for caching, testing, or scratch workspaces where you want transactional semantics without persistence.
 
 **** Writes
 | *Workload*                                   | *Throughput*       |
 |--------------------------------------------+------------------|
-| Single global, batched (100-1000 ops/txn)  | ~580-680 Kelem/s |
-| Single global, batched (10k-100k ops/txn)  | ~375-477 Kelem/s |
-| Multi-global (1000 ops across 100 globals) | ~800 Kelem/s     |
-| Single =set= (=$SET=), 1 op/txn                | ~206 Kops/s      |
+| Single global, batched (100-1000 ops/txn)  | ~590-690 Kelem/s |
+| Single global, batched (10k-100k ops/txn)  | ~400-520 Kelem/s |
+| Multi-global (1000 ops across 100 globals) | ~870 Kelem/s     |
+| Single =set= (=$SET=), 1 op/txn                | ~220 Kops/s      |
 
 One quirk of in-memory mode: per-element throughput /decreases/ for larger batches, which is the opposite of on-disk behavior. On-disk, the fixed I/O cost (=fsync=, WAL flush) is amortized over more operations; in-memory has no I/O to amortize, so you're left with raw =O(n log n)= B-tree insertion cost.
 
@@ -264,15 +273,24 @@ One quirk of in-memory mode: per-element throughput /decreases/ for larger batch
 | *Workload*                                  | *Latency/Throughput*     |
 |-------------------------------------------+------------------------|
 | Single =get= (=$GET=)                         | ~1.5 us                |
-| =query= (=$QUERY=), 100 sequential keys       | ~60 us (~1.7 Melem/s)  |
-| =order= (=$ORDER=), 100 sequential subscripts | ~66 us (~1.5 Melem/s)  |
-| =collects=, 1000 entries                    | ~529 us (~1.9 Melem/s) |
-| =collects=, 10000 entries                   | ~7.0 ms (~1.4 Melem/s) |
+| =query= (=$QUERY=), 100 sequential keys       | ~55 us (~1.8 Melem/s)  |
+| =order= (=$ORDER=), 100 sequential subscripts | ~62 us (~1.6 Melem/s)  |
+| =collects=, 1000 entries                    | ~520 us (~1.9 Melem/s) |
+| =collects=, 10000 entries                   | ~6.8 ms (~1.5 Melem/s) |
 
 **** Deletes
 | *Workload*                          | *Latency* |
 |-----------------------------------+---------|
-| =kill= (=$KILL=), subtree (100 nodes) | ~34 us  |
+| =kill= (=$KILL=), subtree (100 nodes) | ~32 us  |
+
+**** Increment (=$INCREMENT=)
+| *Workload*                                  | *Latency/Throughput*     |
+|-------------------------------------------+------------------------|
+| Single =increment=, 1 op/txn                | ~2.4 us                |
+| Same key, 1000 ops/txn (counter hot path) | ~158 us (~6.3 Melem/s) |
+| 1000 distinct keys/txn                    | ~1.9 ms (~530 Kelem/s) |
+
+The in-memory hot-key path reaches ~6.3 Melem/s; roughly 2x the on-disk rate, since there is no WAL or =fsync= overhead.
 
 - For more details on sync modes, durability trade-offs, and in-memory ACI guarantees, see the section on ACID guarantees in the [[file:docs/concepts.org][concepts]] doc.
 
