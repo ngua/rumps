@@ -107,9 +107,10 @@
 //! [`Name`]: rumps_types::Name
 
 use std::collections::BTreeMap;
+use std::fs;
 use std::future::Future;
-use std::io::SeekFrom;
-use std::path::{Path, PathBuf};
+use std::io::{self, SeekFrom};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
 
@@ -480,6 +481,80 @@ impl Database {
         if let Some(storage) = self.storage.as_ref() {
             storage.shutdown_sync_task();
         }
+
+        Ok(())
+    }
+
+    /// Writes an uncompressed tar archive of the database directory.
+    ///
+    /// Flushes all dirty pages before archiving to ensure a consistent
+    /// snapshot. On load, WAL recovery replays any in-flight transactions.
+    ///
+    /// Pages are already individually LZ4-compressed on disk, so the
+    /// archive is not compressed further.
+    ///
+    /// # Consistency
+    ///
+    /// Callers must not call [`flush`] or [`close`] concurrently with
+    /// `dump`; doing so may modify the data file while the archive is
+    /// being written. Concurrent transactions are safe: their writes
+    /// land in the WAL, which is replayed on [`load`] + [`open`].
+    ///
+    /// [`flush`]: Self::flush
+    /// [`close`]: Self::close
+    /// [`load`]: Self::load
+    /// [`open`]: Self::open
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database is in-memory (no data directory).
+    pub async fn dump(&self, dest: impl AsRef<Path>) -> Result<()> {
+        let storage = self.storage.as_ref().ok_or_else(|| {
+            StorageError::InvalidOperation(
+                "cannot dump an in-memory database".into(),
+            )
+        })?;
+
+        self.flush().await?;
+
+        let src = storage.data_dir().to_path_buf();
+        let dest = dest.as_ref().to_path_buf();
+
+        tokio::task::spawn_blocking(move || Self::dump_blocking(&src, &dest))
+            .await
+            .map_err(|e| {
+                StorageError::InvalidOperation(format!("dump task: {e}"))
+            })??;
+
+        Ok(())
+    }
+
+    /// Extracts a tar archive produced by [`dump`] into `dest`.
+    ///
+    /// The archive is validated against path traversal and symlink attacks
+    /// before extraction. The `dest` directory is created if it does not
+    /// exist.
+    ///
+    /// This does not open the database; call [`open`] or [`open_override`]
+    /// on `dest` afterwards.
+    ///
+    /// [`dump`]: Self::dump
+    /// [`open`]: Self::open
+    /// [`open_override`]: Self::open_override
+    pub async fn load(
+        archive: impl AsRef<Path>,
+        dest: impl AsRef<Path>,
+    ) -> Result<()> {
+        let archive = archive.as_ref().to_path_buf();
+        let dest = dest.as_ref().to_path_buf();
+
+        tokio::task::spawn_blocking(move || {
+            Self::load_blocking(&archive, &dest)
+        })
+        .await
+        .map_err(|e| {
+            StorageError::InvalidOperation(format!("load task: {e}"))
+        })??;
 
         Ok(())
     }
@@ -949,6 +1024,162 @@ impl Database {
 
 // Internal methods
 impl Database {
+    fn dump_blocking(src: &Path, dest: &Path) -> crate::error::Result<()> {
+        let out = fs::File::create(dest).map_err(|e| StorageError::Io {
+            op: "create archive".into(),
+            path: dest.to_path_buf(),
+            source: e,
+        })?;
+
+        let mut ar = tar::Builder::new(out);
+
+        ar.append_path_with_name(
+            src.join(FileStorageEngine::DATA_FILE_NAME),
+            FileStorageEngine::DATA_FILE_NAME,
+        )
+        .map_err(|e| StorageError::Io {
+            op: "archive data file".into(),
+            path: src.join(FileStorageEngine::DATA_FILE_NAME),
+            source: e,
+        })?;
+
+        let wal_dir = src.join(FileStorageEngine::WAL_DIR_NAME);
+        if wal_dir.is_dir() {
+            ar.append_dir_all(FileStorageEngine::WAL_DIR_NAME, &wal_dir)
+                .map_err(|e| StorageError::Io {
+                    op: "archive wal directory".into(),
+                    path: wal_dir,
+                    source: e,
+                })?;
+        }
+
+        ar.finish().map_err(|e| StorageError::Io {
+            op: "finish archive".into(),
+            path: dest.to_path_buf(),
+            source: e,
+        })?;
+
+        Ok(())
+    }
+
+    fn load_blocking(archive: &Path, dest: &Path) -> crate::error::Result<()> {
+        fs::create_dir_all(dest).map_err(|e| StorageError::Io {
+            op: "create destination".into(),
+            path: dest.to_path_buf(),
+            source: e,
+        })?;
+
+        let canon = dest.canonicalize().map_err(|e| StorageError::Io {
+            op: "canonicalize destination".into(),
+            path: dest.to_path_buf(),
+            source: e,
+        })?;
+
+        let file = fs::File::open(archive).map_err(|e| StorageError::Io {
+            op: "open archive".into(),
+            path: archive.to_path_buf(),
+            source: e,
+        })?;
+
+        let mut ar = tar::Archive::new(file);
+
+        ar.entries()
+            .map_err(|e| StorageError::Io {
+                op: "read archive entries".into(),
+                path: archive.to_path_buf(),
+                source: e,
+            })?
+            .try_for_each(|entry| {
+                let mut entry = entry.map_err(|e| StorageError::Io {
+                    op: "read archive entry".into(),
+                    path: archive.to_path_buf(),
+                    source: e,
+                })?;
+
+                let kind = entry.header().entry_type();
+                if !kind.is_file() && !kind.is_dir() {
+                    Err(StorageError::InvalidOperation(format!(
+                        "archive contains unsupported entry type: {:?}",
+                        kind,
+                    )))?;
+                }
+
+                let rel = entry.path().map_err(|e| StorageError::Io {
+                    op: "read entry path".into(),
+                    path: archive.to_path_buf(),
+                    source: e,
+                })?;
+
+                let target = canon.join(&rel);
+                let resolved = normalize_path(&target);
+
+                if !resolved.starts_with(&canon) {
+                    Err(StorageError::InvalidOperation(format!(
+                        "archive path escapes destination: {}",
+                        rel.display()
+                    )))?;
+                }
+
+                if kind.is_dir() {
+                    fs::create_dir_all(&resolved).map_err(|e| {
+                        StorageError::Io {
+                            op: "create directory".into(),
+                            path: resolved.clone(),
+                            source: e,
+                        }
+                    })?;
+                } else {
+                    resolved
+                        .parent()
+                        .map(fs::create_dir_all)
+                        .transpose()
+                        .map_err(|e| StorageError::Io {
+                            op: "create parent directory".into(),
+                            path: resolved.clone(),
+                            source: e,
+                        })?;
+
+                    // Re-canonicalize the parent after `create_dir_all`
+                    // to catch pre-existing symlinks in `dest` that
+                    // lexical normalization cannot detect.
+                    if let Some(parent) = resolved.parent() {
+                        let real = parent.canonicalize().map_err(|e| {
+                            StorageError::Io {
+                                op: "canonicalize parent".into(),
+                                path: parent.to_path_buf(),
+                                source: e,
+                            }
+                        })?;
+
+                        if !real.starts_with(&canon) {
+                            Err(StorageError::InvalidOperation(format!(
+                                "resolved path escapes destination: {}",
+                                rel.display()
+                            )))?;
+                        }
+                    }
+
+                    let mut out = fs::File::create(&resolved).map_err(|e| {
+                        StorageError::Io {
+                            op: "create file".into(),
+                            path: resolved.clone(),
+                            source: e,
+                        }
+                    })?;
+
+                    io::copy(&mut entry, &mut out).map_err(|e| {
+                        StorageError::Io {
+                            op: "extract file".into(),
+                            path: resolved,
+                            source: e,
+                        }
+                    })?;
+                }
+
+                Ok(())
+            })
+    }
+
     /// Sets a value with an explicit transaction ID.
     ///
     /// This is the internal version used by `Transaction::commit()`.
@@ -2265,6 +2496,21 @@ async fn insert_batch(
             .await
     })
     .await
+}
+
+/// Normalizes a path by resolving `.` and `..` components lexically,
+/// without touching the filesystem.
+fn normalize_path(p: &Path) -> PathBuf {
+    p.components().fold(PathBuf::new(), |mut acc, c| {
+        match c {
+            Component::ParentDir => {
+                acc.pop();
+            }
+            Component::CurDir => {}
+            other => acc.push(other),
+        }
+        acc
+    })
 }
 
 #[cfg(test)]

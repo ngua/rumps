@@ -142,10 +142,10 @@ impl FileStorageEngine {
         assert!(page::PAGE_SIZE - Self::HEADER_SIZE <= u16::MAX as usize);
 
     /// Data file name within the data directory.
-    const DATA_FILE_NAME: &'static str = "data.db";
+    pub(crate) const DATA_FILE_NAME: &'static str = "data.db";
 
     /// WAL directory name within the data directory.
-    const WAL_DIR_NAME: &'static str = "wal";
+    pub(crate) const WAL_DIR_NAME: &'static str = "wal";
 
     /// Lock file name within the data directory.
     const LOCK_FILE_NAME: &'static str = "db.lock";
@@ -682,6 +682,10 @@ impl FileStorageEngine {
     /// Returns a clone of the current storage configuration.
     pub(crate) fn config(&self) -> StorageConfig {
         self.cfg.clone()
+    }
+
+    pub(crate) fn data_dir(&self) -> &Path {
+        &self.data_dir
     }
 }
 
