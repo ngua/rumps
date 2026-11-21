@@ -33,8 +33,8 @@
 
 ## 4. `find_predecessor_entry`
 
-- [ ] 4.1 Implement `async fn find_predecessor_entry(&self, node_id: NodeId, target: &Key) -> Result<Option<(Key, Arc<NodeData>)>>` on `BTree`: mirror of `find_successor_entry`; descend toward target, track fallback to the left of search position at each internal node, at leaf return `keys[pos - 1]` or fallback
-- [ ] 4.2 Write tests: predecessor in same leaf, predecessor in ancestor, no predecessor (target <= smallest key), predecessor at internal node separator
+- [x] 4.1 Implement `async fn find_predecessor_entry(&self, node_id: NodeId, target: &Key) -> Result<Option<(Key, Arc<NodeData>)>>` on `BTree`: mirror of `find_successor_entry`; descend toward target, track fallback to the left of search position at each internal node, at leaf return `keys[pos - 1]` or fallback
+- [x] 4.2 Write tests: predecessor in same leaf, predecessor in ancestor, no predecessor (target <= smallest key), predecessor at internal node separator
 
 ## 5. Rename and Remove
 

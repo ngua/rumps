@@ -1914,4 +1914,94 @@ mod tests {
             assert!(bwd.advance_back().await.unwrap().is_none());
         }
     }
+
+    #[cfg(test)]
+    mod find_predecessor_entry_tests {
+        use super::*;
+
+        async fn build(bt: &BTree, vals: &[i64]) -> NodeId {
+            let mut r = bt.create_tree().await.unwrap();
+            let mut it = vals.iter();
+            while let Some(&v) = it.next() {
+                r = bt
+                    .set_internal(r, &key![v], NodeData::with_value(value!(v)))
+                    .await
+                    .unwrap();
+            }
+            r
+        }
+
+        #[tokio::test]
+        async fn predecessor_in_same_leaf() {
+            let bt = BTreeBuilder::default().build().unwrap();
+            let root = build(&bt, &[10, 20, 30]).await;
+
+            let res = bt.find_predecessor_entry(root, &key![30]).await.unwrap();
+            let (k, d) = res.unwrap();
+            assert_eq!(k, key![20]);
+            assert_eq!(d.value, Some(value!(20)));
+        }
+
+        #[tokio::test]
+        async fn predecessor_in_ancestor() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let vals: Vec<i64> = (1..=20).collect();
+            let root = build(&bt, &vals).await;
+
+            // Find the smallest key in the tree whose predecessor
+            // must come from an ancestor node. We pick `4` since with
+            // `min_degree=2` it is likely at the start of a leaf whose
+            // predecessor `3` sits in an ancestor.
+            let res = bt.find_predecessor_entry(root, &key![4]).await.unwrap();
+            let (k, _) = res.unwrap();
+            assert_eq!(k, key![3]);
+        }
+
+        #[tokio::test]
+        async fn no_predecessor_target_le_smallest() {
+            let bt = BTreeBuilder::default().build().unwrap();
+            let root = build(&bt, &[10, 20, 30]).await;
+
+            let res = bt.find_predecessor_entry(root, &key![10]).await.unwrap();
+            assert!(res.is_none());
+
+            let res = bt.find_predecessor_entry(root, &key![5]).await.unwrap();
+            assert!(res.is_none());
+        }
+
+        #[tokio::test]
+        async fn predecessor_at_internal_separator() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let vals: Vec<i64> = (1..=20).collect();
+            let root = build(&bt, &vals).await;
+
+            // For every key `k` in 2..=20, the predecessor of `k`
+            // must be `k-1`, regardless of whether `k-1` sits in a
+            // leaf, an internal node, or an ancestor.
+            let mut it = 2i64..=20;
+            while let Some(v) = it.next() {
+                let res =
+                    bt.find_predecessor_entry(root, &key![v]).await.unwrap();
+                let (k, _) = res.unwrap();
+                assert_eq!(
+                    k,
+                    key![v - 1],
+                    "predecessor of {v} should be {}",
+                    v - 1
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn predecessor_missing_key_between() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let vals: Vec<i64> = (1..=10).map(|i| i * 2).collect();
+            let root = build(&bt, &vals).await;
+
+            // Target `7` is not in the tree; predecessor is `6`.
+            let res = bt.find_predecessor_entry(root, &key![7]).await.unwrap();
+            let (k, _) = res.unwrap();
+            assert_eq!(k, key![6]);
+        }
+    }
 }

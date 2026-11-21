@@ -2298,6 +2298,64 @@ impl BTree {
         Ok(out.or(fb))
     }
 
+    /// Finds the predecessor entry (key + data) strictly less than `target`.
+    ///
+    /// Mirror of `find_successor_entry`. Descends towards `target`,
+    /// remembering the deepest candidate key to the left of the search
+    /// position to fall back on if the subtree has no predecessor.
+    async fn find_predecessor_entry(
+        &self,
+        node_id: NodeId,
+        target: &Key,
+    ) -> Result<Option<(Key, Arc<NodeData>)>> {
+        let mut cur = Some(node_id);
+        let mut tgt = Some(target);
+        let mut fb = None;
+        let mut out = None;
+
+        while let Some(id) = cur.take() {
+            let node = self.load_node(id).await?;
+
+            let at = |i: usize| {
+                node.keys.get(i).cloned().zip(node.values.get(i).cloned())
+            };
+
+            match tgt {
+                None => match node.children.last() {
+                    Some(&c) if !node.is_leaf => cur = Some(c),
+                    _ => {
+                        out = node.keys.len().checked_sub(1).and_then(at);
+                    }
+                },
+                Some(t) => {
+                    let res = node.keys.binary_search(t);
+
+                    match (node.is_leaf, res) {
+                        (true, Ok(p) | Err(p)) => {
+                            out = p.checked_sub(1).and_then(at);
+                        }
+                        (false, _) => {
+                            let p = match res {
+                                Ok(p) | Err(p) => p,
+                            };
+                            tgt = tgt.filter(|_| res.is_err());
+                            fb = p.checked_sub(1).and_then(at).or(fb.take());
+
+                            match node.children.get(p) {
+                                Some(&c) => cur = Some(c),
+                                None => {
+                                    out = p.checked_sub(1).and_then(at);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(out.or(fb))
+    }
+
     /// Finds the first key > `after` that starts with `prefix` and is longer.
     ///
     /// Used by `$ORDER` to find the next subscript at a specific level.
