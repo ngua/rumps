@@ -7,6 +7,7 @@ use dashmap::DashMap;
 use futures::stream::FuturesUnordered;
 use futures::{Stream, StreamExt, TryStreamExt};
 use rumps_types::{DataStatus, Key, Subscript};
+use smallvec::SmallVec;
 #[cfg(feature = "debug")]
 use tokio::sync::RwLock;
 
@@ -882,6 +883,80 @@ impl BTree {
 enum BorrowDir {
     Left,
     Right,
+}
+
+/// One level in a `Cursor`'s descent stack.
+#[derive(Clone, Copy)]
+pub(crate) struct StackEntry {
+    pub(crate) node: NodeId,
+    pub(crate) idx: usize,
+    pub(crate) len: usize,
+}
+
+/// A cursor for in-order traversal of a B-tree.
+///
+/// Holds a stack of `StackEntry` frames from root to the current
+/// position. Nodes are loaded on demand via `BTree::load_node`;
+/// the `DashMap` cache makes re-loads `O(1)`.
+pub(crate) struct Cursor<'a> {
+    stack: SmallVec<[StackEntry; 8]>,
+    tree: &'a BTree,
+    exhausted: bool,
+}
+
+impl<'a> Cursor<'a> {
+    /// Positions the cursor at the first key `>= target`, or the
+    /// leftmost key when `target` is `None`.
+    pub(crate) async fn seek(
+        tree: &'a BTree,
+        root: NodeId,
+        target: Option<&Key>,
+    ) -> Result<Cursor<'a>> {
+        let mut stack: SmallVec<[StackEntry; 8]> = SmallVec::new();
+
+        // Both `None` (leftmost) and `Some(key)` (first `>=`) follow the
+        // same descent pattern: load node, compute position, push, maybe
+        // descend into a child. The only difference is how `pos` and the
+        // "keep descending" condition are determined.
+        let mut cur = Some(root);
+        while let Some(id) = cur.take() {
+            let node = tree.load_node(id).await?;
+            let (pos, descend) = match target {
+                None => (0, !node.is_leaf),
+                Some(key) => {
+                    let res = node.keys.binary_search(key);
+                    let pos = res.unwrap_or_else(|p| p);
+                    (pos, res.is_err() && !node.is_leaf)
+                }
+            };
+            stack.push(StackEntry {
+                node: id,
+                idx: pos,
+                len: node.keys.len(),
+            });
+            cur = if descend {
+                Some(node.children.get(pos).copied().ok_or_else(|| {
+                    StorageError::InvalidOperation(
+                        "Child index out of bounds during seek".into(),
+                    )
+                })?)
+            } else {
+                None
+            };
+        }
+
+        // Pop entries past the end of their node's keys.
+        while stack.last().is_some_and(|e| e.idx >= e.len) {
+            stack.pop();
+        }
+        let exhausted = stack.is_empty();
+
+        Ok(Cursor {
+            stack,
+            tree,
+            exhausted,
+        })
+    }
 }
 
 /// Private utilities for B-tree operations
