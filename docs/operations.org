@@ -11,6 +11,7 @@ In the following "transaction context" means if the operation works outside of a
 - [[#data][=data= (=$DATA=)]]
 - [[#order][=order= (=$ORDER=)]]
 - [[#query][=query= (=$QUERY=)]]
+- [[#increment][=increment= (=$INCREMENT=)]]
 - [[#collects][=collects=]]
   - [[#collecting-all-keys][Collecting all keys]]
   - [[#filtering-by-key-structure][Filtering by key structure]]
@@ -146,6 +147,42 @@ while let Some(k) = cur {
 #+end_src
 
 This mimics traditional MUMPS iteration. However, for most use cases, =collects= (below) is cleaner and more idiomatic.
+* =increment= (=$INCREMENT=)
+Atomically increments a numeric value at a key, returning the new value. If the key does not exist, it is treated as =0=. This is the RUMPS equivalent of MUMPS's =$INCREMENT= function.
+
+Numeric types are freely promoted: incrementing an =Integer= by a =Double= (or vice versa) produces a =Double=. Incrementing an =Integer= by an =Integer= stays =Integer= unless overflow occurs. Non-numeric values (=Boolean=, =Char=, =String=, =Json=) produce a =WrongValueType= error.
+
+*Transaction context*: *Required* for globals. Locals can be incremented directly.
+
+#+begin_src rust
+use rumps_types::Increment;
+
+// Globals require a transaction
+db.transaction(|txn| async move {
+    // Non-existent key defaults to 0, so this sets it to 5
+    let v = txn.increment(&global!("CTR"), &key!["hits"], Increment::from(5i64)).await?;
+    assert_eq!(v, value!(5));
+
+    // Increment again
+    let v = txn.increment(&global!("CTR"), &key!["hits"], Increment::from(3i64)).await?;
+    assert_eq!(v, value!(8));
+
+    // Float delta promotes the result to Double
+    let v = txn.increment(&global!("CTR"), &key!["hits"], Increment::from(0.5)).await?;
+    assert_eq!(v, value!(8.5));
+
+    // Negative deltas work (decrement)
+    let v = txn.increment(&global!("CTR"), &key!["hits"], Increment::from(-2i64)).await?;
+    assert_eq!(v, value!(6.5));
+
+    Ok(())
+}).await?;
+
+// Locals can be incremented directly (no transaction)
+let v = db.increment(&local!("SCRATCH"), &key![1], Increment::from(1i64)).await?;
+assert_eq!(v, value!(1));
+#+end_src
+
 * =collects=
 =collects= takes a predicate (which entries to include) and an extractor (how to transform them), then produces a stream of results. Results are /always/ in sorted key order.
 
