@@ -9,7 +9,7 @@
 
 ## 2. `Subscript::successor` and `Key::prefix_upper_bound`
 
-- [ ] 2.1 Implement `pub fn successor(&self) -> Option<Subscript>` on `Subscript` in `crates/rumps-types/src/key.rs`. Successors stay within the same type; at each type's ceiling, return `None` (and `prefix_upper_bound` pops that subscript). The collation order is `Boolean(0) < Number(1) < Char(2) < String(3) < Json(4)`. Successor rules:
+- [x] 2.1 Implement `pub fn successor(&self) -> Option<Subscript>` on `Subscript` in `crates/rumps-types/src/key.rs`. Successors stay within the same type; at each type's ceiling, return `None` (and `prefix_upper_bound` pops that subscript). The collation order is `Boolean(0) < Number(1) < Char(2) < String(3) < Json(4)`. Successor rules:
   - `Boolean(false)` -> `Some(Boolean(true))`
   - `Boolean(true)` -> `None` (ceiling of `Boolean`)
   - `Number(n)` where `n < f64::INFINITY` -> `Some(Number(OrderedFloat(next_representable_f64(n))))` (use `f64::next_up` or manual bit manipulation for next representable float; `NaN` is handled per `OrderedFloat`'s ordering)
@@ -18,9 +18,9 @@
   - `Char(char::MAX)` -> `None` (ceiling of `Char`)
   - `String(s)` -> `Some(String(s + "\0"))` (append a null byte; this is the smallest string strictly greater than `s` in lexicographic byte order; `String` has no ceiling)
   - `Json(_)` -> `None` (value space has no computable maximum)
-- [ ] 2.2 Implement `pub fn prefix_upper_bound(&self) -> Option<Key>` on `Key` in `crates/rumps-types/src/key.rs`. Clone `self`'s subscripts into a `Vec`. Starting from the last subscript, call `successor()`. If `Some(succ)`, replace that subscript with `succ`, truncate the vec to that length (drop any subscripts after it), and return `Some(Key(vec))`. If `None`, pop that subscript and try the next one toward the front. If all subscripts are exhausted, return `None`. An empty key returns `None` (empty prefix matches all keys).
-- [ ] 2.3 Write tests for `Subscript::successor`: within-type successor (`Boolean(false)` -> `Boolean(true)`, `Number(1.0)` -> next float, `Char('a')` -> `Char('b')`, `String("abc")` -> `String("abc\0")`), type ceilings return `None` (`Boolean(true)`, `Number(INFINITY)`, `Char(char::MAX)`, `Json(...)`), `NaN` handling per `OrderedFloat`'s ordering
-- [ ] 2.4 Write tests for `Key::prefix_upper_bound`: simple case (`[1, "NAME"]` -> `[1, "NAME\0"]`), last subscript at ceiling (`[1, Boolean(true)]` -> pops `Boolean(true)`, tries `1` -> `[next_float(1)]`), all subscripts at ceiling (`[Boolean(true)]` -> `None`), empty key -> `None`, single subscript (`["foo"]` -> `["foo\0"]`)
+- [x] 2.2 Implement `pub fn prefix_upper_bound(&self) -> Option<Key>` on `Key` in `crates/rumps-types/src/key.rs`. Clone `self`'s subscripts into a `Vec`. Starting from the last subscript, call `successor()`. If `Some(succ)`, replace that subscript with `succ`, truncate the vec to that length (drop any subscripts after it), and return `Some(Key(vec))`. If `None`, pop that subscript and try the next one toward the front. If all subscripts are exhausted, return `None`. An empty key returns `None` (empty prefix matches all keys).
+- [x] 2.3 Write tests for `Subscript::successor`: within-type successor (`Boolean(false)` -> `Boolean(true)`, `Number(1.0)` -> next float, `Char('a')` -> `Char('b')`, `String("abc")` -> `String("abc\0")`), type ceilings return `None` (`Boolean(true)`, `Number(INFINITY)`, `Char(char::MAX)`, `Json(...)`), `NaN` handling per `OrderedFloat`'s ordering
+- [x] 2.4 Write tests for `Key::prefix_upper_bound`: simple case (`[1, "NAME"]` -> `[1, "NAME\0"]`), last subscript at ceiling (`[1, Boolean(true)]` -> pops `Boolean(true)`, tries `1` -> `[next_float(1)]`), all subscripts at ceiling (`[Boolean(true)]` -> `None`), empty key -> `None`, single subscript (`["foo"]` -> `["foo\0"]`)
 
 ## 3. `btree::Cursor` Core
 

@@ -118,6 +118,16 @@ impl Scan {
         }
     }
 
+    /// Returns a reference to the bounds.
+    pub fn bounds(&self) -> &Bounds {
+        &self.bounds
+    }
+
+    /// Returns the scan direction.
+    pub fn dir(&self) -> Dir {
+        self.dir
+    }
+
     /// Creates a forward scan over the given bounds.
     pub fn forward(bounds: impl Into<Bounds>) -> Self {
         Self::new(bounds, Dir::Forward)
