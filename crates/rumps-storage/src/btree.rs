@@ -1,12 +1,12 @@
 use std::mem;
-use std::ops::ControlFlow;
+use std::ops::{Bound, ControlFlow};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use dashmap::DashMap;
 use futures::stream::FuturesUnordered;
 use futures::{Stream, StreamExt, TryStreamExt};
-use rumps_types::{DataStatus, Key, Subscript};
+use rumps_types::{DataStatus, Dir, Key, Scan, Subscript};
 use smallvec::SmallVec;
 #[cfg(feature = "debug")]
 use tokio::sync::RwLock;
@@ -581,7 +581,7 @@ impl BTree {
     pub(crate) fn collect_at<'a, P, F, T>(
         &'a self,
         root: NodeId,
-        start: Option<&'a Key>,
+        scan: Scan,
         pred: P,
         extract: F,
         _ctx: Option<&'a crate::TransactionContext>,
@@ -591,7 +591,7 @@ impl BTree {
         F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync + 'a,
         T: Send + 'a,
     {
-        self.collect_internal(root, start, pred, extract)
+        self.collect_internal(root, scan, pred, extract)
     }
 
     /// Creates a stream of entries matching a key prefix.
@@ -604,13 +604,14 @@ impl BTree {
         &'a self,
         root: NodeId,
         prefix: &'a Key,
+        dir: Dir,
         extract: F,
     ) -> impl Stream<Item = Result<T>> + Send + 'a
     where
         F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync + 'a,
         T: Send + 'a,
     {
-        self.collect_prefix_internal(root, prefix, extract)
+        self.collect_prefix_internal(root, prefix, dir, extract)
     }
 }
 
@@ -1213,6 +1214,13 @@ impl<'a> Cursor<'a> {
         }
         Ok(())
     }
+}
+
+/// Unfold state for cursor-based `collect` streams.
+enum CollectState<'a> {
+    NeedSeek,
+    Scanning(Box<Cursor<'a>>),
+    Done,
 }
 
 /// Private utilities for B-tree operations
@@ -1924,32 +1932,116 @@ impl BTree {
         Ok(out)
     }
 
-    /// Internal operation returning next key and its data in a single traversal.
-    async fn get_next_internal(
-        &self,
-        root: NodeId,
-        after: Option<&Key>,
-    ) -> Result<Option<(Key, Arc<NodeData>)>> {
-        match after {
-            None => self.find_leftmost_entry(root).await,
-            Some(key) => self.find_successor_entry(root, key).await,
+    /// Returns `true` when `key` has gone past the far bound of the
+    /// scan (the end bound for forward, the start bound for reverse).
+    fn past_far_bound(scan: &Scan, key: &Key) -> bool {
+        match scan.dir() {
+            Dir::Forward => match scan.bounds().end() {
+                Bound::Unbounded => false,
+                Bound::Included(hi) => key > hi,
+                Bound::Excluded(hi) => key >= hi,
+            },
+            Dir::Reverse => match scan.bounds().start() {
+                Bound::Unbounded => false,
+                Bound::Included(lo) => key < lo,
+                Bound::Excluded(lo) => key <= lo,
+            },
         }
+    }
+
+    /// Advances the cursor, skipping entries outside `scan` bounds or
+    /// rejected by `pred`/`extract`, and returns the first accepted
+    /// item. `None` signals exhaustion or early termination.
+    async fn scan_advance<P, F, T>(
+        cursor: &mut Cursor<'_>,
+        scan: &Scan,
+        pred: &P,
+        extract: &F,
+    ) -> Option<Result<T>>
+    where
+        P: Fn(&Key, &NodeData) -> bool,
+        F: Fn(&Key, &NodeData) -> Option<T>,
+    {
+        let mut found = None;
+        let mut again = Some(());
+
+        while let Some(()) = again.take() {
+            let entry = match scan.dir() {
+                Dir::Forward => cursor.advance().await,
+                Dir::Reverse => cursor.advance_back().await,
+            };
+            match entry {
+                Err(e) => found = Some(Err(e)),
+                Ok(None) => {}
+                Ok(Some((key, data))) => {
+                    if Self::past_far_bound(scan, &key) {
+                        // past far bound; early termination
+                    } else if !scan.bounds().contains(&key) {
+                        again = Some(());
+                    } else if pred(&key, &data) {
+                        match extract(&key, &data) {
+                            Some(val) => found = Some(Ok(val)),
+                            None => again = Some(()),
+                        }
+                    } else {
+                        again = Some(());
+                    }
+                }
+            }
+        }
+
+        found
+    }
+
+    /// Advances the cursor within a prefix range, returning the first
+    /// extracted item. `None` signals exhaustion or prefix termination.
+    async fn prefix_advance<F, T>(
+        cursor: &mut Cursor<'_>,
+        prefix: &Key,
+        dir: Dir,
+        extract: &F,
+    ) -> Option<Result<T>>
+    where
+        F: Fn(&Key, &NodeData) -> Option<T>,
+    {
+        let mut found = None;
+        let mut again = Some(());
+
+        while let Some(()) = again.take() {
+            let entry = match dir {
+                Dir::Forward => cursor.advance().await,
+                Dir::Reverse => cursor.advance_back().await,
+            };
+            match entry {
+                Err(e) => found = Some(Err(e)),
+                Ok(None) => {}
+                Ok(Some((key, data))) if key.starts_with(prefix) => {
+                    match extract(&key, &data) {
+                        Some(val) => found = Some(Ok(val)),
+                        None => again = Some(()),
+                    }
+                }
+                Ok(Some((key, _)))
+                    if matches!(dir, Dir::Reverse) && key > *prefix =>
+                {
+                    again = Some(());
+                }
+                Ok(Some(_)) => {}
+            }
+        }
+
+        found
     }
 
     /// Internal COLLECT operation returning a stream of key-value pairs.
     ///
-    /// Creates a stream that iterates over tree entries in lexicographic order,
-    /// filtering by predicate and transforming with extract function.
-    ///
-    /// # Stream Semantics
-    ///
-    /// - **Lazy**: Entries are fetched on-demand as the stream is consumed
-    /// - **Memory-efficient**: Only one entry is held at a time
-    /// - **Cancellable**: Dropping the stream stops iteration immediately
+    /// Uses a `Cursor` for `O(1)` amortized iteration instead of per-entry
+    /// root-to-leaf descent. The `Scan` controls direction, range bounds,
+    /// and the initial seek target.
     fn collect_internal<'a, P, F, T>(
         &'a self,
         root: NodeId,
-        start: Option<&'a Key>,
+        scan: Scan,
         pred: P,
         extract: F,
     ) -> impl Stream<Item = Result<T>> + Send + 'a
@@ -1958,81 +2050,90 @@ impl BTree {
         F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync + 'a,
         T: Send + 'a,
     {
-        // Wrap closures in Arc for shared ownership across async iterations
         let pred = Arc::new(pred);
         let extract = Arc::new(extract);
+        let scan = Arc::new(scan);
 
-        // State: `Some(key)` = last key yielded, `None` = start from beginning
-        // We use `Option<Option<Key>>` where outer `None` signals stream end
-        let init_state: Option<Option<Key>> = Some(start.cloned());
-
-        futures::stream::unfold(init_state, move |state| {
+        futures::stream::unfold(CollectState::NeedSeek, move |state| {
             let pred = Arc::clone(&pred);
             let extract = Arc::clone(&extract);
+            let scan = Arc::clone(&scan);
 
             async move {
-                // `None` state means stream is exhausted
-                let cursor = state?;
-                self.collect_find_next(
-                    root,
-                    cursor,
-                    pred.as_ref(),
-                    extract.as_ref(),
-                )
-                .await
+                match state {
+                    CollectState::Done => None,
+                    CollectState::NeedSeek => {
+                        let target = match scan.dir() {
+                            Dir::Forward => match scan.bounds().start() {
+                                Bound::Unbounded => None,
+                                Bound::Included(k) | Bound::Excluded(k) => {
+                                    Some(k.clone())
+                                }
+                            },
+                            Dir::Reverse => match scan.bounds().end() {
+                                Bound::Unbounded => None,
+                                Bound::Included(k) | Bound::Excluded(k) => {
+                                    Some(k.clone())
+                                }
+                            },
+                        };
+
+                        let res = match scan.dir() {
+                            Dir::Forward => {
+                                Cursor::seek(self, root, target.as_ref()).await
+                            }
+                            Dir::Reverse => {
+                                Cursor::seek_back(self, root, target.as_ref())
+                                    .await
+                            }
+                        };
+
+                        match res {
+                            Err(e) => Some((Err(e), CollectState::Done)),
+                            Ok(mut cur) => Self::scan_advance(
+                                &mut cur,
+                                &scan,
+                                pred.as_ref(),
+                                extract.as_ref(),
+                            )
+                            .await
+                            .map(|item| match item {
+                                Ok(v) => (
+                                    Ok(v),
+                                    CollectState::Scanning(Box::new(cur)),
+                                ),
+                                Err(e) => (Err(e), CollectState::Done),
+                            }),
+                        }
+                    }
+                    CollectState::Scanning(mut cur) => Self::scan_advance(
+                        &mut cur,
+                        &scan,
+                        pred.as_ref(),
+                        extract.as_ref(),
+                    )
+                    .await
+                    .map(|item| match item {
+                        Ok(v) => (Ok(v), CollectState::Scanning(cur)),
+                        Err(e) => (Err(e), CollectState::Done),
+                    }),
+                }
             }
         })
     }
 
-    /// Recursive helper for `collect_internal` that finds the next matching entry.
-    async fn collect_find_next<P, F, T>(
-        &self,
-        root: NodeId,
-        cursor: Option<Key>,
-        pred: &P,
-        extract: &F,
-    ) -> Option<(Result<T>, Option<Option<Key>>)>
-    where
-        P: Fn(&Key, &NodeData) -> bool + Send + Sync,
-        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync,
-        T: Send,
-    {
-        let mut cur = cursor;
-        let mut out = None;
-        let mut again = Some(());
-
-        while again.take().is_some() {
-            match self.get_next_internal(root, cur.as_ref()).await {
-                Ok(None) => out = None,
-                Err(e) => out = Some((Err(e), None)),
-                Ok(Some((key, data))) => {
-                    match pred(&key, &data)
-                        .then(|| extract(&key, &data))
-                        .flatten()
-                    {
-                        Some(val) => out = Some((Ok(val), Some(Some(key)))),
-                        None => {
-                            cur = Some(key);
-                            again = Some(());
-                        }
-                    }
-                }
-            }
-        }
-
-        out
-    }
-
-    /// Internal implementation for prefix-based collection with early termination.
+    /// Internal implementation for prefix-based collection with early
+    /// termination. Uses a `Cursor` for `O(1)` amortized iteration.
     ///
-    /// This method:
-    /// 1. First checks and yields the entry at the exact prefix key (if exists)
-    /// 2. Then iterates entries after the prefix, yielding while keys match
-    /// 3. Terminates as soon as a key doesn't start with the prefix
+    /// For `Dir::Forward`: seeks to `prefix`, advances forward, stops
+    /// when `!key.starts_with(prefix)`. For `Dir::Reverse`: computes
+    /// `prefix.prefix_upper_bound()` as the seek target and advances
+    /// backward with the same termination check.
     fn collect_prefix_internal<'a, F, T>(
         &'a self,
         root: NodeId,
         prefix: &'a Key,
+        dir: Dir,
         extract: F,
     ) -> impl Stream<Item = Result<T>> + Send + 'a
     where
@@ -2041,112 +2142,58 @@ impl BTree {
     {
         let extract = Arc::new(extract);
 
-        // State machine:
-        // - `Some(None)` = haven't checked the prefix key yet
-        // - `Some(Some(key))` = last key yielded, check successor
-        // - `None` = stream exhausted
-        let init_state: Option<Option<Key>> = Some(None);
-
-        futures::stream::unfold(init_state, move |state| {
+        futures::stream::unfold(CollectState::NeedSeek, move |state| {
             let extract = Arc::clone(&extract);
 
             async move {
                 match state {
-                    None => None, // Stream exhausted
-                    Some(None) => {
-                        // First iteration: check the exact prefix key
-                        self.collect_prefix_first(
-                            root,
-                            prefix,
-                            extract.as_ref(),
-                        )
-                        .await
+                    CollectState::Done => None,
+                    CollectState::NeedSeek => {
+                        let target = match dir {
+                            Dir::Forward => Some(prefix.clone()),
+                            Dir::Reverse => prefix.prefix_upper_bound(),
+                        };
+                        let res = match dir {
+                            Dir::Forward => {
+                                Cursor::seek(self, root, target.as_ref()).await
+                            }
+                            Dir::Reverse => {
+                                Cursor::seek_back(self, root, target.as_ref())
+                                    .await
+                            }
+                        };
+                        match res {
+                            Err(e) => Some((Err(e), CollectState::Done)),
+                            Ok(mut cur) => Self::prefix_advance(
+                                &mut cur,
+                                prefix,
+                                dir,
+                                extract.as_ref(),
+                            )
+                            .await
+                            .map(|item| match item {
+                                Ok(v) => (
+                                    Ok(v),
+                                    CollectState::Scanning(Box::new(cur)),
+                                ),
+                                Err(e) => (Err(e), CollectState::Done),
+                            }),
+                        }
                     }
-                    Some(Some(cursor)) => {
-                        // Subsequent iterations: find next entry after cursor
-                        self.collect_prefix_next(
-                            root,
-                            prefix,
-                            &cursor,
-                            extract.as_ref(),
-                        )
-                        .await
-                    }
+                    CollectState::Scanning(mut cur) => Self::prefix_advance(
+                        &mut cur,
+                        prefix,
+                        dir,
+                        extract.as_ref(),
+                    )
+                    .await
+                    .map(|item| match item {
+                        Ok(v) => (Ok(v), CollectState::Scanning(cur)),
+                        Err(e) => (Err(e), CollectState::Done),
+                    }),
                 }
             }
         })
-    }
-
-    /// Helper for `collect_prefix_internal`: handle the first entry (exact prefix).
-    async fn collect_prefix_first<F, T>(
-        &self,
-        root: NodeId,
-        prefix: &Key,
-        extract: &F,
-    ) -> Option<(Result<T>, Option<Option<Key>>)>
-    where
-        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync,
-        T: Send,
-    {
-        // Check if exact prefix key exists
-        match self.get_internal(root, prefix).await {
-            Err(e) => Some((Err(e), None)), // Error, terminate
-            Ok(None) => {
-                // No entry at prefix, try to find first entry after prefix
-                self.collect_prefix_next(root, prefix, prefix, extract)
-                    .await
-            }
-            Ok(Some(data)) => {
-                // Entry exists at prefix
-                match extract(prefix, &data) {
-                    Some(val) => {
-                        // Yield and continue from prefix
-                        Some((Ok(val), Some(Some(prefix.clone()))))
-                    }
-                    None => {
-                        // Skip this entry, find next
-                        self.collect_prefix_next(root, prefix, prefix, extract)
-                            .await
-                    }
-                }
-            }
-        }
-    }
-
-    /// Helper for `collect_prefix_internal`: find next entry after cursor.
-    async fn collect_prefix_next<F, T>(
-        &self,
-        root: NodeId,
-        prefix: &Key,
-        cursor: &Key,
-        extract: &F,
-    ) -> Option<(Result<T>, Option<Option<Key>>)>
-    where
-        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync,
-        T: Send,
-    {
-        let mut cur = cursor.clone();
-        let mut out = None;
-        let mut again = Some(());
-
-        while again.take().is_some() {
-            match self.get_next_internal(root, Some(&cur)).await {
-                Err(e) => out = Some((Err(e), None)),
-                Ok(None) => out = None,
-                Ok(Some((key, data))) if key.starts_with(prefix) => {
-                    match extract(&key, &data) {
-                        Some(val) => out = Some((Ok(val), Some(Some(key)))),
-                        None => {
-                            cur = key;
-                            again = Some(());
-                        }
-                    }
-                }
-                Ok(Some(_)) => out = None,
-            }
-        }
-
-        out
     }
 
     /// Finds the leftmost (smallest) key in the subtree rooted at `node_id`.

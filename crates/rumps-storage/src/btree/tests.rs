@@ -4,7 +4,7 @@ mod tests {
     use std::sync::Arc;
 
     use futures::{future, StreamExt};
-    use rumps_types::{key, value, Value};
+    use rumps_types::{key, value, Scan, Value};
     use smallvec::smallvec;
     use tokio::task;
 
@@ -1457,7 +1457,7 @@ mod tests {
             let results: Vec<Value> = btree
                 .collect_at(
                     root,
-                    None,
+                    Scan::from(None),
                     |_, _| true,
                     |_, data| data.value.clone(),
                     None,
@@ -1492,7 +1492,7 @@ mod tests {
             let results: Vec<Value> = btree
                 .collect_at(
                     r,
-                    None,
+                    Scan::from(None),
                     |_, data| data.value.is_some(),
                     |_, data| data.value.clone(),
                     None,
@@ -1528,7 +1528,7 @@ mod tests {
             let results: Vec<i64> = btree
                 .collect_at(
                     r,
-                    None,
+                    Scan::from(None),
                     |_, data| {
                         data.value
                             .as_ref()

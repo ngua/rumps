@@ -116,7 +116,9 @@ use std::sync::Arc;
 
 use fs2::FileExt;
 use futures::stream::{self, Stream, StreamExt, TryStreamExt};
-use rumps_types::{DataStatus, Increment, Key, Name, Result, Subscript, Value};
+use rumps_types::{
+    DataStatus, Dir, Increment, Key, Name, Result, Scan, Subscript, Value,
+};
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::RwLock;
@@ -1005,7 +1007,13 @@ impl Database {
         let s = match opt_root {
             Some(root) => self
                 .btree
-                .collect_at(root, start, pred_wrap, extract_wrap, None)
+                .collect_at(
+                    root,
+                    Scan::from(start),
+                    pred_wrap,
+                    extract_wrap,
+                    None,
+                )
                 .map(|r| r.map_err(Into::into))
                 .boxed(),
             None => stream::empty().boxed(),
@@ -1285,7 +1293,7 @@ impl Database {
                             .btree
                             .collect_at(
                                 root,
-                                Some(key),
+                                Scan::from(Some(key)),
                                 |k, _| k.starts_with(key),
                                 |k, data| Some((k.clone(), data.clone())),
                                 None,
@@ -1380,7 +1388,7 @@ impl Database {
         let s = match opt_root {
             Some(root) => self
                 .btree
-                .collect_prefix_at(root, prefix, extract_wrap)
+                .collect_prefix_at(root, prefix, Dir::Forward, extract_wrap)
                 .map(|r| r.map_err(Into::into))
                 .boxed(),
             None => stream::empty().boxed(),

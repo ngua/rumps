@@ -53,11 +53,11 @@
 
 ## 6. Replace `collect_internal` with Cursor
 
-- [ ] 6.1 Rewrite `collect_internal` to accept a `Scan`, create a `Cursor` via `seek` or `seek_back` (based on `scan.dir`), and use `stream::unfold` calling `cursor.advance()` or `cursor.advance_back()` with pred/extract filtering and bound checking from `scan.bounds`. `collect_internal` is responsible for bound adjustment: translating `Included`/`Excluded`/`Unbounded` start (forward) or end (reverse) into the raw `Option<&Key>` target for `seek`/`seek_back`, and skipping the initial entry when the seek bound is `Excluded` and the cursor lands on the exact bound key
-- [ ] 6.2 Rewrite `collect_prefix_internal` to accept a `Dir` parameter and use `Cursor` with prefix-based early termination. For `Dir::Forward`: `seek(root, Some(&prefix))`, advance forward, stop when `!key.starts_with(prefix)`. For `Dir::Reverse`: compute `prefix.prefix_upper_bound()`; if `Some(ub)`, call `seek_back(root, Some(&ub))`; if `None`, call `seek_back(root, None)`; advance backward, stop when `!key.starts_with(prefix)`. If `seek_back` lands on a key not matching the prefix, the `starts_with` check skips it on the first iteration
-- [ ] 6.3 Update `BTree::collect_at` signature: `start: Option<&Key>` -> `scan: &Scan`
-- [ ] 6.4 Update `BTree::collect_prefix_at` signature to accept `Dir`
-- [ ] 6.5 Run existing `collect` and `collect_prefix` tests to verify identical behavior
+- [x] 6.1 Rewrite `collect_internal` to accept a `Scan`, create a `Cursor` via `seek` or `seek_back` (based on `scan.dir`), and use `stream::unfold` calling `cursor.advance()` or `cursor.advance_back()` with pred/extract filtering and bound checking from `scan.bounds`. `collect_internal` is responsible for bound adjustment: translating `Included`/`Excluded`/`Unbounded` start (forward) or end (reverse) into the raw `Option<&Key>` target for `seek`/`seek_back`, and skipping the initial entry when the seek bound is `Excluded` and the cursor lands on the exact bound key
+- [x] 6.2 Rewrite `collect_prefix_internal` to accept a `Dir` parameter and use `Cursor` with prefix-based early termination. For `Dir::Forward`: `seek(root, Some(&prefix))`, advance forward, stop when `!key.starts_with(prefix)`. For `Dir::Reverse`: compute `prefix.prefix_upper_bound()`; if `Some(ub)`, call `seek_back(root, Some(&ub))`; if `None`, call `seek_back(root, None)`; advance backward, stop when `!key.starts_with(prefix)`. If `seek_back` lands on a key not matching the prefix, the `starts_with` check skips it on the first iteration
+- [x] 6.3 Update `BTree::collect_at` signature: `start: Option<&Key>` -> `scan: &Scan`
+- [x] 6.4 Update `BTree::collect_prefix_at` signature to accept `Dir`
+- [x] 6.5 Run existing `collect` and `collect_prefix` tests to verify identical behavior
 
 ## 7. Unified `collect` Signature at Database and Transaction
 
