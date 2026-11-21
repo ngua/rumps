@@ -166,10 +166,10 @@ RUMPS is experimental and under active development. For production systems that 
       let status = db.data(&patients, &key![1]).await?;
       assert_eq!(status, DataStatus::HasDescendants);
 
-      // `collects`: stream records; ALWAYS yields in sorted key order
+      // `collect`: stream records; ALWAYS yields in sorted key order
       // (sorting is inherent to RUMPS data storage)
       let names: Vec<String> = db
-          .collects(
+          .collect(
               &patients,
               None,
               // Predicate to extract data
@@ -237,10 +237,10 @@ Multi-global writes benefit from RUMPS's sharded node cache: writes to different
 | Single =get= (=$GET=)                         | ~34 us                 |
 | =query= (=$QUERY=), 100 sequential keys       | ~104 us (~960 Kelem/s) |
 | =order= (=$ORDER=), 100 sequential subscripts | ~111 us (~900 Kelem/s) |
-| =collects=, 1000 entries                    | ~713 us (~1.4 Melem/s) |
-| =collects=, 10000 entries                   | ~7.5 ms (~1.3 Melem/s) |
+| =collect=, 1000 entries                    | ~713 us (~1.4 Melem/s) |
+| =collect=, 10000 entries                   | ~7.5 ms (~1.3 Melem/s) |
 
-All read operations work outside transactions. Traversal (=query=, =order=, =collects=) yields results in sorted key order with no post-hoc sorting.
+All read operations work outside transactions. Traversal (=query=, =order=, =collect=) yields results in sorted key order with no post-hoc sorting.
 
 *** Deletes
 | *Workload*                   | *Latency*  |
@@ -275,8 +275,8 @@ One quirk of in-memory mode: per-element throughput /decreases/ for larger batch
 | Single =get= (=$GET=)                         | ~1.5 us                |
 | =query= (=$QUERY=), 100 sequential keys       | ~55 us (~1.8 Melem/s)  |
 | =order= (=$ORDER=), 100 sequential subscripts | ~62 us (~1.6 Melem/s)  |
-| =collects=, 1000 entries                    | ~520 us (~1.9 Melem/s) |
-| =collects=, 10000 entries                   | ~6.8 ms (~1.5 Melem/s) |
+| =collect=, 1000 entries                    | ~520 us (~1.9 Melem/s) |
+| =collect=, 10000 entries                   | ~6.8 ms (~1.5 Melem/s) |
 
 **** Deletes
 | *Workload*                          | *Latency* |
@@ -296,7 +296,7 @@ The in-memory hot-key path reaches ~6.3 Melem/s; roughly 2x the on-disk rate, si
 
 * Further reading
 - [[./docs/concepts.org][Concepts]]: MUMPS background, variables, keys, subscripts, collation, ACID guarantees, sync modes, in-memory mode
-- [[./docs/operations.org][Core Operations]]: Full reference for =get=, =set=, =kill=, =data=, =order=, =query=, =collects= with examples
+- [[./docs/operations.org][Core Operations]]: Full reference for =get=, =set=, =kill=, =data=, =order=, =query=, =collect= with examples
 - [[./docs/comparison.org][RUMPS vs SQL]]: Side-by-side comparison of the two paradigms
 
 * License(s)

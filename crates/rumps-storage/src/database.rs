@@ -969,7 +969,7 @@ impl Database {
     /// db.set(&name, &key![2, "A"], Value::from("z")).await?;
     ///
     /// // Collect all values where key starts with `[1]`
-    /// let mut stream = db.collects(
+    /// let mut stream = db.collect(
     ///     &name,
     ///     None,
     ///     |k, _| k.len() == 2 && k.get(0) == Some(&1.into()),
@@ -984,7 +984,7 @@ impl Database {
     /// # Ok::<(), rumps_storage::Error>(())
     /// # });
     /// ```
-    pub async fn collects<'a, P, F, T>(
+    pub async fn collect<'a, P, F, T>(
         &'a self,
         name: &'a Name,
         start: Option<&'a Key>,
@@ -1005,51 +1005,12 @@ impl Database {
         let s = match opt_root {
             Some(root) => self
                 .btree
-                .collects_at(root, start, pred_wrap, extract_wrap, None)
+                .collect_at(root, start, pred_wrap, extract_wrap, None)
                 .map(|r| r.map_err(Into::into))
                 .boxed(),
             None => stream::empty().boxed(),
         };
         Ok(s)
-    }
-
-    /// Collects all matching entries into a `Vec`.
-    ///
-    /// This is a convenience wrapper around `collects()` that collects
-    /// the stream into a vector. Useful when you need all results at once.
-    ///
-    /// # Parameters
-    ///
-    /// * `name` - The variable name (global or local)
-    /// * `start` - Optional key to start iteration after (exclusive)
-    /// * `pred` - Predicate returning `true` to include entry, `false` to skip
-    /// * `extract` - Extractor returning `Some(T)` to yield, `None` to skip
-    pub async fn collects_vec<P, F, T>(
-        &self,
-        name: &Name,
-        start: Option<&Key>,
-        pred: P,
-        extract: F,
-    ) -> Result<Vec<T>>
-    where
-        P: Fn(&Key, &Option<Value>) -> bool + Send + Sync,
-        F: Fn(&Key, &Option<Value>) -> Option<T> + Send + Sync,
-        T: Send,
-    {
-        // Wrap user's closures to adapt to internal NodeData interface
-        let pred_wrap = move |k: &Key, data: &NodeData| pred(k, &data.value);
-        let extract_wrap =
-            move |k: &Key, data: &NodeData| extract(k, &data.value);
-
-        let opt_root = self.get_root(name).await?;
-        Ok(match opt_root {
-            Some(root) => {
-                self.btree
-                    .collects_vec_at(root, start, pred_wrap, extract_wrap, None)
-                    .await?
-            }
-            None => Vec::new(),
-        })
     }
 
     /// Returns diagnostic statistics for the database.
@@ -1322,7 +1283,7 @@ impl Database {
 
                         let descendants: Vec<(Key, NodeData)> = self
                             .btree
-                            .collects_at(
+                            .collect_at(
                                 root,
                                 Some(key),
                                 |k, _| k.starts_with(key),
@@ -1391,42 +1352,6 @@ impl Database {
         Ok(())
     }
 
-    /// Collects all entries matching a key prefix into a `Vec`.
-    ///
-    /// This method is optimized for prefix-based queries: it seeks directly
-    /// to the prefix position and **stops iteration** as soon as a key is
-    /// encountered that doesn't start with the prefix. This is much more
-    /// efficient than `collects_vec` with a prefix predicate for sparse data.
-    ///
-    /// # Parameters
-    ///
-    /// * `name` - The variable name (global or local)
-    /// * `prefix` - The key prefix to match
-    /// * `extract` - Extractor returning `Some(T)` to yield, `None` to skip
-    pub(crate) async fn collects_prefix_vec<F, T>(
-        &self,
-        name: &Name,
-        prefix: &Key,
-        extract: F,
-    ) -> Result<Vec<T>>
-    where
-        F: Fn(&Key, &Option<Value>) -> Option<T> + Send + Sync,
-        T: Send,
-    {
-        let extract_wrap =
-            move |k: &Key, data: &NodeData| extract(k, &data.value);
-
-        let opt_root = self.get_root(name).await?;
-        Ok(match opt_root {
-            Some(root) => {
-                self.btree
-                    .collects_prefix_vec_at(root, prefix, extract_wrap)
-                    .await?
-            }
-            None => Vec::new(),
-        })
-    }
-
     /// Creates a stream of entries matching a key prefix.
     ///
     /// This method is optimized for prefix-based queries: it seeks directly
@@ -1438,7 +1363,7 @@ impl Database {
     /// * `name` - The variable name (global or local)
     /// * `prefix` - The key prefix to match
     /// * `extract` - Extractor returning `Some(T)` to yield, `None` to skip
-    pub(crate) async fn collects_prefix<'a, F, T>(
+    pub(crate) async fn collect_prefix<'a, F, T>(
         &'a self,
         name: &'a Name,
         prefix: &'a Key,
@@ -1455,7 +1380,7 @@ impl Database {
         let s = match opt_root {
             Some(root) => self
                 .btree
-                .collects_prefix_at(root, prefix, extract_wrap)
+                .collect_prefix_at(root, prefix, extract_wrap)
                 .map(|r| r.map_err(Into::into))
                 .boxed(),
             None => stream::empty().boxed(),
@@ -2538,7 +2463,7 @@ async fn collect_batch(
     batch_sz: usize,
 ) -> Result<Option<Vec<(Key, Value)>>> {
     let entries: Vec<(Key, Value)> = db
-        .collects(
+        .collect(
             name,
             start,
             |_, v| v.is_some(),

@@ -38,18 +38,18 @@
 
 ## 5. Rename and Remove
 
-- [ ] 5.1 Rename `collects` -> `collect` in `BTree`: `collects_at` -> `collect_at`, `collects_internal` -> `collect_internal`, `collects_prefix_at` -> `collect_prefix_at`, `collects_prefix_internal` -> `collect_prefix_internal`
-- [ ] 5.2 Remove from `BTree`: `collects_vec_at`, `collects_prefix_vec_at`, `collects_find_next`, `collects_prefix_first`, `collects_prefix_next`
-- [ ] 5.3 Rename `collects` -> `collect` in `Database`: `collects` -> `collect`, `collects_prefix` -> `collect_prefix`
-- [ ] 5.4 Remove from `Database`: `collects_vec`, `collects_prefix_vec`
-- [ ] 5.5 Rename `collects` -> `collect` in `Transaction`: `collects` -> `collect`, `collects_prefix_vec` -> (removed)
-- [ ] 5.6 Remove from `Transaction`: `collects_vec`, `collects_prefix_vec`
-- [ ] 5.7 Update all call sites that used `collects_vec` / `collects_prefix_vec` to use `collect(...).await?.try_collect().await` (or `collect_prefix(...).await?.try_collect().await`)
-- [ ] 5.8 Rename references in test files: `btree/tests.rs`, `database_bench.rs`, any other test modules
-- [ ] 5.9 Update doc comments on `Database::collect`, `Transaction::collect`, `BTree::collect_at`, `Database::collect_prefix` to reflect new name and `Scan` parameter
-- [ ] 5.10 Update `CLAUDE.md` examples if they reference `collects`
-- [ ] 5.11 Update `docs/storage.org`, `docs/operations.org`, and any other docs that reference `collects`
-- [ ] 5.12 Verify: `cargo build` compiles clean, `cargo test` passes, `cargo doc` has no broken links
+- [x] 5.1 Rename `collects` -> `collect` in `BTree`: `collects_at` -> `collect_at`, `collects_internal` -> `collect_internal`, `collects_prefix_at` -> `collect_prefix_at`, `collects_prefix_internal` -> `collect_prefix_internal`
+- [x] 5.2 Remove from `BTree`: `collects_vec_at`, `collects_prefix_vec_at`. Rename `collects_find_next` -> `collect_find_next`, `collects_prefix_first` -> `collect_prefix_first`, `collects_prefix_next` -> `collect_prefix_next` (still called by `collect_internal`/`collect_prefix_internal`; deleted in task 6)
+- [x] 5.3 Rename `collects` -> `collect` in `Database`: `collects` -> `collect`, `collects_prefix` -> `collect_prefix`
+- [x] 5.4 Remove from `Database`: `collects_vec`, `collects_prefix_vec`
+- [x] 5.5 Rename `collects` -> `collect` in `Transaction`: `collects` -> `collect`, `collects_prefix_vec` -> (removed)
+- [x] 5.6 Remove from `Transaction`: `collects_vec`, `collects_prefix_vec`
+- [x] 5.7 Update all call sites that used `collects_vec` / `collects_prefix_vec` to use `collect(...).await?.try_collect().await` (or `collect_prefix(...).await?.try_collect().await`)
+- [x] 5.8 Rename references in test files: `btree/tests.rs`, `database_bench.rs`, any other test modules
+- [x] 5.9 Update doc comments on `Database::collect`, `Transaction::collect`, `BTree::collect_at`, `Database::collect_prefix` to reflect new name and `Scan` parameter
+- [x] 5.10 Update `CLAUDE.md` examples if they reference `collects`
+- [x] 5.11 Update `docs/storage.org`, `docs/operations.org`, and any other docs that reference `collects`
+- [x] 5.12 Verify: `cargo build` compiles clean, `cargo test` passes, `cargo doc` has no broken links
 
 ## 6. Replace `collect_internal` with Cursor
 

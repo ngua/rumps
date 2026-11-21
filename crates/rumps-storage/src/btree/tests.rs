@@ -1446,7 +1446,7 @@ mod tests {
     }
 
     #[cfg(test)]
-    mod collects_internal_tests {
+    mod collect_internal_tests {
         use super::*;
 
         #[tokio::test]
@@ -1455,13 +1455,14 @@ mod tests {
             let root = btree.create_tree().await.unwrap();
 
             let results: Vec<Value> = btree
-                .collects_vec_at(
+                .collect_at(
                     root,
                     None,
                     |_, _| true,
                     |_, data| data.value.clone(),
                     None,
                 )
+                .try_collect()
                 .await
                 .unwrap();
 
@@ -1489,13 +1490,14 @@ mod tests {
                 .await;
 
             let results: Vec<Value> = btree
-                .collects_vec_at(
+                .collect_at(
                     r,
                     None,
                     |_, data| data.value.is_some(),
                     |_, data| data.value.clone(),
                     None,
                 )
+                .try_collect()
                 .await
                 .unwrap();
 
@@ -1524,7 +1526,7 @@ mod tests {
 
             // Only collect even numbers
             let results: Vec<i64> = btree
-                .collects_vec_at(
+                .collect_at(
                     r,
                     None,
                     |_, data| {
@@ -1543,6 +1545,7 @@ mod tests {
                     },
                     None,
                 )
+                .try_collect()
                 .await
                 .unwrap();
 

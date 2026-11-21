@@ -1182,7 +1182,7 @@ pub struct Transaction {
     timeout: Option<Instant>,
     retry_count: u32,
 
-    // Write Buffering (BTreeMap for sorted iteration in `collects`)
+    // Write Buffering (BTreeMap for sorted iteration in `collect`)
     writes: Arc<RwLock<BTreeMap<(Name, Key), WriteOp>>>,
     deleted_subtrees: Arc<RwLock<HashSet<(Name, Key)>>>,
 
@@ -1445,7 +1445,7 @@ impl Transaction {
     /// - Holding an owned lock guard (not collecting the write buffer)
     /// - Using key-based range iteration (O(log n) per access)
     /// - Checking buffered membership via BTreeMap lookup
-    pub async fn collects<'a, P, F, T>(
+    pub async fn collect<'a, P, F, T>(
         &'a self,
         name: &'a Name,
         start: Option<&'a Key>,
@@ -1494,7 +1494,7 @@ impl Transaction {
         // Map from public Error to internal StorageError
         let snapshot_stream = self
             .db
-            .collects(name, start, pred_with_deletes, extract_with_key)
+            .collect(name, start, pred_with_deletes, extract_with_key)
             .await?
             .map(|r| {
                 r.map_err(|e| {
@@ -1525,56 +1525,6 @@ impl Transaction {
         .map(|r| r.map_err(Into::into));
 
         Ok(merged)
-    }
-
-    /// Collects all matching entries into a `Vec`.
-    ///
-    /// This is a convenience wrapper around `collects()` that collects
-    /// the stream into a vector. Useful when you need all results at once.
-    ///
-    /// The vector reflects buffered writes combined with the snapshot.
-    /// Buffered sets may add entries, buffered kills may remove them.
-    pub async fn collects_vec<P, F, T>(
-        &self,
-        name: &Name,
-        start: Option<&Key>,
-        pred: P,
-        extract: F,
-    ) -> Result<Vec<T>>
-    where
-        P: Fn(&Key, &Option<Value>) -> bool + Send + Sync + Clone,
-        F: Fn(&Key, &Option<Value>) -> Option<T> + Send + Sync + Clone,
-        T: Send,
-    {
-        self.collects(name, start, pred, extract)
-            .await?
-            .try_collect()
-            .await
-    }
-
-    /// Collects all entries matching a key prefix into a `Vec`.
-    ///
-    /// This method is optimized for prefix-based queries. It uses the
-    /// existing merge logic to combine buffered writes with the snapshot,
-    /// filtering by the given prefix.
-    pub(crate) async fn collects_prefix_vec<F, T>(
-        &self,
-        name: &Name,
-        prefix: &Key,
-        extract: F,
-    ) -> Result<Vec<T>>
-    where
-        F: Fn(&Key, &Option<Value>) -> Option<T> + Send + Sync + Clone,
-        T: Send,
-    {
-        let prefix_owned = prefix.clone();
-        self.collects_vec(
-            name,
-            None,
-            move |k, _| k.starts_with(&prefix_owned),
-            extract,
-        )
-        .await
     }
 }
 

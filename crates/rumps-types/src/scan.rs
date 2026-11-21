@@ -149,8 +149,8 @@ impl From<Option<&Key>> for Scan {
     /// Converts from the legacy `start` parameter.
     ///
     /// `None` produces a full forward scan. `Some(k)` produces a forward
-    /// scan starting just after `k` (matching the old `collects` resume
-    /// behavior).
+    /// scan starting just after `k` (matching the legacy `start` parameter
+    /// resume behavior).
     fn from(start: Option<&Key>) -> Self {
         match start {
             None => Self::forward(..),

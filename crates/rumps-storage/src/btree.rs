@@ -578,7 +578,7 @@ impl BTree {
     /// that match the predicate, transformed by the extract function.
     ///
     /// Always reads committed state. Transaction context for metadata only.
-    pub(crate) fn collects_at<'a, P, F, T>(
+    pub(crate) fn collect_at<'a, P, F, T>(
         &'a self,
         root: NodeId,
         start: Option<&'a Key>,
@@ -591,51 +591,7 @@ impl BTree {
         F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync + 'a,
         T: Send + 'a,
     {
-        self.collects_internal(root, start, pred, extract)
-    }
-
-    /// Collects all matching entries into a `Vec`.
-    ///
-    /// Convenience wrapper around `collects_at` that consumes the entire stream.
-    /// Use `collects_at` directly for large datasets to avoid loading everything
-    /// into memory.
-    pub(crate) async fn collects_vec_at<P, F, T>(
-        &self,
-        root: NodeId,
-        start: Option<&Key>,
-        pred: P,
-        extract: F,
-        ctx: Option<&crate::TransactionContext>,
-    ) -> Result<Vec<T>>
-    where
-        P: Fn(&Key, &NodeData) -> bool + Send + Sync,
-        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync,
-        T: Send,
-    {
-        self.collects_at(root, start, pred, extract, ctx)
-            .try_collect()
-            .await
-    }
-
-    /// Collects entries matching a key prefix into a `Vec`.
-    ///
-    /// Unlike `collects_vec_at`, this method **stops iteration** as soon as
-    /// a key is encountered that doesn't start with the prefix. This is much
-    /// more efficient for prefix-based queries because it doesn't scan the
-    /// entire tree after the prefix range.
-    pub(crate) async fn collects_prefix_vec_at<F, T>(
-        &self,
-        root: NodeId,
-        prefix: &Key,
-        extract: F,
-    ) -> Result<Vec<T>>
-    where
-        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync,
-        T: Send,
-    {
-        self.collects_prefix_at(root, prefix, extract)
-            .try_collect()
-            .await
+        self.collect_internal(root, start, pred, extract)
     }
 
     /// Creates a stream of entries matching a key prefix.
@@ -644,7 +600,7 @@ impl BTree {
     /// terminating as soon as a non-matching key is encountered. The iteration
     /// seeks to the prefix position first (O(log n)), then yields matching
     /// entries until the prefix range ends.
-    pub(crate) fn collects_prefix_at<'a, F, T>(
+    pub(crate) fn collect_prefix_at<'a, F, T>(
         &'a self,
         root: NodeId,
         prefix: &'a Key,
@@ -654,7 +610,7 @@ impl BTree {
         F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync + 'a,
         T: Send + 'a,
     {
-        self.collects_prefix_internal(root, prefix, extract)
+        self.collect_prefix_internal(root, prefix, extract)
     }
 }
 
@@ -1990,7 +1946,7 @@ impl BTree {
     /// - **Lazy**: Entries are fetched on-demand as the stream is consumed
     /// - **Memory-efficient**: Only one entry is held at a time
     /// - **Cancellable**: Dropping the stream stops iteration immediately
-    fn collects_internal<'a, P, F, T>(
+    fn collect_internal<'a, P, F, T>(
         &'a self,
         root: NodeId,
         start: Option<&'a Key>,
@@ -2017,7 +1973,7 @@ impl BTree {
             async move {
                 // `None` state means stream is exhausted
                 let cursor = state?;
-                self.collects_find_next(
+                self.collect_find_next(
                     root,
                     cursor,
                     pred.as_ref(),
@@ -2028,8 +1984,8 @@ impl BTree {
         })
     }
 
-    /// Recursive helper for `collects_internal` that finds the next matching entry.
-    async fn collects_find_next<P, F, T>(
+    /// Recursive helper for `collect_internal` that finds the next matching entry.
+    async fn collect_find_next<P, F, T>(
         &self,
         root: NodeId,
         cursor: Option<Key>,
@@ -2073,7 +2029,7 @@ impl BTree {
     /// 1. First checks and yields the entry at the exact prefix key (if exists)
     /// 2. Then iterates entries after the prefix, yielding while keys match
     /// 3. Terminates as soon as a key doesn't start with the prefix
-    fn collects_prefix_internal<'a, F, T>(
+    fn collect_prefix_internal<'a, F, T>(
         &'a self,
         root: NodeId,
         prefix: &'a Key,
@@ -2099,7 +2055,7 @@ impl BTree {
                     None => None, // Stream exhausted
                     Some(None) => {
                         // First iteration: check the exact prefix key
-                        self.collects_prefix_first(
+                        self.collect_prefix_first(
                             root,
                             prefix,
                             extract.as_ref(),
@@ -2108,7 +2064,7 @@ impl BTree {
                     }
                     Some(Some(cursor)) => {
                         // Subsequent iterations: find next entry after cursor
-                        self.collects_prefix_next(
+                        self.collect_prefix_next(
                             root,
                             prefix,
                             &cursor,
@@ -2121,8 +2077,8 @@ impl BTree {
         })
     }
 
-    /// Helper for `collects_prefix_internal`: handle the first entry (exact prefix).
-    async fn collects_prefix_first<F, T>(
+    /// Helper for `collect_prefix_internal`: handle the first entry (exact prefix).
+    async fn collect_prefix_first<F, T>(
         &self,
         root: NodeId,
         prefix: &Key,
@@ -2137,7 +2093,7 @@ impl BTree {
             Err(e) => Some((Err(e), None)), // Error, terminate
             Ok(None) => {
                 // No entry at prefix, try to find first entry after prefix
-                self.collects_prefix_next(root, prefix, prefix, extract)
+                self.collect_prefix_next(root, prefix, prefix, extract)
                     .await
             }
             Ok(Some(data)) => {
@@ -2149,7 +2105,7 @@ impl BTree {
                     }
                     None => {
                         // Skip this entry, find next
-                        self.collects_prefix_next(root, prefix, prefix, extract)
+                        self.collect_prefix_next(root, prefix, prefix, extract)
                             .await
                     }
                 }
@@ -2157,8 +2113,8 @@ impl BTree {
         }
     }
 
-    /// Helper for `collects_prefix_internal`: find next entry after cursor.
-    async fn collects_prefix_next<F, T>(
+    /// Helper for `collect_prefix_internal`: find next entry after cursor.
+    async fn collect_prefix_next<F, T>(
         &self,
         root: NodeId,
         prefix: &Key,

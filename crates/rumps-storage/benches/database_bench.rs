@@ -412,10 +412,10 @@ fn bench_order(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark `collects` stream iteration.
-fn bench_collects(c: &mut Criterion) {
+/// Benchmark `collect` stream iteration.
+fn bench_collect(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
-    let mut group = c.benchmark_group("collects_1000");
+    let mut group = c.benchmark_group("collect_1000");
 
     MODES.iter().for_each(|&mode| {
         let (_dir, db) = create_db(mode, &rt);
@@ -438,7 +438,7 @@ fn bench_collects(c: &mut Criterion) {
                         let n = name.clone();
                         async move {
                             let vals: Vec<Value> = txn
-                                .collects(
+                                .collect(
                                     &n,
                                     None,
                                     |_, _| true,
@@ -461,10 +461,10 @@ fn bench_collects(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark `collects` stream iteration with 10,000 entries.
-fn bench_collects_10k(c: &mut Criterion) {
+/// Benchmark `collect` stream iteration with 10,000 entries.
+fn bench_collect_10k(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
-    let mut group = c.benchmark_group("collects_10000");
+    let mut group = c.benchmark_group("collect_10000");
 
     MODES.iter().for_each(|&mode| {
         let (_dir, db) = create_db(mode, &rt);
@@ -487,7 +487,7 @@ fn bench_collects_10k(c: &mut Criterion) {
                         let n = name.clone();
                         async move {
                             let vals: Vec<Value> = txn
-                                .collects(
+                                .collect(
                                     &n,
                                     None,
                                     |_, _| true,
@@ -949,8 +949,8 @@ criterion_group!(
     bench_get,
     bench_query,
     bench_order,
-    bench_collects,
-    bench_collects_10k,
+    bench_collect,
+    bench_collect_10k,
     bench_kill,
     bench_increment_local,
     bench_increment_txn,

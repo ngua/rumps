@@ -5,19 +5,19 @@
 |----------------+---------------------------------------------------------+-------------------------------------------|
 | Data model     | Hierarchical sparse trees (globals)                     | Relational tables with rows/columns       |
 | Schema         | Schema-less; structure emerges from keys                | Strict schema defined upfront             |
-| Query model    | Tree-navigation primitives (=order=, =collects=)            | Declarative set operations (=SELECT=, =JOIN=) |
+| Query model    | Tree-navigation primitives (=order=, =collect=)            | Declarative set operations (=SELECT=, =JOIN=) |
 | Keys           | Compound subscript paths (e.g., =^PATIENT{123,"NAME"}=)   | Primary/foreign key relationships         |
 | Joins          | Hierarchical nesting eliminates most joins              | Explicit =JOIN= operations required         |
 | Node structure | Nodes can have /both/ a value AND children simultaneously | Cells hold single values only             |
 | Storage        | Unified key-value B-tree; one structure for everything  | Separate tables, each with own storage    |
-| Iteration      | Stream-based (=collects=) or tree traversal (=order=)       | Set-based =WHERE= clauses                   |
+| Iteration      | Stream-based (=collect=) or tree traversal (=order=)       | Set-based =WHERE= clauses                   |
 | Collation      | Extended: =bool= < =number= < =string= (=10= < =100=)             | Type-specific; string ="10"= > ="100"=        |
 | Namespaces     | Globals (=^NAME{}=) vs Locals (=NAME{}=)                    | Tables within schemas/databases           |
 
 * Similarities
 Despite the different paradigms, RUMPS and SQL share several capabilities:
 - *ACID transactions*: Both provide atomicity, consistency, isolation, durability
-- *Filtering*: RUMPS predicates in =collects= work like SQL =WHERE=
+- *Filtering*: RUMPS predicates in =collect= work like SQL =WHERE=
 - *Sorted access*: Both can iterate data in sorted order (RUMPS by default; SQL via =ORDER BY=)
 - *Concurrent access*: Both handle multiple simultaneous readers/writers
 - *Indexing*: RUMPS's sorted keys act as implicit indices; SQL has explicit index creation

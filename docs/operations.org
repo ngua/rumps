@@ -12,7 +12,7 @@ In the following "transaction context" means if the operation works outside of a
 - [[#order][=order= (=$ORDER=)]]
 - [[#query][=query= (=$QUERY=)]]
 - [[#increment][=increment= (=$INCREMENT=)]]
-- [[#collects][=collects=]]
+- [[#collect][=collect=]]
   - [[#collecting-all-keys][Collecting all keys]]
   - [[#filtering-by-key-structure][Filtering by key structure]]
   - [[#filtering-and-transformation][Filtering and transformation]]
@@ -146,7 +146,7 @@ while let Some(k) = cur {
 }
 #+end_src
 
-This mimics traditional MUMPS iteration. However, for most use cases, =collects= (below) is cleaner and more idiomatic.
+This mimics traditional MUMPS iteration. However, for most use cases, =collect= (below) is cleaner and more idiomatic.
 * =increment= (=$INCREMENT=)
 Atomically increments a numeric value at a key, returning the new value. If the key does not exist, it is treated as =0=. This is the RUMPS equivalent of MUMPS's =$INCREMENT= function.
 
@@ -183,10 +183,10 @@ let v = db.increment(&local!("SCRATCH"), &key![1], Increment::from(1i64)).await?
 assert_eq!(v, value!(1));
 #+end_src
 
-* =collects=
-=collects= takes a predicate (which entries to include) and an extractor (how to transform them), then produces a stream of results. Results are /always/ in sorted key order.
+* =collect=
+=collect= takes a predicate (which entries to include) and an extractor (how to transform them), then produces a stream of results. Results are /always/ in sorted key order.
 
-*This is a RUMPS extension*; traditional MUMPS doesn't have this. Instead, you'd write imperative loops with =@ORDER=. RUMPS provides =collects= as a declarative, stream-based alternative that's more idiomatic for Rust and modern programming.
+*This is a RUMPS extension*; traditional MUMPS doesn't have this. Instead, you'd write imperative loops with =@ORDER=. RUMPS provides =collect= as a declarative, stream-based alternative that's more idiomatic for Rust and modern programming.
 
 Why the extension? A few reasons:
 1. *Composability*: Streams chain naturally with =.map()=, =.filter()=, =.take()=, etc.
@@ -201,7 +201,7 @@ The simplest use: get all key-value pairs from a variable.
 
 #+begin_src rust
 // Stream-based
-let mut stream = db.collects(
+let mut stream = db.collect(
     &global!("X"),
     None,
     |_, _| true,  // include all
@@ -213,9 +213,11 @@ while let Some(item) = stream.next().await {
     println!("{:?} = {:?}", key, val);
 }
 
-// Or collect to Vec directly
+// Or collect to Vec directly (needs `futures::TryStreamExt`)
 let all: Vec<(Key, Option<Value>)> = db
-    .collects_vec(&global!("X"), None, |_, _| true, |k, v| Some((k.clone(), v.clone())))
+    .collect(&global!("X"), None, |_, _| true, |k, v| Some((k.clone(), v.clone())))
+    .await?
+    .try_collect()
     .await?;
 #+end_src
 
@@ -225,7 +227,7 @@ let all: Vec<(Key, Option<Value>)> = db
 use futures::TryStreamExt;
 
 let names: Vec<String> = db
-    .collects(
+    .collect(
         &global!("P"),
         None,
         |k, _| k.len() == 2 && k.get(1) == Some(&subscript!("NAME")),
@@ -242,7 +244,7 @@ assert_eq!(names, vec!["Alice", "Bob", "Carol"]);  // sorted by key
 #+begin_src rust
 // Same data as above; get patients with ID > 1, uppercase names
 let names: Vec<String> = db
-    .collects(
+    .collect(
         &global!("P"),
         None,
         |k, _| {
@@ -261,9 +263,11 @@ assert_eq!(names, vec!["BOB", "CAROL"]);
 
 ** Collecting into a Vec directly
 #+begin_src rust
-// collects_vec is a convenience wrapper
+// `try_collect` gathers the stream into a `Vec`
 let vals: Vec<Value> = db
-    .collects_vec(&global!("P"), None, |k, _| k.len() == 2, |_, v| v.clone())
+    .collect(&global!("P"), None, |k, _| k.len() == 2, |_, v| v.clone())
+    .await?
+    .try_collect()
     .await?;
 #+end_src
 
@@ -273,7 +277,7 @@ use futures::StreamExt;
 
 // Standard stream combinators work
 let first_two: Vec<String> = db
-    .collects(&global!("P"), None, |_, _| true, |k, _| Some(format!("{:?}", k)))
+    .collect(&global!("P"), None, |_, _| true, |k, _| Some(format!("{:?}", k)))
     .await?
     .take(2)
     .try_collect()

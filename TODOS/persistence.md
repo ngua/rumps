@@ -4,7 +4,7 @@
 
 CURRENT PRIORITIES
 - ~~add `increment`~~
-- `collects` enhancements
+- `collect` enhancements
 - networking
 - parallel txs
 
@@ -29,10 +29,10 @@ These are future considerations not yet planned:
 - **Replication**: Multi-node deployment with data replication
 - **Distributed Transactions**: Two-phase commit for multi-node transactions
 - **Configuration Changes**: Runtime overrides, persistent reconfiguration, and data rebuilds (see [persistence/reconfigure.md](persistence/reconfigure.md))
-- **`collects` Enhancements**:
+- **`collect` Enhancements**:
   - Parallel processing with `buffer_unordered` for concurrent record processing:
     ```rust
-    let results: Vec<_> = btree.collects(...)
+    let results: Vec<_> = btree.collect(...)
         .map(|r| async move { process_record_async(r).await })
         .buffer_unordered(10)
         .try_collect()
