@@ -243,9 +243,9 @@ Multi-global writes benefit from RUMPS's sharded node cache: writes to different
 All read operations work outside transactions. Traversal (=query=, =order=, =collect=) yields results in sorted key order with no post-hoc sorting.
 
 *** Deletes
-| *Workload*                   | *Latency*  |
-|------------------------------+------------|
-| =kill= (=$KILL=), subtree (100 nodes)  | ~1.0 ms    |
+| *Workload*                          | *Latency* |
+|-----------------------------------+---------|
+| =kill= (=$KILL=), subtree (100 nodes) | ~1.0 ms |
 
 *** Increment (=$INCREMENT=)
 | *Workload*                                  | *Latency/Throughput*     |
@@ -275,8 +275,8 @@ One quirk of in-memory mode: per-element throughput /decreases/ for larger batch
 | Single =get= (=$GET=)                         | ~1.5 us                |
 | =query= (=$QUERY=), 100 sequential keys       | ~55 us (~1.8 Melem/s)  |
 | =order= (=$ORDER=), 100 sequential subscripts | ~62 us (~1.6 Melem/s)  |
-| =collect=, 1000 entries                    | ~520 us (~1.9 Melem/s) |
-| =collect=, 10000 entries                   | ~6.8 ms (~1.5 Melem/s) |
+| =collect=, 1000 entries                     | ~520 us (~1.9 Melem/s) |
+| =collect=, 10000 entries                    | ~6.8 ms (~1.5 Melem/s) |
 
 **** Deletes
 | *Workload*                          | *Latency* |
