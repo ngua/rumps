@@ -957,6 +957,104 @@ impl<'a> Cursor<'a> {
             exhausted,
         })
     }
+
+    /// Positions the cursor at the last key `<= target`, or the
+    /// rightmost key when `target` is `None`.
+    ///
+    /// Unlike `seek`, the stack may be sparse: levels where no key
+    /// `<= target` exists are omitted. This is correct because
+    /// `advance_back` only descends into children of nodes already
+    /// on the stack; skipped levels simply mean the cursor pops
+    /// further on underflow.
+    pub(crate) async fn seek_back(
+        tree: &'a BTree,
+        root: NodeId,
+        target: Option<&Key>,
+    ) -> Result<Cursor<'a>> {
+        let mut stack: SmallVec<[StackEntry; 8]> = SmallVec::new();
+
+        let mut cur = Some(root);
+        match target {
+            None => {
+                while let Some(id) = cur.take() {
+                    let node = tree.load_node(id).await?;
+                    let len = node.keys.len();
+                    cur = match len.checked_sub(1) {
+                        None => None,
+                        Some(last) => {
+                            stack.push(StackEntry {
+                                node: id,
+                                idx: last,
+                                len,
+                            });
+                            if node.is_leaf {
+                                None
+                            } else {
+                                Some(node.children.last().copied().ok_or_else(
+                                    || {
+                                        StorageError::InvalidOperation(
+                                            "Internal node has no children"
+                                                .into(),
+                                        )
+                                    },
+                                )?)
+                            }
+                        }
+                    };
+                }
+            }
+            Some(key) => {
+                while let Some(id) = cur.take() {
+                    let node = tree.load_node(id).await?;
+                    let len = node.keys.len();
+                    let res = node.keys.binary_search(key);
+                    cur = match res {
+                        Ok(pos) => {
+                            stack.push(StackEntry {
+                                node: id,
+                                idx: pos,
+                                len,
+                            });
+                            None
+                        }
+                        Err(pos) => {
+                            if let Some(prev) = pos.checked_sub(1) {
+                                stack.push(StackEntry {
+                                    node: id,
+                                    idx: prev,
+                                    len,
+                                });
+                            }
+                            if node.is_leaf {
+                                None
+                            } else {
+                                Some(
+                                    node.children
+                                        .get(pos)
+                                        .copied()
+                                        .ok_or_else(|| {
+                                            StorageError::InvalidOperation(
+                                                "Child index out of bounds \
+                                                 during seek_back"
+                                                    .into(),
+                                            )
+                                        })?,
+                                )
+                            }
+                        }
+                    };
+                }
+            }
+        }
+
+        let exhausted = stack.is_empty();
+
+        Ok(Cursor {
+            stack,
+            tree,
+            exhausted,
+        })
+    }
 }
 
 /// Private utilities for B-tree operations
