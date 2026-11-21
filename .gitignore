@@ -4,6 +4,7 @@
 result
 CLAUDE.md
 .claude/
+openspec/archive
 .slop
 .pre-commit*
 # For temp dirs in benchmark runs
