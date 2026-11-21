@@ -1662,4 +1662,256 @@ mod tests {
         assert_eq!(val1.value, Some(value!("tree1")));
         assert_eq!(val2.value, Some(value!("tree2")));
     }
+
+    #[cfg(test)]
+    mod cursor_tests {
+        use rumps_types::Key;
+
+        use super::*;
+
+        async fn build(bt: &BTree, vals: &[i64]) -> NodeId {
+            let mut r = bt.create_tree().await.unwrap();
+            let mut it = vals.iter();
+            while let Some(&v) = it.next() {
+                r = bt
+                    .set_internal(r, &key![v], NodeData::with_value(value!(v)))
+                    .await
+                    .unwrap();
+            }
+            r
+        }
+
+        async fn collect_fwd(c: &mut Cursor<'_>) -> Vec<Key> {
+            let mut out = Vec::new();
+            while let Some((k, _)) = c.advance().await.unwrap() {
+                out.push(k);
+            }
+            out
+        }
+
+        async fn collect_bwd(c: &mut Cursor<'_>) -> Vec<Key> {
+            let mut out = Vec::new();
+            while let Some((k, _)) = c.advance_back().await.unwrap() {
+                out.push(k);
+            }
+            out
+        }
+
+        // -- empty tree --
+
+        #[tokio::test]
+        async fn empty_tree_seek() {
+            let bt = BTreeBuilder::default().build().unwrap();
+            let root = bt.create_tree().await.unwrap();
+
+            let mut c = Cursor::seek(&bt, root, None).await.unwrap();
+            assert!(c.advance().await.unwrap().is_none());
+        }
+
+        #[tokio::test]
+        async fn empty_tree_seek_back() {
+            let bt = BTreeBuilder::default().build().unwrap();
+            let root = bt.create_tree().await.unwrap();
+
+            let mut c = Cursor::seek_back(&bt, root, None).await.unwrap();
+            assert!(c.advance_back().await.unwrap().is_none());
+        }
+
+        // -- single-node tree --
+
+        #[tokio::test]
+        async fn single_node_forward() {
+            let bt = BTreeBuilder::default().build().unwrap();
+            let root = build(&bt, &[3, 1, 2]).await;
+
+            let mut c = Cursor::seek(&bt, root, None).await.unwrap();
+            let keys = collect_fwd(&mut c).await;
+            assert_eq!(keys, vec![key![1], key![2], key![3]]);
+        }
+
+        #[tokio::test]
+        async fn single_node_backward() {
+            let bt = BTreeBuilder::default().build().unwrap();
+            let root = build(&bt, &[3, 1, 2]).await;
+
+            let mut c = Cursor::seek_back(&bt, root, None).await.unwrap();
+            let keys = collect_bwd(&mut c).await;
+            assert_eq!(keys, vec![key![3], key![2], key![1]]);
+        }
+
+        // -- multi-level tree (min_degree=2 gives 3+ levels at 20 keys) --
+
+        #[tokio::test]
+        async fn multi_level_forward() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let vals: Vec<i64> = (1..=20).collect();
+            let root = build(&bt, &vals).await;
+
+            let mut c = Cursor::seek(&bt, root, None).await.unwrap();
+            let keys = collect_fwd(&mut c).await;
+            let expected: Vec<Key> = (1..=20).map(|i: i64| key![i]).collect();
+            assert_eq!(keys, expected);
+        }
+
+        #[tokio::test]
+        async fn multi_level_backward() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let vals: Vec<i64> = (1..=20).collect();
+            let root = build(&bt, &vals).await;
+
+            let mut c = Cursor::seek_back(&bt, root, None).await.unwrap();
+            let keys = collect_bwd(&mut c).await;
+            let expected: Vec<Key> =
+                (1..=20).rev().map(|i: i64| key![i]).collect();
+            assert_eq!(keys, expected);
+        }
+
+        // -- seek to exact key --
+
+        #[tokio::test]
+        async fn seek_exact() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let vals: Vec<i64> = (1..=20).collect();
+            let root = build(&bt, &vals).await;
+
+            let tgt = key![10];
+            let mut c = Cursor::seek(&bt, root, Some(&tgt)).await.unwrap();
+            let (k, _) = c.advance().await.unwrap().unwrap();
+            assert_eq!(k, key![10]);
+        }
+
+        #[tokio::test]
+        async fn seek_back_exact() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let vals: Vec<i64> = (1..=20).collect();
+            let root = build(&bt, &vals).await;
+
+            let tgt = key![10];
+            let mut c = Cursor::seek_back(&bt, root, Some(&tgt)).await.unwrap();
+            let (k, _) = c.advance_back().await.unwrap().unwrap();
+            assert_eq!(k, key![10]);
+        }
+
+        // -- seek to missing key --
+
+        #[tokio::test]
+        async fn seek_missing_lands_on_successor() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let vals: Vec<i64> = (1..=10).map(|i| i * 2).collect();
+            let root = build(&bt, &vals).await;
+
+            let tgt = key![7];
+            let mut c = Cursor::seek(&bt, root, Some(&tgt)).await.unwrap();
+            let (k, _) = c.advance().await.unwrap().unwrap();
+            assert_eq!(k, key![8]);
+        }
+
+        #[tokio::test]
+        async fn seek_back_missing_lands_on_predecessor() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let vals: Vec<i64> = (1..=10).map(|i| i * 2).collect();
+            let root = build(&bt, &vals).await;
+
+            let tgt = key![7];
+            let mut c = Cursor::seek_back(&bt, root, Some(&tgt)).await.unwrap();
+            let (k, _) = c.advance_back().await.unwrap().unwrap();
+            assert_eq!(k, key![6]);
+        }
+
+        #[tokio::test]
+        async fn seek_past_all_keys() {
+            let bt = BTreeBuilder::default().build().unwrap();
+            let root = build(&bt, &[1, 2, 3]).await;
+
+            let tgt = key![99];
+            let mut c = Cursor::seek(&bt, root, Some(&tgt)).await.unwrap();
+            assert!(c.advance().await.unwrap().is_none());
+        }
+
+        #[tokio::test]
+        async fn seek_back_before_all_keys() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let root = build(&bt, &[10, 20, 30]).await;
+
+            let tgt = key![5];
+            let mut c = Cursor::seek_back(&bt, root, Some(&tgt)).await.unwrap();
+            assert!(c.advance_back().await.unwrap().is_none());
+        }
+
+        // -- partial traversals from a mid-point --
+
+        #[tokio::test]
+        async fn seek_mid_then_forward() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let vals: Vec<i64> = (1..=20).collect();
+            let root = build(&bt, &vals).await;
+
+            let tgt = key![10];
+            let mut c = Cursor::seek(&bt, root, Some(&tgt)).await.unwrap();
+            let keys = collect_fwd(&mut c).await;
+            let expected: Vec<Key> = (10..=20).map(|i: i64| key![i]).collect();
+            assert_eq!(keys, expected);
+        }
+
+        #[tokio::test]
+        async fn seek_back_mid_then_backward() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let vals: Vec<i64> = (1..=20).collect();
+            let root = build(&bt, &vals).await;
+
+            let tgt = key![10];
+            let mut c = Cursor::seek_back(&bt, root, Some(&tgt)).await.unwrap();
+            let keys = collect_bwd(&mut c).await;
+            let expected: Vec<Key> =
+                (1..=10).rev().map(|i: i64| key![i]).collect();
+            assert_eq!(keys, expected);
+        }
+
+        // -- forward == backward reversed --
+
+        #[tokio::test]
+        async fn forward_equals_backward_reversed() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let vals: Vec<i64> = (1..=30).collect();
+            let root = build(&bt, &vals).await;
+
+            let mut fwd = Cursor::seek(&bt, root, None).await.unwrap();
+            let fwd_keys = collect_fwd(&mut fwd).await;
+
+            let mut bwd = Cursor::seek_back(&bt, root, None).await.unwrap();
+            let mut bwd_keys = collect_bwd(&mut bwd).await;
+            bwd_keys.reverse();
+
+            assert_eq!(fwd_keys, bwd_keys);
+        }
+
+        // -- data association --
+
+        #[tokio::test]
+        async fn advance_returns_correct_data() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let root = build(&bt, &[5, 10, 15]).await;
+
+            let mut c = Cursor::seek(&bt, root, Some(&key![10])).await.unwrap();
+            let (k, data) = c.advance().await.unwrap().unwrap();
+            assert_eq!(k, key![10]);
+            assert_eq!(data.value, Some(value!(10)));
+        }
+
+        // -- post-exhaustion idempotency --
+
+        #[tokio::test]
+        async fn exhausted_cursor_stays_none() {
+            let bt = BTreeBuilder::default().build().unwrap();
+            let root = bt.create_tree().await.unwrap();
+
+            let mut fwd = Cursor::seek(&bt, root, None).await.unwrap();
+            assert!(fwd.advance().await.unwrap().is_none());
+            assert!(fwd.advance().await.unwrap().is_none());
+
+            let mut bwd = Cursor::seek_back(&bt, root, None).await.unwrap();
+            assert!(bwd.advance_back().await.unwrap().is_none());
+            assert!(bwd.advance_back().await.unwrap().is_none());
+        }
+    }
 }

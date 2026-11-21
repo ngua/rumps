@@ -24,12 +24,12 @@
 
 ## 3. `btree::Cursor` Core
 
-- [ ] 3.1 Define `Cursor<'a>` in `btree.rs`: fields `stack: SmallVec<[(NodeId, usize); 8]>`, `tree: &'a BTree`, `exhausted: bool`
-- [ ] 3.2 Implement `async fn seek(tree: &'a BTree, root: NodeId, target: Option<&Key>) -> Result<Cursor<'a>>`: descend from root, push `(node_id, idx)` at each level, land on first key >= target (or leftmost for `None`)
-- [ ] 3.3 Implement `async fn seek_back(tree: &'a BTree, root: NodeId, target: Option<&Key>) -> Result<Cursor<'a>>`: descend from root, land on last key <= target (or rightmost for `None`). Uses `find_predecessor_entry` logic to track fallback candidates.
-- [ ] 3.4 Implement `async fn advance(&mut self) -> Result<Option<(Key, Arc<NodeData>)>>`: yield current entry, then step forward (increment leaf index; on exhaustion pop stack, yield parent separator, descend into next child's leftmost)
-- [ ] 3.5 Implement `async fn advance_back(&mut self) -> Result<Option<(Key, Arc<NodeData>)>>`: yield current entry, then step backward (decrement leaf index; at `0` pop stack, yield parent separator to the left, descend into left child's rightmost)
-- [ ] 3.6 Write cursor unit tests: empty tree, single-node tree, multi-level tree (3+ levels), `seek` to exact key, `seek` to missing key (lands on successor), `seek_back` to exact key, `seek_back` to missing key (lands on predecessor), full forward traversal, full backward traversal, forward traversal == backward traversal reversed
+- [x] 3.1 Define `Cursor<'a>` in `btree.rs`: fields `stack: SmallVec<[(NodeId, usize); 8]>`, `tree: &'a BTree`, `exhausted: bool`
+- [x] 3.2 Implement `async fn seek(tree: &'a BTree, root: NodeId, target: Option<&Key>) -> Result<Cursor<'a>>`: descend from root, push `(node_id, idx)` at each level, land on first key >= target (or leftmost for `None`)
+- [x] 3.3 Implement `async fn seek_back(tree: &'a BTree, root: NodeId, target: Option<&Key>) -> Result<Cursor<'a>>`: descend from root, land on last key <= target (or rightmost for `None`). Uses `find_predecessor_entry` logic to track fallback candidates.
+- [x] 3.4 Implement `async fn advance(&mut self) -> Result<Option<(Key, Arc<NodeData>)>>`: yield current entry, then step forward (increment leaf index; on exhaustion pop stack, yield parent separator, descend into next child's leftmost)
+- [x] 3.5 Implement `async fn advance_back(&mut self) -> Result<Option<(Key, Arc<NodeData>)>>`: yield current entry, then step backward (decrement leaf index; at `0` pop stack, yield parent separator to the left, descend into left child's rightmost)
+- [x] 3.6 Write cursor unit tests: empty tree, single-node tree, multi-level tree (3+ levels), `seek` to exact key, `seek` to missing key (lands on successor), `seek_back` to exact key, `seek_back` to missing key (lands on predecessor), full forward traversal, full backward traversal, forward traversal == backward traversal reversed
 
 ## 4. `find_predecessor_entry`
 
