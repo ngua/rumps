@@ -1055,6 +1055,208 @@ impl<'a> Cursor<'a> {
             exhausted,
         })
     }
+
+    /// Yields the current entry and advances the cursor forward.
+    ///
+    /// Returns `Ok(None)` once the cursor is exhausted. The stepping
+    /// logic is:
+    ///  1. Pop any past-the-end stack entries (returned from an
+    ///     exhausted subtree).
+    ///  2. Yield `keys[idx]` from the top entry.
+    ///  3. Increment `idx`. If the node is internal, descend into
+    ///     `children[idx]` (the new, post-increment index) leftmost.
+    pub(crate) async fn advance(
+        &mut self,
+    ) -> Result<Option<(Key, Arc<NodeData>)>> {
+        if self.exhausted {
+            Ok(None)
+        } else {
+            while self.stack.last().is_some_and(|e| e.idx >= e.len) {
+                self.stack.pop();
+            }
+
+            match self.stack.last().copied() {
+                None => {
+                    self.exhausted = true;
+                    Ok(None)
+                }
+                Some(e) => {
+                    let node = self.tree.load_node(e.node).await?;
+                    let key = node
+                        .keys
+                        .get(e.idx)
+                        .ok_or_else(|| {
+                            StorageError::InvalidOperation(
+                                "Key index out of bounds in advance".into(),
+                            )
+                        })?
+                        .clone();
+                    let data = Arc::clone(node.values.get(e.idx).ok_or_else(
+                        || {
+                            StorageError::InvalidOperation(
+                                "Value index out of bounds in advance".into(),
+                            )
+                        },
+                    )?);
+
+                    if let Some(top) = self.stack.last_mut() {
+                        top.idx = e.idx + 1;
+                    }
+
+                    if !node.is_leaf {
+                        let child =
+                            node.children.get(e.idx + 1).copied().ok_or_else(
+                                || {
+                                    StorageError::InvalidOperation(
+                                        "Child index out of bounds in advance"
+                                            .into(),
+                                    )
+                                },
+                            )?;
+                        drop(node);
+                        self.descend_leftmost(child).await?;
+                    }
+
+                    Ok(Some((key, data)))
+                }
+            }
+        }
+    }
+
+    /// Yields the current entry and advances the cursor backward.
+    ///
+    /// Mirror of `advance`. The stepping logic is:
+    ///  1. Pop any underflowed stack entries (index wrapped past zero
+    ///     after the previous step).
+    ///  2. Yield `keys[idx]` from the top entry.
+    ///  3. If the node is internal, descend into `children[idx]`
+    ///     rightmost. Then decrement `idx` (or pop if it was `0`).
+    ///     If the node is a leaf, just decrement (or pop).
+    pub(crate) async fn advance_back(
+        &mut self,
+    ) -> Result<Option<(Key, Arc<NodeData>)>> {
+        if self.exhausted {
+            Ok(None)
+        } else {
+            while self.stack.last().is_some_and(|e| e.idx >= e.len) {
+                self.stack.pop();
+            }
+
+            match self.stack.last().copied() {
+                None => {
+                    self.exhausted = true;
+                    Ok(None)
+                }
+                Some(e) => {
+                    let node = self.tree.load_node(e.node).await?;
+                    let key = node
+                        .keys
+                        .get(e.idx)
+                        .ok_or_else(|| {
+                            StorageError::InvalidOperation(
+                                "Key index out of bounds in advance_back"
+                                    .into(),
+                            )
+                        })?
+                        .clone();
+                    let data = Arc::clone(node.values.get(e.idx).ok_or_else(
+                        || {
+                            StorageError::InvalidOperation(
+                                "Value index out of bounds in advance_back"
+                                    .into(),
+                            )
+                        },
+                    )?);
+
+                    // Decrement (or pop on underflow) BEFORE descending
+                    // so the stack entry is correct when the subtree is
+                    // later exhausted and we return to this level.
+                    match e.idx.checked_sub(1) {
+                        Some(prev) => {
+                            if let Some(top) = self.stack.last_mut() {
+                                top.idx = prev;
+                            }
+                        }
+                        None => {
+                            self.stack.pop();
+                        }
+                    }
+
+                    if !node.is_leaf {
+                        let child =
+                            node.children.get(e.idx).copied().ok_or_else(
+                                || {
+                                    StorageError::InvalidOperation(
+                                        "Child index out of bounds in \
+                                     advance_back"
+                                            .into(),
+                                    )
+                                },
+                            )?;
+                        drop(node);
+                        self.descend_rightmost(child).await?;
+                    }
+
+                    Ok(Some((key, data)))
+                }
+            }
+        }
+    }
+
+    /// Pushes the leftmost path from `start` onto the stack.
+    async fn descend_leftmost(&mut self, start: NodeId) -> Result<()> {
+        let mut cur = Some(start);
+        while let Some(id) = cur.take() {
+            let node = self.tree.load_node(id).await?;
+            let len = node.keys.len();
+            self.stack.push(StackEntry {
+                node: id,
+                idx: 0,
+                len,
+            });
+            cur = if node.is_leaf {
+                None
+            } else {
+                Some(node.children.first().copied().ok_or_else(|| {
+                    StorageError::InvalidOperation(
+                        "Internal node has no children".into(),
+                    )
+                })?)
+            };
+        }
+        Ok(())
+    }
+
+    /// Pushes the rightmost path from `start` onto the stack.
+    async fn descend_rightmost(&mut self, start: NodeId) -> Result<()> {
+        let mut cur = Some(start);
+        while let Some(id) = cur.take() {
+            let node = self.tree.load_node(id).await?;
+            let len = node.keys.len();
+            cur = match len.checked_sub(1) {
+                None => None,
+                Some(last) => {
+                    self.stack.push(StackEntry {
+                        node: id,
+                        idx: last,
+                        len,
+                    });
+                    if node.is_leaf {
+                        None
+                    } else {
+                        Some(node.children.last().copied().ok_or_else(
+                            || {
+                                StorageError::InvalidOperation(
+                                    "Internal node has no children".into(),
+                                )
+                            },
+                        )?)
+                    }
+                }
+            };
+        }
+        Ok(())
+    }
 }
 
 /// Private utilities for B-tree operations
