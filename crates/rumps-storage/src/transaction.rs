@@ -52,7 +52,8 @@ use std::{fmt, future};
 
 use futures::stream::{self, BoxStream, StreamExt, TryStreamExt};
 use rumps_types::{
-    DataStatus, Dir, Increment, Key, Name, Result, Scan, Subscript, Value,
+    Bounds, DataStatus, Dir, Increment, Key, Name, Result, Scan, Subscript,
+    Value,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{OwnedRwLockReadGuard, RwLock};
@@ -60,6 +61,33 @@ use tokio::sync::{OwnedRwLockReadGuard, RwLock};
 use crate::database::Database;
 use crate::error::StorageError;
 use crate::node::{NodeData, NodeId};
+
+/// Lazy wrapper around the snapshot `BoxStream`, tracking the next
+/// peeked entry, stream exhaustion, and any error encountered.
+struct SnapshotState<'a, T> {
+    stream: BoxStream<'a, crate::error::Result<(Key, T)>>,
+    next: Option<(Key, T)>,
+    error: Option<StorageError>,
+    done: bool,
+}
+
+impl<T: Send> SnapshotState<'_, T> {
+    async fn advance(&mut self) {
+        if self.next.is_none() && !self.done {
+            match self.stream.next().await {
+                None => {
+                    self.done = true;
+                }
+                Some(Err(e)) => {
+                    self.error = Some(e);
+                }
+                Some(Ok(entry)) => {
+                    self.next = Some(entry);
+                }
+            }
+        }
+    }
+}
 
 /// State for lazily merging buffered entries with a snapshot stream.
 ///
@@ -86,16 +114,12 @@ where
     extract: F,
     /// Predicate for filtering entries.
     pred: P,
-    /// Start key for filtering.
-    start: Option<Key>,
+    /// Scan bounds for filtering buffered entries.
+    bounds: Bounds,
     /// Iteration direction.
     dir: Dir,
-    /// The snapshot stream yielding `(Key, T)` pairs (lazy, unbounded).
-    snapshot: BoxStream<'a, crate::error::Result<(Key, T)>>,
-    /// Next snapshot entry to consider.
-    next_snapshot: Option<(Key, T)>,
-    /// Tracks if we've encountered an error in the snapshot stream.
-    snapshot_error: Option<StorageError>,
+    /// Snapshot stream state.
+    snapshot: SnapshotState<'a, T>,
 }
 
 impl<'a, T: Send, F, P> MergeState<'a, T, F, P>
@@ -113,26 +137,19 @@ where
         let name_min = || (self.name.clone(), Key::default());
 
         let map_entry = |((n, k), op): (&(Name, Key), &WriteOp)| {
-            if n != &self.name {
+            if n != &self.name || !self.bounds.contains(k) {
                 None
             } else {
-                let after_start =
-                    self.start.as_ref().map(|s| k >= s).unwrap_or(true);
-
-                if after_start {
-                    match op {
-                        WriteOp::Set(data) => {
-                            let val = (self.pred)(k, &data.value)
-                                .then(|| (self.extract)(k, &data.value))
-                                .flatten();
-                            Some((k.clone(), val))
-                        }
-                        WriteOp::Delete | WriteOp::KillSubtree => {
-                            Some((k.clone(), None))
-                        }
+                match op {
+                    WriteOp::Set(data) => {
+                        let val = (self.pred)(k, &data.value)
+                            .then(|| (self.extract)(k, &data.value))
+                            .flatten();
+                        Some((k.clone(), val))
                     }
-                } else {
-                    None
+                    WriteOp::Delete | WriteOp::KillSubtree => {
+                        Some((k.clone(), None))
+                    }
                 }
             }
         };
@@ -165,49 +182,32 @@ where
         }
     }
 
-    /// Advances the snapshot stream (no `is_buffered` check needed).
-    async fn advance_snapshot(&mut self) {
-        if self.next_snapshot.is_none() {
-            match self.snapshot.next().await {
-                None => {}
-                Some(Err(e)) => {
-                    self.snapshot_error = Some(e);
-                }
-                Some(Ok(entry)) => {
-                    self.next_snapshot = Some(entry);
-                }
-            }
-        }
-    }
-
     /// Core merge logic with O(n + m) complexity.
-    async fn next_impl(&mut self) -> Option<crate::error::Result<T>> {
+    async fn next(&mut self) -> Option<crate::error::Result<T>> {
         let mut out = None;
         let mut again = Some(());
         while again.take().is_some() {
-            out = match self.snapshot_error.take() {
+            out = match self.snapshot.error.take() {
                 Some(e) => Some(Err(e)),
                 None => {
-                    // Initialize buffered on first call
                     if self.next_buffered.is_none()
                         && self.last_buffered_key.is_none()
                     {
                         self.advance_buffered();
                     }
 
-                    self.advance_snapshot().await;
+                    self.snapshot.advance().await;
 
-                    // Clone keys for comparison to avoid borrow issues
                     let buf_key =
                         self.next_buffered.as_ref().map(|(k, _)| k.clone());
                     let snap_key =
-                        self.next_snapshot.as_ref().map(|(k, _)| k.clone());
+                        self.snapshot.next.as_ref().map(|(k, _)| k.clone());
 
                     let step = match (buf_key, snap_key) {
                         (None, None) => ControlFlow::Break(None),
                         (Some(_), None) => ControlFlow::Continue(false),
                         (None, Some(_)) => ControlFlow::Break(
-                            self.next_snapshot.take().map(|(_, val)| Ok(val)),
+                            self.snapshot.next.take().map(|(_, v)| Ok(v)),
                         ),
                         (Some(bk), Some(sk)) => {
                             let cmp = match self.dir {
@@ -218,9 +218,10 @@ where
                                 Ordering::Less => ControlFlow::Continue(false),
                                 Ordering::Equal => ControlFlow::Continue(true),
                                 Ordering::Greater => ControlFlow::Break(
-                                    self.next_snapshot
+                                    self.snapshot
+                                        .next
                                         .take()
-                                        .map(|(_, val)| Ok(val)),
+                                        .map(|(_, v)| Ok(v)),
                                 ),
                             }
                         }
@@ -232,7 +233,7 @@ where
                             let opt_val =
                                 self.next_buffered.take().and_then(|(_, v)| v);
                             if skip {
-                                self.next_snapshot = None;
+                                self.snapshot.next = None;
                             }
                             self.advance_buffered();
                             again = opt_val.is_none().then_some(());
@@ -243,11 +244,6 @@ where
             };
         }
         out
-    }
-
-    /// Gets the next item from the merged stream.
-    async fn next(&mut self) -> Option<crate::error::Result<T>> {
-        self.next_impl().await
     }
 }
 
@@ -1513,10 +1509,7 @@ impl Transaction {
         };
 
         let dir = scan.dir();
-        let start = match scan.bounds().start() {
-            Bound::Included(k) | Bound::Excluded(k) => Some(k.clone()),
-            Bound::Unbounded => None,
-        };
+        let bounds = scan.bounds().clone();
 
         let snapshot_stream = self
             .db
@@ -1536,11 +1529,14 @@ impl Transaction {
             next_buffered: None,
             extract,
             pred,
-            start,
+            bounds,
             dir,
-            snapshot: snapshot_stream.boxed(),
-            next_snapshot: None,
-            snapshot_error: None,
+            snapshot: SnapshotState {
+                stream: snapshot_stream.boxed(),
+                next: None,
+                error: None,
+                done: false,
+            },
         };
 
         let merged = stream::unfold(state, |mut state| async move {
@@ -2629,6 +2625,239 @@ mod tests {
                 .await;
 
             assert!(r.is_err());
+        }
+    }
+
+    mod merge_direction {
+        use std::ops::Bound;
+
+        use futures::TryStreamExt;
+        use rumps_types::{global, key, value, Bounds, Key, Scan, Value};
+
+        use crate::Database;
+
+        async fn setup_db(vals: &[i64]) -> Database {
+            let db = Database::in_memory().unwrap();
+            let name = global!("T");
+            let pairs: Vec<(Key, Value)> =
+                vals.iter().map(|&v| (key![v], value!(v))).collect();
+            let n = name.clone();
+            db.transaction(move |txn| async move {
+                let mut it = pairs.into_iter();
+                while let Some((k, v)) = it.next() {
+                    txn.set(&n, &k, v).await?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+            db
+        }
+
+        async fn collect_keys<S: Into<Scan>>(
+            db: &Database,
+            scan: S,
+        ) -> Vec<Key> {
+            let name = global!("T");
+            db.transaction(|txn| async move {
+                let keys: Vec<Key> = txn
+                    .collect(
+                        &name,
+                        scan,
+                        |_, v| v.is_some(),
+                        |k, _| Some(k.clone()),
+                    )
+                    .await?
+                    .try_collect()
+                    .await?;
+                Ok(keys)
+            })
+            .await
+            .unwrap()
+        }
+
+        #[tokio::test]
+        async fn forward_half_open_range() {
+            let db = setup_db(&(1..=10).collect::<Vec<_>>()).await;
+            let keys = collect_keys(&db, Scan::forward(key![3]..key![7])).await;
+            let expect: Vec<Key> = (3..7).map(|i| key![i]).collect();
+            assert_eq!(keys, expect);
+        }
+
+        #[tokio::test]
+        async fn forward_closed_range() {
+            let db = setup_db(&(1..=10).collect::<Vec<_>>()).await;
+            let keys =
+                collect_keys(&db, Scan::forward(key![3]..=key![7])).await;
+            let expect: Vec<Key> = (3..=7).map(|i| key![i]).collect();
+            assert_eq!(keys, expect);
+        }
+
+        #[tokio::test]
+        async fn reverse_unbounded() {
+            let db = setup_db(&(1..=10).collect::<Vec<_>>()).await;
+            let keys = collect_keys(&db, Scan::reverse(..)).await;
+            let expect: Vec<Key> = (1..=10).rev().map(|i| key![i]).collect();
+            assert_eq!(keys, expect);
+        }
+
+        #[tokio::test]
+        async fn reverse_half_open_range() {
+            let db = setup_db(&(1..=10).collect::<Vec<_>>()).await;
+            let keys = collect_keys(&db, Scan::reverse(key![3]..key![7])).await;
+            let expect: Vec<Key> = (3..7).rev().map(|i| key![i]).collect();
+            assert_eq!(keys, expect);
+        }
+
+        #[tokio::test]
+        async fn reverse_closed_range() {
+            let db = setup_db(&(1..=10).collect::<Vec<_>>()).await;
+            let keys =
+                collect_keys(&db, Scan::reverse(key![3]..=key![7])).await;
+            let expect: Vec<Key> = (3..=7).rev().map(|i| key![i]).collect();
+            assert_eq!(keys, expect);
+        }
+
+        #[tokio::test]
+        async fn reverse_buffered_sets() {
+            let db = setup_db(&[1, 3, 5, 7, 9]).await;
+            let name = global!("T");
+            let keys: Vec<Key> = db
+                .transaction(|txn| async move {
+                    txn.set(&name, &key![4], value!(4)).await?;
+                    txn.set(&name, &key![6], value!(6)).await?;
+                    let keys: Vec<Key> = txn
+                        .collect(
+                            &name,
+                            Scan::reverse(..),
+                            |_, v| v.is_some(),
+                            |k, _| Some(k.clone()),
+                        )
+                        .await?
+                        .try_collect()
+                        .await?;
+                    Ok(keys)
+                })
+                .await
+                .unwrap();
+            let expect: Vec<Key> =
+                [9, 7, 6, 5, 4, 3, 1].iter().map(|&i| key![i]).collect();
+            assert_eq!(keys, expect);
+        }
+
+        #[tokio::test]
+        async fn reverse_buffered_kills() {
+            let db = setup_db(&(1..=5).collect::<Vec<_>>()).await;
+            let name = global!("T");
+            let keys: Vec<Key> = db
+                .transaction(|txn| async move {
+                    txn.kill(&name, &key![3]).await?;
+                    let keys: Vec<Key> = txn
+                        .collect(
+                            &name,
+                            Scan::reverse(..),
+                            |_, v| v.is_some(),
+                            |k, _| Some(k.clone()),
+                        )
+                        .await?
+                        .try_collect()
+                        .await?;
+                    Ok(keys)
+                })
+                .await
+                .unwrap();
+            let expect: Vec<Key> =
+                [5, 4, 2, 1].iter().map(|&i| key![i]).collect();
+            assert_eq!(keys, expect);
+        }
+
+        #[tokio::test]
+        async fn reverse_buffered_set_overrides_snapshot() {
+            let db = setup_db(&(1..=5).collect::<Vec<_>>()).await;
+            let name = global!("T");
+            let vals: Vec<(Key, Value)> = db
+                .transaction(|txn| async move {
+                    txn.set(&name, &key![3], value!(99)).await?;
+                    let vs: Vec<(Key, Value)> = txn
+                        .collect(
+                            &name,
+                            Scan::reverse(..),
+                            |_, v| v.is_some(),
+                            |k, v| v.clone().map(|val| (k.clone(), val)),
+                        )
+                        .await?
+                        .try_collect()
+                        .await?;
+                    Ok(vs)
+                })
+                .await
+                .unwrap();
+            assert_eq!(vals.len(), 5);
+            let entry = vals.iter().find(|(k, _)| k == &key![3]).unwrap();
+            assert_eq!(entry.1, value!(99));
+        }
+
+        #[tokio::test]
+        async fn forward_excluded_start_straddle() {
+            let db = setup_db(&[2, 4, 6, 8, 10]).await;
+            let name = global!("T");
+            let keys: Vec<Key> = db
+                .transaction(|txn| async move {
+                    // Buffer writes at and around the excluded bound
+                    txn.set(&name, &key![3], value!(3)).await?;
+                    txn.set(&name, &key![4], value!(44)).await?;
+                    txn.set(&name, &key![5], value!(5)).await?;
+                    let scan = Scan::forward(Bounds::new(
+                        Bound::Excluded(key![4]),
+                        Bound::Excluded(key![9]),
+                    ));
+                    let keys: Vec<Key> = txn
+                        .collect(
+                            &name,
+                            scan,
+                            |_, v| v.is_some(),
+                            |k, _| Some(k.clone()),
+                        )
+                        .await?
+                        .try_collect()
+                        .await?;
+                    Ok(keys)
+                })
+                .await
+                .unwrap();
+            // key![3] is below excluded start, key![4] is excluded,
+            // key![5] through key![8] are in range, key![10] is out
+            let expect: Vec<Key> = [5, 6, 8].iter().map(|&i| key![i]).collect();
+            assert_eq!(keys, expect);
+        }
+
+        #[tokio::test]
+        async fn reverse_bounded_with_buffered_straddle() {
+            let db = setup_db(&[2, 4, 6, 8, 10]).await;
+            let name = global!("T");
+            let keys: Vec<Key> = db
+                .transaction(|txn| async move {
+                    txn.set(&name, &key![3], value!(3)).await?;
+                    txn.set(&name, &key![7], value!(7)).await?;
+                    txn.set(&name, &key![11], value!(11)).await?;
+                    let keys: Vec<Key> = txn
+                        .collect(
+                            &name,
+                            Scan::reverse(key![3]..=key![8]),
+                            |_, v| v.is_some(),
+                            |k, _| Some(k.clone()),
+                        )
+                        .await?
+                        .try_collect()
+                        .await?;
+                    Ok(keys)
+                })
+                .await
+                .unwrap();
+            // In [3, 8] descending: 8, 7, 6, 4, 3
+            let expect: Vec<Key> =
+                [8, 7, 6, 4, 3].iter().map(|&i| key![i]).collect();
+            assert_eq!(keys, expect);
         }
     }
 }
