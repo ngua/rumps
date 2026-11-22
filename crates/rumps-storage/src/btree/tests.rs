@@ -1700,7 +1700,7 @@ mod tests {
             out
         }
 
-        // -- empty tree --
+        // empty tree
 
         #[tokio::test]
         async fn empty_tree_seek() {
@@ -1720,7 +1720,7 @@ mod tests {
             assert!(c.advance_back().await.unwrap().is_none());
         }
 
-        // -- single-node tree --
+        // single-node tree
 
         #[tokio::test]
         async fn single_node_forward() {
@@ -1742,7 +1742,7 @@ mod tests {
             assert_eq!(keys, vec![key![3], key![2], key![1]]);
         }
 
-        // -- multi-level tree (min_degree=2 gives 3+ levels at 20 keys) --
+        // multi-level tree (min_degree=2 gives 3+ levels at 20 keys)
 
         #[tokio::test]
         async fn multi_level_forward() {
@@ -1769,7 +1769,7 @@ mod tests {
             assert_eq!(keys, expected);
         }
 
-        // -- seek to exact key --
+        // seek to exact key
 
         #[tokio::test]
         async fn seek_exact() {
@@ -1795,7 +1795,7 @@ mod tests {
             assert_eq!(k, key![10]);
         }
 
-        // -- seek to missing key --
+        // seek to missing key
 
         #[tokio::test]
         async fn seek_missing_lands_on_successor() {
@@ -1841,7 +1841,7 @@ mod tests {
             assert!(c.advance_back().await.unwrap().is_none());
         }
 
-        // -- partial traversals from a mid-point --
+        // partial traversals from a mid-point
 
         #[tokio::test]
         async fn seek_mid_then_forward() {
@@ -1870,7 +1870,7 @@ mod tests {
             assert_eq!(keys, expected);
         }
 
-        // -- forward == backward reversed --
+        // forward == backward reversed
 
         #[tokio::test]
         async fn forward_equals_backward_reversed() {
@@ -1888,7 +1888,7 @@ mod tests {
             assert_eq!(fwd_keys, bwd_keys);
         }
 
-        // -- data association --
+        // data association
 
         #[tokio::test]
         async fn advance_returns_correct_data() {
@@ -1901,7 +1901,7 @@ mod tests {
             assert_eq!(data.value, Some(value!(10)));
         }
 
-        // -- post-exhaustion idempotency --
+        // post-exhaustion idempotency
 
         #[tokio::test]
         async fn exhausted_cursor_stays_none() {
@@ -2005,6 +2005,363 @@ mod tests {
             let res = bt.find_predecessor_entry(root, &key![7]).await.unwrap();
             let (k, _) = res.unwrap();
             assert_eq!(k, key![6]);
+        }
+    }
+
+    #[cfg(test)]
+    mod scan_tests {
+        use std::ops::Bound;
+
+        use rumps_types::{Bounds, Key};
+
+        use super::*;
+
+        async fn build(bt: &BTree, vals: &[i64]) -> NodeId {
+            let mut r = bt.create_tree().await.unwrap();
+            let mut it = vals.iter();
+            while let Some(&v) = it.next() {
+                r = bt
+                    .set_internal(r, &key![v], NodeData::with_value(value!(v)))
+                    .await
+                    .unwrap();
+            }
+            r
+        }
+
+        async fn collect_keys(
+            bt: &BTree,
+            root: NodeId,
+            scan: Scan,
+        ) -> Vec<Key> {
+            bt.collect_at(root, scan, |_, _| true, |k, _| Some(k.clone()), None)
+                .try_collect()
+                .await
+                .unwrap()
+        }
+
+        #[tokio::test]
+        async fn full_forward() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let root = build(&bt, &(1..=10).collect::<Vec<_>>()).await;
+
+            let keys = collect_keys(&bt, root, Scan::forward(..)).await;
+            let expect: Vec<Key> = (1..=10).map(|i| key![i]).collect();
+            assert_eq!(keys, expect);
+        }
+
+        #[tokio::test]
+        async fn full_reverse() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let root = build(&bt, &(1..=10).collect::<Vec<_>>()).await;
+
+            let keys = collect_keys(&bt, root, Scan::reverse(..)).await;
+            let expect: Vec<Key> = (1..=10).rev().map(|i| key![i]).collect();
+            assert_eq!(keys, expect);
+        }
+
+        #[tokio::test]
+        async fn half_open_forward() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let root = build(&bt, &(1..=10).collect::<Vec<_>>()).await;
+
+            let keys =
+                collect_keys(&bt, root, Scan::forward(key![3]..key![7])).await;
+            let expect: Vec<Key> = (3..7).map(|i| key![i]).collect();
+            assert_eq!(keys, expect);
+        }
+
+        #[tokio::test]
+        async fn half_open_reverse() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let root = build(&bt, &(1..=10).collect::<Vec<_>>()).await;
+
+            let keys =
+                collect_keys(&bt, root, Scan::reverse(key![3]..key![7])).await;
+            let expect: Vec<Key> = (3..7).rev().map(|i| key![i]).collect();
+            assert_eq!(keys, expect);
+        }
+
+        #[tokio::test]
+        async fn closed_forward() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let root = build(&bt, &(1..=10).collect::<Vec<_>>()).await;
+
+            let keys =
+                collect_keys(&bt, root, Scan::forward(key![3]..=key![7])).await;
+            let expect: Vec<Key> = (3..=7).map(|i| key![i]).collect();
+            assert_eq!(keys, expect);
+        }
+
+        #[tokio::test]
+        async fn closed_reverse() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let root = build(&bt, &(1..=10).collect::<Vec<_>>()).await;
+
+            let keys =
+                collect_keys(&bt, root, Scan::reverse(key![3]..=key![7])).await;
+            let expect: Vec<Key> = (3..=7).rev().map(|i| key![i]).collect();
+            assert_eq!(keys, expect);
+        }
+
+        #[tokio::test]
+        async fn from_range_forward() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let root = build(&bt, &(1..=10).collect::<Vec<_>>()).await;
+
+            let keys = collect_keys(&bt, root, Scan::forward(key![6]..)).await;
+            let expect: Vec<Key> = (6..=10).map(|i| key![i]).collect();
+            assert_eq!(keys, expect);
+        }
+
+        #[tokio::test]
+        async fn to_range_forward() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let root = build(&bt, &(1..=10).collect::<Vec<_>>()).await;
+
+            let keys = collect_keys(&bt, root, Scan::forward(..key![5])).await;
+            let expect: Vec<Key> = (1..5).map(|i| key![i]).collect();
+            assert_eq!(keys, expect);
+        }
+
+        #[tokio::test]
+        async fn to_inclusive_reverse() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let root = build(&bt, &(1..=10).collect::<Vec<_>>()).await;
+
+            let keys = collect_keys(&bt, root, Scan::reverse(..=key![5])).await;
+            let expect: Vec<Key> = (1..=5).rev().map(|i| key![i]).collect();
+            assert_eq!(keys, expect);
+        }
+
+        #[tokio::test]
+        async fn excluded_both_bounds() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let root = build(&bt, &(1..=10).collect::<Vec<_>>()).await;
+
+            let scan = Scan::forward(Bounds::new(
+                Bound::Excluded(key![3]),
+                Bound::Excluded(key![7]),
+            ));
+            let keys = collect_keys(&bt, root, scan).await;
+            let expect: Vec<Key> = (4..7).map(|i| key![i]).collect();
+            assert_eq!(keys, expect);
+        }
+
+        #[tokio::test]
+        async fn empty_range() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let root = build(&bt, &(1..=10).collect::<Vec<_>>()).await;
+
+            let keys =
+                collect_keys(&bt, root, Scan::forward(key![5]..key![5])).await;
+            assert!(keys.is_empty());
+        }
+
+        #[tokio::test]
+        async fn compat_none() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let root = build(&bt, &(1..=5).collect::<Vec<_>>()).await;
+
+            let scan = Scan::from(None);
+            let keys = collect_keys(&bt, root, scan).await;
+            let expect: Vec<Key> = (1..=5).map(|i| key![i]).collect();
+            assert_eq!(keys, expect);
+        }
+
+        #[tokio::test]
+        async fn compat_some() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let root = build(&bt, &(1..=5).collect::<Vec<_>>()).await;
+
+            let scan = Scan::from(Some(&key![3]));
+            let keys = collect_keys(&bt, root, scan).await;
+            let expect: Vec<Key> = (4..=5).map(|i| key![i]).collect();
+            assert_eq!(keys, expect);
+        }
+
+        #[tokio::test]
+        async fn excluded_start_skips_exact() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let root = build(&bt, &(1..=5).collect::<Vec<_>>()).await;
+
+            let scan = Scan::forward(Bounds::new(
+                Bound::Excluded(key![2]),
+                Bound::Unbounded,
+            ));
+            let keys = collect_keys(&bt, root, scan).await;
+            let expect: Vec<Key> = (3..=5).map(|i| key![i]).collect();
+            assert_eq!(keys, expect);
+        }
+
+        #[tokio::test]
+        async fn included_start_yields_exact() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let root = build(&bt, &(1..=5).collect::<Vec<_>>()).await;
+
+            let keys = collect_keys(&bt, root, Scan::forward(key![2]..)).await;
+            let expect: Vec<Key> = (2..=5).map(|i| key![i]).collect();
+            assert_eq!(keys, expect);
+        }
+    }
+
+    #[cfg(test)]
+    mod prefix_dir_tests {
+        use rumps_types::{Dir, Key, Subscript};
+
+        use super::*;
+
+        async fn build_prefix_tree(bt: &BTree) -> NodeId {
+            let mut r = bt.create_tree().await.unwrap();
+            let keys = [
+                key![1, "A"],
+                key![1, "B"],
+                key![1, "C"],
+                key![2, "A"],
+                key![2, "B"],
+                key![3, "A"],
+            ];
+            let mut it = keys.iter();
+            while let Some(k) = it.next() {
+                r = bt
+                    .set_internal(r, k, NodeData::with_value(value!("v")))
+                    .await
+                    .unwrap();
+            }
+            r
+        }
+
+        async fn collect_prefix_keys(
+            bt: &BTree,
+            root: NodeId,
+            prefix: &Key,
+            dir: Dir,
+        ) -> Vec<Key> {
+            bt.collect_prefix_at(root, prefix, dir, |k, d| {
+                d.value.as_ref().map(|_| k.clone())
+            })
+            .try_collect()
+            .await
+            .unwrap()
+        }
+
+        #[tokio::test]
+        async fn forward_prefix() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let root = build_prefix_tree(&bt).await;
+
+            let keys =
+                collect_prefix_keys(&bt, root, &key![1], Dir::Forward).await;
+            assert_eq!(keys, vec![key![1, "A"], key![1, "B"], key![1, "C"]]);
+        }
+
+        #[tokio::test]
+        async fn reverse_prefix() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let root = build_prefix_tree(&bt).await;
+
+            let keys =
+                collect_prefix_keys(&bt, root, &key![1], Dir::Reverse).await;
+            assert_eq!(keys, vec![key![1, "C"], key![1, "B"], key![1, "A"]]);
+        }
+
+        #[tokio::test]
+        async fn reverse_prefix_no_match() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let root = build_prefix_tree(&bt).await;
+
+            let keys =
+                collect_prefix_keys(&bt, root, &key![99], Dir::Reverse).await;
+            assert!(keys.is_empty());
+        }
+
+        #[tokio::test]
+        async fn reverse_prefix_upper_bound_exists_in_tree() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let mut r = bt.create_tree().await.unwrap();
+
+            // `key![1]` has `prefix_upper_bound` = `key![next_float(1)]`.
+            // Insert that exact upper bound key so seek_back lands on it;
+            // it must be skipped since it doesn't match the prefix.
+            let ub = key![1].prefix_upper_bound().unwrap();
+            let keys = [key![1, "X"], key![1, "Y"], ub.clone(), key![5]];
+            let mut it = keys.iter();
+            while let Some(k) = it.next() {
+                r = bt
+                    .set_internal(r, k, NodeData::with_value(value!("v")))
+                    .await
+                    .unwrap();
+            }
+
+            let result =
+                collect_prefix_keys(&bt, r, &key![1], Dir::Reverse).await;
+            assert_eq!(result, vec![key![1, "Y"], key![1, "X"]]);
+        }
+
+        #[tokio::test]
+        async fn reverse_prefix_ceiling_subscript_boolean() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let mut r = bt.create_tree().await.unwrap();
+
+            // `Boolean(true)` is at the ceiling; `successor()` returns `None`,
+            // so `prefix_upper_bound` pops it and tries the parent subscript.
+            // Prefix `key![1, true]`: upper bound pops `true`, tries `1` ->
+            // `key![next_float(1)]`.
+            let prefix =
+                Key::from(vec![Subscript::from(1), Subscript::Boolean(true)]);
+            let k1 = Key::from(vec![
+                Subscript::from(1),
+                Subscript::Boolean(true),
+                Subscript::from("a"),
+            ]);
+            let k2 = Key::from(vec![
+                Subscript::from(1),
+                Subscript::Boolean(true),
+                Subscript::from("b"),
+            ]);
+            let keys = [k1.clone(), k2.clone()];
+            let mut it = keys.iter();
+            while let Some(k) = it.next() {
+                r = bt
+                    .set_internal(r, k, NodeData::with_value(value!("v")))
+                    .await
+                    .unwrap();
+            }
+
+            let result =
+                collect_prefix_keys(&bt, r, &prefix, Dir::Reverse).await;
+            assert_eq!(result, vec![k2, k1]);
+        }
+
+        #[tokio::test]
+        async fn reverse_prefix_ceiling_subscript_json() {
+            let bt = BTreeBuilder::default().min_degree(2).build().unwrap();
+            let mut r = bt.create_tree().await.unwrap();
+
+            // `Json(...)` has no successor; `prefix_upper_bound` pops it.
+            let json_sub = Subscript::Json(serde_json::json!({"x": 1}));
+            let prefix = Key::from(vec![Subscript::from(1), json_sub.clone()]);
+            let k1 = Key::from(vec![
+                Subscript::from(1),
+                json_sub.clone(),
+                Subscript::from("p"),
+            ]);
+            let k2 = Key::from(vec![
+                Subscript::from(1),
+                json_sub.clone(),
+                Subscript::from("q"),
+            ]);
+            let keys = [k1.clone(), k2.clone()];
+            let mut it = keys.iter();
+            while let Some(k) = it.next() {
+                r = bt
+                    .set_internal(r, k, NodeData::with_value(value!("v")))
+                    .await
+                    .unwrap();
+            }
+
+            let result =
+                collect_prefix_keys(&bt, r, &prefix, Dir::Reverse).await;
+            assert_eq!(result, vec![k2, k1]);
         }
     }
 }
