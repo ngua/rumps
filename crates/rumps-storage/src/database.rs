@@ -961,7 +961,7 @@ impl Database {
     /// ```
     /// # tokio_test::block_on(async {
     /// use rumps_storage::Database;
-    /// use rumps_types::{local, key, Value};
+    /// use rumps_types::{local, key, Scan, Value};
     /// use futures::stream::StreamExt;
     ///
     /// let db = Database::in_memory()?;
@@ -973,7 +973,7 @@ impl Database {
     /// // Collect all values where key starts with `[1]`
     /// let mut stream = db.collect(
     ///     &name,
-    ///     None,
+    ///     Scan::forward(..),
     ///     |k, _| k.len() == 2 && k.get(0) == Some(&1.into()),
     ///     |_, val| val.clone(),
     /// ).await?;
@@ -989,7 +989,7 @@ impl Database {
     pub async fn collect<'a, P, F, T>(
         &'a self,
         name: &'a Name,
-        start: Option<&'a Key>,
+        scan: impl Into<Scan>,
         pred: P,
         extract: F,
     ) -> Result<impl Stream<Item = Result<T>> + Send + 'a>
@@ -998,7 +998,6 @@ impl Database {
         F: Fn(&Key, &Option<Value>) -> Option<T> + Send + Sync + 'a,
         T: Send + 'a,
     {
-        // Wrap user's closures to adapt to internal NodeData interface
         let pred_wrap = move |k: &Key, data: &NodeData| pred(k, &data.value);
         let extract_wrap =
             move |k: &Key, data: &NodeData| extract(k, &data.value);
@@ -1007,13 +1006,7 @@ impl Database {
         let s = match opt_root {
             Some(root) => self
                 .btree
-                .collect_at(
-                    root,
-                    Scan::from(start),
-                    pred_wrap,
-                    extract_wrap,
-                    None,
-                )
+                .collect_at(root, scan.into(), pred_wrap, extract_wrap, None)
                 .map(|r| r.map_err(Into::into))
                 .boxed(),
             None => stream::empty().boxed(),
@@ -1370,11 +1363,13 @@ impl Database {
     ///
     /// * `name` - The variable name (global or local)
     /// * `prefix` - The key prefix to match
+    /// * `dir` - Iteration direction (`Forward` or `Reverse`)
     /// * `extract` - Extractor returning `Some(T)` to yield, `None` to skip
     pub(crate) async fn collect_prefix<'a, F, T>(
         &'a self,
         name: &'a Name,
         prefix: &'a Key,
+        dir: Dir,
         extract: F,
     ) -> Result<impl Stream<Item = Result<T>> + Send + 'a>
     where
@@ -1388,7 +1383,7 @@ impl Database {
         let s = match opt_root {
             Some(root) => self
                 .btree
-                .collect_prefix_at(root, prefix, Dir::Forward, extract_wrap)
+                .collect_prefix_at(root, prefix, dir, extract_wrap)
                 .map(|r| r.map_err(Into::into))
                 .boxed(),
             None => stream::empty().boxed(),

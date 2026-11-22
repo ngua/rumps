@@ -51,7 +51,9 @@ use std::time::{Duration, Instant};
 use std::{fmt, future};
 
 use futures::stream::{self, BoxStream, StreamExt, TryStreamExt};
-use rumps_types::{DataStatus, Increment, Key, Name, Result, Subscript, Value};
+use rumps_types::{
+    DataStatus, Increment, Key, Name, Result, Scan, Subscript, Value,
+};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{OwnedRwLockReadGuard, RwLock};
 
@@ -1448,7 +1450,7 @@ impl Transaction {
     pub async fn collect<'a, P, F, T>(
         &'a self,
         name: &'a Name,
-        start: Option<&'a Key>,
+        scan: impl Into<Scan>,
         pred: P,
         extract: F,
     ) -> Result<impl futures::stream::Stream<Item = Result<T>> + Send + 'a>
@@ -1457,10 +1459,10 @@ impl Transaction {
         F: Fn(&Key, &Option<Value>) -> Option<T> + Send + Sync + Clone + 'a,
         T: Send + 'a,
     {
-        // Get owned guard for writes - O(1) memory, no collection
+        let scan = scan.into();
+
         let writes_guard = Arc::clone(&self.writes).read_owned().await;
 
-        // Build list of deleted subtrees for this name (for snapshot filtering)
         let deleted = self.deleted_subtrees.read().await;
         let deleted_list: Vec<Key> = deleted
             .iter()
@@ -1468,8 +1470,8 @@ impl Transaction {
             .collect();
         drop(deleted);
 
-        // Create predicate that excludes killed keys from snapshot.
-        // Buffered writes are NOT filtered by kills (handled in MergeState).
+        // Excludes killed keys from the snapshot; buffered writes are NOT
+        // filtered here (handled in `MergeState`).
         let pred_clone = pred.clone();
         let pred_with_deletes = move |k: &Key, val: &Option<Value>| {
             let in_deleted =
@@ -1482,7 +1484,6 @@ impl Transaction {
             }
         };
 
-        // Create extract_with_key to get (Key, T) pairs from snapshot
         let extract_with_key = {
             let extract = extract.clone();
             move |k: &Key, val: &Option<Value>| {
@@ -1490,11 +1491,14 @@ impl Transaction {
             }
         };
 
-        // Get snapshot stream yielding (Key, T) pairs (lazy, not collected!)
-        // Map from public Error to internal StorageError
+        let start = match scan.bounds().start() {
+            Bound::Included(k) | Bound::Excluded(k) => Some(k.clone()),
+            Bound::Unbounded => None,
+        };
+
         let snapshot_stream = self
             .db
-            .collect(name, start, pred_with_deletes, extract_with_key)
+            .collect(name, scan, pred_with_deletes, extract_with_key)
             .await?
             .map(|r| {
                 r.map_err(|e| {
@@ -1503,7 +1507,6 @@ impl Transaction {
                 })
             });
 
-        // Create O(1) memory merge state
         let state = MergeState {
             writes_guard,
             name: name.clone(),
@@ -1511,14 +1514,12 @@ impl Transaction {
             next_buffered: None,
             extract,
             pred,
-            start: start.cloned(),
+            start,
             snapshot: snapshot_stream.boxed(),
             next_snapshot: None,
             snapshot_error: None,
         };
 
-        // Create a merge stream using unfold
-        // Map from internal StorageError to public Error
         let merged = stream::unfold(state, |mut state| async move {
             state.next().await.map(|item| (item, state))
         })
