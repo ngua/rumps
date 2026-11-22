@@ -1,12 +1,13 @@
 use std::mem;
-use std::ops::ControlFlow;
+use std::ops::{Bound, ControlFlow};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use dashmap::DashMap;
 use futures::stream::FuturesUnordered;
 use futures::{Stream, StreamExt, TryStreamExt};
-use rumps_types::{DataStatus, Key, Subscript};
+use rumps_types::{DataStatus, Dir, Key, Scan, Subscript};
+use smallvec::SmallVec;
 #[cfg(feature = "debug")]
 use tokio::sync::RwLock;
 
@@ -577,10 +578,10 @@ impl BTree {
     /// that match the predicate, transformed by the extract function.
     ///
     /// Always reads committed state. Transaction context for metadata only.
-    pub(crate) fn collects_at<'a, P, F, T>(
+    pub(crate) fn collect_at<'a, P, F, T>(
         &'a self,
         root: NodeId,
-        start: Option<&'a Key>,
+        scan: Scan,
         pred: P,
         extract: F,
         _ctx: Option<&'a crate::TransactionContext>,
@@ -590,51 +591,7 @@ impl BTree {
         F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync + 'a,
         T: Send + 'a,
     {
-        self.collects_internal(root, start, pred, extract)
-    }
-
-    /// Collects all matching entries into a `Vec`.
-    ///
-    /// Convenience wrapper around `collects_at` that consumes the entire stream.
-    /// Use `collects_at` directly for large datasets to avoid loading everything
-    /// into memory.
-    pub(crate) async fn collects_vec_at<P, F, T>(
-        &self,
-        root: NodeId,
-        start: Option<&Key>,
-        pred: P,
-        extract: F,
-        ctx: Option<&crate::TransactionContext>,
-    ) -> Result<Vec<T>>
-    where
-        P: Fn(&Key, &NodeData) -> bool + Send + Sync,
-        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync,
-        T: Send,
-    {
-        self.collects_at(root, start, pred, extract, ctx)
-            .try_collect()
-            .await
-    }
-
-    /// Collects entries matching a key prefix into a `Vec`.
-    ///
-    /// Unlike `collects_vec_at`, this method **stops iteration** as soon as
-    /// a key is encountered that doesn't start with the prefix. This is much
-    /// more efficient for prefix-based queries because it doesn't scan the
-    /// entire tree after the prefix range.
-    pub(crate) async fn collects_prefix_vec_at<F, T>(
-        &self,
-        root: NodeId,
-        prefix: &Key,
-        extract: F,
-    ) -> Result<Vec<T>>
-    where
-        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync,
-        T: Send,
-    {
-        self.collects_prefix_at(root, prefix, extract)
-            .try_collect()
-            .await
+        self.collect_internal(root, scan, pred, extract)
     }
 
     /// Creates a stream of entries matching a key prefix.
@@ -643,17 +600,18 @@ impl BTree {
     /// terminating as soon as a non-matching key is encountered. The iteration
     /// seeks to the prefix position first (O(log n)), then yields matching
     /// entries until the prefix range ends.
-    pub(crate) fn collects_prefix_at<'a, F, T>(
+    pub(crate) fn collect_prefix_at<'a, F, T>(
         &'a self,
         root: NodeId,
         prefix: &'a Key,
+        dir: Dir,
         extract: F,
     ) -> impl Stream<Item = Result<T>> + Send + 'a
     where
         F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync + 'a,
         T: Send + 'a,
     {
-        self.collects_prefix_internal(root, prefix, extract)
+        self.collect_prefix_internal(root, prefix, dir, extract)
     }
 }
 
@@ -882,6 +840,387 @@ impl BTree {
 enum BorrowDir {
     Left,
     Right,
+}
+
+/// One level in a `Cursor`'s descent stack.
+#[derive(Clone, Copy)]
+pub(crate) struct StackEntry {
+    pub(crate) node: NodeId,
+    pub(crate) idx: usize,
+    pub(crate) len: usize,
+}
+
+/// A cursor for in-order traversal of a B-tree.
+///
+/// Holds a stack of `StackEntry` frames from root to the current
+/// position. Nodes are loaded on demand via `BTree::load_node`;
+/// the `DashMap` cache makes re-loads `O(1)`.
+pub(crate) struct Cursor<'a> {
+    stack: SmallVec<[StackEntry; 8]>,
+    tree: &'a BTree,
+    exhausted: bool,
+}
+
+impl<'a> Cursor<'a> {
+    /// Positions the cursor at the first key `>= target`, or the
+    /// leftmost key when `target` is `None`.
+    pub(crate) async fn seek(
+        tree: &'a BTree,
+        root: NodeId,
+        target: Option<&Key>,
+    ) -> Result<Cursor<'a>> {
+        let mut stack: SmallVec<[StackEntry; 8]> = SmallVec::new();
+
+        // Both `None` (leftmost) and `Some(key)` (first `>=`) follow the
+        // same descent pattern: load node, compute position, push, maybe
+        // descend into a child. The only difference is how `pos` and the
+        // "keep descending" condition are determined.
+        let mut cur = Some(root);
+        while let Some(id) = cur.take() {
+            let node = tree.load_node(id).await?;
+            let (pos, descend) = match target {
+                None => (0, !node.is_leaf),
+                Some(key) => {
+                    let res = node.keys.binary_search(key);
+                    let pos = res.unwrap_or_else(|p| p);
+                    (pos, res.is_err() && !node.is_leaf)
+                }
+            };
+            stack.push(StackEntry {
+                node: id,
+                idx: pos,
+                len: node.keys.len(),
+            });
+            cur = if descend {
+                Some(node.children.get(pos).copied().ok_or_else(|| {
+                    StorageError::InvalidOperation(
+                        "Child index out of bounds during seek".into(),
+                    )
+                })?)
+            } else {
+                None
+            };
+        }
+
+        // Pop entries past the end of their node's keys.
+        while stack.last().is_some_and(|e| e.idx >= e.len) {
+            stack.pop();
+        }
+        let exhausted = stack.is_empty();
+
+        Ok(Cursor {
+            stack,
+            tree,
+            exhausted,
+        })
+    }
+
+    /// Positions the cursor at the last key `<= target`, or the
+    /// rightmost key when `target` is `None`.
+    ///
+    /// Unlike `seek`, the stack may be sparse: levels where no key
+    /// `<= target` exists are omitted. This is correct because
+    /// `advance_back` only descends into children of nodes already
+    /// on the stack; skipped levels simply mean the cursor pops
+    /// further on underflow.
+    pub(crate) async fn seek_back(
+        tree: &'a BTree,
+        root: NodeId,
+        target: Option<&Key>,
+    ) -> Result<Cursor<'a>> {
+        let mut stack: SmallVec<[StackEntry; 8]> = SmallVec::new();
+
+        let mut cur = Some(root);
+        match target {
+            None => {
+                while let Some(id) = cur.take() {
+                    let node = tree.load_node(id).await?;
+                    let len = node.keys.len();
+                    cur = match len.checked_sub(1) {
+                        None => None,
+                        Some(last) => {
+                            stack.push(StackEntry {
+                                node: id,
+                                idx: last,
+                                len,
+                            });
+                            if node.is_leaf {
+                                None
+                            } else {
+                                Some(node.children.last().copied().ok_or_else(
+                                    || {
+                                        StorageError::InvalidOperation(
+                                            "Internal node has no children"
+                                                .into(),
+                                        )
+                                    },
+                                )?)
+                            }
+                        }
+                    };
+                }
+            }
+            Some(key) => {
+                while let Some(id) = cur.take() {
+                    let node = tree.load_node(id).await?;
+                    let len = node.keys.len();
+                    let res = node.keys.binary_search(key);
+                    cur = match res {
+                        Ok(pos) => {
+                            stack.push(StackEntry {
+                                node: id,
+                                idx: pos,
+                                len,
+                            });
+                            None
+                        }
+                        Err(pos) => {
+                            if let Some(prev) = pos.checked_sub(1) {
+                                stack.push(StackEntry {
+                                    node: id,
+                                    idx: prev,
+                                    len,
+                                });
+                            }
+                            if node.is_leaf {
+                                None
+                            } else {
+                                Some(
+                                    node.children
+                                        .get(pos)
+                                        .copied()
+                                        .ok_or_else(|| {
+                                            StorageError::InvalidOperation(
+                                                "Child index out of bounds \
+                                                 during seek_back"
+                                                    .into(),
+                                            )
+                                        })?,
+                                )
+                            }
+                        }
+                    };
+                }
+            }
+        }
+
+        let exhausted = stack.is_empty();
+
+        Ok(Cursor {
+            stack,
+            tree,
+            exhausted,
+        })
+    }
+
+    /// Yields the current entry and advances the cursor forward.
+    ///
+    /// Returns `Ok(None)` once the cursor is exhausted. The stepping
+    /// logic is:
+    ///  1. Pop any past-the-end stack entries (returned from an
+    ///     exhausted subtree).
+    ///  2. Yield `keys[idx]` from the top entry.
+    ///  3. Increment `idx`. If the node is internal, descend into
+    ///     `children[idx]` (the new, post-increment index) leftmost.
+    pub(crate) async fn advance(
+        &mut self,
+    ) -> Result<Option<(Key, Arc<NodeData>)>> {
+        if self.exhausted {
+            Ok(None)
+        } else {
+            while self.stack.last().is_some_and(|e| e.idx >= e.len) {
+                self.stack.pop();
+            }
+
+            match self.stack.last().copied() {
+                None => {
+                    self.exhausted = true;
+                    Ok(None)
+                }
+                Some(e) => {
+                    let node = self.tree.load_node(e.node).await?;
+                    let key = node
+                        .keys
+                        .get(e.idx)
+                        .ok_or_else(|| {
+                            StorageError::InvalidOperation(
+                                "Key index out of bounds in advance".into(),
+                            )
+                        })?
+                        .clone();
+                    let data = Arc::clone(node.values.get(e.idx).ok_or_else(
+                        || {
+                            StorageError::InvalidOperation(
+                                "Value index out of bounds in advance".into(),
+                            )
+                        },
+                    )?);
+
+                    if let Some(top) = self.stack.last_mut() {
+                        top.idx = e.idx + 1;
+                    }
+
+                    if !node.is_leaf {
+                        let child =
+                            node.children.get(e.idx + 1).copied().ok_or_else(
+                                || {
+                                    StorageError::InvalidOperation(
+                                        "Child index out of bounds in advance"
+                                            .into(),
+                                    )
+                                },
+                            )?;
+                        drop(node);
+                        self.descend_leftmost(child).await?;
+                    }
+
+                    Ok(Some((key, data)))
+                }
+            }
+        }
+    }
+
+    /// Yields the current entry and advances the cursor backward.
+    ///
+    /// Mirror of `advance`. The stepping logic is:
+    ///  1. Pop any underflowed stack entries (index wrapped past zero
+    ///     after the previous step).
+    ///  2. Yield `keys[idx]` from the top entry.
+    ///  3. If the node is internal, descend into `children[idx]`
+    ///     rightmost. Then decrement `idx` (or pop if it was `0`).
+    ///     If the node is a leaf, just decrement (or pop).
+    pub(crate) async fn advance_back(
+        &mut self,
+    ) -> Result<Option<(Key, Arc<NodeData>)>> {
+        if self.exhausted {
+            Ok(None)
+        } else {
+            while self.stack.last().is_some_and(|e| e.idx >= e.len) {
+                self.stack.pop();
+            }
+
+            match self.stack.last().copied() {
+                None => {
+                    self.exhausted = true;
+                    Ok(None)
+                }
+                Some(e) => {
+                    let node = self.tree.load_node(e.node).await?;
+                    let key = node
+                        .keys
+                        .get(e.idx)
+                        .ok_or_else(|| {
+                            StorageError::InvalidOperation(
+                                "Key index out of bounds in advance_back"
+                                    .into(),
+                            )
+                        })?
+                        .clone();
+                    let data = Arc::clone(node.values.get(e.idx).ok_or_else(
+                        || {
+                            StorageError::InvalidOperation(
+                                "Value index out of bounds in advance_back"
+                                    .into(),
+                            )
+                        },
+                    )?);
+
+                    // Decrement (or pop on underflow) BEFORE descending
+                    // so the stack entry is correct when the subtree is
+                    // later exhausted and we return to this level.
+                    match e.idx.checked_sub(1) {
+                        Some(prev) => {
+                            if let Some(top) = self.stack.last_mut() {
+                                top.idx = prev;
+                            }
+                        }
+                        None => {
+                            self.stack.pop();
+                        }
+                    }
+
+                    if !node.is_leaf {
+                        let child =
+                            node.children.get(e.idx).copied().ok_or_else(
+                                || {
+                                    StorageError::InvalidOperation(
+                                        "Child index out of bounds in \
+                                     advance_back"
+                                            .into(),
+                                    )
+                                },
+                            )?;
+                        drop(node);
+                        self.descend_rightmost(child).await?;
+                    }
+
+                    Ok(Some((key, data)))
+                }
+            }
+        }
+    }
+
+    /// Pushes the leftmost path from `start` onto the stack.
+    async fn descend_leftmost(&mut self, start: NodeId) -> Result<()> {
+        let mut cur = Some(start);
+        while let Some(id) = cur.take() {
+            let node = self.tree.load_node(id).await?;
+            let len = node.keys.len();
+            self.stack.push(StackEntry {
+                node: id,
+                idx: 0,
+                len,
+            });
+            cur = if node.is_leaf {
+                None
+            } else {
+                Some(node.children.first().copied().ok_or_else(|| {
+                    StorageError::InvalidOperation(
+                        "Internal node has no children".into(),
+                    )
+                })?)
+            };
+        }
+        Ok(())
+    }
+
+    /// Pushes the rightmost path from `start` onto the stack.
+    async fn descend_rightmost(&mut self, start: NodeId) -> Result<()> {
+        let mut cur = Some(start);
+        while let Some(id) = cur.take() {
+            let node = self.tree.load_node(id).await?;
+            let len = node.keys.len();
+            cur = match len.checked_sub(1) {
+                None => None,
+                Some(last) => {
+                    self.stack.push(StackEntry {
+                        node: id,
+                        idx: last,
+                        len,
+                    });
+                    if node.is_leaf {
+                        None
+                    } else {
+                        Some(node.children.last().copied().ok_or_else(
+                            || {
+                                StorageError::InvalidOperation(
+                                    "Internal node has no children".into(),
+                                )
+                            },
+                        )?)
+                    }
+                }
+            };
+        }
+        Ok(())
+    }
+}
+
+/// Unfold state for cursor-based `collect` streams.
+enum CollectState<'a> {
+    NeedSeek,
+    Scanning(Box<Cursor<'a>>),
+    Done,
 }
 
 /// Private utilities for B-tree operations
@@ -1593,32 +1932,116 @@ impl BTree {
         Ok(out)
     }
 
-    /// Internal operation returning next key and its data in a single traversal.
-    async fn get_next_internal(
-        &self,
-        root: NodeId,
-        after: Option<&Key>,
-    ) -> Result<Option<(Key, Arc<NodeData>)>> {
-        match after {
-            None => self.find_leftmost_entry(root).await,
-            Some(key) => self.find_successor_entry(root, key).await,
+    /// Returns `true` when `key` has gone past the far bound of the
+    /// scan (the end bound for forward, the start bound for reverse).
+    fn past_far_bound(scan: &Scan, key: &Key) -> bool {
+        match scan.dir() {
+            Dir::Forward => match scan.bounds().end() {
+                Bound::Unbounded => false,
+                Bound::Included(hi) => key > hi,
+                Bound::Excluded(hi) => key >= hi,
+            },
+            Dir::Reverse => match scan.bounds().start() {
+                Bound::Unbounded => false,
+                Bound::Included(lo) => key < lo,
+                Bound::Excluded(lo) => key <= lo,
+            },
         }
+    }
+
+    /// Advances the cursor, skipping entries outside `scan` bounds or
+    /// rejected by `pred`/`extract`, and returns the first accepted
+    /// item. `None` signals exhaustion or early termination.
+    async fn scan_advance<P, F, T>(
+        cursor: &mut Cursor<'_>,
+        scan: &Scan,
+        pred: &P,
+        extract: &F,
+    ) -> Option<Result<T>>
+    where
+        P: Fn(&Key, &NodeData) -> bool,
+        F: Fn(&Key, &NodeData) -> Option<T>,
+    {
+        let mut found = None;
+        let mut again = Some(());
+
+        while let Some(()) = again.take() {
+            let entry = match scan.dir() {
+                Dir::Forward => cursor.advance().await,
+                Dir::Reverse => cursor.advance_back().await,
+            };
+            match entry {
+                Err(e) => found = Some(Err(e)),
+                Ok(None) => {}
+                Ok(Some((key, data))) => {
+                    if Self::past_far_bound(scan, &key) {
+                        // past far bound; early termination
+                    } else if !scan.bounds().contains(&key) {
+                        again = Some(());
+                    } else if pred(&key, &data) {
+                        match extract(&key, &data) {
+                            Some(val) => found = Some(Ok(val)),
+                            None => again = Some(()),
+                        }
+                    } else {
+                        again = Some(());
+                    }
+                }
+            }
+        }
+
+        found
+    }
+
+    /// Advances the cursor within a prefix range, returning the first
+    /// extracted item. `None` signals exhaustion or prefix termination.
+    async fn prefix_advance<F, T>(
+        cursor: &mut Cursor<'_>,
+        prefix: &Key,
+        dir: Dir,
+        extract: &F,
+    ) -> Option<Result<T>>
+    where
+        F: Fn(&Key, &NodeData) -> Option<T>,
+    {
+        let mut found = None;
+        let mut again = Some(());
+
+        while let Some(()) = again.take() {
+            let entry = match dir {
+                Dir::Forward => cursor.advance().await,
+                Dir::Reverse => cursor.advance_back().await,
+            };
+            match entry {
+                Err(e) => found = Some(Err(e)),
+                Ok(None) => {}
+                Ok(Some((key, data))) if key.starts_with(prefix) => {
+                    match extract(&key, &data) {
+                        Some(val) => found = Some(Ok(val)),
+                        None => again = Some(()),
+                    }
+                }
+                Ok(Some((key, _)))
+                    if matches!(dir, Dir::Reverse) && key > *prefix =>
+                {
+                    again = Some(());
+                }
+                Ok(Some(_)) => {}
+            }
+        }
+
+        found
     }
 
     /// Internal COLLECT operation returning a stream of key-value pairs.
     ///
-    /// Creates a stream that iterates over tree entries in lexicographic order,
-    /// filtering by predicate and transforming with extract function.
-    ///
-    /// # Stream Semantics
-    ///
-    /// - **Lazy**: Entries are fetched on-demand as the stream is consumed
-    /// - **Memory-efficient**: Only one entry is held at a time
-    /// - **Cancellable**: Dropping the stream stops iteration immediately
-    fn collects_internal<'a, P, F, T>(
+    /// Uses a `Cursor` for `O(1)` amortized iteration instead of per-entry
+    /// root-to-leaf descent. The `Scan` controls direction, range bounds,
+    /// and the initial seek target.
+    fn collect_internal<'a, P, F, T>(
         &'a self,
         root: NodeId,
-        start: Option<&'a Key>,
+        scan: Scan,
         pred: P,
         extract: F,
     ) -> impl Stream<Item = Result<T>> + Send + 'a
@@ -1627,81 +2050,90 @@ impl BTree {
         F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync + 'a,
         T: Send + 'a,
     {
-        // Wrap closures in Arc for shared ownership across async iterations
         let pred = Arc::new(pred);
         let extract = Arc::new(extract);
+        let scan = Arc::new(scan);
 
-        // State: `Some(key)` = last key yielded, `None` = start from beginning
-        // We use `Option<Option<Key>>` where outer `None` signals stream end
-        let init_state: Option<Option<Key>> = Some(start.cloned());
-
-        futures::stream::unfold(init_state, move |state| {
+        futures::stream::unfold(CollectState::NeedSeek, move |state| {
             let pred = Arc::clone(&pred);
             let extract = Arc::clone(&extract);
+            let scan = Arc::clone(&scan);
 
             async move {
-                // `None` state means stream is exhausted
-                let cursor = state?;
-                self.collects_find_next(
-                    root,
-                    cursor,
-                    pred.as_ref(),
-                    extract.as_ref(),
-                )
-                .await
+                match state {
+                    CollectState::Done => None,
+                    CollectState::NeedSeek => {
+                        let target = match scan.dir() {
+                            Dir::Forward => match scan.bounds().start() {
+                                Bound::Unbounded => None,
+                                Bound::Included(k) | Bound::Excluded(k) => {
+                                    Some(k.clone())
+                                }
+                            },
+                            Dir::Reverse => match scan.bounds().end() {
+                                Bound::Unbounded => None,
+                                Bound::Included(k) | Bound::Excluded(k) => {
+                                    Some(k.clone())
+                                }
+                            },
+                        };
+
+                        let res = match scan.dir() {
+                            Dir::Forward => {
+                                Cursor::seek(self, root, target.as_ref()).await
+                            }
+                            Dir::Reverse => {
+                                Cursor::seek_back(self, root, target.as_ref())
+                                    .await
+                            }
+                        };
+
+                        match res {
+                            Err(e) => Some((Err(e), CollectState::Done)),
+                            Ok(mut cur) => Self::scan_advance(
+                                &mut cur,
+                                &scan,
+                                pred.as_ref(),
+                                extract.as_ref(),
+                            )
+                            .await
+                            .map(|item| match item {
+                                Ok(v) => (
+                                    Ok(v),
+                                    CollectState::Scanning(Box::new(cur)),
+                                ),
+                                Err(e) => (Err(e), CollectState::Done),
+                            }),
+                        }
+                    }
+                    CollectState::Scanning(mut cur) => Self::scan_advance(
+                        &mut cur,
+                        &scan,
+                        pred.as_ref(),
+                        extract.as_ref(),
+                    )
+                    .await
+                    .map(|item| match item {
+                        Ok(v) => (Ok(v), CollectState::Scanning(cur)),
+                        Err(e) => (Err(e), CollectState::Done),
+                    }),
+                }
             }
         })
     }
 
-    /// Recursive helper for `collects_internal` that finds the next matching entry.
-    async fn collects_find_next<P, F, T>(
-        &self,
-        root: NodeId,
-        cursor: Option<Key>,
-        pred: &P,
-        extract: &F,
-    ) -> Option<(Result<T>, Option<Option<Key>>)>
-    where
-        P: Fn(&Key, &NodeData) -> bool + Send + Sync,
-        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync,
-        T: Send,
-    {
-        let mut cur = cursor;
-        let mut out = None;
-        let mut again = Some(());
-
-        while again.take().is_some() {
-            match self.get_next_internal(root, cur.as_ref()).await {
-                Ok(None) => out = None,
-                Err(e) => out = Some((Err(e), None)),
-                Ok(Some((key, data))) => {
-                    match pred(&key, &data)
-                        .then(|| extract(&key, &data))
-                        .flatten()
-                    {
-                        Some(val) => out = Some((Ok(val), Some(Some(key)))),
-                        None => {
-                            cur = Some(key);
-                            again = Some(());
-                        }
-                    }
-                }
-            }
-        }
-
-        out
-    }
-
-    /// Internal implementation for prefix-based collection with early termination.
+    /// Internal implementation for prefix-based collection with early
+    /// termination. Uses a `Cursor` for `O(1)` amortized iteration.
     ///
-    /// This method:
-    /// 1. First checks and yields the entry at the exact prefix key (if exists)
-    /// 2. Then iterates entries after the prefix, yielding while keys match
-    /// 3. Terminates as soon as a key doesn't start with the prefix
-    fn collects_prefix_internal<'a, F, T>(
+    /// For `Dir::Forward`: seeks to `prefix`, advances forward, stops
+    /// when `!key.starts_with(prefix)`. For `Dir::Reverse`: computes
+    /// `prefix.prefix_upper_bound()` as the seek target and advances
+    /// backward with the same termination check.
+    fn collect_prefix_internal<'a, F, T>(
         &'a self,
         root: NodeId,
         prefix: &'a Key,
+        dir: Dir,
         extract: F,
     ) -> impl Stream<Item = Result<T>> + Send + 'a
     where
@@ -1710,112 +2142,58 @@ impl BTree {
     {
         let extract = Arc::new(extract);
 
-        // State machine:
-        // - `Some(None)` = haven't checked the prefix key yet
-        // - `Some(Some(key))` = last key yielded, check successor
-        // - `None` = stream exhausted
-        let init_state: Option<Option<Key>> = Some(None);
-
-        futures::stream::unfold(init_state, move |state| {
+        futures::stream::unfold(CollectState::NeedSeek, move |state| {
             let extract = Arc::clone(&extract);
 
             async move {
                 match state {
-                    None => None, // Stream exhausted
-                    Some(None) => {
-                        // First iteration: check the exact prefix key
-                        self.collects_prefix_first(
-                            root,
-                            prefix,
-                            extract.as_ref(),
-                        )
-                        .await
+                    CollectState::Done => None,
+                    CollectState::NeedSeek => {
+                        let target = match dir {
+                            Dir::Forward => Some(prefix.clone()),
+                            Dir::Reverse => prefix.prefix_upper_bound(),
+                        };
+                        let res = match dir {
+                            Dir::Forward => {
+                                Cursor::seek(self, root, target.as_ref()).await
+                            }
+                            Dir::Reverse => {
+                                Cursor::seek_back(self, root, target.as_ref())
+                                    .await
+                            }
+                        };
+                        match res {
+                            Err(e) => Some((Err(e), CollectState::Done)),
+                            Ok(mut cur) => Self::prefix_advance(
+                                &mut cur,
+                                prefix,
+                                dir,
+                                extract.as_ref(),
+                            )
+                            .await
+                            .map(|item| match item {
+                                Ok(v) => (
+                                    Ok(v),
+                                    CollectState::Scanning(Box::new(cur)),
+                                ),
+                                Err(e) => (Err(e), CollectState::Done),
+                            }),
+                        }
                     }
-                    Some(Some(cursor)) => {
-                        // Subsequent iterations: find next entry after cursor
-                        self.collects_prefix_next(
-                            root,
-                            prefix,
-                            &cursor,
-                            extract.as_ref(),
-                        )
-                        .await
-                    }
+                    CollectState::Scanning(mut cur) => Self::prefix_advance(
+                        &mut cur,
+                        prefix,
+                        dir,
+                        extract.as_ref(),
+                    )
+                    .await
+                    .map(|item| match item {
+                        Ok(v) => (Ok(v), CollectState::Scanning(cur)),
+                        Err(e) => (Err(e), CollectState::Done),
+                    }),
                 }
             }
         })
-    }
-
-    /// Helper for `collects_prefix_internal`: handle the first entry (exact prefix).
-    async fn collects_prefix_first<F, T>(
-        &self,
-        root: NodeId,
-        prefix: &Key,
-        extract: &F,
-    ) -> Option<(Result<T>, Option<Option<Key>>)>
-    where
-        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync,
-        T: Send,
-    {
-        // Check if exact prefix key exists
-        match self.get_internal(root, prefix).await {
-            Err(e) => Some((Err(e), None)), // Error, terminate
-            Ok(None) => {
-                // No entry at prefix, try to find first entry after prefix
-                self.collects_prefix_next(root, prefix, prefix, extract)
-                    .await
-            }
-            Ok(Some(data)) => {
-                // Entry exists at prefix
-                match extract(prefix, &data) {
-                    Some(val) => {
-                        // Yield and continue from prefix
-                        Some((Ok(val), Some(Some(prefix.clone()))))
-                    }
-                    None => {
-                        // Skip this entry, find next
-                        self.collects_prefix_next(root, prefix, prefix, extract)
-                            .await
-                    }
-                }
-            }
-        }
-    }
-
-    /// Helper for `collects_prefix_internal`: find next entry after cursor.
-    async fn collects_prefix_next<F, T>(
-        &self,
-        root: NodeId,
-        prefix: &Key,
-        cursor: &Key,
-        extract: &F,
-    ) -> Option<(Result<T>, Option<Option<Key>>)>
-    where
-        F: Fn(&Key, &NodeData) -> Option<T> + Send + Sync,
-        T: Send,
-    {
-        let mut cur = cursor.clone();
-        let mut out = None;
-        let mut again = Some(());
-
-        while again.take().is_some() {
-            match self.get_next_internal(root, Some(&cur)).await {
-                Err(e) => out = Some((Err(e), None)),
-                Ok(None) => out = None,
-                Ok(Some((key, data))) if key.starts_with(prefix) => {
-                    match extract(&key, &data) {
-                        Some(val) => out = Some((Ok(val), Some(Some(key)))),
-                        None => {
-                            cur = key;
-                            again = Some(());
-                        }
-                    }
-                }
-                Ok(Some(_)) => out = None,
-            }
-        }
-
-        out
     }
 
     /// Finds the leftmost (smallest) key in the subtree rooted at `node_id`.
@@ -1913,6 +2291,64 @@ impl BTree {
                             match node.children.get(p) {
                                 Some(&c) => cur = Some(c),
                                 None => out = at(p),
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(out.or(fb))
+    }
+
+    /// Finds the predecessor entry (key + data) strictly less than `target`.
+    ///
+    /// Mirror of `find_successor_entry`. Descends towards `target`,
+    /// remembering the deepest candidate key to the left of the search
+    /// position to fall back on if the subtree has no predecessor.
+    async fn find_predecessor_entry(
+        &self,
+        node_id: NodeId,
+        target: &Key,
+    ) -> Result<Option<(Key, Arc<NodeData>)>> {
+        let mut cur = Some(node_id);
+        let mut tgt = Some(target);
+        let mut fb = None;
+        let mut out = None;
+
+        while let Some(id) = cur.take() {
+            let node = self.load_node(id).await?;
+
+            let at = |i: usize| {
+                node.keys.get(i).cloned().zip(node.values.get(i).cloned())
+            };
+
+            match tgt {
+                None => match node.children.last() {
+                    Some(&c) if !node.is_leaf => cur = Some(c),
+                    _ => {
+                        out = node.keys.len().checked_sub(1).and_then(at);
+                    }
+                },
+                Some(t) => {
+                    let res = node.keys.binary_search(t);
+
+                    match (node.is_leaf, res) {
+                        (true, Ok(p) | Err(p)) => {
+                            out = p.checked_sub(1).and_then(at);
+                        }
+                        (false, _) => {
+                            let p = match res {
+                                Ok(p) | Err(p) => p,
+                            };
+                            tgt = tgt.filter(|_| res.is_err());
+                            fb = p.checked_sub(1).and_then(at).or(fb.take());
+
+                            match node.children.get(p) {
+                                Some(&c) => cur = Some(c),
+                                None => {
+                                    out = p.checked_sub(1).and_then(at);
+                                }
                             }
                         }
                     }

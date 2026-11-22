@@ -8,7 +8,7 @@ use crossterm::event::{
     Event, EventStream, KeyCode, KeyEventKind, KeyModifiers,
 };
 use futures::future::BoxFuture;
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use lru::LruCache;
 use miette::{IntoDiagnostic, Result};
 use ratatui::backend::CrosstermBackend;
@@ -449,12 +449,15 @@ impl App {
 
         // Collect unique subscripts at the next level
         let results: Vec<Subscript> = db
-            .collects_vec(
+            .collect(
                 &name,
                 None,
                 |k, _| k.len() > depth && k.starts_with(path),
                 |k, _| k.get(depth).cloned(),
             )
+            .await
+            .into_diagnostic()?
+            .try_collect()
             .await
             .into_diagnostic()?;
 
@@ -462,7 +465,7 @@ impl App {
 
         // Build items with flags and value preview
         // NOTE: This makes separate `db.data()` and `db.get()` calls per subscript.
-        // Could be optimized to a single `collects_vec` pass that extracts flags and
+        // Could be optimized to a single `collect` pass that extracts flags and
         // values directly, but the current approach is simpler and good enough for now.
         let width = shortcut_width(subs.len());
         let items: Vec<Item> =

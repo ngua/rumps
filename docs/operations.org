@@ -12,8 +12,11 @@ In the following "transaction context" means if the operation works outside of a
 - [[#order][=order= (=$ORDER=)]]
 - [[#query][=query= (=$QUERY=)]]
 - [[#increment][=increment= (=$INCREMENT=)]]
-- [[#collects][=collects=]]
+- [[#collect][=collect=]]
+  - [[#scan-bounds-and-dir][=Scan=, =Bounds=, and =Dir=]]
   - [[#collecting-all-keys][Collecting all keys]]
+  - [[#range-bounded-queries][Range-bounded queries]]
+  - [[#reverse-iteration][Reverse iteration]]
   - [[#filtering-by-key-structure][Filtering by key structure]]
   - [[#filtering-and-transformation][Filtering and transformation]]
   - [[#collecting-into-a-vec-directly][Collecting into a Vec directly]]
@@ -146,7 +149,7 @@ while let Some(k) = cur {
 }
 #+end_src
 
-This mimics traditional MUMPS iteration. However, for most use cases, =collects= (below) is cleaner and more idiomatic.
+This mimics traditional MUMPS iteration. However, for most use cases, =collect= (below) is cleaner and more idiomatic.
 * =increment= (=$INCREMENT=)
 Atomically increments a numeric value at a key, returning the new value. If the key does not exist, it is treated as =0=. This is the RUMPS equivalent of MUMPS's =$INCREMENT= function.
 
@@ -183,10 +186,10 @@ let v = db.increment(&local!("SCRATCH"), &key![1], Increment::from(1i64)).await?
 assert_eq!(v, value!(1));
 #+end_src
 
-* =collects=
-=collects= takes a predicate (which entries to include) and an extractor (how to transform them), then produces a stream of results. Results are /always/ in sorted key order.
+* =collect=
+=collect= takes a =Scan= (which keys to visit, in which direction), a predicate (which entries to include), and an extractor (how to transform them), then produces a stream of results. Results are in key order according to the scan direction: ascending for =Forward=, descending for =Reverse=.
 
-*This is a RUMPS extension*; traditional MUMPS doesn't have this. Instead, you'd write imperative loops with =@ORDER=. RUMPS provides =collects= as a declarative, stream-based alternative that's more idiomatic for Rust and modern programming.
+*This is a RUMPS extension*; traditional MUMPS doesn't have this. Instead, you'd write imperative loops with =@ORDER=. RUMPS provides =collect= as a declarative, stream-based alternative that's more idiomatic for Rust and modern programming.
 
 Why the extension? A few reasons:
 1. *Composability*: Streams chain naturally with =.map()=, =.filter()=, =.take()=, etc.
@@ -196,14 +199,58 @@ Why the extension? A few reasons:
 
 *Transaction context*: Not required. Works outside transactions as it is read-only.
 
+** =Scan=, =Bounds=, and =Dir=
+A =Scan= bundles a key range (=Bounds=) with an iteration direction (=Dir=). It is the second argument to =collect=.
+
+=Bounds= wraps a pair of =Bound<Key>= values and converts from standard Rust range syntax: =..= (all keys), =a..b= (half-open), =a..=b= (closed), =a..= (from), =..b= (to), =..=b= (to inclusive). For explicit excluded endpoints, use =Bounds::new(Bound::Excluded(a), Bound::Excluded(b))=.
+
+=Dir= is either =Forward= (ascending) or =Reverse= (descending).
+
+Convenience constructors:
+
+#+begin_src rust
+use rumps_types::{key, Scan, Bounds};
+use std::ops::Bound;
+
+Scan::forward(..)                           // all keys, ascending
+Scan::reverse(..)                           // all keys, descending
+Scan::forward(key![100]..key![200])         // half-open range, ascending
+Scan::reverse(key![100]..=key![200])        // closed range, descending
+Scan::forward(key![500]..)                  // from key 500 onward
+Scan::forward(Bounds::new(                  // explicit excluded bounds
+    Bound::Excluded(key![10]),
+    Bound::Excluded(key![20]),
+))
+#+end_src
+
+The =scan= parameter accepts =impl Into<Scan>=, so =Option<&Key>= also works directly: =None= becomes =Scan::forward(..)= (all keys, ascending), and =Some(&key)= becomes a forward scan starting just after that key (matching the resume-from-cursor pattern):
+
+#+begin_src rust
+use rumps_types::key;
+
+// These are equivalent:
+db.collect(&name, None, pred, extract).await?;
+db.collect(&name, Scan::forward(..), pred, extract).await?;
+
+// And these are equivalent (resume after a known key):
+let last = key![42];
+db.collect(&name, Some(&last), pred, extract).await?;
+db.collect(&name, Scan::forward(Bounds::new(
+    Bound::Excluded(last),
+    Bound::Unbounded,
+)), pred, extract).await?;
+#+end_src
+
+Range bounds provide early termination at the cursor level; the B-tree seeks directly to the start of the range and stops at the end, so bounded scans only visit the keys within the range.
+
 ** Collecting all keys
 The simplest use: get all key-value pairs from a variable.
 
 #+begin_src rust
 // Stream-based
-let mut stream = db.collects(
+let mut stream = db.collect(
     &global!("X"),
-    None,
+    Scan::forward(..),
     |_, _| true,  // include all
     |k, v| Some((k.clone(), v.clone())),
 ).await?;
@@ -213,21 +260,91 @@ while let Some(item) = stream.next().await {
     println!("{:?} = {:?}", key, val);
 }
 
-// Or collect to Vec directly
+// Or collect to Vec directly (needs `futures::TryStreamExt`)
 let all: Vec<(Key, Option<Value>)> = db
-    .collects_vec(&global!("X"), None, |_, _| true, |k, v| Some((k.clone(), v.clone())))
+    .collect(
+        &global!("X"),
+        Scan::forward(..),
+        |_, _| true,
+        |k, v| Some((k.clone(), v.clone())),
+    )
+    .await?
+    .try_collect()
     .await?;
+#+end_src
+
+** Range-bounded queries
+#+begin_src rust
+use rumps_types::{key, Scan, Value};
+use futures::TryStreamExt;
+
+// Assuming ^SENSOR{1} through ^SENSOR{1000} exist.
+// Collect only keys 100..200 (half-open: includes 100, excludes 200)
+let vals: Vec<Value> = db
+    .collect(
+        &global!("SENSOR"),
+        Scan::forward(key![100]..key![200]),
+        |_, _| true,
+        |_, v| v.clone(),
+    )
+    .await?
+    .try_collect()
+    .await?;
+
+// Closed range: includes both endpoints
+let vals: Vec<Value> = db
+    .collect(
+        &global!("SENSOR"),
+        Scan::forward(key![100]..=key![200]),
+        |_, _| true,
+        |_, v| v.clone(),
+    )
+    .await?
+    .try_collect()
+    .await?;
+#+end_src
+
+** Reverse iteration
+#+begin_src rust
+use rumps_types::{key, Scan, Key};
+use futures::TryStreamExt;
+
+// All keys in descending order
+let keys: Vec<Key> = db
+    .collect(
+        &global!("X"),
+        Scan::reverse(..),
+        |_, _| true,
+        |k, _| Some(k.clone()),
+    )
+    .await?
+    .try_collect()
+    .await?;
+
+// Reverse within a range: keys from 500 down to 100 (half-open)
+let keys: Vec<Key> = db
+    .collect(
+        &global!("X"),
+        Scan::reverse(key![100]..key![500]),
+        |_, _| true,
+        |k, _| Some(k.clone()),
+    )
+    .await?
+    .try_collect()
+    .await?;
+// yields [499], [498], ..., [100]
 #+end_src
 
 ** Filtering by key structure
 #+begin_src rust
 // Assuming ^P{1,"NAME"}="Alice", ^P{2,"NAME"}="Bob", ^P{3,"NAME"}="Carol"
+use rumps_types::Scan;
 use futures::TryStreamExt;
 
 let names: Vec<String> = db
-    .collects(
+    .collect(
         &global!("P"),
-        None,
+        Scan::forward(..),
         |k, _| k.len() == 2 && k.get(1) == Some(&subscript!("NAME")),
         |_, v| v.as_ref()?.as_str().map(str::to_owned),
     )
@@ -240,11 +357,13 @@ assert_eq!(names, vec!["Alice", "Bob", "Carol"]);  // sorted by key
 
 ** Filtering and transformation
 #+begin_src rust
+use rumps_types::Scan;
+
 // Same data as above; get patients with ID > 1, uppercase names
 let names: Vec<String> = db
-    .collects(
+    .collect(
         &global!("P"),
-        None,
+        Scan::forward(..),
         |k, _| {
             k.len() == 2
                 && k.get(0).and_then(|s| s.as_i64()).is_some_and(|id| id > 1)
@@ -261,19 +380,34 @@ assert_eq!(names, vec!["BOB", "CAROL"]);
 
 ** Collecting into a Vec directly
 #+begin_src rust
-// collects_vec is a convenience wrapper
+use rumps_types::Scan;
+
+// `try_collect` gathers the stream into a `Vec`
 let vals: Vec<Value> = db
-    .collects_vec(&global!("P"), None, |k, _| k.len() == 2, |_, v| v.clone())
+    .collect(
+        &global!("P"),
+        Scan::forward(..),
+        |k, _| k.len() == 2,
+        |_, v| v.clone(),
+    )
+    .await?
+    .try_collect()
     .await?;
 #+end_src
 
 ** Streaming with early termination
 #+begin_src rust
+use rumps_types::Scan;
 use futures::StreamExt;
 
 // Standard stream combinators work
 let first_two: Vec<String> = db
-    .collects(&global!("P"), None, |_, _| true, |k, _| Some(format!("{:?}", k)))
+    .collect(
+        &global!("P"),
+        Scan::forward(..),
+        |_, _| true,
+        |k, _| Some(format!("{:?}", k)),
+    )
     .await?
     .take(2)
     .try_collect()

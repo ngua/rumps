@@ -22,6 +22,7 @@ compile_error!("RUMPS requires a 64-bit platform (usize must be 64 bits)");
 pub use convert::{FromValue, ToValue};
 pub use error::{Error, Result, StorageError};
 pub use key::*;
+pub use scan::{Bounds, Dir, Scan};
 // Re-export serde_json::json! macro for convenience with JSON subscripts
 pub use serde_json::json;
 // Re-export smol_str for constructing `Name`s from runtime strings using
@@ -34,4 +35,5 @@ pub use value::*;
 mod convert;
 mod error;
 mod key;
+mod scan;
 mod value;

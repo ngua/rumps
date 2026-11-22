@@ -74,7 +74,7 @@ let deep = key![1, "CONTACT", "ADDRESS", "CITY"];
 let root = key![];
 #+end_src
 
-Keys are ordered lexicographically by their subscripts, which means iteration (via =order= or =collects=) yields keys in a predictable, sorted order.
+Keys are ordered lexicographically by their subscripts, which means iteration (via =order= or =collect=) yields keys in a predictable, sorted order.
 *** Subscript types
 RUMPS subscripts are represented by the =Subscript= enum. Unlike traditional MUMPS where everything was stringly-typed, RUMPS supports explicit types:
 
@@ -119,7 +119,7 @@ db.transaction(|txn| async move {
 }).await?;
 #+end_src
 
-Because subscripts participate in /ordering and traversal/, we require this distinction. When you call =order= or =collects=, RUMPS walks through keys in sorted subscript order. Values just exist at the node; they don't affect iteration order.
+Because subscripts participate in /ordering and traversal/, we require this distinction. When you call =order= or =collect=, RUMPS walks through keys in sorted subscript order. Values just exist at the node; they don't affect iteration order.
 
 Another way to think about it: in a filesystem analogy, subscripts are like directory and file names (they form the path, or /key/), while values are like file contents (what's stored there).
 
@@ -146,7 +146,7 @@ RUMPS adds support for a few =Value= types that don't exist in MUMPS:
 - =Value::Char=: figured it might be nice for e.g. single-character flags and storage is very cheap (vs. storing a whole =Value::String= with one character)
 - =Value::Json=: this one might seem a bit stranger, but it allows for storing chunks of data at paths if you want to; for example, storing an entire array or object at a node
 ** Collation
-/Collation order/ is the rule that determines how keys are sorted. Since RUMPS stores all data in *sorted* B-trees, iteration primitives (i.e. =order=, =collects=) always yields keys *in this order*, so no explicit sorting is needed.
+/Collation order/ is the rule that determines how keys are sorted. Since RUMPS stores all data in *sorted* B-trees, iteration primitives (i.e. =order=, =collect=) always yields keys *in this order*, so no explicit sorting is needed.
 
 Traditional MUMPS treats everything as strings with quirky numeric coercion. RUMPS uses proper types with a well-defined collation:
 

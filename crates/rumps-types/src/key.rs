@@ -82,7 +82,7 @@
 //! ```
 
 use std::hash::{Hash, Hasher};
-use std::{cmp, fmt, mem, slice, vec};
+use std::{cmp, fmt, iter, mem, slice, vec};
 
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -357,6 +357,41 @@ impl Subscript {
         match self {
             Self::Json(j) => Some(j),
             _ => None,
+        }
+    }
+
+    /// Returns the smallest `Subscript` strictly greater than `self` within
+    /// the same type, or `None` at the type's ceiling.
+    pub fn successor(&self) -> Option<Self> {
+        match self {
+            Self::Boolean(false) => Some(Self::Boolean(true)),
+            Self::Boolean(true) => None,
+            Self::Number(n) if n.into_inner().is_nan() => {
+                // `OrderedFloat` sorts `NaN` below everything; its
+                // successor in that ordering is `-INFINITY`
+                Some(Self::Number(OrderedFloat(f64::NEG_INFINITY)))
+            }
+            Self::Number(n) if n.into_inner() < f64::INFINITY => {
+                Some(Self::Number(OrderedFloat(n.into_inner().next_up())))
+            }
+            Self::Number(_) => None,
+            Self::Char(c) if *c < char::MAX => {
+                // Skip the surrogate gap `0xD800..=0xDFFF`
+                let next = *c as u32 + 1;
+                let next = if (0xD800..=0xDFFF).contains(&next) {
+                    0xE000
+                } else {
+                    next
+                };
+                char::from_u32(next).map(Self::Char)
+            }
+            Self::Char(_) => None,
+            Self::String(s) => {
+                let mut s = s.clone();
+                s.push('\0');
+                Some(Self::String(s))
+            }
+            Self::Json(_) => None,
         }
     }
 
@@ -696,6 +731,25 @@ impl Key {
     pub fn starts_with(&self, prefix: &Self) -> bool {
         self.0.len() >= prefix.0.len()
             && self.0[..prefix.0.len()] == prefix.0[..]
+    }
+
+    /// Returns the smallest `Key` whose prefix is strictly greater than `self`
+    /// as a prefix, or `None` if no such key exists.
+    ///
+    /// Works by finding the rightmost subscript that has a `successor`. That
+    /// subscript is replaced with its successor, and all subscripts after it
+    /// are dropped. If no subscript has a successor (or the key is empty),
+    /// returns `None`.
+    pub fn prefix_upper_bound(&self) -> Option<Self> {
+        self.0.iter().enumerate().rev().find_map(|(i, s)| {
+            s.successor().map(|succ| {
+                self.0[..i]
+                    .iter()
+                    .cloned()
+                    .chain(iter::once(succ))
+                    .collect()
+            })
+        })
     }
 
     /// Returns the parent key (all subscripts except the last), or None if empty.
@@ -1475,5 +1529,122 @@ mod tests {
         assert_eq!(with_json.len(), 2);
         assert!(with_json.get(0).unwrap().is_number());
         assert!(with_json.get(1).unwrap().is_json());
+    }
+
+    // Subscript::successor
+
+    #[test]
+    fn successor_boolean() {
+        assert_eq!(
+            Subscript::Boolean(false).successor(),
+            Some(Subscript::Boolean(true))
+        );
+        assert_eq!(Subscript::Boolean(true).successor(), None);
+    }
+
+    #[test]
+    fn successor_number() {
+        assert_eq!(
+            Subscript::Number(OrderedFloat(1.0)).successor(),
+            Some(Subscript::Number(OrderedFloat(1.0_f64.next_up()))),
+        );
+
+        assert_eq!(
+            Subscript::Number(OrderedFloat(f64::INFINITY)).successor(),
+            None
+        );
+    }
+
+    #[test]
+    fn successor_number_neg_infinity() {
+        assert_eq!(
+            Subscript::Number(OrderedFloat(f64::NEG_INFINITY)).successor(),
+            Some(Subscript::Number(OrderedFloat(f64::MIN))),
+        );
+    }
+
+    #[test]
+    fn successor_number_nan() {
+        // `OrderedFloat` orders `NaN` below `-INFINITY`; successor is
+        // `-INFINITY`
+        assert_eq!(
+            Subscript::Number(OrderedFloat(f64::NAN)).successor(),
+            Some(Subscript::Number(OrderedFloat(f64::NEG_INFINITY))),
+        );
+    }
+
+    #[test]
+    fn successor_char() {
+        assert_eq!(
+            Subscript::Char('a').successor(),
+            Some(Subscript::Char('b'))
+        );
+        assert_eq!(Subscript::Char(char::MAX).successor(), None);
+    }
+
+    #[test]
+    fn successor_char_surrogate_gap() {
+        // `0xD7FF` is the char just before the surrogate gap; its successor
+        // should jump to `0xE000`
+        let before_gap = char::from_u32(0xD7FF).unwrap();
+        let after_gap = char::from_u32(0xE000).unwrap();
+        assert_eq!(
+            Subscript::Char(before_gap).successor(),
+            Some(Subscript::Char(after_gap))
+        );
+    }
+
+    #[test]
+    fn successor_string() {
+        assert_eq!(
+            Subscript::String("abc".into()).successor(),
+            Some(Subscript::String("abc\0".into()))
+        );
+    }
+
+    #[test]
+    fn successor_json() {
+        assert_eq!(Subscript::Json(json!({"a": 1})).successor(), None);
+    }
+
+    // Key::prefix_upper_bound
+
+    #[test]
+    fn prefix_upper_bound_simple() {
+        let k = key![1, "NAME"];
+        let ub = k.prefix_upper_bound().unwrap();
+        assert_eq!(ub, key![1, "NAME\0"]);
+    }
+
+    #[test]
+    fn prefix_upper_bound_pops_ceiling() {
+        // `Boolean(true)` is at its ceiling, so it gets popped and
+        // `Number(1)` is incremented instead
+        let k = key![1, true];
+        let ub = k.prefix_upper_bound().unwrap();
+        assert_eq!(
+            ub,
+            Key::from(
+                vec![Subscript::Number(OrderedFloat(1.0_f64.next_up())),]
+            )
+        );
+    }
+
+    #[test]
+    fn prefix_upper_bound_all_ceiling() {
+        let k = key![true];
+        // `Boolean(true)` -> ceiling, nothing left -> `None`
+        assert_eq!(k.prefix_upper_bound(), None);
+    }
+
+    #[test]
+    fn prefix_upper_bound_empty() {
+        assert_eq!(Key::new().prefix_upper_bound(), None);
+    }
+
+    #[test]
+    fn prefix_upper_bound_single_string() {
+        let k = key!["foo"];
+        assert_eq!(k.prefix_upper_bound(), Some(key!["foo\0"]));
     }
 }

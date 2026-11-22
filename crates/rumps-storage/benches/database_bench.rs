@@ -18,7 +18,7 @@ use criterion::{
 };
 use futures::{StreamExt, TryStreamExt};
 use rumps_storage::{Database, Increment, SyncMode, Transaction};
-use rumps_types::{global, key, local, value, Name, Value};
+use rumps_types::{global, key, local, value, Name, Scan, Value};
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
@@ -412,10 +412,10 @@ fn bench_order(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark `collects` stream iteration.
-fn bench_collects(c: &mut Criterion) {
+/// Benchmark `collect` stream iteration.
+fn bench_collect(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
-    let mut group = c.benchmark_group("collects_1000");
+    let mut group = c.benchmark_group("collect_1000");
 
     MODES.iter().for_each(|&mode| {
         let (_dir, db) = create_db(mode, &rt);
@@ -438,7 +438,7 @@ fn bench_collects(c: &mut Criterion) {
                         let n = name.clone();
                         async move {
                             let vals: Vec<Value> = txn
-                                .collects(
+                                .collect(
                                     &n,
                                     None,
                                     |_, _| true,
@@ -461,10 +461,10 @@ fn bench_collects(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark `collects` stream iteration with 10,000 entries.
-fn bench_collects_10k(c: &mut Criterion) {
+/// Benchmark `collect` stream iteration with 10,000 entries.
+fn bench_collect_10k(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
-    let mut group = c.benchmark_group("collects_10000");
+    let mut group = c.benchmark_group("collect_10000");
 
     MODES.iter().for_each(|&mode| {
         let (_dir, db) = create_db(mode, &rt);
@@ -487,9 +487,161 @@ fn bench_collects_10k(c: &mut Criterion) {
                         let n = name.clone();
                         async move {
                             let vals: Vec<Value> = txn
-                                .collects(
+                                .collect(
                                     &n,
                                     None,
+                                    |_, _| true,
+                                    |_, v| v.clone(),
+                                )
+                                .await?
+                                .try_collect()
+                                .await?;
+                            black_box(vals.len());
+                            Ok(())
+                        }
+                    })
+                    .await
+                    .unwrap();
+                })
+            })
+        });
+    });
+
+    group.finish();
+}
+
+/// Benchmark range-bounded `collect` (forward scan over a 10% slice of 10k keys).
+fn bench_collect_range(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("collect_range");
+
+    let n = 10_000i64;
+
+    MODES.iter().for_each(|&mode| {
+        let (_dir, db) = create_db(mode, &rt);
+        let name = global!("BENCH");
+
+        rt.block_on(async {
+            db.transaction(|txn| {
+                let n2 = name.clone();
+                async move { insert_keys(&txn, &n2, n).await }
+            })
+            .await
+            .unwrap();
+        });
+
+        group.bench_function(format!("{mode}"), |b| {
+            b.iter(|| {
+                rt.block_on(async {
+                    db.transaction(|txn| {
+                        let n2 = name.clone();
+                        async move {
+                            let scan =
+                                Scan::forward(key![2000i64]..key![3000i64]);
+                            let vals: Vec<Value> = txn
+                                .collect(
+                                    &n2,
+                                    scan,
+                                    |_, _| true,
+                                    |_, v| v.clone(),
+                                )
+                                .await?
+                                .try_collect()
+                                .await?;
+                            black_box(vals.len());
+                            Ok(())
+                        }
+                    })
+                    .await
+                    .unwrap();
+                })
+            })
+        });
+    });
+
+    group.finish();
+}
+
+/// Benchmark reverse `collect` (full reverse scan over 1k keys).
+fn bench_collect_reverse(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("collect_reverse_1000");
+
+    MODES.iter().for_each(|&mode| {
+        let (_dir, db) = create_db(mode, &rt);
+        let name = global!("BENCH");
+
+        rt.block_on(async {
+            db.transaction(|txn| {
+                let n2 = name.clone();
+                async move { insert_keys(&txn, &n2, 1000).await }
+            })
+            .await
+            .unwrap();
+        });
+
+        group.bench_function(format!("{mode}"), |b| {
+            b.iter(|| {
+                rt.block_on(async {
+                    db.transaction(|txn| {
+                        let n2 = name.clone();
+                        async move {
+                            let vals: Vec<Value> = txn
+                                .collect(
+                                    &n2,
+                                    Scan::reverse(..),
+                                    |_, _| true,
+                                    |_, v| v.clone(),
+                                )
+                                .await?
+                                .try_collect()
+                                .await?;
+                            black_box(vals.len());
+                            Ok(())
+                        }
+                    })
+                    .await
+                    .unwrap();
+                })
+            })
+        });
+    });
+
+    group.finish();
+}
+
+/// Benchmark reverse range-bounded `collect` (reverse scan over a 10% slice of 10k keys).
+fn bench_collect_reverse_range(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("collect_reverse_range");
+
+    let n = 10_000i64;
+
+    MODES.iter().for_each(|&mode| {
+        let (_dir, db) = create_db(mode, &rt);
+        let name = global!("BENCH");
+
+        rt.block_on(async {
+            db.transaction(|txn| {
+                let n2 = name.clone();
+                async move { insert_keys(&txn, &n2, n).await }
+            })
+            .await
+            .unwrap();
+        });
+
+        group.bench_function(format!("{mode}"), |b| {
+            b.iter(|| {
+                rt.block_on(async {
+                    db.transaction(|txn| {
+                        let n2 = name.clone();
+                        async move {
+                            let scan =
+                                Scan::reverse(key![2000i64]..key![3000i64]);
+                            let vals: Vec<Value> = txn
+                                .collect(
+                                    &n2,
+                                    scan,
                                     |_, _| true,
                                     |_, v| v.clone(),
                                 )
@@ -949,8 +1101,11 @@ criterion_group!(
     bench_get,
     bench_query,
     bench_order,
-    bench_collects,
-    bench_collects_10k,
+    bench_collect,
+    bench_collect_10k,
+    bench_collect_range,
+    bench_collect_reverse,
+    bench_collect_reverse_range,
     bench_kill,
     bench_increment_local,
     bench_increment_txn,
