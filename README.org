@@ -237,8 +237,8 @@ Multi-global writes benefit from RUMPS's sharded node cache: writes to different
 | Single =get= (=$GET=)                         | ~34 us                 |
 | =query= (=$QUERY=), 100 sequential keys       | ~104 us (~960 Kelem/s) |
 | =order= (=$ORDER=), 100 sequential subscripts | ~111 us (~900 Kelem/s) |
-| =collect=, 1000 entries                    | ~713 us (~1.4 Melem/s) |
-| =collect=, 10000 entries                   | ~7.5 ms (~1.3 Melem/s) |
+| =collect=, 1000 entries                     | ~337 us (~3.0 Melem/s) |
+| =collect=, 10000 entries                    | ~3.0 ms (~3.3 Melem/s) |
 
 All read operations work outside transactions. Traversal (=query=, =order=, =collect=) yields results in sorted key order with no post-hoc sorting.
 
