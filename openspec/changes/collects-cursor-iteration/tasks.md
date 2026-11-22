@@ -70,9 +70,9 @@
 
 ## 8. `MergeState` Direction Support
 
-- [ ] 8.1 Add `dir: Dir` field to `MergeState`
-- [ ] 8.2 Branch `advance_buffered` on `dir`: `Dir::Forward` uses `range((Excluded(...), Unbounded)).next()` (current behavior), `Dir::Reverse` uses `range((Unbounded, Excluded(...))).next_back()`
-- [ ] 8.3 Branch merge comparison in `next_impl` on `dir`: `Dir::Forward` yields smaller key first, `Dir::Reverse` yields larger key first
+- [x] 8.1 Add `dir: Dir` field to `MergeState`
+- [x] 8.2 Branch `advance_buffered` on `dir`: `Dir::Forward` uses `range((Excluded(...), Unbounded)).next()` (current behavior), `Dir::Reverse` uses `range((Unbounded, Excluded(...))).next_back()`
+- [x] 8.3 Branch merge comparison in `next_impl` on `dir`: `Dir::Forward` yields smaller key first, `Dir::Reverse` yields larger key first
 - [ ] 8.4 Add bounded range to `advance_buffered`: skip buffered entries outside `scan.bounds`
 - [ ] 8.5 Write merge tests: forward with range bounds (half-open, closed), reverse unbounded, reverse with range bounds, reverse with buffered sets/deletes/kills, forward excluded-start range with buffered writes straddling bounds
 

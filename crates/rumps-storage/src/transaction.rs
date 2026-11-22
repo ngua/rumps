@@ -52,7 +52,7 @@ use std::{fmt, future};
 
 use futures::stream::{self, BoxStream, StreamExt, TryStreamExt};
 use rumps_types::{
-    DataStatus, Increment, Key, Name, Result, Scan, Subscript, Value,
+    DataStatus, Dir, Increment, Key, Name, Result, Scan, Subscript, Value,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{OwnedRwLockReadGuard, RwLock};
@@ -88,6 +88,8 @@ where
     pred: P,
     /// Start key for filtering.
     start: Option<Key>,
+    /// Iteration direction.
+    dir: Dir,
     /// The snapshot stream yielding `(Key, T)` pairs (lazy, unbounded).
     snapshot: BoxStream<'a, crate::error::Result<(Key, T)>>,
     /// Next snapshot entry to consider.
@@ -107,44 +109,57 @@ where
     /// can properly hide snapshot entries. Buffered Sets are always visible,
     /// even under killed subtrees (sets after kills take precedence).
     fn advance_buffered(&mut self) {
-        let range_start = match &self.last_buffered_key {
-            None => Bound::Included((self.name.clone(), Key::default())),
-            Some(k) => Bound::Excluded((self.name.clone(), k.clone())),
+        let name_key = |k: &Key| (self.name.clone(), k.clone());
+        let name_min = || (self.name.clone(), Key::default());
+
+        let map_entry = |((n, k), op): (&(Name, Key), &WriteOp)| {
+            if n != &self.name {
+                None
+            } else {
+                let after_start =
+                    self.start.as_ref().map(|s| k >= s).unwrap_or(true);
+
+                if after_start {
+                    match op {
+                        WriteOp::Set(data) => {
+                            let val = (self.pred)(k, &data.value)
+                                .then(|| (self.extract)(k, &data.value))
+                                .flatten();
+                            Some((k.clone(), val))
+                        }
+                        WriteOp::Delete | WriteOp::KillSubtree => {
+                            Some((k.clone(), None))
+                        }
+                    }
+                } else {
+                    None
+                }
+            }
         };
 
-        // Find next entry in O(log n) - include ALL write ops
-        self.next_buffered = self
-            .writes_guard
-            .range((range_start, Bound::Unbounded))
-            .filter_map(|((n, k), op)| {
-                // Stop if we've moved past our target name
-                if n != &self.name {
-                    None
-                } else {
-                    let after_start =
-                        self.start.as_ref().map(|s| k >= s).unwrap_or(true);
+        self.next_buffered = match self.dir {
+            Dir::Forward => {
+                let lo = match &self.last_buffered_key {
+                    None => Bound::Included(name_min()),
+                    Some(k) => Bound::Excluded(name_key(k)),
+                };
+                self.writes_guard
+                    .range((lo, Bound::Unbounded))
+                    .filter_map(map_entry)
+                    .next()
+            }
+            Dir::Reverse => {
+                let hi = match &self.last_buffered_key {
+                    None => Bound::Unbounded,
+                    Some(k) => Bound::Excluded(name_key(k)),
+                };
+                self.writes_guard
+                    .range((Bound::Included(name_min()), hi))
+                    .filter_map(map_entry)
+                    .next_back()
+            }
+        };
 
-                    if after_start {
-                        match op {
-                            WriteOp::Set(data) => {
-                                // Buffered Sets are always visible; apply pred
-                                let val = (self.pred)(k, &data.value)
-                                    .then(|| (self.extract)(k, &data.value))
-                                    .flatten();
-                                Some((k.clone(), val))
-                            }
-                            WriteOp::Delete | WriteOp::KillSubtree => {
-                                Some((k.clone(), None))
-                            }
-                        }
-                    } else {
-                        None
-                    }
-                }
-            })
-            .next();
-
-        // Update position marker
         if let Some((k, _)) = &self.next_buffered {
             self.last_buffered_key = Some(k.clone());
         }
@@ -194,15 +209,21 @@ where
                         (None, Some(_)) => ControlFlow::Break(
                             self.next_snapshot.take().map(|(_, val)| Ok(val)),
                         ),
-                        (Some(bk), Some(sk)) => match bk.cmp(&sk) {
-                            Ordering::Less => ControlFlow::Continue(false),
-                            Ordering::Equal => ControlFlow::Continue(true),
-                            Ordering::Greater => ControlFlow::Break(
-                                self.next_snapshot
-                                    .take()
-                                    .map(|(_, val)| Ok(val)),
-                            ),
-                        },
+                        (Some(bk), Some(sk)) => {
+                            let cmp = match self.dir {
+                                Dir::Forward => bk.cmp(&sk),
+                                Dir::Reverse => sk.cmp(&bk),
+                            };
+                            match cmp {
+                                Ordering::Less => ControlFlow::Continue(false),
+                                Ordering::Equal => ControlFlow::Continue(true),
+                                Ordering::Greater => ControlFlow::Break(
+                                    self.next_snapshot
+                                        .take()
+                                        .map(|(_, val)| Ok(val)),
+                                ),
+                            }
+                        }
                     };
 
                     match step {
@@ -1491,6 +1512,7 @@ impl Transaction {
             }
         };
 
+        let dir = scan.dir();
         let start = match scan.bounds().start() {
             Bound::Included(k) | Bound::Excluded(k) => Some(k.clone()),
             Bound::Unbounded => None,
@@ -1515,6 +1537,7 @@ impl Transaction {
             extract,
             pred,
             start,
+            dir,
             snapshot: snapshot_stream.boxed(),
             next_snapshot: None,
             snapshot_error: None,
