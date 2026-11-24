@@ -1,9 +1,9 @@
 ## 1. Crate Scaffolding
 
-- [ ] 1.1 Create `crates/rumps-server/` with `Cargo.toml` depending on `rumps-storage`, `rumps-types`, `axum`, `tokio`, `serde`, `serde_json`, `uuid`, `tower`, `tower-http`, `toml`, `dashmap`, `tracing`, `tracing-subscriber`
-- [ ] 1.2 Add workspace dependencies for new crates (`axum`, `uuid`, `tower`, `tower-http`, `toml`, `dashmap`, `clap`) in root `Cargo.toml`
-- [ ] 1.3 Create `src/lib.rs` (server builder, public API) and `src/main.rs` (CLI binary with clap)
-- [ ] 1.4 Implement TOML config loading (`ServerConfig` struct with server, database, session, transaction, auth sections)
+- [x] 1.1 Create `crates/rumps-server/` with `Cargo.toml` depending on `rumps-storage`, `rumps-types`, `axum`, `tokio`, `serde`, `serde_json`, `uuid`, `tower`, `tower-http`, `toml`, `dashmap`, `tracing`, `tracing-subscriber`
+- [x] 1.2 Add workspace dependencies for new crates (`axum`, `uuid`, `tower`, `tower-http`, `toml`, `dashmap`, `clap`) in root `Cargo.toml`
+- [x] 1.3 Create `src/lib.rs` (server builder, public API) and `src/main.rs` (CLI binary with clap)
+- [x] 1.4 Implement TOML config loading (`config::Config` struct with `config::Server`, `config::Database`, `config::Session`, `config::Transaction`, `config::AuthSection` sections)
 
 ## 2. Wire Encoding Types
 
@@ -89,9 +89,9 @@ Implement for both `&Transaction` and session-scoped `&Database`. Each op handle
 
 ## 10. Error Handling
 
-- [ ] 10.1 Implement `StorageError` -> HTTP status code mapping (per server-errors spec)
-- [ ] 10.2 Implement `AppError` type that implements `IntoResponse` for Axum, producing `{"error": "..."}` JSON bodies
-- [ ] 10.3 Wire up error handling in all op handlers: convert `rumps_types::Error` to `AppError`
+- [ ] 10.1 Implement `StorageError` -> HTTP status code mapping (per server-errors spec) in the unified `error::Error` type
+- [ ] 10.2 Implement `IntoResponse` for `error::Error`, producing `{"error": "..."}` JSON bodies with appropriate HTTP status codes
+- [ ] 10.3 Wire up error handling in all op handlers: convert `rumps_types::Error` to `error::Error`. All fallible functions use the crate's `Result` alias (`use error::Result`); use `result::Result` when `std`'s `Result` is needed.
 - [ ] 10.4 Handle request validation errors (missing fields, bad JSON, unknown ops) as `400`
 
 ## 11. Admin Endpoints

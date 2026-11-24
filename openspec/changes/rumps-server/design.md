@@ -90,7 +90,7 @@ Router::new()
     .route("/health", get(health))
     .route("/status", get(status))
     .route("/rpc", post(rpc))
-    .with_state(AppState { db, sessions, transactions, auth_config })
+    .with_state(AppState { db, config, sessions, transactions })
 ```
 
 Auth and session validation are handled via Axum extractors in handler signatures, not middleware layers. See sections 7 and the session-management spec.
