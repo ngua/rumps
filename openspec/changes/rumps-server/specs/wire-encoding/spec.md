@@ -43,7 +43,15 @@ The system SHALL encode `Value` in JSON using type inference. JSON `true`/`false
 - **THEN** it deserializes as `Value::String("Alice")`
 
 ### Requirement: Explicit type tags with dollar-prefix
-The system SHALL support `$`-prefixed type tags for explicit type control. Recognized tags: `$bool`, `$int`, `$float`, `$char`, `$str`, `$json`. A tagged form is a JSON object with exactly one key matching a recognized tag. When a tagged form is encountered, inference SHALL be bypassed and the tag SHALL determine the type.
+The system SHALL support `$`-prefixed type tags for explicit type control. A tagged form is a JSON object with exactly one key matching a recognized tag. When a tagged form is encountered, inference SHALL be bypassed and the tag SHALL determine the type.
+
+Subscript tags: `$bool`, `$number`, `$char`, `$str`, `$json`. Because `Subscript` has a single `Number` variant (backed by `f64`), a single `$number` tag covers both integers and floats.
+
+Value tags: `$bool`, `$int`, `$float`, `$char`, `$str`, `$json`. Because `Value` distinguishes `Integer` and `Double`, separate `$int` and `$float` tags are needed.
+
+#### Scenario: Explicit number subscript
+- **WHEN** a JSON key array contains `{"$number": 42}`
+- **THEN** it deserializes as `Subscript::Number(OrderedFloat(42.0))`
 
 #### Scenario: Explicit char subscript
 - **WHEN** a JSON key array contains `{"$char": "A"}`

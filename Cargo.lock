@@ -1324,6 +1324,7 @@ dependencies = [
  "axum",
  "clap",
  "dashmap 6.2.1",
+ "ordered-float",
  "rumps-storage",
  "rumps-types",
  "serde",

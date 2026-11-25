@@ -49,7 +49,7 @@ Note: `Subscript::Number` is always `f64` regardless of whether the JSON was int
 
 **Response serialization:** Always uses tags for `Char` and `Json` to enable lossless round-tripping. `Boolean`, `Integer`, `Double`, `String` use bare JSON.
 
-**Implementation:** Custom `serde::Deserialize` for a `WireSubscript` / `WireValue` newtype that wraps the core types. The `Deserialize` impl uses `serde_json::Value` as an intermediate: check if it's a tagged object (single key starting with `$`), otherwise infer.
+**Implementation:** Custom `serde::Deserialize` for a `wire::Subscript` / `wire::Value` newtype that wraps the core types. The `Deserialize` impl uses `serde_json::Value` as an intermediate: check if it's a tagged object (single key starting with `$`), otherwise infer.
 
 **Alternatives considered:**
 - Full tagging always: rejected; makes the common case verbose (`{"$int": 123}` vs `123`)
@@ -115,9 +115,9 @@ enum RpcRequest {
     #[serde(rename = "txn.rollback")]
     TxnRollback { txn: Uuid },
     #[serde(rename = "global.get")]
-    GlobalGet { txn: Uuid, name: String, key: WireKey },
+    GlobalGet { txn: Uuid, name: String, key: wire::Key },
     #[serde(rename = "global.set")]
-    GlobalSet { txn: Uuid, name: String, key: WireKey, value: WireValue },
+    GlobalSet { txn: Uuid, name: String, key: wire::Key, value: wire::Value },
     // ... remaining variants follow the same pattern
 }
 ```

@@ -7,16 +7,16 @@
 
 ## 2. Wire Encoding Types
 
-- [ ] 2.1 Implement `WireSubscript` newtype with custom `Deserialize`: JSON primitive inference + `$`-prefixed tag parsing; `Serialize` with tags for `Char`/`Json` and bare JSON for others
-- [ ] 2.2 Implement `WireValue` newtype with custom `Deserialize`: JSON primitive inference + `$`-prefixed tag parsing; `Serialize` with tags for `Char`/`Json` and bare JSON for others
-- [ ] 2.3 Implement `WireKey` as `Vec<WireSubscript>` with `From`/`Into` conversions to `Key`
-- [ ] 2.4 Implement `WireIncrement` with inference (JSON int -> `Increment::Integer`, JSON float -> `Increment::Double`) and tag support
-- [ ] 2.5 Implement `WireDataStatus` serialization (string enum: `no-data`, `has-value`, `has-descendants`, `both`)
+- [x] 2.1 Implement `wire::Subscript` newtype with custom `Deserialize`: JSON primitive inference + `$`-prefixed tag parsing; `Serialize` with tags for `Char`/`Json` and bare JSON for others
+- [ ] 2.2 Implement `wire::Value` newtype with custom `Deserialize`: JSON primitive inference + `$`-prefixed tag parsing; `Serialize` with tags for `Char`/`Json` and bare JSON for others
+- [ ] 2.3 Implement `wire::Key` as `Vec<wire::Subscript>` with `From`/`Into` conversions to `Key`
+- [ ] 2.4 Implement `wire::Increment` with inference (JSON int -> `Increment::Integer`, JSON float -> `Increment::Double`) and tag support
+- [ ] 2.5 Implement `wire::DataStatus` serialization (string enum: `no-data`, `has-value`, `has-descendants`, `both`)
 - [ ] 2.6 Unit tests for all wire type round-trips: inference, explicit tags, edge cases (`$char` validation, `$json` nesting)
 
 ## 3. RPC Protocol and Dispatch
 
-- [ ] 3.1 Define `RpcRequest` as a `#[serde(tag = "op")]` enum where each variant carries its own typed fields (e.g. `GlobalGet { txn: Uuid, name: String, key: WireKey }`). Serde handles both op dispatch and field extraction in one deserialization step; unknown ops fail at deserialization with a `400`.
+- [ ] 3.1 Define `RpcRequest` as a `#[serde(tag = "op")]` enum where each variant carries its own typed fields (e.g. `GlobalGet { txn: Uuid, name: String, key: wire::Key }`). Serde handles both op dispatch and field extraction in one deserialization step; unknown ops fail at deserialization with a `400`.
 - [ ] 3.2 Implement `rpc` that deserializes the request body into `RpcRequest` and matches on the variant to dispatch to per-op handler functions
 - [ ] 3.3 Define per-op response structs (`ValueResp`, `OkResp`, `IncrementResp`, `DataResp`, `OrderResp`, `QueryResp`, `ListGlobalsResp`) with `Serialize`
 - [ ] 3.4 Wire up Axum router: `POST /rpc` -> `rpc`, `GET /health`, `GET /status`
@@ -59,13 +59,13 @@ Implement for both `&Transaction` and session-scoped `&Database`. Each op handle
 - [ ] 6.1 Define `DbContext` trait with the methods above
 - [ ] 6.2 Implement `DbContext` for `Transaction` (delegates to `Transaction::get`, etc.)
 - [ ] 6.3 Implement `DbContext` for session-local context: wraps the shared in-memory `Database` and the session's internal `u64` ID. Prepends the session ID to keys on the way in, strips it on the way out. Tracks used local names in the session's `HashSet<SmolStr>` on write ops.
-- [ ] 6.4 Implement shared `get` handler: deserialize `WireKey`, call `DbContext::get`, serialize response
-- [ ] 6.5 Implement shared `set` handler: deserialize `WireKey` + `WireValue`, call `DbContext::set`
-- [ ] 6.6 Implement shared `increment` handler: deserialize `WireKey` + `WireIncrement`, call `DbContext::increment`, serialize new value
-- [ ] 6.7 Implement shared `kill` handler: deserialize `WireKey`, call `DbContext::kill`
-- [ ] 6.8 Implement shared `data` handler: deserialize `WireKey`, call `DbContext::data`, serialize `WireDataStatus`
-- [ ] 6.9 Implement shared `order` handler: deserialize `WireKey` (prefix) + optional `WireSubscript` (after), call `DbContext::order`, serialize response
-- [ ] 6.10 Implement shared `query` handler: deserialize optional `WireKey` (after), call `DbContext::query`, serialize response
+- [ ] 6.4 Implement shared `get` handler: deserialize `wire::Key`, call `DbContext::get`, serialize response
+- [ ] 6.5 Implement shared `set` handler: deserialize `wire::Key` + `wire::Value`, call `DbContext::set`
+- [ ] 6.6 Implement shared `increment` handler: deserialize `wire::Key` + `wire::Increment`, call `DbContext::increment`, serialize new value
+- [ ] 6.7 Implement shared `kill` handler: deserialize `wire::Key`, call `DbContext::kill`
+- [ ] 6.8 Implement shared `data` handler: deserialize `wire::Key`, call `DbContext::data`, serialize `wire::DataStatus`
+- [ ] 6.9 Implement shared `order` handler: deserialize `wire::Key` (prefix) + optional `wire::Subscript` (after), call `DbContext::order`, serialize response
+- [ ] 6.10 Implement shared `query` handler: deserialize optional `wire::Key` (after), call `DbContext::query`, serialize response
 - [ ] 6.11 Implement `global.list`: call `Database::list_globals`, serialize response. This op is session-exempt and does not use `DbContext`.
 
 ## 7. Global/Local Dispatch Wiring
@@ -76,7 +76,7 @@ Implement for both `&Transaction` and session-scoped `&Database`. Each op handle
 ## 8. NDJSON Streaming (collect)
 
 - [ ] 8.1 Implement `Scan` construction from wire fields using `rumps-types` types: `start`/`end` -> `Bounds::new(...)` with `Bound::Included`/`Bound::Excluded`/`Bound::Unbounded`; `dir` -> `Dir::Forward`/`Dir::Reverse` (see wire-encoding `Dir` spec); combine into `Scan::new(bounds, dir)`. Default to `Bounds::full()` and `Dir::Forward`.
-- [ ] 8.2 Implement `global.collect`: build `Scan`, call `Transaction::collect` with `pred: |_, _| true` and `extract: |k: &Key, v: &Option<Value>| -> Option<(WireKey, Option<WireValue>)> { Some((WireKey::from(k.clone()), v.as_ref().map(WireValue::from))) }`. Note: `collect` takes `pred: Fn(&Key, &Option<Value>) -> bool` and `extract: Fn(&Key, &Option<Value>) -> Option<T>`. Map the resulting stream items to JSON lines and return via `Body::from_stream()`.
+- [ ] 8.2 Implement `global.collect`: build `Scan`, call `Transaction::collect` with `pred: |_, _| true` and `extract: |k: &Key, v: &Option<Value>| -> Option<(wire::Key, Option<wire::Value>)> { Some((wire::Key::from(k.clone()), v.as_ref().map(wire::Value::from))) }`. Note: `collect` takes `pred: Fn(&Key, &Option<Value>) -> bool` and `extract: Fn(&Key, &Option<Value>) -> Option<T>`. Map the resulting stream items to JSON lines and return via `Body::from_stream()`.
 - [ ] 8.3 Implement `local.collect`: same as above but on the shared in-memory `Database`. Prepend session internal ID to scan bounds, strip the session ID prefix from keys in the NDJSON output.
 - [ ] 8.4 Implement `limit` support: wrap stream in `.take(limit)` when present
 - [ ] 8.5 Integration test: stream multiple entries, verify NDJSON format and ordering

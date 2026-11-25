@@ -10,6 +10,7 @@ rumps-types = { path = "../rumps-types" }
 axum = { workspace = true }
 clap = { workspace = true }
 dashmap = { workspace = true }
+ordered-float = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
