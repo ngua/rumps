@@ -320,6 +320,102 @@ impl From<Key> for rumps_types::Key {
     }
 }
 
+/// Wire-format wrapper for [`rumps_types::Increment`].
+///
+/// Deserialization infers from JSON numbers: integers -> `Integer`,
+/// floats -> `Double`. Explicit `$int`/`$float` tags are also supported.
+/// Serialization uses bare JSON integers/floats.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Increment(rumps_types::Increment);
+
+impl From<rumps_types::Increment> for Increment {
+    fn from(i: rumps_types::Increment) -> Self {
+        Self(i)
+    }
+}
+
+impl From<Increment> for rumps_types::Increment {
+    fn from(w: Increment) -> Self {
+        w.0
+    }
+}
+
+impl Serialize for Increment {
+    fn serialize<S>(&self, ser: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match &self.0 {
+            rumps_types::Increment::Integer(n) => ser.serialize_i64(*n),
+            rumps_types::Increment::Double(n) => {
+                ser.serialize_f64(n.into_inner())
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Increment {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let v = serde_json::Value::deserialize(deserializer)?;
+
+        match v {
+            serde_json::Value::Number(n) => {
+                if n.is_i64() {
+                    Ok(Self(rumps_types::Increment::Integer(
+                        n.as_i64().ok_or_else(|| {
+                            de::Error::custom(
+                                "numeric value out of `i64` range",
+                            )
+                        })?,
+                    )))
+                } else {
+                    Ok(Self(rumps_types::Increment::Double(OrderedFloat(
+                        n.as_f64().ok_or_else(|| {
+                            de::Error::custom(
+                                "numeric value out of `f64` range",
+                            )
+                        })?,
+                    ))))
+                }
+            }
+            serde_json::Value::Object(map) if map.len() == 1 => {
+                let (tag, val) = map
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| de::Error::custom("empty tagged object"))?;
+
+                match tag.as_str() {
+                    "$int" => val
+                        .as_i64()
+                        .map(|n| Self(rumps_types::Increment::Integer(n)))
+                        .ok_or_else(|| {
+                            de::Error::custom("`$int` requires an integer")
+                        }),
+                    "$float" => val
+                        .as_f64()
+                        .map(|n| {
+                            Self(rumps_types::Increment::Double(OrderedFloat(
+                                n,
+                            )))
+                        })
+                        .ok_or_else(|| {
+                            de::Error::custom("`$float` requires a number")
+                        }),
+                    other => Err(de::Error::custom(format!(
+                        "unrecognized tag `{other}`"
+                    ))),
+                }
+            }
+            _ => Err(de::Error::custom(
+                "increment must be a number or a `$int`/`$float` tag",
+            )),
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -796,5 +892,89 @@ mod tests {
         let wk = Key::from(k.clone());
         let k2: rumps_types::Key = wk.into();
         assert_eq!(k, k2);
+    }
+
+    #[test]
+    fn incr_deser_integer() {
+        let wi: Increment = serde_json::from_value(json!(5)).unwrap();
+        assert_eq!(wi.0, rumps_types::Increment::Integer(5));
+    }
+
+    #[test]
+    fn incr_deser_negative_integer() {
+        let wi: Increment = serde_json::from_value(json!(-3)).unwrap();
+        assert_eq!(wi.0, rumps_types::Increment::Integer(-3));
+    }
+
+    #[test]
+    fn incr_deser_float() {
+        let wi: Increment = serde_json::from_value(json!(1.5)).unwrap();
+        assert_eq!(wi.0, rumps_types::Increment::Double(OrderedFloat(1.5)));
+    }
+
+    #[test]
+    fn incr_deser_explicit_int_tag() {
+        let wi: Increment =
+            serde_json::from_value(json!({"$int": 42})).unwrap();
+        assert_eq!(wi.0, rumps_types::Increment::Integer(42));
+    }
+
+    #[test]
+    fn incr_deser_explicit_float_tag() {
+        let wi: Increment =
+            serde_json::from_value(json!({"$float": 1})).unwrap();
+        assert_eq!(wi.0, rumps_types::Increment::Double(OrderedFloat(1.0)));
+    }
+
+    #[test]
+    fn incr_deser_string_rejected() {
+        let r: Result<Increment, _> = serde_json::from_value(json!("nope"));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn incr_deser_bool_rejected() {
+        let r: Result<Increment, _> = serde_json::from_value(json!(true));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn incr_deser_null_rejected() {
+        let r: Result<Increment, _> = serde_json::from_value(json!(null));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn incr_deser_unrecognized_tag_rejected() {
+        let r: Result<Increment, _> =
+            serde_json::from_value(json!({"$str": "1"}));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn incr_ser_integer() {
+        let wi = Increment(rumps_types::Increment::Integer(5));
+        assert_eq!(serde_json::to_value(&wi).unwrap(), json!(5));
+    }
+
+    #[test]
+    fn incr_ser_double() {
+        let wi = Increment(rumps_types::Increment::Double(OrderedFloat(1.5)));
+        assert_eq!(serde_json::to_value(&wi).unwrap(), json!(1.5));
+    }
+
+    #[test]
+    fn incr_round_trip() {
+        let cases = vec![
+            Increment(rumps_types::Increment::Integer(0)),
+            Increment(rumps_types::Increment::Integer(-100)),
+            Increment(rumps_types::Increment::Double(OrderedFloat(3.14))),
+        ];
+
+        cases.iter().for_each(|wi| {
+            let json = serde_json::to_value(wi).unwrap();
+            let back: Increment = serde_json::from_value(json).unwrap();
+            assert_eq!(&back, wi);
+        });
     }
 }
