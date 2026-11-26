@@ -9,7 +9,7 @@
 
 - [x] 2.1 Implement `wire::Subscript` newtype with custom `Deserialize`: JSON primitive inference + `$`-prefixed tag parsing; `Serialize` with tags for `Char`/`Json` and bare JSON for others
 - [x] 2.2 Implement `wire::Value` newtype with custom `Deserialize`: JSON primitive inference + `$`-prefixed tag parsing; `Serialize` with tags for `Char`/`Json` and bare JSON for others
-- [ ] 2.3 Implement `wire::Key` as `Vec<wire::Subscript>` with `From`/`Into` conversions to `Key`
+- [x] 2.3 Implement `wire::Key` as `Vec<wire::Subscript>` with `From`/`Into` conversions to `Key`
 - [ ] 2.4 Implement `wire::Increment` with inference (JSON int -> `Increment::Integer`, JSON float -> `Increment::Double`) and tag support
 - [ ] 2.5 Implement `wire::DataStatus` serialization (string enum: `no-data`, `has-value`, `has-descendants`, `both`)
 - [ ] 2.6 Unit tests for all wire type round-trips: inference, explicit tags, edge cases (`$char` validation, `$json` nesting, tag type mismatches: `{"$bool": 42}`, `{"$str": 42}`, `{"$char": ""}`)

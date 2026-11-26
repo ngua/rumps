@@ -5,7 +5,6 @@
 //! tags for exotic types (`Char`, `Json`).
 
 use ordered_float::OrderedFloat;
-use rumps_types;
 use serde::ser::SerializeMap;
 use serde::{de, Deserialize, Serialize};
 
@@ -298,6 +297,26 @@ impl<'de> Deserialize<'de> for Value {
     }
 }
 
+/// Wire-format wrapper for [`rumps_types::Key`].
+///
+/// Serialized as a JSON array of [`Subscript`] values. An empty array
+/// represents `Key::new()`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub(crate) struct Key(Vec<Subscript>);
+
+impl From<rumps_types::Key> for Key {
+    fn from(k: rumps_types::Key) -> Self {
+        Self(k.into_iter().map(Subscript::from).collect())
+    }
+}
+
+impl From<Key> for rumps_types::Key {
+    fn from(w: Key) -> Self {
+        w.0.into_iter().map(rumps_types::Subscript::from).collect()
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -484,8 +503,6 @@ mod tests {
         });
     }
 
-    // --- Value deserialization ---
-
     #[test]
     fn value_deser_bool() {
         let wv: Value = serde_json::from_value(json!(true)).unwrap();
@@ -628,8 +645,6 @@ mod tests {
         assert!(r.is_err());
     }
 
-    // --- Value serialization ---
-
     #[test]
     fn value_ser_bool() {
         let wv = Value(rumps_types::Value::Boolean(true));
@@ -669,8 +684,6 @@ mod tests {
         );
     }
 
-    // Value round-trips
-
     #[test]
     fn value_round_trip_all_variants() {
         let cases = vec![
@@ -691,5 +704,94 @@ mod tests {
             let back: Value = serde_json::from_value(json).unwrap();
             assert_eq!(&back, wv);
         });
+    }
+
+    #[test]
+    fn key_deser_empty() {
+        let wk: Key = serde_json::from_value(json!([])).unwrap();
+        let k: rumps_types::Key = wk.into();
+        assert!(k.is_empty());
+    }
+
+    #[test]
+    fn key_deser_multi_subscript() {
+        let wk: Key = serde_json::from_value(json!([123, "NAME"])).unwrap();
+        let k: rumps_types::Key = wk.into();
+        assert_eq!(k.len(), 2);
+        assert_eq!(
+            k.get(0),
+            Some(&rumps_types::Subscript::Number(OrderedFloat(123.0)))
+        );
+        assert_eq!(
+            k.get(1),
+            Some(&rumps_types::Subscript::String("NAME".into()))
+        );
+    }
+
+    #[test]
+    fn key_deser_mixed_types() {
+        let wk: Key = serde_json::from_value(
+            json!([true, 1, {"$char": "A"}, "foo", {"$json": null}]),
+        )
+        .unwrap();
+        let k: rumps_types::Key = wk.into();
+        assert_eq!(k.len(), 5);
+        assert_eq!(k.get(0), Some(&rumps_types::Subscript::Boolean(true)));
+        assert_eq!(
+            k.get(1),
+            Some(&rumps_types::Subscript::Number(OrderedFloat(1.0)))
+        );
+        assert_eq!(k.get(2), Some(&rumps_types::Subscript::Char('A')));
+        assert_eq!(
+            k.get(3),
+            Some(&rumps_types::Subscript::String("foo".into()))
+        );
+        assert_eq!(
+            k.get(4),
+            Some(&rumps_types::Subscript::Json(serde_json::Value::Null))
+        );
+    }
+
+    #[test]
+    fn key_ser_empty() {
+        let wk = Key::from(rumps_types::Key::new());
+        assert_eq!(serde_json::to_value(&wk).unwrap(), json!([]));
+    }
+
+    #[test]
+    fn key_ser_multi_subscript() {
+        let k = rumps_types::Key::from(vec![
+            rumps_types::Subscript::Number(OrderedFloat(123.0)),
+            rumps_types::Subscript::String("NAME".into()),
+        ]);
+        let wk = Key::from(k);
+        assert_eq!(serde_json::to_value(&wk).unwrap(), json!([123.0, "NAME"]));
+    }
+
+    #[test]
+    fn key_round_trip() {
+        let k = rumps_types::Key::from(vec![
+            rumps_types::Subscript::Boolean(false),
+            rumps_types::Subscript::Number(OrderedFloat(42.0)),
+            rumps_types::Subscript::Char('Z'),
+            rumps_types::Subscript::String("test".into()),
+            rumps_types::Subscript::Json(json!([1])),
+        ]);
+        let wk = Key::from(k.clone());
+        let json = serde_json::to_value(&wk).unwrap();
+        let back: Key = serde_json::from_value(json).unwrap();
+        let k2: rumps_types::Key = back.into();
+        assert_eq!(k, k2);
+    }
+
+    #[test]
+    fn key_from_into_roundtrip() {
+        let k = rumps_types::Key::from(vec![
+            rumps_types::Subscript::Number(OrderedFloat(1.0)),
+            rumps_types::Subscript::String("x".into()),
+        ]);
+        let wk = Key::from(k.clone());
+        let k2: rumps_types::Key = wk.into();
+        assert_eq!(k, k2);
     }
 }
