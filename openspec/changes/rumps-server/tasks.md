@@ -12,7 +12,7 @@
 - [x] 2.3 Implement `wire::Key` as `Vec<wire::Subscript>` with `From`/`Into` conversions to `Key`
 - [x] 2.4 Implement `wire::Increment` with inference (JSON int -> `Increment::Integer`, JSON float -> `Increment::Double`) and tag support
 - [x] 2.5 Implement `wire::DataStatus` serialization (numeric `$DATA` codes: `0`, `1`, `10`, `11`)
-- [ ] 2.6 Unit tests for all wire type round-trips: inference, explicit tags, edge cases (`$char` validation, `$json` nesting, tag type mismatches: `{"$bool": 42}`, `{"$str": 42}`, `{"$char": ""}`, negative float increment deser)
+- [x] 2.6 Unit tests for all wire type round-trips: inference, explicit tags, edge cases (`$char` validation, `$json` nesting, tag type mismatches: `{"$bool": 42}`, `{"$str": 42}`, `{"$char": ""}`, negative float increment deser)
 
 ## 3. RPC Protocol and Dispatch
 

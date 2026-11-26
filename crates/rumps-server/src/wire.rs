@@ -1086,4 +1086,105 @@ mod tests {
             assert_eq!(ws, back);
         });
     }
+
+    // Edge cases: tag type mismatches across Subscript and Value
+
+    #[test]
+    fn subscript_bool_tag_type_mismatch() {
+        let r: Result<Subscript, _> =
+            serde_json::from_value(json!({"$bool": 42}));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn subscript_str_tag_type_mismatch() {
+        let r: Result<Subscript, _> =
+            serde_json::from_value(json!({"$str": 42}));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn subscript_number_tag_type_mismatch() {
+        let r: Result<Subscript, _> =
+            serde_json::from_value(json!({"$number": "nope"}));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn subscript_char_tag_empty_string() {
+        let r: Result<Subscript, _> =
+            serde_json::from_value(json!({"$char": ""}));
+        assert!(r.is_err());
+        assert!(r.unwrap_err().to_string().contains("exactly one character"));
+    }
+
+    #[test]
+    fn value_bool_tag_type_mismatch() {
+        let r: Result<Value, _> = serde_json::from_value(json!({"$bool": 42}));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn value_str_tag_type_mismatch() {
+        let r: Result<Value, _> = serde_json::from_value(json!({"$str": 42}));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn value_char_tag_empty_string() {
+        let r: Result<Value, _> = serde_json::from_value(json!({"$char": ""}));
+        assert!(r.is_err());
+        assert!(r.unwrap_err().to_string().contains("exactly one character"));
+    }
+
+    // `$json` nesting: a `$json` tag whose value itself contains `$`-prefixed keys
+    #[test]
+    fn subscript_json_nested_dollar_keys() {
+        let ws: Subscript = serde_json::from_value(
+            json!({"$json": {"$char": "not a tag", "$int": [1, 2]}}),
+        )
+        .unwrap();
+        assert_eq!(
+            ws.0,
+            rumps_types::Subscript::Json(
+                json!({"$char": "not a tag", "$int": [1, 2]})
+            )
+        );
+    }
+
+    #[test]
+    fn value_json_nested_dollar_keys() {
+        let wv: Value = serde_json::from_value(
+            json!({"$json": {"$bool": 99, "nested": {"$float": "x"}}}),
+        )
+        .unwrap();
+        assert_eq!(
+            wv.0,
+            rumps_types::Value::Json(
+                json!({"$bool": 99, "nested": {"$float": "x"}})
+            )
+        );
+    }
+
+    // Negative float increment
+    #[test]
+    fn incr_deser_negative_float() {
+        let wi: Increment = serde_json::from_value(json!(-2.5)).unwrap();
+        assert_eq!(wi.0, rumps_types::Increment::Double(OrderedFloat(-2.5)));
+    }
+
+    // Multi-key object rejected (not a valid single-key tag)
+    #[test]
+    fn subscript_multi_key_object_rejected() {
+        let r: Result<Subscript, _> =
+            serde_json::from_value(json!({"$bool": true, "$str": "x"}));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn value_multi_key_object_rejected() {
+        let r: Result<Value, _> =
+            serde_json::from_value(json!({"$int": 1, "$float": 2.0}));
+        assert!(r.is_err());
+    }
 }
