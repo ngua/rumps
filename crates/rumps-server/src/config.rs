@@ -19,7 +19,7 @@ pub struct Config {
     pub session: Session,
     #[serde(default)]
     pub transaction: Transaction,
-    pub auth: Option<AuthSection>,
+    pub auth: Option<Auth>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -50,7 +50,7 @@ pub struct Transaction {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "method")]
-pub enum AuthSection {
+pub enum Auth {
     #[serde(rename = "bearer")]
     Bearer { token: String },
 }

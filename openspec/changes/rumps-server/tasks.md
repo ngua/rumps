@@ -3,7 +3,7 @@
 - [x] 1.1 Create `crates/rumps-server/` with `Cargo.toml` depending on `rumps-storage`, `rumps-types`, `axum`, `tokio`, `serde`, `serde_json`, `uuid`, `tower`, `tower-http`, `toml`, `dashmap`, `tracing`, `tracing-subscriber`
 - [x] 1.2 Add workspace dependencies for new crates (`axum`, `uuid`, `tower`, `tower-http`, `toml`, `dashmap`, `clap`) in root `Cargo.toml`
 - [x] 1.3 Create `src/lib.rs` (server builder, public API) and `src/main.rs` (CLI binary with clap)
-- [x] 1.4 Implement TOML config loading (`config::Config` struct with `config::Server`, `config::Database`, `config::Session`, `config::Transaction`, `config::AuthSection` sections)
+- [x] 1.4 Implement TOML config loading (`config::Config` struct with `config::Server`, `config::Database`, `config::Session`, `config::Transaction`, `config::Auth` sections)
 
 ## 2. Wire Encoding Types
 
@@ -16,23 +16,23 @@
 
 ## 3. RPC Protocol and Dispatch
 
-- [ ] 3.1 Define `RpcRequest` as a `#[serde(tag = "op")]` enum where each variant carries its own typed fields (e.g. `GlobalGet { txn: Uuid, name: String, key: wire::Key }`). Serde handles both op dispatch and field extraction in one deserialization step; unknown ops fail at deserialization with a `400`.
-- [ ] 3.2 Implement `rpc` that deserializes the request body into `RpcRequest` and matches on the variant to dispatch to per-op handler functions
+- [ ] 3.1 Create `src/rpc.rs`; define `rpc::Request` as a `#[serde(tag = "op")]` enum where each variant carries its own typed fields (e.g. `GlobalGet { txn: Uuid, name: String, key: wire::Key }`). Serde handles both op dispatch and field extraction in one deserialization step; unknown ops fail at deserialization with a `400`.
+- [ ] 3.2 Implement `rpc::dispatch` that deserializes the request body into `rpc::Request` and matches on the variant to dispatch to per-op handler functions
 - [ ] 3.3 Define per-op response structs (`ValueResp`, `OkResp`, `IncrementResp`, `DataResp`, `OrderResp`, `QueryResp`, `ListGlobalsResp`) with `Serialize`
 - [ ] 3.4 Wire up Axum router: `POST /rpc` -> `rpc`, `GET /health`, `GET /status`
 
 ## 4. Session Management
 
 - [ ] 4.1 Implement `Session` struct (external UUID, internal `u64` ID, last activity timestamp, owned transaction set, `HashSet<SmolStr>` of used local names)
-- [ ] 4.2 Implement `SessionManager` with `DashMap<Uuid, Session>`, `AtomicU64` counter, shared `Database::in_memory()` for locals, `create()`, `get()`, `destroy()` methods. `destroy()` rolls back owned transactions and calls `kill(&Name::local(name), &key![internal_id])` for each used local name.
-- [ ] 4.3 Implement session reaper: background `tokio::spawn` task that periodically scans for idle sessions and destroys them via `SessionManager::destroy()`
+- [ ] 4.2 Create `src/session.rs`; implement `session::Manager` with `DashMap<Uuid, Session>`, `AtomicU64` counter, shared `Database::in_memory()` for locals, `create()`, `get()`, `destroy()` methods. `destroy()` rolls back owned transactions and calls `kill(&Name::local(name), &key![internal_id])` for each used local name.
+- [ ] 4.3 Implement session reaper: background `tokio::spawn` task that periodically scans for idle sessions and destroys them via `session::Manager::destroy()`
 - [ ] 4.4 Implement `Session` Axum extractor (`impl FromRequestParts`) that reads and validates the `X-Session-Id` header and injects the session into the handler. Ops that do not require a session (e.g. `session.start`, `global.list`) simply omit this extractor from their handler signature.
 - [ ] 4.5 Implement `session.start` and `session.end` op handlers
 
 ## 5. Transaction Management
 
-- [ ] 5.1 Implement `TransactionStore` with `DashMap<Uuid, (Uuid, Transaction, Instant)>` (txn token -> session id, transaction, last use)
-- [ ] 5.2 Implement `txn.start` handler: build transaction from `Database`, optional isolation/timeout, store in `TransactionStore`
+- [ ] 5.1 Create `src/transaction.rs`; implement `transaction::Store` with `DashMap<Uuid, (Uuid, Transaction, Instant)>` (txn token -> session id, transaction, last use)
+- [ ] 5.2 Implement `txn.start` handler: build transaction from `Database`, optional isolation/timeout, store in `transaction::Store`
 - [ ] 5.3 Implement `txn.commit` handler: remove the `Transaction` from the `DashMap` first (taking ownership), then call `.commit()` on the removed value. Removal must happen before the async commit call to avoid holding a `DashMap` ref across an await.
 - [ ] 5.4 Implement `txn.rollback` handler: remove the `Transaction` from the `DashMap` first (taking ownership), then call `.rollback()` on the removed value. Same ownership constraint as commit.
 - [ ] 5.5 Implement transaction token validation: lookup in store, verify session ownership, update last-use timestamp
@@ -43,7 +43,7 @@
 Global and local ops differ only in how the "database context" is obtained: global ops look up a `Transaction` by token, local ops use the session's in-memory `Database`. To avoid duplicating every handler, define a trait abstracting over both:
 
 ```rust
-trait DbContext {
+trait Context {
     async fn get(&self, name: &Name, key: &Key) -> Result<Option<Value>>;
     async fn set(&self, name: &Name, key: &Key, val: Value) -> Result<()>;
     async fn increment(&self, name: &Name, key: &Key, amt: Increment) -> Result<Value>;
@@ -54,24 +54,24 @@ trait DbContext {
 }
 ```
 
-Implement for both `&Transaction` and session-scoped `&Database`. Each op handler is generic over `DbContext`; the `RpcRequest` match arm resolves which context to use and calls the shared handler.
+Implement for both `&Transaction` and session-scoped `&Database`. Each op handler is generic over `Context`; the `rpc::Request` match arm resolves which context to use and calls the shared handler.
 
-- [ ] 6.1 Define `DbContext` trait with the methods above
-- [ ] 6.2 Implement `DbContext` for `Transaction` (delegates to `Transaction::get`, etc.)
-- [ ] 6.3 Implement `DbContext` for session-local context: wraps the shared in-memory `Database` and the session's internal `u64` ID. Prepends the session ID to keys on the way in, strips it on the way out. Tracks used local names in the session's `HashSet<SmolStr>` on write ops.
-- [ ] 6.4 Implement shared `get` handler: deserialize `wire::Key`, call `DbContext::get`, serialize response
-- [ ] 6.5 Implement shared `set` handler: deserialize `wire::Key` + `wire::Value`, call `DbContext::set`
-- [ ] 6.6 Implement shared `increment` handler: deserialize `wire::Key` + `wire::Increment`, call `DbContext::increment`, serialize new value
-- [ ] 6.7 Implement shared `kill` handler: deserialize `wire::Key`, call `DbContext::kill`
-- [ ] 6.8 Implement shared `data` handler: deserialize `wire::Key`, call `DbContext::data`, serialize `wire::DataStatus`
-- [ ] 6.9 Implement shared `order` handler: deserialize `wire::Key` (prefix) + optional `wire::Subscript` (after), call `DbContext::order`, serialize response
-- [ ] 6.10 Implement shared `query` handler: deserialize optional `wire::Key` (after), call `DbContext::query`, serialize response
-- [ ] 6.11 Implement `global.list`: call `Database::list_globals`, serialize response. This op is session-exempt and does not use `DbContext`.
+- [ ] 6.1 Create `src/handler.rs`; define `handler::Context` trait with the methods above
+- [ ] 6.2 Implement `handler::Context` for `Transaction` (delegates to `Transaction::get`, etc.)
+- [ ] 6.3 Implement `handler::Context` for session-local context: wraps the shared in-memory `Database` and the session's internal `u64` ID. Prepends the session ID to keys on the way in, strips it on the way out. Tracks used local names in the session's `HashSet<SmolStr>` on write ops.
+- [ ] 6.4 Implement shared `get` handler: deserialize `wire::Key`, call `Context::get`, serialize response
+- [ ] 6.5 Implement shared `set` handler: deserialize `wire::Key` + `wire::Value`, call `Context::set`
+- [ ] 6.6 Implement shared `increment` handler: deserialize `wire::Key` + `wire::Increment`, call `Context::increment`, serialize new value
+- [ ] 6.7 Implement shared `kill` handler: deserialize `wire::Key`, call `Context::kill`
+- [ ] 6.8 Implement shared `data` handler: deserialize `wire::Key`, call `Context::data`, serialize `wire::DataStatus`
+- [ ] 6.9 Implement shared `order` handler: deserialize `wire::Key` (prefix) + optional `wire::Subscript` (after), call `Context::order`, serialize response
+- [ ] 6.10 Implement shared `query` handler: deserialize optional `wire::Key` (after), call `Context::query`, serialize response
+- [ ] 6.11 Implement `global.list`: call `Database::list_globals`, serialize response. This op is session-exempt and does not use `Context`.
 
 ## 7. Global/Local Dispatch Wiring
 
-- [ ] 7.1 Wire `global.*` variants in the `RpcRequest` match to resolve the `Transaction` from the `txn` token and call the shared handler with the transaction as `DbContext`
-- [ ] 7.2 Wire `local.*` variants in the `RpcRequest` match to resolve the session's local `Database` and call the shared handler with it as `DbContext`
+- [ ] 7.1 Wire `global.*` variants in the `rpc::Request` match to resolve the `Transaction` from the `txn` token and call the shared handler with the transaction as `handler::Context`
+- [ ] 7.2 Wire `local.*` variants in the `rpc::Request` match to resolve the session's local `Database` and call the shared handler with it as `handler::Context`
 
 ## 8. NDJSON Streaming (collect)
 
