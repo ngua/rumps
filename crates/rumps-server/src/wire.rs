@@ -416,6 +416,53 @@ impl<'de> Deserialize<'de> for Increment {
     }
 }
 
+/// Wire-format wrapper for [`rumps_types::DataStatus`].
+///
+/// Serialized as the MUMPS `$DATA` return code: `0` (no data), `1` (has
+/// value), `10` (has descendants), `11` (has both).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DataStatus(rumps_types::DataStatus);
+
+impl From<rumps_types::DataStatus> for DataStatus {
+    fn from(d: rumps_types::DataStatus) -> Self {
+        Self(d)
+    }
+}
+
+impl From<DataStatus> for rumps_types::DataStatus {
+    fn from(w: DataStatus) -> Self {
+        w.0
+    }
+}
+
+impl Serialize for DataStatus {
+    fn serialize<S>(&self, ser: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        ser.serialize_u8(self.0 as u8)
+    }
+}
+
+impl<'de> Deserialize<'de> for DataStatus {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let n = u8::deserialize(deserializer)?;
+
+        match n {
+            0 => Ok(Self(rumps_types::DataStatus::NoData)),
+            1 => Ok(Self(rumps_types::DataStatus::HasValue)),
+            10 => Ok(Self(rumps_types::DataStatus::HasDescendants)),
+            11 => Ok(Self(rumps_types::DataStatus::Both)),
+            _ => Err(de::Error::custom(format!(
+                "invalid `data` code `{n}`; expected `0`, `1`, `10`, or `11`"
+            ))),
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -975,6 +1022,68 @@ mod tests {
             let json = serde_json::to_value(wi).unwrap();
             let back: Increment = serde_json::from_value(json).unwrap();
             assert_eq!(&back, wi);
+        });
+    }
+
+    #[test]
+    fn data_status_ser_all() {
+        let cases = [
+            (rumps_types::DataStatus::NoData, 0),
+            (rumps_types::DataStatus::HasValue, 1),
+            (rumps_types::DataStatus::HasDescendants, 10),
+            (rumps_types::DataStatus::Both, 11),
+        ];
+        cases.iter().for_each(|(status, code)| {
+            let ws = DataStatus::from(*status);
+            assert_eq!(serde_json::to_value(&ws).unwrap(), json!(code));
+        });
+    }
+
+    #[test]
+    fn data_status_deser_all() {
+        let cases = [
+            (0, rumps_types::DataStatus::NoData),
+            (1, rumps_types::DataStatus::HasValue),
+            (10, rumps_types::DataStatus::HasDescendants),
+            (11, rumps_types::DataStatus::Both),
+        ];
+        cases.iter().for_each(|(code, expected)| {
+            let ws: DataStatus = serde_json::from_value(json!(code)).unwrap();
+            assert_eq!(ws.0, *expected);
+        });
+    }
+
+    #[test]
+    fn data_status_deser_invalid_code_rejected() {
+        [2, 3, 12, 100, 255].iter().for_each(|code| {
+            let r: Result<DataStatus, _> = serde_json::from_value(json!(code));
+            assert!(r.is_err());
+        });
+    }
+
+    #[test]
+    fn data_status_deser_non_integer_rejected() {
+        let r: Result<DataStatus, _> = serde_json::from_value(json!("both"));
+        assert!(r.is_err());
+
+        let r: Result<DataStatus, _> = serde_json::from_value(json!(1.5));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn data_status_round_trip() {
+        [
+            rumps_types::DataStatus::NoData,
+            rumps_types::DataStatus::HasValue,
+            rumps_types::DataStatus::HasDescendants,
+            rumps_types::DataStatus::Both,
+        ]
+        .iter()
+        .for_each(|status| {
+            let ws = DataStatus::from(*status);
+            let json = serde_json::to_value(&ws).unwrap();
+            let back: DataStatus = serde_json::from_value(json).unwrap();
+            assert_eq!(ws, back);
         });
     }
 }
