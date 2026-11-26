@@ -146,6 +146,158 @@ impl<'de> Deserialize<'de> for Subscript {
     }
 }
 
+/// Wire-format wrapper for [`rumps_types::Value`] with JSON-native serialization.
+///
+/// Deserialization infers the type from JSON primitives:
+/// - `true`/`false` -> `rumps_types::Value::Boolean`
+/// - integer (no fractional part) -> `rumps_types::Value::Integer`
+/// - float (has fractional part) -> `rumps_types::Value::Double`
+/// - string -> `rumps_types::Value::String`
+/// - object -> parsed as `$`-prefixed tag; error if unrecognized
+///
+/// Serialization uses bare JSON for `Boolean`, `Integer`, `Double`, `String`,
+/// and `$`-prefixed tags for `Char` and `Json`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Value(rumps_types::Value);
+
+impl From<rumps_types::Value> for Value {
+    fn from(v: rumps_types::Value) -> Self {
+        Self(v)
+    }
+}
+
+impl From<Value> for rumps_types::Value {
+    fn from(w: Value) -> Self {
+        w.0
+    }
+}
+
+impl Serialize for Value {
+    fn serialize<S>(&self, ser: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match &self.0 {
+            rumps_types::Value::Boolean(b) => ser.serialize_bool(*b),
+            rumps_types::Value::Integer(n) => ser.serialize_i64(*n),
+            rumps_types::Value::Double(n) => ser.serialize_f64(n.into_inner()),
+            rumps_types::Value::String(s) => ser.serialize_str(s),
+            rumps_types::Value::Char(c) => {
+                let mut map = ser.serialize_map(Some(1))?;
+                map.serialize_entry("$char", &c.to_string())?;
+                map.end()
+            }
+            rumps_types::Value::Json(j) => {
+                let mut map = ser.serialize_map(Some(1))?;
+                map.serialize_entry("$json", j)?;
+                map.end()
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Value {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let v = serde_json::Value::deserialize(deserializer)?;
+
+        match v {
+            serde_json::Value::Bool(b) => {
+                Ok(Self(rumps_types::Value::Boolean(b)))
+            }
+            serde_json::Value::Number(n) => {
+                if n.is_i64() {
+                    Ok(Self(rumps_types::Value::Integer(
+                        n.as_i64().ok_or_else(|| {
+                            de::Error::custom(
+                                "numeric value out of `i64` range",
+                            )
+                        })?,
+                    )))
+                } else {
+                    Ok(Self(rumps_types::Value::Double(OrderedFloat(
+                        n.as_f64().ok_or_else(|| {
+                            de::Error::custom(
+                                "numeric value out of `f64` range",
+                            )
+                        })?,
+                    ))))
+                }
+            }
+            serde_json::Value::String(s) => {
+                Ok(Self(rumps_types::Value::String(s)))
+            }
+            serde_json::Value::Object(map) if map.len() == 1 => {
+                let (tag, val) = map
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| de::Error::custom("empty tagged object"))?;
+
+                match tag.as_str() {
+                    "$bool" => val
+                        .as_bool()
+                        .map(|b| Self(rumps_types::Value::Boolean(b)))
+                        .ok_or_else(|| {
+                            de::Error::custom("`$bool` requires a boolean")
+                        }),
+                    "$int" => val
+                        .as_i64()
+                        .map(|n| Self(rumps_types::Value::Integer(n)))
+                        .ok_or_else(|| {
+                            de::Error::custom("`$int` requires an integer")
+                        }),
+                    "$float" => val
+                        .as_f64()
+                        .map(|n| {
+                            Self(rumps_types::Value::Double(OrderedFloat(n)))
+                        })
+                        .ok_or_else(|| {
+                            de::Error::custom("`$float` requires a number")
+                        }),
+                    "$str" => match val {
+                        serde_json::Value::String(s) => {
+                            Ok(Self(rumps_types::Value::String(s)))
+                        }
+                        _ => Err(de::Error::custom("`$str` requires a string")),
+                    },
+                    "$char" => {
+                        let s = val.as_str().ok_or_else(|| {
+                            de::Error::custom("`$char` requires a string")
+                        })?;
+                        let mut chars = s.chars();
+                        let c = chars.next().ok_or_else(|| {
+                            de::Error::custom(
+                                "`$char` requires exactly one character",
+                            )
+                        })?;
+                        if chars.next().is_some() {
+                            Err(de::Error::custom(
+                                "`$char` requires exactly one character",
+                            ))
+                        } else {
+                            Ok(Self(rumps_types::Value::Char(c)))
+                        }
+                    }
+                    "$json" => Ok(Self(rumps_types::Value::Json(val))),
+                    other => Err(de::Error::custom(format!(
+                        "unrecognized tag `{other}`"
+                    ))),
+                }
+            }
+            serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
+                Err(de::Error::custom(
+                    "objects and arrays must use `$json` tag for values",
+                ))
+            }
+            serde_json::Value::Null => {
+                Err(de::Error::custom("`null` is not a valid value"))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -329,6 +481,215 @@ mod tests {
             let json = serde_json::to_value(ws).unwrap();
             let back: Subscript = serde_json::from_value(json).unwrap();
             assert_eq!(&back, ws);
+        });
+    }
+
+    // --- Value deserialization ---
+
+    #[test]
+    fn value_deser_bool() {
+        let wv: Value = serde_json::from_value(json!(true)).unwrap();
+        assert_eq!(wv.0, rumps_types::Value::Boolean(true));
+
+        let wv: Value = serde_json::from_value(json!(false)).unwrap();
+        assert_eq!(wv.0, rumps_types::Value::Boolean(false));
+    }
+
+    #[test]
+    fn value_deser_integer() {
+        let wv: Value = serde_json::from_value(json!(42)).unwrap();
+        assert_eq!(wv.0, rumps_types::Value::Integer(42));
+    }
+
+    #[test]
+    fn value_deser_negative_integer() {
+        let wv: Value = serde_json::from_value(json!(-7)).unwrap();
+        assert_eq!(wv.0, rumps_types::Value::Integer(-7));
+    }
+
+    #[test]
+    fn value_deser_float() {
+        let wv: Value = serde_json::from_value(json!(3.14)).unwrap();
+        assert_eq!(wv.0, rumps_types::Value::Double(OrderedFloat(3.14)));
+    }
+
+    #[test]
+    fn value_deser_string() {
+        let wv: Value = serde_json::from_value(json!("Alice")).unwrap();
+        assert_eq!(wv.0, rumps_types::Value::String("Alice".into()));
+    }
+
+    #[test]
+    fn value_deser_explicit_bool_tag() {
+        let wv: Value = serde_json::from_value(json!({"$bool": true})).unwrap();
+        assert_eq!(wv.0, rumps_types::Value::Boolean(true));
+    }
+
+    #[test]
+    fn value_deser_explicit_int_tag() {
+        let wv: Value = serde_json::from_value(json!({"$int": 42})).unwrap();
+        assert_eq!(wv.0, rumps_types::Value::Integer(42));
+    }
+
+    #[test]
+    fn value_deser_explicit_float_tag() {
+        let wv: Value = serde_json::from_value(json!({"$float": 42})).unwrap();
+        assert_eq!(wv.0, rumps_types::Value::Double(OrderedFloat(42.0)));
+
+        let wv: Value =
+            serde_json::from_value(json!({"$float": 3.14})).unwrap();
+        assert_eq!(wv.0, rumps_types::Value::Double(OrderedFloat(3.14)));
+    }
+
+    #[test]
+    fn value_deser_explicit_str_tag() {
+        let wv: Value =
+            serde_json::from_value(json!({"$str": "hello"})).unwrap();
+        assert_eq!(wv.0, rumps_types::Value::String("hello".into()));
+    }
+
+    #[test]
+    fn value_deser_explicit_char_tag() {
+        let wv: Value = serde_json::from_value(json!({"$char": "X"})).unwrap();
+        assert_eq!(wv.0, rumps_types::Value::Char('X'));
+    }
+
+    #[test]
+    fn value_deser_char_tag_multi_char_rejected() {
+        let r: Result<Value, _> =
+            serde_json::from_value(json!({"$char": "AB"}));
+        assert!(r.is_err());
+        assert!(r.unwrap_err().to_string().contains("exactly one character"));
+    }
+
+    #[test]
+    fn value_deser_char_tag_non_string_rejected() {
+        let r: Result<Value, _> = serde_json::from_value(json!({"$char": 65}));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn value_deser_explicit_json_tag_object() {
+        let wv: Value =
+            serde_json::from_value(json!({"$json": {"a": 1}})).unwrap();
+        assert_eq!(wv.0, rumps_types::Value::Json(json!({"a": 1})));
+    }
+
+    #[test]
+    fn value_deser_explicit_json_tag_array() {
+        let wv: Value =
+            serde_json::from_value(json!({"$json": [1, 2, 3]})).unwrap();
+        assert_eq!(wv.0, rumps_types::Value::Json(json!([1, 2, 3])));
+    }
+
+    #[test]
+    fn value_deser_explicit_json_tag_null() {
+        let wv: Value = serde_json::from_value(json!({"$json": null})).unwrap();
+        assert_eq!(wv.0, rumps_types::Value::Json(serde_json::Value::Null));
+    }
+
+    #[test]
+    fn value_deser_bare_object_rejected() {
+        let r: Result<Value, _> = serde_json::from_value(json!({"a": 1}));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn value_deser_bare_array_rejected() {
+        let r: Result<Value, _> = serde_json::from_value(json!([1, 2]));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn value_deser_null_rejected() {
+        let r: Result<Value, _> = serde_json::from_value(json!(null));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn value_deser_unrecognized_tag_rejected() {
+        let r: Result<Value, _> =
+            serde_json::from_value(json!({"$unknown": 1}));
+        assert!(r.is_err());
+        assert!(r.unwrap_err().to_string().contains("unrecognized tag"));
+    }
+
+    #[test]
+    fn value_deser_int_tag_rejects_non_integer() {
+        let r: Result<Value, _> =
+            serde_json::from_value(json!({"$int": "nope"}));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn value_deser_float_tag_rejects_non_number() {
+        let r: Result<Value, _> =
+            serde_json::from_value(json!({"$float": "nope"}));
+        assert!(r.is_err());
+    }
+
+    // --- Value serialization ---
+
+    #[test]
+    fn value_ser_bool() {
+        let wv = Value(rumps_types::Value::Boolean(true));
+        assert_eq!(serde_json::to_value(&wv).unwrap(), json!(true));
+    }
+
+    #[test]
+    fn value_ser_integer() {
+        let wv = Value(rumps_types::Value::Integer(42));
+        assert_eq!(serde_json::to_value(&wv).unwrap(), json!(42));
+    }
+
+    #[test]
+    fn value_ser_double() {
+        let wv = Value(rumps_types::Value::Double(OrderedFloat(3.14)));
+        assert_eq!(serde_json::to_value(&wv).unwrap(), json!(3.14));
+    }
+
+    #[test]
+    fn value_ser_string() {
+        let wv = Value(rumps_types::Value::String("foo".into()));
+        assert_eq!(serde_json::to_value(&wv).unwrap(), json!("foo"));
+    }
+
+    #[test]
+    fn value_ser_char_uses_tag() {
+        let wv = Value(rumps_types::Value::Char('Z'));
+        assert_eq!(serde_json::to_value(&wv).unwrap(), json!({"$char": "Z"}));
+    }
+
+    #[test]
+    fn value_ser_json_uses_tag() {
+        let wv = Value(rumps_types::Value::Json(json!({"a": 1})));
+        assert_eq!(
+            serde_json::to_value(&wv).unwrap(),
+            json!({"$json": {"a": 1}})
+        );
+    }
+
+    // Value round-trips
+
+    #[test]
+    fn value_round_trip_all_variants() {
+        let cases = vec![
+            Value(rumps_types::Value::Boolean(false)),
+            Value(rumps_types::Value::Integer(-10)),
+            Value(rumps_types::Value::Integer(0)),
+            Value(rumps_types::Value::Integer(42)),
+            Value(rumps_types::Value::Double(OrderedFloat(1.5))),
+            Value(rumps_types::Value::Double(OrderedFloat(-0.001))),
+            Value(rumps_types::Value::Char('X')),
+            Value(rumps_types::Value::String("hello".into())),
+            Value(rumps_types::Value::Json(json!({"nested": [1, 2]}))),
+            Value(rumps_types::Value::Json(json!(null))),
+        ];
+
+        cases.iter().for_each(|wv| {
+            let json = serde_json::to_value(wv).unwrap();
+            let back: Value = serde_json::from_value(json).unwrap();
+            assert_eq!(&back, wv);
         });
     }
 }
