@@ -127,11 +127,11 @@ The `amount` field for `increment` ops SHALL use type inference: JSON integers m
 - **THEN** it deserializes as `Increment::Double(OrderedFloat(1.0))`
 
 ### Requirement: DataStatus wire format
-`DataStatus` SHALL be serialized as a JSON string: `"no-data"`, `"has-value"`, `"has-descendants"`, `"both"`.
+`DataStatus` SHALL be serialized as a JSON integer matching its `repr(u8)` discriminant: `0` (no data), `1` (has value), `10` (has descendants), `11` (has both). On deserialization, only these four values SHALL be accepted; any other integer or non-integer SHALL return a `400` error. This preserves the standard MUMPS `$DATA` return codes, where the ones digit encodes "has value" and the tens digit encodes "has descendants".
 
 #### Scenario: DataStatus encoding
 - **WHEN** a `data` op returns `DataStatus::Both`
-- **THEN** the response contains `{"status": "both"}`
+- **THEN** the response contains `{"status": 11}`
 
 ### Requirement: Dir wire format
 `Dir` SHALL be serialized as a JSON string: `"fwd"` for `Dir::Forward`, `"rev"` for `Dir::Reverse`. On deserialization, `"fwd"` SHALL map to `Dir::Forward` and `"rev"` SHALL map to `Dir::Reverse`. Any other string SHALL return a `400` error.

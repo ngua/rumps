@@ -2151,7 +2151,7 @@ mod tests {
         assert_eq!(ids[4].page_num(), 300);
     }
 
-    // ---- Expensive integration test for indirect bitmap allocation ----
+    // Expensive integration test for indirect bitmap allocation
     //
     // Run with: cargo test -p rumps-storage single_indirect_allocation -- --ignored --nocapture
     //

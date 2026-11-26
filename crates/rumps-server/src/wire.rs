@@ -195,6 +195,9 @@ impl Serialize for Value {
     }
 }
 
+// Note that this impl is extremely close to that of `Subscript`, only differing
+// in having numeric type tags `$float`/`$int` rather than a `$number`. This
+// is for consistency with RUMPS semantics
 impl<'de> Deserialize<'de> for Value {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
