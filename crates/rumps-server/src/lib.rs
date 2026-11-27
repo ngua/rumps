@@ -9,12 +9,12 @@
 pub mod config;
 pub mod error;
 pub(crate) mod response;
+pub(crate) mod router;
 pub(crate) mod rpc;
 pub(crate) mod wire;
 
 use std::net::SocketAddr;
 
-use axum::Router;
 use config::Config;
 use error::{Error, Result};
 use rumps_storage::Database;
@@ -27,8 +27,8 @@ pub(crate) struct AppState {
 }
 
 impl AppState {
-    fn router(self) -> Router {
-        Router::new().with_state(self)
+    fn into_router(self) -> axum::Router {
+        router::Router::build(self)
     }
 }
 
@@ -75,7 +75,7 @@ impl ServerBuilder {
             config: self.config,
         };
 
-        let app = state.router();
+        let app = state.into_router();
         let listener = TcpListener::bind(addr).await?;
         tracing::info!("listening on {}", addr);
 
