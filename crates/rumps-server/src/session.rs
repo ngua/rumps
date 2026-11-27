@@ -1,0 +1,120 @@
+//! Session state and lifecycle management.
+
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use dashmap::mapref::one::RefMut;
+use dashmap::DashMap;
+use futures::future;
+use rumps_storage::Database;
+use rumps_types::{key, Name};
+use smol_str::SmolStr;
+use tokio::time::Instant;
+use uuid::Uuid;
+
+use crate::error::Result;
+
+/// A single client session.
+pub(crate) struct Session {
+    /// Client-facing session token.
+    pub(crate) id: Uuid,
+    /// Monotonic internal ID used as a key prefix for local variable isolation.
+    pub(crate) internal_id: u64,
+    /// Last time this session was used; reset on every request.
+    pub(crate) last_activity: Instant,
+    /// Transaction tokens owned by this session.
+    pub(crate) txns: HashSet<Uuid>,
+    /// Local variable names this session has written to.
+    pub(crate) locals: HashSet<SmolStr>,
+}
+
+impl Session {
+    pub(crate) fn new(id: Uuid, internal_id: u64) -> Self {
+        Self {
+            id,
+            internal_id,
+            last_activity: Instant::now(),
+            txns: HashSet::new(),
+            locals: HashSet::new(),
+        }
+    }
+
+    /// Updates the last activity timestamp to now.
+    pub(crate) fn touch(&mut self) {
+        self.last_activity = Instant::now();
+    }
+}
+
+/// Manages active sessions and owns the shared in-memory database for locals.
+pub(crate) struct Manager {
+    sessions: DashMap<Uuid, Session>,
+    counter: AtomicU64,
+    /// Shared in-memory database backing all sessions' local variables.
+    pub(crate) locals_db: Database,
+}
+
+impl Manager {
+    pub(crate) fn new() -> Result<Self> {
+        Ok(Self {
+            sessions: DashMap::new(),
+            counter: AtomicU64::new(0),
+            locals_db: Database::in_memory()?,
+        })
+    }
+
+    /// Creates a new session and returns its external UUID.
+    pub(crate) fn create(&self) -> Uuid {
+        let id = Uuid::new_v4();
+        let internal = self.counter.fetch_add(1, Ordering::Relaxed);
+        self.sessions.insert(id, Session::new(id, internal));
+        id
+    }
+
+    /// Looks up a session by its external UUID.
+    pub(crate) fn get(&self, id: &Uuid) -> Option<RefMut<'_, Uuid, Session>> {
+        self.sessions.get_mut(id)
+    }
+
+    /// Destroys a session, killing all its local variable subtrees.
+    ///
+    /// Returns the set of transaction UUIDs owned by the session; the
+    /// caller is responsible for rolling them back.
+    pub(crate) async fn destroy(&self, id: &Uuid) -> HashSet<Uuid> {
+        match self.sessions.remove(id) {
+            Some((_, session)) => {
+                let Session {
+                    internal_id,
+                    locals,
+                    txns,
+                    ..
+                } = session;
+
+                future::join_all(locals.into_iter().map(|name| {
+                    let db = &self.locals_db;
+                    async move {
+                        if let Err(e) = db
+                            .kill(
+                                &Name::local(&name),
+                                // `Subscript::Number` is `f64`; precision is
+                                // exact up to `2^53`, which is unreachable for
+                                // a session counter. That would be ~9 quadrillion
+                                // sessions, not a realistic concern
+                                &key![internal_id as i64],
+                            )
+                            .await
+                        {
+                            tracing::warn!(
+                                local = %name,
+                                "failed to kill local: {e}"
+                            );
+                        }
+                    }
+                }))
+                .await;
+
+                txns
+            }
+            None => HashSet::new(),
+        }
+    }
+}

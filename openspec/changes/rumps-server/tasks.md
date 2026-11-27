@@ -23,10 +23,10 @@
 
 ## 4. Session Management
 
-- [ ] 4.1 Implement `Session` struct (external UUID, internal `u64` ID, last activity timestamp, owned transaction set, `HashSet<SmolStr>` of used local names)
-- [ ] 4.2 Create `src/session.rs`; implement `session::Manager` with `DashMap<Uuid, Session>`, `AtomicU64` counter, shared `Database::in_memory()` for locals, `create()`, `get()`, `destroy()` methods. `destroy()` rolls back owned transactions and calls `kill(&Name::local(name), &key![internal_id])` for each used local name.
+- [x] 4.1 Create `src/session.rs` and implement `Session` struct (external UUID, internal `u64` ID, last activity timestamp, owned transaction set, `HashSet<SmolStr>` of used local names)
+- [x] 4.2 Implement `session::Manager` with `DashMap<Uuid, Session>`, `AtomicU64` counter, shared `Database::in_memory()` for locals, `create()`, `get()`, `destroy()` methods. `destroy()` rolls back owned transactions and calls `kill(&Name::local(name), &key![internal_id])` for each used local name.
 - [ ] 4.3 Implement session reaper: background `tokio::spawn` task that periodically scans for idle sessions and destroys them via `session::Manager::destroy()`
-- [ ] 4.4 Implement `Session` Axum extractor (`impl FromRequestParts`) that reads and validates the `X-Session-Id` header and injects the session into the handler. Ops that do not require a session (e.g. `session.start`, `global.list`) simply omit this extractor from their handler signature.
+- [ ] 4.4 Implement `Session` Axum extractor (`impl FromRequestParts`) that reads and validates the `X-Session-Id` header and injects the session into the handler. Only `session.start` does not require a session and omits this extractor from their handler signature. Every other op goes through the session gate, including `session.end`.
 - [ ] 4.5 Implement `session.start` and `session.end` op handlers
 
 ## 5. Transaction Management

@@ -11,6 +11,7 @@ pub mod error;
 pub(crate) mod response;
 pub(crate) mod router;
 pub(crate) mod rpc;
+pub(crate) mod session;
 pub(crate) mod wire;
 
 use std::net::SocketAddr;
