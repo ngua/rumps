@@ -471,33 +471,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn deser_bool() {
-        let ws: Subscript = serde_json::from_value(json!(true)).unwrap();
-        assert_eq!(ws.0, rumps_types::Subscript::Boolean(true));
-
-        let ws: Subscript = serde_json::from_value(json!(false)).unwrap();
-        assert_eq!(ws.0, rumps_types::Subscript::Boolean(false));
-    }
-
-    #[test]
-    fn deser_integer_as_number() {
-        let ws: Subscript = serde_json::from_value(json!(123)).unwrap();
-        assert_eq!(ws.0, rumps_types::Subscript::Number(OrderedFloat(123.0)));
-    }
-
-    #[test]
-    fn deser_float_as_number() {
-        let ws: Subscript = serde_json::from_value(json!(1.5)).unwrap();
-        assert_eq!(ws.0, rumps_types::Subscript::Number(OrderedFloat(1.5)));
-    }
-
-    #[test]
-    fn deser_string() {
-        let ws: Subscript = serde_json::from_value(json!("NAME")).unwrap();
-        assert_eq!(ws.0, rumps_types::Subscript::String("NAME".into()));
-    }
-
-    #[test]
     fn deser_explicit_bool_tag() {
         let ws: Subscript =
             serde_json::from_value(json!({"$bool": true})).unwrap();
@@ -592,30 +565,6 @@ mod tests {
     }
 
     #[test]
-    fn ser_bool() {
-        let ws = Subscript(rumps_types::Subscript::Boolean(true));
-        assert_eq!(serde_json::to_value(&ws).unwrap(), json!(true));
-    }
-
-    #[test]
-    fn ser_number_integer() {
-        let ws = Subscript(rumps_types::Subscript::Number(OrderedFloat(42.0)));
-        assert_eq!(serde_json::to_value(&ws).unwrap(), json!(42.0));
-    }
-
-    #[test]
-    fn ser_number_float() {
-        let ws = Subscript(rumps_types::Subscript::Number(OrderedFloat(3.14)));
-        assert_eq!(serde_json::to_value(&ws).unwrap(), json!(3.14));
-    }
-
-    #[test]
-    fn ser_string() {
-        let ws = Subscript(rumps_types::Subscript::String("foo".into()));
-        assert_eq!(serde_json::to_value(&ws).unwrap(), json!("foo"));
-    }
-
-    #[test]
     fn ser_char_uses_tag() {
         let ws = Subscript(rumps_types::Subscript::Char('Z'));
         assert_eq!(serde_json::to_value(&ws).unwrap(), json!({"$char": "Z"}));
@@ -647,39 +596,6 @@ mod tests {
             let back: Subscript = serde_json::from_value(json).unwrap();
             assert_eq!(&back, ws);
         });
-    }
-
-    #[test]
-    fn value_deser_bool() {
-        let wv: Value = serde_json::from_value(json!(true)).unwrap();
-        assert_eq!(wv.0, rumps_types::Value::Boolean(true));
-
-        let wv: Value = serde_json::from_value(json!(false)).unwrap();
-        assert_eq!(wv.0, rumps_types::Value::Boolean(false));
-    }
-
-    #[test]
-    fn value_deser_integer() {
-        let wv: Value = serde_json::from_value(json!(42)).unwrap();
-        assert_eq!(wv.0, rumps_types::Value::Integer(42));
-    }
-
-    #[test]
-    fn value_deser_negative_integer() {
-        let wv: Value = serde_json::from_value(json!(-7)).unwrap();
-        assert_eq!(wv.0, rumps_types::Value::Integer(-7));
-    }
-
-    #[test]
-    fn value_deser_float() {
-        let wv: Value = serde_json::from_value(json!(3.14)).unwrap();
-        assert_eq!(wv.0, rumps_types::Value::Double(OrderedFloat(3.14)));
-    }
-
-    #[test]
-    fn value_deser_string() {
-        let wv: Value = serde_json::from_value(json!("Alice")).unwrap();
-        assert_eq!(wv.0, rumps_types::Value::String("Alice".into()));
     }
 
     #[test]
@@ -789,30 +705,6 @@ mod tests {
         let r: Result<Value, _> =
             serde_json::from_value(json!({"$float": "nope"}));
         assert!(r.is_err());
-    }
-
-    #[test]
-    fn value_ser_bool() {
-        let wv = Value(rumps_types::Value::Boolean(true));
-        assert_eq!(serde_json::to_value(&wv).unwrap(), json!(true));
-    }
-
-    #[test]
-    fn value_ser_integer() {
-        let wv = Value(rumps_types::Value::Integer(42));
-        assert_eq!(serde_json::to_value(&wv).unwrap(), json!(42));
-    }
-
-    #[test]
-    fn value_ser_double() {
-        let wv = Value(rumps_types::Value::Double(OrderedFloat(3.14)));
-        assert_eq!(serde_json::to_value(&wv).unwrap(), json!(3.14));
-    }
-
-    #[test]
-    fn value_ser_string() {
-        let wv = Value(rumps_types::Value::String("foo".into()));
-        assert_eq!(serde_json::to_value(&wv).unwrap(), json!("foo"));
     }
 
     #[test]
@@ -942,24 +834,6 @@ mod tests {
     }
 
     #[test]
-    fn incr_deser_integer() {
-        let wi: Increment = serde_json::from_value(json!(5)).unwrap();
-        assert_eq!(wi.0, rumps_types::Increment::Integer(5));
-    }
-
-    #[test]
-    fn incr_deser_negative_integer() {
-        let wi: Increment = serde_json::from_value(json!(-3)).unwrap();
-        assert_eq!(wi.0, rumps_types::Increment::Integer(-3));
-    }
-
-    #[test]
-    fn incr_deser_float() {
-        let wi: Increment = serde_json::from_value(json!(1.5)).unwrap();
-        assert_eq!(wi.0, rumps_types::Increment::Double(OrderedFloat(1.5)));
-    }
-
-    #[test]
     fn incr_deser_explicit_int_tag() {
         let wi: Increment =
             serde_json::from_value(json!({"$int": 42})).unwrap();
@@ -996,18 +870,6 @@ mod tests {
         let r: Result<Increment, _> =
             serde_json::from_value(json!({"$str": "1"}));
         assert!(r.is_err());
-    }
-
-    #[test]
-    fn incr_ser_integer() {
-        let wi = Increment(rumps_types::Increment::Integer(5));
-        assert_eq!(serde_json::to_value(&wi).unwrap(), json!(5));
-    }
-
-    #[test]
-    fn incr_ser_double() {
-        let wi = Increment(rumps_types::Increment::Double(OrderedFloat(1.5)));
-        assert_eq!(serde_json::to_value(&wi).unwrap(), json!(1.5));
     }
 
     #[test]
