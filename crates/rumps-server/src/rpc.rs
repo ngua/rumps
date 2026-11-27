@@ -23,8 +23,8 @@ pub(crate) enum Dir {
 impl From<Dir> for rumps_types::Dir {
     fn from(d: Dir) -> Self {
         match d {
-            Dir::Forward => rumps_types::Dir::Forward,
-            Dir::Reverse => rumps_types::Dir::Reverse,
+            Dir::Forward => Self::Forward,
+            Dir::Reverse => Self::Reverse,
         }
     }
 }
@@ -163,28 +163,28 @@ impl Request {
         _state: &AppState,
     ) -> Result<response::Response> {
         match self {
-            Request::SessionStart => todo!(),
-            Request::SessionEnd => todo!(),
-            Request::TxnStart { .. } => todo!(),
-            Request::TxnCommit { .. } => todo!(),
-            Request::TxnRollback { .. } => todo!(),
-            Request::GlobalGet { .. } => todo!(),
-            Request::GlobalSet { .. } => todo!(),
-            Request::GlobalIncrement { .. } => todo!(),
-            Request::GlobalKill { .. } => todo!(),
-            Request::GlobalData { .. } => todo!(),
-            Request::GlobalOrder { .. } => todo!(),
-            Request::GlobalQuery { .. } => todo!(),
-            Request::GlobalCollect { .. } => todo!(),
-            Request::GlobalList => todo!(),
-            Request::LocalGet { .. } => todo!(),
-            Request::LocalSet { .. } => todo!(),
-            Request::LocalIncrement { .. } => todo!(),
-            Request::LocalKill { .. } => todo!(),
-            Request::LocalData { .. } => todo!(),
-            Request::LocalOrder { .. } => todo!(),
-            Request::LocalQuery { .. } => todo!(),
-            Request::LocalCollect { .. } => todo!(),
+            Self::SessionStart => todo!(),
+            Self::SessionEnd => todo!(),
+            Self::TxnStart { .. } => todo!(),
+            Self::TxnCommit { .. } => todo!(),
+            Self::TxnRollback { .. } => todo!(),
+            Self::GlobalGet { .. } => todo!(),
+            Self::GlobalSet { .. } => todo!(),
+            Self::GlobalIncrement { .. } => todo!(),
+            Self::GlobalKill { .. } => todo!(),
+            Self::GlobalData { .. } => todo!(),
+            Self::GlobalOrder { .. } => todo!(),
+            Self::GlobalQuery { .. } => todo!(),
+            Self::GlobalCollect { .. } => todo!(),
+            Self::GlobalList => todo!(),
+            Self::LocalGet { .. } => todo!(),
+            Self::LocalSet { .. } => todo!(),
+            Self::LocalIncrement { .. } => todo!(),
+            Self::LocalKill { .. } => todo!(),
+            Self::LocalData { .. } => todo!(),
+            Self::LocalOrder { .. } => todo!(),
+            Self::LocalQuery { .. } => todo!(),
+            Self::LocalCollect { .. } => todo!(),
         }
     }
 }
