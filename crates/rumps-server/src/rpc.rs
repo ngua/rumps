@@ -8,7 +8,8 @@
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::wire;
+use crate::error::Result;
+use crate::{wire, AppState};
 
 /// Wire-format scan direction; `"fwd"` or `"rev"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -154,6 +155,38 @@ pub(crate) enum Request {
         dir: Option<Dir>,
         limit: Option<u64>,
     },
+}
+
+impl Request {
+    pub(crate) async fn dispatch(
+        self,
+        _state: &AppState,
+    ) -> Result<axum::response::Response> {
+        match self {
+            Request::SessionStart => todo!(),
+            Request::SessionEnd => todo!(),
+            Request::TxnStart { .. } => todo!(),
+            Request::TxnCommit { .. } => todo!(),
+            Request::TxnRollback { .. } => todo!(),
+            Request::GlobalGet { .. } => todo!(),
+            Request::GlobalSet { .. } => todo!(),
+            Request::GlobalIncrement { .. } => todo!(),
+            Request::GlobalKill { .. } => todo!(),
+            Request::GlobalData { .. } => todo!(),
+            Request::GlobalOrder { .. } => todo!(),
+            Request::GlobalQuery { .. } => todo!(),
+            Request::GlobalCollect { .. } => todo!(),
+            Request::GlobalList => todo!(),
+            Request::LocalGet { .. } => todo!(),
+            Request::LocalSet { .. } => todo!(),
+            Request::LocalIncrement { .. } => todo!(),
+            Request::LocalKill { .. } => todo!(),
+            Request::LocalData { .. } => todo!(),
+            Request::LocalOrder { .. } => todo!(),
+            Request::LocalQuery { .. } => todo!(),
+            Request::LocalCollect { .. } => todo!(),
+        }
+    }
 }
 
 #[cfg(test)]

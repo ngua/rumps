@@ -95,7 +95,7 @@ Router::new()
 
 Auth and session validation are handled via Axum extractors in handler signatures, not middleware layers. See sections 7 and the session-management spec.
 
-**Dispatch pattern:** `rpc::Request` is a `#[serde(tag = "op")]` enum. Each variant carries its own typed fields. Invalid or unknown ops fail at deserialization. The `rpc::dispatch` function deserializes the request body into `rpc::Request` and matches on the variant:
+**Dispatch pattern:** `rpc::Request` is a `#[serde(tag = "op")]` enum. Each variant carries its own typed fields. Invalid or unknown ops fail at deserialization. The Axum handler deserializes the request body into `rpc::Request` and calls `Request::dispatch`, which matches on `self` to dispatch to per-op handlers:
 
 ```rust
 #[serde(tag = "op")]
