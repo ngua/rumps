@@ -2,6 +2,8 @@
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 use dashmap::mapref::one::RefMut;
 use dashmap::DashMap;
@@ -9,6 +11,7 @@ use futures::future;
 use rumps_storage::Database;
 use rumps_types::{key, Name};
 use smol_str::SmolStr;
+use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use uuid::Uuid;
 
@@ -116,5 +119,39 @@ impl Manager {
             }
             None => HashSet::new(),
         }
+    }
+
+    /// Spawns a background task that periodically reaps idle sessions.
+    pub(crate) fn spawn_reaper(
+        mgr: Arc<Self>,
+        timeout: Duration,
+    ) -> JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(timeout / 10);
+            loop {
+                tick.tick().await;
+
+                let stale: Vec<Uuid> = mgr
+                    .sessions
+                    .iter()
+                    .filter(|e| e.value().last_activity.elapsed() > timeout)
+                    .map(|e| *e.key())
+                    .collect();
+
+                future::join_all(stale.into_iter().map(|id| {
+                    let mgr = &mgr;
+                    async move {
+                        let txns = mgr.destroy(&id).await;
+                        if !txns.is_empty() {
+                            // TODO(5.1, 5.6): roll back via `transaction::Store`;
+                            // these are orphaned and will leak locks until then
+                            todo!("roll back orphaned transactions");
+                        }
+                        tracing::info!(session = %id, "reaped idle session");
+                    }
+                }))
+                .await;
+            }
+        })
     }
 }
