@@ -1322,8 +1322,10 @@ name = "rumps-server"
 version = "0.0.1"
 dependencies = [
  "axum",
+ "bytes",
  "clap",
  "dashmap 6.2.1",
+ "futures",
  "ordered-float",
  "rumps-storage",
  "rumps-types",

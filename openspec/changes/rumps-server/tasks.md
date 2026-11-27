@@ -17,8 +17,8 @@
 ## 3. RPC Protocol and Dispatch
 
 - [x] 3.1 Create `src/rpc.rs`; define `rpc::Request` as a `#[serde(tag = "op")]` enum where each variant carries its own typed fields (e.g. `GlobalGet { txn: Uuid, name: String, key: wire::Key }`). Serde handles both op dispatch and field extraction in one deserialization step; unknown ops fail at deserialization with a `400`.
-- [x] 3.2 Implement `Request::dispatch` method: takes `self` (by value, so fields can be moved into handlers without cloning), takes shared state, matches on `self`, and dispatches to per-op handlers (initially stubs returning `todo!()`; filled in as handlers land in sections 4-7)
-- [ ] 3.3 Create `src/response.rs`; define per-op response structs (`response::Value`, `response::Ok`, `response::Increment`, `response::Data`, `response::Order`, `response::Query`, `response::ListGlobals`) with `Serialize`
+- [x] 3.2 Implement `Request::dispatch` method: takes `self` (by value, so fields can be moved into handlers without cloning), takes shared state, returns `Result<response::Response>`, matches on `self`, and dispatches to per-op handlers (initially stubs returning `todo!()`; filled in as handlers land in sections 4-7)
+- [x] 3.3 Create `src/response.rs`; define per-op response structs (`response::Value`, `response::Ok`, `response::Session`, `response::Txn`, `response::Increment`, `response::Data`, `response::Order`, `response::Query`, `response::ListGlobals`) with `Serialize`; unified `response::Response` enum with `IntoResponse` impl; `response::NdjsonStream` for NDJSON streaming; `Request::dispatch` returns `Result<response::Response>` (no Axum types in dispatch logic)
 - [ ] 3.4 Wire up Axum router: `POST /rpc` -> Axum handler that deserializes body into `rpc::Request` and calls `Request::dispatch`, `GET /health`, `GET /status`
 
 ## 4. Session Management

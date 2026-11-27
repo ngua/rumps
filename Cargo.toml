@@ -33,6 +33,7 @@ tokio-util = "0.7.9"
 
 # Server dependencies
 axum = "0.8"
+bytes = "1"
 clap = { version = "4", features = ["derive"] }
 dashmap = "6"
 tower = "0.5"

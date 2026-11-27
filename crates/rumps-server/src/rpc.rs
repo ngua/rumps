@@ -9,7 +9,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::error::Result;
-use crate::{wire, AppState};
+use crate::{response, wire, AppState};
 
 /// Wire-format scan direction; `"fwd"` or `"rev"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -161,7 +161,7 @@ impl Request {
     pub(crate) async fn dispatch(
         self,
         _state: &AppState,
-    ) -> Result<axum::response::Response> {
+    ) -> Result<response::Response> {
         match self {
             Request::SessionStart => todo!(),
             Request::SessionEnd => todo!(),
@@ -197,22 +197,24 @@ mod tests {
 
     #[test]
     fn deser_session_start() {
-        let req: Request =
-            serde_json::from_value(json!({"op": "session.start"})).unwrap();
+        let req =
+            serde_json::from_value::<Request>(json!({"op": "session.start"}))
+                .unwrap();
         assert!(matches!(req, Request::SessionStart));
     }
 
     #[test]
     fn deser_session_end() {
-        let req: Request =
-            serde_json::from_value(json!({"op": "session.end"})).unwrap();
+        let req =
+            serde_json::from_value::<Request>(json!({"op": "session.end"}))
+                .unwrap();
         assert!(matches!(req, Request::SessionEnd));
     }
 
     #[test]
     fn deser_txn_start_minimal() {
-        let req: Request =
-            serde_json::from_value(json!({"op": "txn.start"})).unwrap();
+        let req = serde_json::from_value::<Request>(json!({"op": "txn.start"}))
+            .unwrap();
         assert!(matches!(
             req,
             Request::TxnStart {
@@ -224,7 +226,7 @@ mod tests {
 
     #[test]
     fn deser_txn_start_with_fields() {
-        let req: Request = serde_json::from_value(json!({
+        let req = serde_json::from_value::<Request>(json!({
             "op": "txn.start",
             "timeout-ms": 5000,
             "isolation": "snapshot"
@@ -242,7 +244,7 @@ mod tests {
     #[test]
     fn deser_txn_commit() {
         let id = Uuid::new_v4();
-        let req: Request = serde_json::from_value(json!({
+        let req = serde_json::from_value::<Request>(json!({
             "op": "txn.commit",
             "txn": id.to_string()
         }))
@@ -253,7 +255,7 @@ mod tests {
     #[test]
     fn deser_txn_rollback() {
         let id = Uuid::new_v4();
-        let req: Request = serde_json::from_value(json!({
+        let req = serde_json::from_value::<Request>(json!({
             "op": "txn.rollback",
             "txn": id.to_string()
         }))
@@ -264,7 +266,7 @@ mod tests {
     #[test]
     fn deser_global_get() {
         let id = Uuid::new_v4();
-        let req: Request = serde_json::from_value(json!({
+        let req = serde_json::from_value::<Request>(json!({
             "op": "global.get",
             "txn": id.to_string(),
             "name": "PATIENT",
@@ -281,7 +283,7 @@ mod tests {
     #[test]
     fn deser_global_set() {
         let id = Uuid::new_v4();
-        let req: Request = serde_json::from_value(json!({
+        let req = serde_json::from_value::<Request>(json!({
             "op": "global.set",
             "txn": id.to_string(),
             "name": "PATIENT",
@@ -299,7 +301,7 @@ mod tests {
     #[test]
     fn deser_global_increment() {
         let id = Uuid::new_v4();
-        let req: Request = serde_json::from_value(json!({
+        let req = serde_json::from_value::<Request>(json!({
             "op": "global.increment",
             "txn": id.to_string(),
             "name": "COUNTER",
@@ -313,7 +315,7 @@ mod tests {
     #[test]
     fn deser_global_kill() {
         let id = Uuid::new_v4();
-        let req: Request = serde_json::from_value(json!({
+        let req = serde_json::from_value::<Request>(json!({
             "op": "global.kill",
             "txn": id.to_string(),
             "name": "PATIENT",
@@ -326,7 +328,7 @@ mod tests {
     #[test]
     fn deser_global_data() {
         let id = Uuid::new_v4();
-        let req: Request = serde_json::from_value(json!({
+        let req = serde_json::from_value::<Request>(json!({
             "op": "global.data",
             "txn": id.to_string(),
             "name": "PATIENT",
@@ -339,7 +341,7 @@ mod tests {
     #[test]
     fn deser_global_order_no_after() {
         let id = Uuid::new_v4();
-        let req: Request = serde_json::from_value(json!({
+        let req = serde_json::from_value::<Request>(json!({
             "op": "global.order",
             "txn": id.to_string(),
             "name": "DATA",
@@ -352,7 +354,7 @@ mod tests {
     #[test]
     fn deser_global_order_with_after() {
         let id = Uuid::new_v4();
-        let req: Request = serde_json::from_value(json!({
+        let req = serde_json::from_value::<Request>(json!({
             "op": "global.order",
             "txn": id.to_string(),
             "name": "DATA",
@@ -366,7 +368,7 @@ mod tests {
     #[test]
     fn deser_global_query_no_after() {
         let id = Uuid::new_v4();
-        let req: Request = serde_json::from_value(json!({
+        let req = serde_json::from_value::<Request>(json!({
             "op": "global.query",
             "txn": id.to_string(),
             "name": "PATIENT"
@@ -378,7 +380,7 @@ mod tests {
     #[test]
     fn deser_global_query_with_after() {
         let id = Uuid::new_v4();
-        let req: Request = serde_json::from_value(json!({
+        let req = serde_json::from_value::<Request>(json!({
             "op": "global.query",
             "txn": id.to_string(),
             "name": "PATIENT",
@@ -391,7 +393,7 @@ mod tests {
     #[test]
     fn deser_global_collect_minimal() {
         let id = Uuid::new_v4();
-        let req: Request = serde_json::from_value(json!({
+        let req = serde_json::from_value::<Request>(json!({
             "op": "global.collect",
             "txn": id.to_string(),
             "name": "PATIENT"
@@ -414,7 +416,7 @@ mod tests {
     #[test]
     fn deser_global_collect_full() {
         let id = Uuid::new_v4();
-        let req: Request = serde_json::from_value(json!({
+        let req = serde_json::from_value::<Request>(json!({
             "op": "global.collect",
             "txn": id.to_string(),
             "name": "PATIENT",
@@ -442,14 +444,15 @@ mod tests {
 
     #[test]
     fn deser_global_list() {
-        let req: Request =
-            serde_json::from_value(json!({"op": "global.list"})).unwrap();
+        let req =
+            serde_json::from_value::<Request>(json!({"op": "global.list"}))
+                .unwrap();
         assert!(matches!(req, Request::GlobalList));
     }
 
     #[test]
     fn deser_local_get() {
-        let req: Request = serde_json::from_value(json!({
+        let req = serde_json::from_value::<Request>(json!({
             "op": "local.get",
             "name": "TEMP",
             "key": ["x"]
@@ -460,7 +463,7 @@ mod tests {
 
     #[test]
     fn deser_local_set() {
-        let req: Request = serde_json::from_value(json!({
+        let req = serde_json::from_value::<Request>(json!({
             "op": "local.set",
             "name": "TEMP",
             "key": ["x"],
@@ -472,7 +475,7 @@ mod tests {
 
     #[test]
     fn deser_local_increment() {
-        let req: Request = serde_json::from_value(json!({
+        let req = serde_json::from_value::<Request>(json!({
             "op": "local.increment",
             "name": "TEMP",
             "key": ["count"],
@@ -484,7 +487,7 @@ mod tests {
 
     #[test]
     fn deser_local_kill() {
-        let req: Request = serde_json::from_value(json!({
+        let req = serde_json::from_value::<Request>(json!({
             "op": "local.kill",
             "name": "TEMP",
             "key": ["x"]
@@ -495,7 +498,7 @@ mod tests {
 
     #[test]
     fn deser_local_data() {
-        let req: Request = serde_json::from_value(json!({
+        let req = serde_json::from_value::<Request>(json!({
             "op": "local.data",
             "name": "TEMP",
             "key": ["x"]
@@ -506,7 +509,7 @@ mod tests {
 
     #[test]
     fn deser_local_order() {
-        let req: Request = serde_json::from_value(json!({
+        let req = serde_json::from_value::<Request>(json!({
             "op": "local.order",
             "name": "TEMP",
             "prefix": []
@@ -517,7 +520,7 @@ mod tests {
 
     #[test]
     fn deser_local_query() {
-        let req: Request = serde_json::from_value(json!({
+        let req = serde_json::from_value::<Request>(json!({
             "op": "local.query",
             "name": "TEMP"
         }))
@@ -527,7 +530,7 @@ mod tests {
 
     #[test]
     fn deser_local_collect_minimal() {
-        let req: Request = serde_json::from_value(json!({
+        let req = serde_json::from_value::<Request>(json!({
             "op": "local.collect",
             "name": "TEMP"
         }))
@@ -546,56 +549,57 @@ mod tests {
 
     #[test]
     fn deser_unknown_op_rejected() {
-        let r: Result<Request, _> =
-            serde_json::from_value(json!({"op": "unknown.op"}));
-        assert!(r.is_err());
+        assert!(
+            serde_json::from_value::<Request>(json!({"op": "unknown.op"}))
+                .is_err()
+        );
     }
 
     #[test]
     fn deser_missing_op_rejected() {
-        let r: Result<Request, _> =
-            serde_json::from_value(json!({"name": "PATIENT"}));
-        assert!(r.is_err());
+        assert!(
+            serde_json::from_value::<Request>(json!({"name": "PATIENT"}))
+                .is_err()
+        );
     }
 
     #[test]
     fn deser_global_get_missing_txn_rejected() {
-        let r: Result<Request, _> = serde_json::from_value(json!({
+        assert!(serde_json::from_value::<Request>(json!({
             "op": "global.get",
             "name": "PATIENT",
             "key": [123]
-        }));
-        assert!(r.is_err());
+        }))
+        .is_err());
     }
 
     #[test]
     fn deser_global_set_missing_value_rejected() {
         let id = Uuid::new_v4();
-        let r: Result<Request, _> = serde_json::from_value(json!({
+        assert!(serde_json::from_value::<Request>(json!({
             "op": "global.set",
             "txn": id.to_string(),
             "name": "PATIENT",
             "key": [123]
-        }));
-        assert!(r.is_err());
+        }))
+        .is_err());
     }
 
     #[test]
     fn deser_dir_forward() {
-        let d: Dir = serde_json::from_value(json!("fwd")).unwrap();
+        let d = serde_json::from_value::<Dir>(json!("fwd")).unwrap();
         assert_eq!(d, Dir::Forward);
     }
 
     #[test]
     fn deser_dir_reverse() {
-        let d: Dir = serde_json::from_value(json!("rev")).unwrap();
+        let d = serde_json::from_value::<Dir>(json!("rev")).unwrap();
         assert_eq!(d, Dir::Reverse);
     }
 
     #[test]
     fn deser_dir_invalid_rejected() {
-        let r: Result<Dir, _> = serde_json::from_value(json!("backward"));
-        assert!(r.is_err());
+        assert!(serde_json::from_value::<Dir>(json!("backward")).is_err());
     }
 
     #[test]

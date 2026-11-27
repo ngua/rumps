@@ -8,6 +8,7 @@
 
 pub mod config;
 pub mod error;
+pub(crate) mod response;
 pub(crate) mod rpc;
 pub(crate) mod wire;
 
