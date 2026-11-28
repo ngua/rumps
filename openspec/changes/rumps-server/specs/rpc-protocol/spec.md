@@ -38,19 +38,19 @@ The system SHALL support `session.start` and `session.end` operations. `session.
 - **THEN** the server returns `410` with an error indicating the session was not found
 
 ### Requirement: Session token header
-All operations except `session.start`, `global.list`, `GET /health`, and `GET /status` SHALL require a valid `X-Session-Id` header. Requests without this header (or with an expired/invalid session) SHALL return `401`.
+All operations except `session.start`, `GET /health`, and `GET /status` SHALL require a valid `X-Session-Id` header. The session gate is two-phase: an Axum extractor (`session::Gate`) attempts to resolve the header on every `POST /rpc` request, but always succeeds; it stores `None` when the header is absent, malformed, or references an unknown/expired session. Individual operations then call `session::Gate::require()` to enforce session presence, returning `401` when the session is `None`. This means `session.start` is never rejected by a stale or invalid `X-Session-Id` header; only operations that call `require()` enforce session presence.
 
 #### Scenario: Missing session header
 - **WHEN** a request to `POST /rpc` with `{"op": "global.get", ...}` lacks the `X-Session-Id` header
-- **THEN** the server returns `401` with `{"error": "session token required"}`
-
-#### Scenario: global.list without session
-- **WHEN** a request contains `{"op": "global.list"}` without an `X-Session-Id` header
-- **THEN** the request succeeds and returns the list of globals
+- **THEN** `session::Gate` resolves to `None`, `require()` rejects, and the server returns `401` with `{"error": "session token required"}`
 
 #### Scenario: Expired session header
-- **WHEN** a request uses an `X-Session-Id` for a session that has been reaped
-- **THEN** the server returns `410` with `{"error": "session expired or not found"}`
+- **WHEN** a request to `POST /rpc` with `{"op": "global.get", ...}` uses an `X-Session-Id` for a session that has been reaped
+- **THEN** `session::Gate` resolves to `None`, `require()` rejects, and the server returns `401` with `{"error": "session token required"}`
+
+#### Scenario: Stale header on session.start
+- **WHEN** a `session.start` request includes an `X-Session-Id` header referencing an expired or invalid session
+- **THEN** `session::Gate` resolves to `None`, `session.start` does not call `require()`, and the request succeeds normally
 
 ### Requirement: Global operations
 The system SHALL support the following `global.*` ops, each requiring a `"txn"` field with a valid transaction token and a `"name"` field with the global variable name:
@@ -67,7 +67,7 @@ The system SHALL support the following `global.*` ops, each requiring a `"txn"` 
 | `global.collect`   | `name`                | NDJSON stream               | `Transaction::collect`   |
 | `global.list`      | (none)                | `{"globals": [...]}`        | `Database::list_globals` |
 
-`global.list` is the exception: it operates at the database level and SHALL NOT require a `txn` field.
+`global.list` is the exception: it operates at the database level and SHALL NOT require a `txn` field. It still requires a valid session (i.e. `X-Session-Id` header).
 
 #### Scenario: global.get
 - **WHEN** a request contains `{"op": "global.get", "txn": "<token>", "name": "PATIENT", "key": [123, "NAME"]}`
@@ -98,7 +98,7 @@ The system SHALL support the following `global.*` ops, each requiring a `"txn"` 
 - **THEN** the server calls `Transaction::query` and returns `{"key": [124, "AGE"]}` or `{"key": null}`
 
 #### Scenario: global.list
-- **WHEN** a request contains `{"op": "global.list"}`
+- **WHEN** a request contains `{"op": "global.list"}` with a valid `X-Session-Id` header
 - **THEN** the server calls `Database::list_globals` and returns `{"globals": ["PATIENT", "ORDER"]}`
 
 ### Requirement: Global order op fields

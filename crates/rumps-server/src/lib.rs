@@ -15,6 +15,8 @@ pub(crate) mod session;
 pub(crate) mod wire;
 
 use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
 
 use config::Config;
 use error::{Error, Result};
@@ -25,6 +27,7 @@ use tokio::net::TcpListener;
 pub(crate) struct AppState {
     pub(crate) db: Database,
     pub(crate) config: Config,
+    pub(crate) sessions: Arc<session::Manager>,
 }
 
 impl AppState {
@@ -65,6 +68,12 @@ impl ServerBuilder {
         }
 
         let db = Database::open(&self.config.database.path).await?;
+        let sessions = Arc::new(session::Manager::new()?);
+
+        let idle_timeout =
+            Duration::from_secs(self.config.session.idle_timeout_secs);
+        let _reaper =
+            session::Manager::spawn_reaper(Arc::clone(&sessions), idle_timeout);
 
         let addr = SocketAddr::new(
             self.config.server.bind.parse()?,
@@ -74,6 +83,7 @@ impl ServerBuilder {
         let state = AppState {
             db,
             config: self.config,
+            sessions,
         };
 
         let app = state.into_router();

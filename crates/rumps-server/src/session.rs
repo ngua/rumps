@@ -5,6 +5,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::extract::FromRequestParts;
+use axum::http::request::Parts;
 use dashmap::mapref::one::RefMut;
 use dashmap::DashMap;
 use futures::future;
@@ -15,7 +17,8 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use uuid::Uuid;
 
-use crate::error::Result;
+use crate::error::{Error, Result};
+use crate::AppState;
 
 /// A single client session.
 pub(crate) struct Session {
@@ -45,6 +48,54 @@ impl Session {
     /// Updates the last activity timestamp to now.
     pub(crate) fn touch(&mut self) {
         self.last_activity = Instant::now();
+    }
+}
+
+/// Validated session extracted from the `X-Session-Id` header.
+pub(crate) struct ActiveSession {
+    pub(crate) id: Uuid,
+    pub(crate) internal_id: u64,
+}
+
+/// Axum extractor that optionally resolves a session from the `X-Session-Id`
+/// header. Always succeeds; stores `None` when the header is absent or the
+/// session is not found. Only `require()` enforces session presence.
+pub(crate) struct Gate(pub(crate) Option<ActiveSession>);
+
+impl Gate {
+    /// Requires that a valid session was resolved. Returns `SessionRequired`
+    /// (`401`) if not.
+    pub(crate) fn require(self) -> Result<ActiveSession> {
+        match self.0 {
+            Some(s) => Ok(s),
+            None => Err(Error::SessionRequired),
+        }
+    }
+}
+
+impl FromRequestParts<AppState> for Gate {
+    type Rejection = Error;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self> {
+        let active = parts
+            .headers
+            .get("x-session-id")
+            .and_then(|hdr| hdr.to_str().ok())
+            .and_then(|raw| raw.parse::<Uuid>().ok())
+            .and_then(|id| {
+                let mut sess = state.sessions.get(&id)?;
+                sess.touch();
+                let a = ActiveSession {
+                    id,
+                    internal_id: sess.internal_id,
+                };
+                drop(sess);
+                Some(a)
+            });
+        Ok(Self(active))
     }
 }
 

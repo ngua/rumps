@@ -7,6 +7,7 @@ use bytes::Bytes;
 
 use crate::error::{Error, Result};
 use crate::rpc::Request;
+use crate::session::Gate;
 use crate::AppState;
 
 /// HTTP router for the RUMPS server.
@@ -33,12 +34,13 @@ impl Router {
 
     async fn rpc(
         State(state): State<AppState>,
+        gate: Gate,
         body: Bytes,
     ) -> Result<axum::response::Response> {
         let req = serde_json::from_slice::<Request>(&body)
             .map_err(|e| Error::BadRequest(e.to_string()))?;
 
-        req.dispatch(&state)
+        req.dispatch(&state, gate)
             .await
             .map(axum::response::IntoResponse::into_response)
     }

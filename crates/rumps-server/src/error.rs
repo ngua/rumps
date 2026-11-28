@@ -20,6 +20,10 @@ pub enum Error {
     NoAuth,
     #[error("{0}")]
     BadRequest(String),
+    #[error("session token required")]
+    SessionRequired,
+    #[error("session expired or not found")]
+    SessionExpired,
     #[error("{0}")]
     Storage(#[from] rumps_storage::Error),
     #[error("invalid bind address: {0}")]
@@ -32,6 +36,10 @@ impl IntoResponse for Error {
     fn into_response(self) -> axum::response::Response {
         let (status, msg) = match &self {
             Self::BadRequest(_) => (StatusCode::BAD_REQUEST, self.to_string()),
+            Self::SessionRequired => {
+                (StatusCode::UNAUTHORIZED, self.to_string())
+            }
+            Self::SessionExpired => (StatusCode::GONE, self.to_string()),
             Self::Storage(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, self.to_string())
             }

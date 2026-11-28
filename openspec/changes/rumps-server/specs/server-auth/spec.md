@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Extractor-based authentication
-Authentication SHALL be implemented as an Axum extractor (`impl FromRequestParts`) that produces a typed `Auth` value. Handlers that require authentication declare `Auth` in their parameter list; handlers that do not (e.g. `health`, `status`, `global.list`) simply omit it. No Tower middleware layer is used for auth.
+Authentication SHALL be implemented as an Axum extractor (`impl FromRequestParts`) that produces a typed `Auth` value. Handlers that require authentication declare `Auth` in their parameter list; handlers that do not (e.g. `health`, `status`) simply omit it. No Tower middleware layer is used for auth.
 
 #### Scenario: Auth-required handler
 - **WHEN** a `POST /rpc` request arrives with a `global.get` op and no valid authentication

@@ -9,6 +9,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::error::Result;
+use crate::session::Gate;
 use crate::{response, wire, AppState};
 
 /// Wire-format scan direction; `"fwd"` or `"rev"`.
@@ -161,30 +162,38 @@ impl Request {
     pub(crate) async fn dispatch(
         self,
         _state: &AppState,
+        gate: Gate,
     ) -> Result<response::Response> {
         match self {
             Self::SessionStart => todo!(),
-            Self::SessionEnd => todo!(),
-            Self::TxnStart { .. } => todo!(),
-            Self::TxnCommit { .. } => todo!(),
-            Self::TxnRollback { .. } => todo!(),
-            Self::GlobalGet { .. } => todo!(),
-            Self::GlobalSet { .. } => todo!(),
-            Self::GlobalIncrement { .. } => todo!(),
-            Self::GlobalKill { .. } => todo!(),
-            Self::GlobalData { .. } => todo!(),
-            Self::GlobalOrder { .. } => todo!(),
-            Self::GlobalQuery { .. } => todo!(),
-            Self::GlobalCollect { .. } => todo!(),
-            Self::GlobalList => todo!(),
-            Self::LocalGet { .. } => todo!(),
-            Self::LocalSet { .. } => todo!(),
-            Self::LocalIncrement { .. } => todo!(),
-            Self::LocalKill { .. } => todo!(),
-            Self::LocalData { .. } => todo!(),
-            Self::LocalOrder { .. } => todo!(),
-            Self::LocalQuery { .. } => todo!(),
-            Self::LocalCollect { .. } => todo!(),
+
+            other => {
+                let _sess = gate.require()?;
+                match other {
+                    Self::SessionStart => unreachable!(),
+                    Self::SessionEnd => todo!(),
+                    Self::TxnStart { .. } => todo!(),
+                    Self::TxnCommit { .. } => todo!(),
+                    Self::TxnRollback { .. } => todo!(),
+                    Self::GlobalGet { .. } => todo!(),
+                    Self::GlobalSet { .. } => todo!(),
+                    Self::GlobalIncrement { .. } => todo!(),
+                    Self::GlobalKill { .. } => todo!(),
+                    Self::GlobalData { .. } => todo!(),
+                    Self::GlobalOrder { .. } => todo!(),
+                    Self::GlobalQuery { .. } => todo!(),
+                    Self::GlobalCollect { .. } => todo!(),
+                    Self::GlobalList => todo!(),
+                    Self::LocalGet { .. } => todo!(),
+                    Self::LocalSet { .. } => todo!(),
+                    Self::LocalIncrement { .. } => todo!(),
+                    Self::LocalKill { .. } => todo!(),
+                    Self::LocalData { .. } => todo!(),
+                    Self::LocalOrder { .. } => todo!(),
+                    Self::LocalQuery { .. } => todo!(),
+                    Self::LocalCollect { .. } => todo!(),
+                }
+            }
         }
     }
 }

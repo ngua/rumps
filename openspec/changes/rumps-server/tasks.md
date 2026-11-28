@@ -26,7 +26,7 @@
 - [x] 4.1 Create `src/session.rs` and implement `Session` struct (external UUID, internal `u64` ID, last activity timestamp, owned transaction set, `HashSet<SmolStr>` of used local names)
 - [x] 4.2 Implement `session::Manager` with `DashMap<Uuid, Session>`, `AtomicU64` counter, shared `Database::in_memory()` for locals, `create()`, `get()`, `destroy()` methods. `destroy()` rolls back owned transactions and calls `kill(&Name::local(name), &key![internal_id])` for each used local name.
 - [x] 4.3 Implement session reaper: background `tokio::spawn` task that periodically scans for idle sessions and destroys them via `session::Manager::destroy()`
-- [ ] 4.4 Implement `Session` Axum extractor (`impl FromRequestParts`) that reads and validates the `X-Session-Id` header and injects the session into the handler. Only `session.start` does not require a session and omits this extractor from their handler signature. Every other op goes through the session gate, including `session.end`.
+- [x] 4.4 Implement `Session` Axum extractor (`impl FromRequestParts`) that reads and validates the `X-Session-Id` header and injects the session into the handler. Only `session.start` does not require a session and omits this extractor from their handler signature. Every other op goes through the session gate, including `session.end`.
 - [ ] 4.5 Implement `session.start` and `session.end` op handlers
 
 ## 5. Transaction Management
@@ -66,7 +66,7 @@ Implement for both `&Transaction` and session-scoped `&Database`. Each op handle
 - [ ] 6.8 Implement shared `data` handler: deserialize `wire::Key`, call `Context::data`, serialize `wire::DataStatus`
 - [ ] 6.9 Implement shared `order` handler: deserialize `wire::Key` (prefix) + optional `wire::Subscript` (after), call `Context::order`, serialize response
 - [ ] 6.10 Implement shared `query` handler: deserialize optional `wire::Key` (after), call `Context::query`, serialize response
-- [ ] 6.11 Implement `global.list`: call `Database::list_globals`, serialize response. This op is session-exempt and does not use `Context`.
+- [ ] 6.11 Implement `global.list`: call `Database::list_globals`, serialize response. This op does not use `Context`.
 
 ## 7. Global/Local Dispatch Wiring
 
@@ -84,7 +84,7 @@ Implement for both `&Transaction` and session-scoped `&Database`. Each op handle
 ## 9. Authentication
 
 - [ ] 9.1 Implement `Auth` Axum extractor (`impl FromRequestParts`): reads `Authorization: Bearer <token>` from the request, compares to the configured token, and produces a typed `Auth` value on success or returns `401` on failure. In `--no-auth` mode, the extractor always succeeds with a default `Auth` context.
-- [ ] 9.2 Add `Auth` extractor to the `rpc` signature. Handlers for health, status, and `global.list` omit it, naturally bypassing auth with no special logic.
+- [ ] 9.2 Add `Auth` extractor to the `rpc` signature. Handlers for health and status omit it, naturally bypassing auth with no special logic.
 - [ ] 9.3 Refuse to start without auth config and without `--no-auth`; print loud warning to stderr when `--no-auth`
 
 ## 10. Error Handling
