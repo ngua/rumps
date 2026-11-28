@@ -3,7 +3,7 @@ use std::process;
 
 use clap::Parser;
 use rumps_server::config::Config;
-use rumps_server::ServerBuilder;
+use rumps_server::Server;
 
 /// RUMPS database server; HTTP RPC access to a RUMPS database.
 #[derive(Parser)]
@@ -64,12 +64,12 @@ async fn main() {
         cfg.database.path = db;
     }
 
-    let mut builder = ServerBuilder::new(cfg);
+    let mut server = Server::new(cfg);
     if cli.no_auth {
-        builder = builder.no_auth();
+        server = server.no_auth();
     }
 
-    if let Err(e) = builder.run().await {
+    if let Err(e) = server.run().await {
         eprintln!("error: {e}");
         process::exit(1);
     }

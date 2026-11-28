@@ -24,6 +24,8 @@ pub enum Error {
     SessionRequired,
     #[error("session expired or not found")]
     SessionExpired,
+    #[error("transaction not found or expired")]
+    TxnNotFound,
     #[error("{0}")]
     Storage(#[from] rumps_storage::Error),
     #[error("invalid bind address: {0}")]
@@ -40,6 +42,7 @@ impl IntoResponse for Error {
                 (StatusCode::UNAUTHORIZED, self.to_string())
             }
             Self::SessionExpired => (StatusCode::GONE, self.to_string()),
+            Self::TxnNotFound => (StatusCode::GONE, self.to_string()),
             Self::Storage(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, self.to_string())
             }

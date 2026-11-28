@@ -12,6 +12,7 @@ pub(crate) mod response;
 pub(crate) mod router;
 pub(crate) mod rpc;
 pub(crate) mod session;
+pub(crate) mod transaction;
 pub(crate) mod wire;
 
 use std::hash::{Hash, Hasher};
@@ -108,6 +109,7 @@ pub(crate) struct AppState {
     pub(crate) db: Database,
     pub(crate) config: Config,
     pub(crate) sessions: Arc<session::Manager>,
+    pub(crate) txns: Arc<transaction::Store>,
 }
 
 impl AppState {
@@ -116,13 +118,13 @@ impl AppState {
     }
 }
 
-/// Builder for constructing and launching a RUMPS server.
-pub struct ServerBuilder {
+/// RUMPS database server.
+pub struct Server {
     config: Config,
     no_auth: bool,
 }
 
-impl ServerBuilder {
+impl Server {
     /// Creates a new builder from the given config.
     pub fn new(config: Config) -> Self {
         Self {
@@ -160,10 +162,13 @@ impl ServerBuilder {
             self.config.server.port,
         );
 
+        let txns = Arc::new(transaction::Store::new());
+
         let state = AppState {
             db,
             config: self.config,
             sessions,
+            txns,
         };
 
         let app = state.into_router();
