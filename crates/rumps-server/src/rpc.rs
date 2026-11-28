@@ -5,9 +5,10 @@
 //! [`Request`] is deserialized; serde handles both dispatch and field extraction
 //! in a single step.
 
+use rumps_storage::IsolationLevel;
 use serde::Deserialize;
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::session::Gate;
 use crate::{response, wire, AppState, Id};
 
@@ -160,12 +161,12 @@ pub(crate) enum Request {
 impl Request {
     pub(crate) async fn dispatch(
         self,
-        _state: &AppState,
+        state: &AppState,
         gate: Gate,
     ) -> Result<response::Response> {
         match self {
             Self::SessionStart => {
-                let id = _state.sessions.create();
+                let id = state.sessions.create();
                 Ok(response::Response::Session(response::Session { id }))
             }
 
@@ -174,14 +175,43 @@ impl Request {
                 match other {
                     Self::SessionStart => unreachable!(),
                     Self::SessionEnd => {
-                        let txns = _state.sessions.destroy(&sess.id).await;
+                        let txns = state.sessions.destroy(&sess.id).await;
                         if !txns.is_empty() {
                             // TODO(5.1): roll back via `transaction::Store`
                             todo!("roll back owned transactions");
                         }
                         Ok(response::Response::Ok(response::Ok {}))
                     }
-                    Self::TxnStart { .. } => todo!(),
+                    Self::TxnStart {
+                        timeout_ms,
+                        isolation,
+                    } => {
+                        let iso = match isolation.as_deref() {
+                            None | Some("snapshot") => {
+                                IsolationLevel::SnapshotIsolation
+                            }
+                            Some(other) => Err(Error::BadRequest(format!(
+                                "unknown isolation level: `{other}`"
+                            )))?,
+                        };
+
+                        let mut b = state.db.build_transaction().isolation(iso);
+                        if let Some(ms) = timeout_ms {
+                            b = b.timeout(ms);
+                        }
+
+                        let txn = b.start().await?;
+                        let id = state.txns.insert(sess.id, txn);
+
+                        // Session could have been reaped between
+                        // `gate.require()` and here; the txn reaper
+                        // will clean up the orphan in that case
+                        if let Some(mut s) = state.sessions.get(&sess.id) {
+                            s.txns.insert(id);
+                        }
+
+                        Ok(response::Response::Txn(response::Txn { txn: id }))
+                    }
                     Self::TxnCommit { .. } => todo!(),
                     Self::TxnRollback { .. } => todo!(),
                     Self::GlobalGet { .. } => todo!(),

@@ -60,12 +60,12 @@ pub(crate) struct Ok {}
 
 #[derive(Debug, Serialize)]
 pub(crate) struct Session {
-    pub(crate) id: crate::Id<Session>,
+    pub(crate) id: crate::Id<Self>,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct Txn {
-    pub(crate) txn: crate::Id<Txn>,
+    pub(crate) txn: crate::Id<Self>,
 }
 
 #[derive(Debug, Serialize)]
