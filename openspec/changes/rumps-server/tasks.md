@@ -34,8 +34,8 @@
 
 - [x] 5.1 Create `src/transaction.rs`; define `transaction::Entry` struct (`session: Id<Session>`, `txn: Transaction`, `last_use: Instant`); implement `transaction::Store` with `DashMap<Id<Txn>, Entry>` (txn token -> entry)
 - [x] 5.2 Implement `txn.start` handler: build transaction from `Database`, optional isolation/timeout, store in `transaction::Store`
-- [ ] 5.3 Implement `txn.commit` handler: remove the `Transaction` from the `DashMap` first (taking ownership), then call `.commit()` on the removed value. Removal must happen before the async commit call to avoid holding a `DashMap` ref across an await.
-- [ ] 5.4 Implement `txn.rollback` handler: remove the `Transaction` from the `DashMap` first (taking ownership), then call `.rollback()` on the removed value. Same ownership constraint as commit.
+- [x] 5.3 Implement `txn.commit` handler: remove the `Transaction` from the `DashMap` first (taking ownership), then call `.commit()` on the removed value. Removal must happen before the async commit call to avoid holding a `DashMap` ref across an await.
+- [x] 5.4 Implement `txn.rollback` handler: remove the `Transaction` from the `DashMap` first (taking ownership), then call `.rollback()` on the removed value. Same ownership constraint as commit.
 - [ ] 5.5 Implement transaction token validation: lookup in store, verify session ownership, update last-use timestamp
 - [ ] 5.6 Implement transaction reaper: background task that rolls back idle transactions
 

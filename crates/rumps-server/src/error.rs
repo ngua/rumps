@@ -53,5 +53,11 @@ impl IntoResponse for Error {
     }
 }
 
+impl From<rumps_types::StorageError> for Error {
+    fn from(e: rumps_types::StorageError) -> Self {
+        Self::Storage(e.into())
+    }
+}
+
 /// Convenience alias for `Result<T, Error>`.
 pub type Result<T> = std::result::Result<T, Error>;

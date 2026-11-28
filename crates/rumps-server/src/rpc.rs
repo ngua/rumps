@@ -5,6 +5,7 @@
 //! [`Request`] is deserialized; serde handles both dispatch and field extraction
 //! in a single step.
 
+use futures::future;
 use rumps_storage::IsolationLevel;
 use serde::Deserialize;
 
@@ -175,11 +176,25 @@ impl Request {
                 match other {
                     Self::SessionStart => unreachable!(),
                     Self::SessionEnd => {
-                        let txns = state.sessions.destroy(&sess.id).await;
-                        if !txns.is_empty() {
-                            // TODO(5.1): roll back via `transaction::Store`
-                            todo!("roll back owned transactions");
-                        }
+                        let txn_ids = state.sessions.destroy(&sess.id).await;
+                        future::join_all(
+                            txn_ids
+                                .iter()
+                                .filter_map(|id| {
+                                    state
+                                        .txns
+                                        .remove_unchecked(id)
+                                        .map(|e| e.txn)
+                                })
+                                .map(|txn| async move {
+                                    if let Err(e) = txn.rollback().await {
+                                        tracing::warn!(
+                                        "rollback on session end failed: {e}"
+                                    );
+                                    }
+                                }),
+                        )
+                        .await;
                         Ok(response::Response::Ok(response::Ok {}))
                     }
                     Self::TxnStart {
@@ -212,8 +227,26 @@ impl Request {
 
                         Ok(response::Response::Txn(response::Txn { txn: id }))
                     }
-                    Self::TxnCommit { .. } => todo!(),
-                    Self::TxnRollback { .. } => todo!(),
+                    Self::TxnCommit { txn } => {
+                        let entry = state.txns.remove(&txn, sess.id)?;
+
+                        if let Some(mut s) = state.sessions.get(&sess.id) {
+                            s.txns.remove(&txn);
+                        }
+
+                        entry.txn.commit().await?;
+                        Ok(response::Response::Ok(response::Ok {}))
+                    }
+                    Self::TxnRollback { txn } => {
+                        let entry = state.txns.remove(&txn, sess.id)?;
+
+                        if let Some(mut s) = state.sessions.get(&sess.id) {
+                            s.txns.remove(&txn);
+                        }
+
+                        entry.txn.rollback().await?;
+                        Ok(response::Response::Ok(response::Ok {}))
+                    }
                     Self::GlobalGet { .. } => todo!(),
                     Self::GlobalSet { .. } => todo!(),
                     Self::GlobalIncrement { .. } => todo!(),

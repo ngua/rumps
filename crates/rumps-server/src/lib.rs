@@ -151,18 +151,20 @@ impl Server {
 
         let db = Database::open(&self.config.database.path).await?;
         let sessions = Arc::new(session::Manager::new()?);
+        let txns = Arc::new(transaction::Store::new());
 
         let idle_timeout =
             Duration::from_secs(self.config.session.idle_timeout_secs);
-        let _reaper =
-            session::Manager::spawn_reaper(Arc::clone(&sessions), idle_timeout);
+        let _reaper = session::Manager::spawn_reaper(
+            Arc::clone(&sessions),
+            Arc::clone(&txns),
+            idle_timeout,
+        );
 
         let addr = SocketAddr::new(
             self.config.server.bind.parse()?,
             self.config.server.port,
         );
-
-        let txns = Arc::new(transaction::Store::new());
 
         let state = AppState {
             db,

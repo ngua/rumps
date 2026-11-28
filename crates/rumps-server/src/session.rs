@@ -180,6 +180,7 @@ impl Manager {
     /// Spawns a background task that periodically reaps idle sessions.
     pub(crate) fn spawn_reaper(
         mgr: Arc<Self>,
+        txns: Arc<crate::transaction::Store>,
         timeout: Duration,
     ) -> JoinHandle<()> {
         tokio::spawn(async move {
@@ -196,13 +197,24 @@ impl Manager {
 
                 future::join_all(stale.into_iter().map(|id| {
                     let mgr = &mgr;
+                    let txns = &txns;
                     async move {
-                        let txns = mgr.destroy(&id).await;
-                        if !txns.is_empty() {
-                            // TODO(5.1, 5.6): roll back via `transaction::Store`;
-                            // these are orphaned and will leak locks until then
-                            todo!("roll back orphaned transactions");
-                        }
+                        let owned = mgr.destroy(&id).await;
+                        future::join_all(
+                            owned
+                                .iter()
+                                .filter_map(|tid| {
+                                    txns.remove_unchecked(tid).map(|e| e.txn)
+                                })
+                                .map(|txn| async move {
+                                    if let Err(e) = txn.rollback().await {
+                                        tracing::warn!(
+                                        "rollback on session reap failed: {e}"
+                                    );
+                                    }
+                                }),
+                        )
+                        .await;
                         tracing::info!(session = %id, "reaped idle session");
                     }
                 }))
