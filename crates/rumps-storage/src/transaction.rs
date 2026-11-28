@@ -1947,6 +1947,25 @@ impl Transaction {
     }
 }
 
+impl Drop for Transaction {
+    fn drop(&mut self) {
+        let still_active = self
+            .state
+            .try_read()
+            .map_or(false, |s| *s == TransactionState::Active);
+        if still_active {
+            if let Ok(mut s) = self.state.try_write() {
+                *s = TransactionState::Aborted;
+            }
+            let mgr = self.db.txn_manager.clone();
+            let id = self.id;
+            tokio::spawn(async move {
+                let _ = mgr.abort(id).await;
+            });
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
