@@ -57,7 +57,7 @@ trait Context {
 
 Implement for both `&Transaction` and session-scoped `&Database`. Each op handler is generic over `Context`; the `rpc::Request` match arm resolves which context to use and calls the shared handler.
 
-- [ ] 6.1 Create `src/handler.rs`; define `handler::Context` trait with the methods above
+- [x] 6.1 Create `src/handler.rs`; define `handler::Context` trait with the methods above
 - [ ] 6.2 Implement `handler::Context` for `Transaction` (delegates to `Transaction::get`, etc.)
 - [ ] 6.3 Implement `handler::Context` for session-local context: wraps the shared in-memory `Database` and the session's internal `u64` ID. Prepends the session ID to keys on the way in, strips it on the way out. Tracks used local names in the session's `HashSet<SmolStr>` on write ops.
 - [ ] 6.4 Implement shared `get` handler: deserialize `wire::Key`, call `Context::get`, serialize response
