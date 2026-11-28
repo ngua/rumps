@@ -165,13 +165,23 @@ impl Request {
         gate: Gate,
     ) -> Result<response::Response> {
         match self {
-            Self::SessionStart => todo!(),
+            Self::SessionStart => {
+                let id = _state.sessions.create();
+                Ok(response::Response::Session(response::Session { id }))
+            }
 
             other => {
-                let _sess = gate.require()?;
+                let sess = gate.require()?;
                 match other {
                     Self::SessionStart => unreachable!(),
-                    Self::SessionEnd => todo!(),
+                    Self::SessionEnd => {
+                        let txns = _state.sessions.destroy(&sess.id).await;
+                        if !txns.is_empty() {
+                            // TODO(5.1): roll back via `transaction::Store`
+                            todo!("roll back owned transactions");
+                        }
+                        Ok(response::Response::Ok(response::Ok {}))
+                    }
                     Self::TxnStart { .. } => todo!(),
                     Self::TxnCommit { .. } => todo!(),
                     Self::TxnRollback { .. } => todo!(),
