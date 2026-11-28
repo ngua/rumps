@@ -153,12 +153,20 @@ impl Server {
         let sessions = Arc::new(session::Manager::new()?);
         let txns = Arc::new(transaction::Store::new());
 
-        let idle_timeout =
+        let session_timeout =
             Duration::from_secs(self.config.session.idle_timeout_secs);
-        let _reaper = session::Manager::spawn_reaper(
+        let _session_reaper = session::Manager::spawn_reaper(
             Arc::clone(&sessions),
             Arc::clone(&txns),
-            idle_timeout,
+            session_timeout,
+        );
+
+        let txn_timeout =
+            Duration::from_secs(self.config.transaction.idle_timeout_secs);
+        let _txn_reaper = transaction::Store::spawn_reaper(
+            Arc::clone(&txns),
+            Arc::clone(&sessions),
+            txn_timeout,
         );
 
         let addr = SocketAddr::new(

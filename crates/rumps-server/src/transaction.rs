@@ -1,12 +1,17 @@
 //! Transaction storage and lifecycle management.
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use dashmap::mapref::one::RefMut;
 use dashmap::DashMap;
+use futures::future;
 use rumps_storage::Transaction;
+use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 use crate::error::{Error, Result};
-use crate::{response, Id};
+use crate::{response, session, Id};
 
 /// A stored transaction entry with its owning session and last-use timestamp.
 pub(crate) struct Entry {
@@ -95,5 +100,46 @@ impl Store {
     /// Returns the number of active transactions.
     pub(crate) fn len(&self) -> usize {
         self.txns.len()
+    }
+
+    /// Spawns a background task that periodically reaps idle transactions.
+    pub(crate) fn spawn_reaper(
+        store: Arc<Self>,
+        sessions: Arc<session::Manager>,
+        timeout: Duration,
+    ) -> JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(timeout / 10);
+            loop {
+                tick.tick().await;
+
+                let stale: Vec<(Id<response::Txn>, Id<response::Session>)> =
+                    store
+                        .iter()
+                        .filter(|e| e.value().last_use.elapsed() > timeout)
+                        .map(|e| (*e.key(), e.value().session))
+                        .collect();
+
+                future::join_all(stale.into_iter().map(|(tid, sid)| {
+                    let store = &store;
+                    let sessions = &sessions;
+                    async move {
+                        if let Some(entry) = store.remove_unchecked(&tid) {
+                            if let Some(mut sess) = sessions.get(&sid) {
+                                sess.txns.remove(&tid);
+                            }
+                            if let Err(e) = entry.txn.rollback().await {
+                                tracing::warn!(
+                                    txn = %tid,
+                                    "rollback on txn reap failed: {e}"
+                                );
+                            }
+                            tracing::info!(txn = %tid, "reaped idle transaction");
+                        }
+                    }
+                }))
+                .await;
+            }
+        })
     }
 }
