@@ -15,27 +15,26 @@ use rumps_types::{key, Name};
 use smol_str::SmolStr;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
-use uuid::Uuid;
 
 use crate::error::{Error, Result};
-use crate::AppState;
+use crate::{response, AppState, Id};
 
 /// A single client session.
 pub(crate) struct Session {
     /// Client-facing session token.
-    pub(crate) id: Uuid,
+    pub(crate) id: Id<response::Session>,
     /// Monotonic internal ID used as a key prefix for local variable isolation.
     pub(crate) internal_id: u64,
     /// Last time this session was used; reset on every request.
     pub(crate) last_activity: Instant,
     /// Transaction tokens owned by this session.
-    pub(crate) txns: HashSet<Uuid>,
+    pub(crate) txns: HashSet<Id<response::Txn>>,
     /// Local variable names this session has written to.
     pub(crate) locals: HashSet<SmolStr>,
 }
 
 impl Session {
-    pub(crate) fn new(id: Uuid, internal_id: u64) -> Self {
+    pub(crate) fn new(id: Id<response::Session>, internal_id: u64) -> Self {
         Self {
             id,
             internal_id,
@@ -53,7 +52,7 @@ impl Session {
 
 /// Validated session extracted from the `X-Session-Id` header.
 pub(crate) struct ActiveSession {
-    pub(crate) id: Uuid,
+    pub(crate) id: Id<response::Session>,
     pub(crate) internal_id: u64,
 }
 
@@ -84,7 +83,7 @@ impl FromRequestParts<AppState> for Gate {
             .headers
             .get("x-session-id")
             .and_then(|hdr| hdr.to_str().ok())
-            .and_then(|raw| raw.parse::<Uuid>().ok())
+            .and_then(|raw| raw.parse::<Id<response::Session>>().ok())
             .and_then(|id| {
                 let mut sess = state.sessions.get(&id)?;
                 sess.touch();
@@ -101,7 +100,7 @@ impl FromRequestParts<AppState> for Gate {
 
 /// Manages active sessions and owns the shared in-memory database for locals.
 pub(crate) struct Manager {
-    sessions: DashMap<Uuid, Session>,
+    sessions: DashMap<Id<response::Session>, Session>,
     counter: AtomicU64,
     /// Shared in-memory database backing all sessions' local variables.
     pub(crate) locals_db: Database,
@@ -116,24 +115,30 @@ impl Manager {
         })
     }
 
-    /// Creates a new session and returns its external UUID.
-    pub(crate) fn create(&self) -> Uuid {
-        let id = Uuid::new_v4();
+    /// Creates a new session and returns its external token.
+    pub(crate) fn create(&self) -> Id<response::Session> {
+        let id = Id::new();
         let internal = self.counter.fetch_add(1, Ordering::Relaxed);
         self.sessions.insert(id, Session::new(id, internal));
         id
     }
 
-    /// Looks up a session by its external UUID.
-    pub(crate) fn get(&self, id: &Uuid) -> Option<RefMut<'_, Uuid, Session>> {
+    /// Looks up a session by its external token.
+    pub(crate) fn get(
+        &self,
+        id: &Id<response::Session>,
+    ) -> Option<RefMut<'_, Id<response::Session>, Session>> {
         self.sessions.get_mut(id)
     }
 
     /// Destroys a session, killing all its local variable subtrees.
     ///
-    /// Returns the set of transaction UUIDs owned by the session; the
+    /// Returns the set of transaction tokens owned by the session; the
     /// caller is responsible for rolling them back.
-    pub(crate) async fn destroy(&self, id: &Uuid) -> HashSet<Uuid> {
+    pub(crate) async fn destroy(
+        &self,
+        id: &Id<response::Session>,
+    ) -> HashSet<Id<response::Txn>> {
         match self.sessions.remove(id) {
             Some((_, session)) => {
                 let Session {
@@ -182,7 +187,7 @@ impl Manager {
             loop {
                 tick.tick().await;
 
-                let stale: Vec<Uuid> = mgr
+                let stale: Vec<Id<response::Session>> = mgr
                     .sessions
                     .iter()
                     .filter(|e| e.value().last_activity.elapsed() > timeout)

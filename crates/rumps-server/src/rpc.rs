@@ -6,11 +6,10 @@
 //! in a single step.
 
 use serde::Deserialize;
-use uuid::Uuid;
 
 use crate::error::Result;
 use crate::session::Gate;
-use crate::{response, wire, AppState};
+use crate::{response, wire, AppState, Id};
 
 /// Wire-format scan direction; `"fwd"` or `"rev"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -48,59 +47,59 @@ pub(crate) enum Request {
         isolation: Option<String>,
     },
     #[serde(rename = "txn.commit")]
-    TxnCommit { txn: Uuid },
+    TxnCommit { txn: Id<response::Txn> },
     #[serde(rename = "txn.rollback")]
-    TxnRollback { txn: Uuid },
+    TxnRollback { txn: Id<response::Txn> },
 
     // Global ops
     #[serde(rename = "global.get")]
     GlobalGet {
-        txn: Uuid,
+        txn: Id<response::Txn>,
         name: String,
         key: wire::Key,
     },
     #[serde(rename = "global.set")]
     GlobalSet {
-        txn: Uuid,
+        txn: Id<response::Txn>,
         name: String,
         key: wire::Key,
         value: wire::Value,
     },
     #[serde(rename = "global.increment")]
     GlobalIncrement {
-        txn: Uuid,
+        txn: Id<response::Txn>,
         name: String,
         key: wire::Key,
         amount: wire::Increment,
     },
     #[serde(rename = "global.kill")]
     GlobalKill {
-        txn: Uuid,
+        txn: Id<response::Txn>,
         name: String,
         key: wire::Key,
     },
     #[serde(rename = "global.data")]
     GlobalData {
-        txn: Uuid,
+        txn: Id<response::Txn>,
         name: String,
         key: wire::Key,
     },
     #[serde(rename = "global.order")]
     GlobalOrder {
-        txn: Uuid,
+        txn: Id<response::Txn>,
         name: String,
         prefix: wire::Key,
         after: Option<wire::Subscript>,
     },
     #[serde(rename = "global.query")]
     GlobalQuery {
-        txn: Uuid,
+        txn: Id<response::Txn>,
         name: String,
         after: Option<wire::Key>,
     },
     #[serde(rename = "global.collect")]
     GlobalCollect {
-        txn: Uuid,
+        txn: Id<response::Txn>,
         name: String,
         start: Option<wire::Key>,
         end: Option<wire::Key>,
@@ -211,6 +210,7 @@ impl Request {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+    use uuid::Uuid;
 
     use super::*;
 
@@ -268,7 +268,9 @@ mod tests {
             "txn": id.to_string()
         }))
         .unwrap();
-        assert!(matches!(req, Request::TxnCommit { txn } if txn == id));
+        assert!(
+            matches!(req, Request::TxnCommit { txn } if txn == Id::from(id))
+        );
     }
 
     #[test]
@@ -279,7 +281,9 @@ mod tests {
             "txn": id.to_string()
         }))
         .unwrap();
-        assert!(matches!(req, Request::TxnRollback { txn } if txn == id));
+        assert!(
+            matches!(req, Request::TxnRollback { txn } if txn == Id::from(id))
+        );
     }
 
     #[test]
@@ -295,7 +299,7 @@ mod tests {
         assert!(matches!(
             req,
             Request::GlobalGet { txn, ref name, .. }
-            if txn == id && name == "PATIENT"
+            if txn == Id::from(id) && name == "PATIENT"
         ));
     }
 
@@ -313,7 +317,7 @@ mod tests {
         assert!(matches!(
             req,
             Request::GlobalSet { txn, ref name, .. }
-            if txn == id && name == "PATIENT"
+            if txn == Id::from(id) && name == "PATIENT"
         ));
     }
 

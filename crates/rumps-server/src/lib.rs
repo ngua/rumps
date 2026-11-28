@@ -14,14 +14,94 @@ pub(crate) mod rpc;
 pub(crate) mod session;
 pub(crate) mod wire;
 
+use std::hash::{Hash, Hasher};
+use std::marker::PhantomData;
 use std::net::SocketAddr;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{fmt, result};
 
 use config::Config;
 use error::{Error, Result};
 use rumps_storage::Database;
+use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
+use uuid::Uuid;
+
+/// Phantom-typed wrapper around [`Uuid`] for domain-specific token safety.
+pub(crate) struct Id<T>(Uuid, PhantomData<T>);
+
+impl<T> Id<T> {
+    pub(crate) fn new() -> Self {
+        Self(Uuid::new_v4(), PhantomData)
+    }
+}
+
+impl<T> Clone for Id<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for Id<T> {}
+
+impl<T> PartialEq for Id<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl<T> Eq for Id<T> {}
+
+impl<T> Hash for Id<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+
+impl<T> fmt::Debug for Id<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Id({})", self.0)
+    }
+}
+
+impl<T> fmt::Display for Id<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl<T> Serialize for Id<T> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        ser: S,
+    ) -> result::Result<S::Ok, S::Error> {
+        self.0.serialize(ser)
+    }
+}
+
+impl<'de, T> Deserialize<'de> for Id<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        de: D,
+    ) -> result::Result<Self, D::Error> {
+        Uuid::deserialize(de).map(Self::from)
+    }
+}
+
+impl<T> From<Uuid> for Id<T> {
+    fn from(id: Uuid) -> Self {
+        Self(id, PhantomData)
+    }
+}
+
+impl<T> FromStr for Id<T> {
+    type Err = uuid::Error;
+
+    fn from_str(s: &str) -> result::Result<Self, Self::Err> {
+        s.parse::<Uuid>().map(Self::from)
+    }
+}
 
 #[derive(Clone)]
 pub(crate) struct AppState {
